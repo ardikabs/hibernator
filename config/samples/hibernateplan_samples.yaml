@@ -1,0 +1,259 @@
+---
+# Example: CloudProvider for AWS
+apiVersion: hibernator.ardikabs.com/v1alpha1
+kind: CloudProvider
+metadata:
+  name: aws-production
+  namespace: hibernator-system
+spec:
+  type: AWS
+  aws:
+    region: us-west-2
+    auth:
+      type: ServiceAccount
+      serviceAccount:
+        name: hibernator-runner
+        namespace: hibernator-system
+        roleARN: arn:aws:iam::123456789012:role/HibernatorRole
+---
+# Example: K8SCluster for EKS
+apiVersion: hibernator.ardikabs.com/v1alpha1
+kind: K8SCluster
+metadata:
+  name: eks-production
+  namespace: hibernator-system
+spec:
+  type: EKS
+  clusterName: production-cluster
+  eks:
+    region: us-west-2
+    providerRef:
+      name: aws-production
+---
+# Example: HibernatePlan with DAG strategy
+apiVersion: hibernator.ardikabs.com/v1alpha1
+kind: HibernatePlan
+metadata:
+  name: production-hibernate
+  namespace: hibernator-system
+spec:
+  schedule:
+    timezone: America/Los_Angeles
+    offHours:
+      - start: "20:00"
+        end: "06:00"
+        daysOfWeek: ["MON", "TUE", "WED", "THU", "FRI"]
+
+  execution:
+    strategy:
+      type: DAG
+      maxConcurrency: 3
+      dependencies:
+        # Frontend depends on backend
+        - from: frontend-asg
+          to: backend-asg
+        # Backend depends on database
+        - from: backend-asg
+          to: database-rds
+        # Worker depends on database
+        - from: worker-asg
+          to: database-rds
+
+  targets:
+    # EKS node groups
+    - name: eks-nodes
+      type: eks
+      connectorRef:
+        kind: K8SCluster
+        name: eks-production
+      parameters:
+        managedNodeGroups:
+          - name: app-nodes
+            minSize: 0
+          - name: worker-nodes
+            minSize: 0
+
+    # RDS database
+    - name: database-rds
+      type: rds
+      connectorRef:
+        kind: CloudProvider
+        name: aws-production
+      parameters:
+        instanceIdentifier: production-db
+        snapshotBeforeStop: true
+
+    # Frontend ASG (via EC2 instances)
+    - name: frontend-asg
+      type: ec2
+      connectorRef:
+        kind: CloudProvider
+        name: aws-production
+      parameters:
+        tags:
+          Environment: production
+          Component: frontend
+
+    # Backend ASG
+    - name: backend-asg
+      type: ec2
+      connectorRef:
+        kind: CloudProvider
+        name: aws-production
+      parameters:
+        tags:
+          Environment: production
+          Component: backend
+
+    # Worker ASG
+    - name: worker-asg
+      type: ec2
+      connectorRef:
+        kind: CloudProvider
+        name: aws-production
+      parameters:
+        tags:
+          Environment: production
+          Component: worker
+
+  behavior:
+    mode: BestEffort
+    failFast: false
+    retries: 3
+---
+# Example: HibernatePlan with Staged strategy
+apiVersion: hibernator.ardikabs.com/v1alpha1
+kind: HibernatePlan
+metadata:
+  name: dev-hibernate-staged
+  namespace: hibernator-system
+spec:
+  schedule:
+    timezone: UTC
+    offHours:
+      - start: "18:00"
+        end: "08:00"
+        daysOfWeek: ["MON", "TUE", "WED", "THU", "FRI"]
+
+  execution:
+    strategy:
+      type: Staged
+      stages:
+        - name: frontend-tier
+          parallel: true
+          maxConcurrency: 2
+          targets:
+            - frontend-web
+            - frontend-api
+        - name: backend-tier
+          parallel: true
+          maxConcurrency: 2
+          targets:
+            - backend-service
+            - worker-service
+        - name: data-tier
+          parallel: false
+          targets:
+            - cache-redis
+            - database
+
+  targets:
+    - name: frontend-web
+      type: ec2
+      connectorRef:
+        kind: CloudProvider
+        name: aws-production
+      parameters:
+        tags:
+          Name: dev-frontend-web
+
+    - name: frontend-api
+      type: ec2
+      connectorRef:
+        kind: CloudProvider
+        name: aws-production
+      parameters:
+        tags:
+          Name: dev-frontend-api
+
+    - name: backend-service
+      type: ec2
+      connectorRef:
+        kind: CloudProvider
+        name: aws-production
+      parameters:
+        tags:
+          Name: dev-backend
+
+    - name: worker-service
+      type: ec2
+      connectorRef:
+        kind: CloudProvider
+        name: aws-production
+      parameters:
+        tags:
+          Name: dev-worker
+
+    - name: cache-redis
+      type: ec2
+      connectorRef:
+        kind: CloudProvider
+        name: aws-production
+      parameters:
+        tags:
+          Name: dev-redis
+
+    - name: database
+      type: rds
+      connectorRef:
+        kind: CloudProvider
+        name: aws-production
+      parameters:
+        instanceIdentifier: dev-database
+
+  behavior:
+    mode: Strict
+    failFast: true
+    retries: 2
+---
+# Example: Simple Sequential HibernatePlan
+apiVersion: hibernator.ardikabs.com/v1alpha1
+kind: HibernatePlan
+metadata:
+  name: simple-sequential
+  namespace: default
+spec:
+  schedule:
+    timezone: UTC
+    offHours:
+      - start: "22:00"
+        end: "07:00"
+        daysOfWeek: ["MON", "TUE", "WED", "THU", "FRI", "SAT", "SUN"]
+
+  execution:
+    strategy:
+      type: Sequential
+
+  targets:
+    - name: app-instances
+      type: ec2
+      connectorRef:
+        kind: CloudProvider
+        name: aws-production
+        namespace: hibernator-system
+      parameters:
+        instanceIds:
+          - i-0123456789abcdef0
+          - i-0123456789abcdef1
+
+    - name: app-database
+      type: rds
+      connectorRef:
+        kind: CloudProvider
+        name: aws-production
+        namespace: hibernator-system
+      parameters:
+        instanceIdentifier: simple-app-db
+
+  behavior:
+    mode: BestEffort

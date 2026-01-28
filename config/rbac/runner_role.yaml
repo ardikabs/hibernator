@@ -1,0 +1,38 @@
+---
+# ClusterRole for runner pods
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: hibernator-runner
+  labels:
+    app.kubernetes.io/name: hibernator
+    app.kubernetes.io/component: runner
+rules:
+  # Read CloudProvider and K8SCluster connectors
+  - apiGroups:
+      - hibernator.ardikabs.com
+    resources:
+      - cloudproviders
+      - k8sclusters
+    verbs:
+      - get
+      - list
+
+  # Read secrets for connector credentials
+  - apiGroups:
+      - ""
+    resources:
+      - secrets
+    verbs:
+      - get
+
+  # Read and update ConfigMaps for restore data
+  - apiGroups:
+      - ""
+    resources:
+      - configmaps
+    verbs:
+      - get
+      - create
+      - update
+      - patch
