@@ -11,12 +11,14 @@
 Hibernator is a Kubernetes operator that provides centralized, declarative management for suspending and restoring cloud resources during user-defined off-hours. It extends beyond Kubernetes to manage heterogeneous cloud infrastructure (EKS, RDS, EC2, and more) with dependency-aware orchestration and auditable execution.
 
 **Key capabilities:**
-- 🕐 **Timezone-aware scheduling** with cron expressions for hibernate/wake cycles
-- 🔗 **Dependency orchestration** using DAG, Staged, Parallel, or Sequential execution strategies
-- 🔌 **Pluggable executor model** for EKS, RDS, EC2 with extensibility for custom resources
+- 🕐 **Timezone-aware scheduling** with start/end times and day-of-week patterns
+- ⏸️ **Schedule exceptions** with lead-time grace periods (extend, suspend, replace)
+- ✅ **Multi-channel approval workflows** (Slack DM, kubectl, SSO/URL, Dashboard)
+- 🔗 **Dependency orchestration** using DAG, Staged, Parallel, or Sequential strategies
+- 🔌 **Pluggable executor model** for EKS, RDS, EC2, Karpenter, GKE, Cloud SQL
 - 🔒 **Isolated runner jobs** with scoped RBAC, IRSA, and projected ServiceAccount tokens
 - 📊 **Real-time progress streaming** via gRPC (preferred) or HTTP webhooks (fallback)
-- 💾 **Durable restore metadata** persisted in ConfigMaps with object-store integration planned
+- 💾 **Durable restore metadata** persisted in ConfigMaps for safe recovery
 
 ## Why Hibernator?
 
@@ -78,13 +80,16 @@ The operator separates concerns:
 
 ### Supported Executors
 
-| Executor | Operations | Restore Data |
-|----------|-----------|--------------|
-| **EKS** | MNG scale-to-zero, Karpenter pause | Desired capacities, NodePool configs |
-| **RDS** | Instance/cluster stop (optional snapshot) | Instance IDs, cluster IDs |
-| **EC2** | Tag-based or ID-based instance stop | Instance IDs, states |
-
-**Planned:** GKE, AKS, Cloud SQL, Azure SQL, Compute Engine, ASG
+| Executor | Status | Operations |
+|----------|--------|----------|
+| **EKS** | ✅ Stable | ManagedNodeGroups scale-to-zero, Karpenter NodePool management |
+| **RDS** | ✅ Stable | Instance/cluster stop with optional snapshot |
+| **EC2** | ✅ Stable | Tag-based or ID-based instance stop |
+| **Karpenter** | ✅ Stable | NodePool scaling and disruption budget management |
+| **GKE** | 🏗️ Planned | Node pool scaling (GCP API integration) |
+| **Cloud SQL** | 🏗️ Planned | Instance stop/start (GCP API integration) |
+| **AKS** | 📋 Roadmap | Node pool management (Azure API integration) |
+| **Azure SQL** | 📋 Roadmap | Server pause/resume (Azure API integration) |
 
 ### Security & Compliance
 
@@ -92,6 +97,23 @@ The operator separates concerns:
 - **IRSA/Workload Identity**: Cloud credentials via Kubernetes ServiceAccount projection
 - **TokenReview authentication**: Streaming auth using projected SA tokens with custom audience (`hibernator-control-plane`)
 - **Audit trail**: Kubernetes API audit logs + object-store access logs + execution ledger in CR status
+
+### Schedule Exceptions & Approval Workflows
+
+Handle temporary deviations from base schedule:
+
+**Exception Types:**
+- **extend**: Add hibernation windows (e.g., weekend event support)
+- **suspend**: Prevent hibernation with lead-time buffer (e.g., maintenance window)
+- **replace**: Fully override base schedule (e.g., holiday mode)
+
+**Approval Options:**
+- **Slack DM**: Direct messages to approvers with [APPROVE] buttons (on-call specifies emails)
+- **kubectl plugin**: CLI-based approval for engineering teams
+- **SSO/URL**: Enterprise approval links with organization authentication
+- **Dashboard UI**: Web-based approval interface with real-time tracking
+
+See [`enhancements/0003-schedule-exceptions.md`](enhancements/0003-schedule-exceptions.md) for complete details.
 
 ## Quick Start
 
@@ -116,6 +138,8 @@ kubectl apply -f config/rbac/
 
 ### Create Your First HibernatePlan
 
+**Basic example with schedule exceptions:**
+
 ```yaml
 apiVersion: hibernator.ardikabs.com/v1alpha1
 kind: HibernatePlan
@@ -128,15 +152,30 @@ spec:
     offHours:
       - start: "20:00"
         end: "06:00"
-        daysOfWeek: ["MON", "TUE", "WED", "THU", "FRI"]
+        daysOfWeek: ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday"]
+
+    # NEW: Temporary exceptions for special events
+    exceptions:
+      - name: "on-site-event"
+        type: "extend"  # Add hibernation during event
+        validFrom: "2026-02-10T00:00:00Z"
+        validUntil: "2026-02-15T23:59:59Z"
+        approvalRequired: true
+        approverEmails:  # On-call specifies approvers
+          - "engineering-head@company.com"
+          - "manager@company.com"
+        windows:
+          - start: "06:00"
+            end: "11:00"
+            daysOfWeek: ["Saturday", "Sunday"]
 
   execution:
     strategy:
       type: DAG
       maxConcurrency: 3
       dependencies:
-        - target: dev-cluster
-          dependsOn: ["dev-db"]  # Shutdown cluster after DB
+        - from: dev-db
+          to: dev-cluster  # Shutdown cluster after DB
 
   targets:
     - name: dev-db
@@ -144,7 +183,6 @@ spec:
       connectorRef:
         name: aws-dev
       parameters:
-        instanceIds: ["dev-postgres"]
         snapshotBeforeStop: true
 
     - name: dev-cluster
@@ -152,9 +190,17 @@ spec:
       connectorRef:
         name: aws-dev
       parameters:
-        clusterName: "dev-eks-1"
-        managedNodeGroups: ["ng-1", "ng-2"]
+        computePolicy:
+          mode: Both
+          order: [karpenter, managedNodeGroups]
 ```
+
+**What happens:**
+1. On-call engineer specifies exception with `approverEmails`
+2. Controller sends Slack DM to approvers with [APPROVE] button
+3. Approvers click button → exception becomes active
+4. During event period, services stay awake (exception takes precedence)
+5. After event expires, normal hibernation resumes
 
 ### Monitor Execution
 
@@ -208,39 +254,87 @@ spec:
 
 ## Status & Roadmap
 
-### ✅ Completed (P0-P2)
+### ✅ Completed (P0-P2 MVP)
 
 - [x] Core controller with phase state machine
 - [x] All 4 execution strategies (Sequential, Parallel, DAG, Staged)
-- [x] EKS, RDS, EC2 executors
-- [x] Cron schedule parsing with timezone support
+- [x] EKS, RDS, EC2, Karpenter executors
+- [x] Cron schedule parsing with timezone support (start/end/daysOfWeek format)
 - [x] Validation webhook with DAG cycle detection
 - [x] ConfigMap-based restore data persistence
 - [x] gRPC streaming server + HTTP webhook fallback
 - [x] Runner streaming integration with progress reporting
-- [x] TokenReview authentication
+- [x] TokenReview authentication with projected SA tokens
+- [x] Error recovery with exponential backoff retry logic
+- [x] Prometheus metrics for observability
+- [x] E2E test suite (hibernation, wakeup, schedule, recovery cycles)
+- [x] Production-ready Helm charts with RBAC, webhook, monitoring
 
-### 🚧 In Progress (P3)
+### 🚧 In Progress (P3 - RFC-0003 Implementation)
 
-- [ ] Karpenter executor (NodePool management)
-- [ ] Restore data consumption in wake-up flow
-- [ ] Error recovery and automatic retry logic
-- [ ] Object-store artifact persistence (S3/GCS)
-- [ ] Helm chart packaging
+- [ ] **Schedule Exceptions & Approval Workflow** (RFC-0003)
+  - [ ] Three exception types: extend, suspend (with lead time), replace
+  - [ ] Four approval options: Slack DM, kubectl plugin, SSO/URL, Dashboard UI
+  - [ ] On-call engineer workflow with email-based approver notification
+  - [ ] Multi-stage approval state machine (Pending → Approved → Active → Expired)
+  - [ ] Full audit trail for compliance
 
-### 📋 Planned
+### 📋 Planned (P3-P4)
 
 - [ ] GCP executors (GKE, Cloud SQL, Compute Engine)
 - [ ] Azure executors (AKS, Azure SQL, VMs)
-- [ ] Prometheus metrics and observability
-- [ ] Advanced scheduling (holidays, blackout windows)
+- [ ] Advanced scheduling (holidays, blackout windows, timezone exceptions)
 - [ ] Multi-cluster federation
+- [ ] Slack DM approval integration (Phase 2)
+- [ ] SSO/URL-based approval workflow (Phase 3)
+- [ ] Dashboard UI for exception management (Phase 4)
+- [ ] Object-store artifact persistence (S3/GCS)
+- [ ] kubectl hibernator plugin for CLI management
 
-See [`WORKPLAN.md`](WORKPLAN.md) for detailed design and [`RFCs/0001-hibernate-operator.md`](RFCs/0001-hibernate-operator.md) for architecture decisions.
+### 📚 Reference Documentation
+
+See the following for detailed information:
+- **Copilot Instructions**: [`.github/copilot-instructions.md`](.github/copilot-instructions.md) — Project architecture, status, development guidelines
+- **Core Principles**: [`.github/instructions/`](.github/instructions/) — Design principles, security, testing, concurrency, API design
+- **Architecture RFC**: [`enhancements/0001-hibernate-operator.md`](enhancements/0001-hibernate-operator.md) — Control Plane + Runner Model design
+- **Schedule Exceptions RFC**: [`enhancements/0003-schedule-exceptions.md`](enhancements/0003-schedule-exceptions.md) — Approval workflow with multi-channel support
+- **Detailed Workplan**: [`enhancements/archived/WORKPLAN.md`](enhancements/archived/WORKPLAN.md) — Historical design decisions and milestones
+- **Agent Guide**: [`AGENTS.md`](AGENTS.md) — Repository conventions and development procedures
 
 ## Development
 
-### Build
+### Installation Options
+
+**Option 1: Using Helm (Recommended for production)**
+
+```bash
+# Add Hibernator chart repository
+helm repo add hibernator https://your-registry/charts
+helm repo update
+
+# Install with default values
+helm install hibernator hibernator/hibernator -n hibernator-system --create-namespace
+
+# Customize installation
+helm install hibernator hibernator/hibernator \
+  -n hibernator-system \
+  -f values.yaml
+```
+
+**Option 2: Using kubectl (For development)**
+
+```bash
+# Apply CRDs
+kubectl apply -f config/crd/bases/
+
+# Deploy the operator
+kubectl apply -f config/manager/manager.yaml
+
+# Apply RBAC
+kubectl apply -f config/rbac/
+```
+
+### Build & Test
 
 ```bash
 # Build controller
@@ -249,8 +343,11 @@ make build
 # Build runner
 make build-runner
 
-# Run tests
+# Run unit tests
 make test
+
+# Run E2E tests (full hibernation cycle)
+make e2e
 
 # Run linter
 make lint
@@ -272,43 +369,78 @@ make test-coverage
 ### Project Structure
 
 ```
-├── api/                      # API definitions
-│   ├── v1alpha1/            # CRD types and webhook
-│   └── streaming/           # Streaming API proto/types
+├── .github/
+│   ├── copilot-instructions.md        # Project guidance & status
+│   └── instructions/                  # Development principles & mandates
+├── api/                               # API definitions
+│   ├── v1alpha1/                     # CRD types and webhook
+│   └── streaming/                    # Streaming API proto/types
 ├── cmd/
-│   ├── controller/          # Controller main
-│   └── runner/              # Runner main
-├── config/                  # Kubernetes manifests
-│   ├── crd/                # CRD definitions
-│   ├── manager/            # Deployment manifests
-│   ├── rbac/               # RBAC rules
-│   ├── samples/            # Example CRs
-│   └── webhook/            # Webhook configuration
+│   ├── controller/                   # Controller main
+│   └── runner/                       # Runner main
+├── config/                           # Kubernetes manifests
+│   ├── crd/bases/                   # CRD definitions
+│   ├── manager/                     # Deployment manifests
+│   ├── rbac/                        # RBAC rules
+│   ├── samples/                     # Example CRs
+│   └── webhook/                     # Webhook configuration
+├── charts/hibernator/                # Helm chart (production-ready)
+│   ├── Chart.yaml
+│   ├── values.yaml
+│   ├── templates/                   # Deployment, RBAC, webhook, service
+│   └── README.md
+├── enhancements/                     # Design RFCs
+│   ├── 0001-hibernate-operator.md   # Architecture & Control Plane Model
+│   ├── 0002-schedule-format-migration.md  # Schedule format evolution
+│   ├── 0003-schedule-exceptions.md  # Exceptions & approval workflow
+│   └── archived/                    # Historical workplans
 ├── internal/
-│   ├── controller/         # Reconciliation logic
-│   ├── executor/           # Executor implementations
-│   ├── scheduler/          # Schedule evaluation & DAG planner
-│   ├── restore/            # Restore data manager
-│   └── streaming/          # gRPC/webhook server & client
-├── RFCs/                   # Design documents
-├── WORKPLAN.md             # Detailed design & milestones
-└── AGENTS.md               # Agent onboarding guide
+│   ├── controller/                 # Reconciliation logic
+│   ├── executor/                   # Executor implementations
+│   │   ├── eks/                   # EKS ManagedNodeGroups + Karpenter
+│   │   ├── rds/                   # RDS instances/clusters
+│   │   ├── ec2/                   # EC2 instances
+│   │   ├── karpenter/             # Karpenter NodePools
+│   │   ├── gke/                   # GKE node pools (placeholder)
+│   │   └── cloudsql/              # Cloud SQL (placeholder)
+│   ├── scheduler/                 # Schedule evaluation & DAG planner
+│   ├── restore/                   # Restore data manager (ConfigMap)
+│   ├── recovery/                  # Error recovery & retry logic
+│   ├── metrics/                   # Prometheus metrics
+│   └── streaming/                 # gRPC/webhook server & client
+├── test/e2e/                        # End-to-end tests
+│   ├── hibernation_test.go        # Hibernation cycle
+│   ├── wakeup_test.go             # Wake-up cycle
+│   ├── schedule_test.go           # Schedule evaluation
+│   ├── recovery_test.go           # Error recovery
+│   └── README.md                  # Test documentation
+├── AGENTS.md                        # Agent onboarding & repository conventions
+├── CHANGELOG.md                     # Release notes
+└── README.md                        # This file
 ```
 
 ## Contributing
 
 Contributions welcome! Please:
-1. Read [`AGENTS.md`](AGENTS.md) for repository conventions
-2. Check [`WORKPLAN.md`](WORKPLAN.md) for current priorities
-3. Open an issue to discuss major changes
-4. Follow existing code patterns and add tests
+
+1. **Start with documentation**: Read [`.github/copilot-instructions.md`](.github/copilot-instructions.md) for project overview
+2. **Follow principles**: Check [`.github/instructions/`](.github/instructions/) for design and coding guidelines
+3. **Review conventions**: See [`AGENTS.md`](AGENTS.md) for repository conventions and development procedures
+4. **Check priorities**: See [`.github/copilot-instructions.md`](.github/copilot-instructions.md#current-implementation-status) for current work
+5. **Open discussion**: Discuss major changes in issues before implementation
+6. **Write tests**: Add unit tests for all new code and integration tests for features
+7. **Update docs**: Keep this README and RFCs updated with your changes
 
 ## License
 
 Apache License 2.0 - see [LICENSE](LICENSE) for details.
 
-## Links
+## Quick Links
 
-- **Design**: [`WORKPLAN.md`](WORKPLAN.md)
-- **Architecture RFC**: [`RFCs/0001-hibernate-operator.md`](RFCs/0001-hibernate-operator.md)
-- **Agent Guide**: [`AGENTS.md`](AGENTS.md)
+- **Copilot Instructions**: [`.github/copilot-instructions.md`](.github/copilot-instructions.md) — Project guidance & implementation status
+- **Development Principles**: [`.github/instructions/`](.github/instructions/) — Security, testing, concurrency, API design
+- **Architecture RFC**: [`enhancements/0001-hibernate-operator.md`](enhancements/0001-hibernate-operator.md) — Control Plane + Runner Model
+- **Schedule Exceptions RFC**: [`enhancements/0003-schedule-exceptions.md`](enhancements/0003-schedule-exceptions.md) — Approval workflows
+- **Agent Guide**: [`AGENTS.md`](AGENTS.md) — Repository conventions
+- **Helm Chart**: [`charts/hibernator/`](charts/hibernator/) — Production deployment
+- **E2E Tests**: [`test/e2e/`](test/e2e/) — Integration test suite
