@@ -427,12 +427,38 @@ func loadRestoreData(ctx context.Context, k8sClient client.Client, cfg *Config) 
 }
 
 func saveRestoreData(ctx context.Context, k8sClient client.Client, cfg *Config, data *executor.RestoreData) error {
-	// Store restore data in a ConfigMap
-	// TODO: Implement proper restore data storage
-	_ = ctx
-	_ = k8sClient
-	_ = cfg
-	_ = data
+	// Store restore data in a ConfigMap using the RestoreManager
+	if cfg.Namespace == "" || cfg.Plan == "" {
+		return fmt.Errorf("plan namespace and name required for restore data storage")
+	}
+
+	if cfg.Target == "" || data == nil || data.Type == "" {
+		return fmt.Errorf("target name and restore data type required")
+	}
+
+	// Create restore data with executor and target information
+	restoreData := &restore.Data{
+		Target:    cfg.Target,
+		Executor:  data.Type,
+		Version:   1,
+		CreatedAt: metav1.Now(),
+	}
+
+	// Parse executor-specific state from raw data
+	if len(data.Data) > 0 {
+		var stateMap map[string]interface{}
+		if err := json.Unmarshal(data.Data, &stateMap); err != nil {
+			return fmt.Errorf("unmarshal restore data: %w", err)
+		}
+		restoreData.State = stateMap
+	}
+
+	// Persist to ConfigMap
+	rm := restore.NewManager(k8sClient)
+	if err := rm.Save(ctx, cfg.Namespace, cfg.Plan, cfg.Target, restoreData); err != nil {
+		return fmt.Errorf("save restore data: %w", err)
+	}
+
 	return nil
 }
 
