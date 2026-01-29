@@ -37,6 +37,10 @@ vet: ## Run go vet.
 test: generate fmt vet envtest ## Run tests.
 	KUBEBUILDER_ASSETS="$(shell $(ENVTEST) use -p path)" go test ./... -coverprofile cover.out
 
+.PHONY: e2e
+e2e: generate fmt vet envtest ## Run E2E tests.
+	KUBEBUILDER_ASSETS="$(shell $(ENVTEST) use -p path)" go test ./test/e2e/... -v -ginkgo.v
+
 ##@ Build
 
 .PHONY: build

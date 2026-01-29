@@ -7,7 +7,6 @@ package controller
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
 	"time"
 
@@ -22,7 +21,10 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
 
-	hibernatorv1alpha1 "github.com/ardikabs/hibernator/api/v1alpha1"	"github.com/ardikabs/hibernator/internal/restore"	"github.com/ardikabs/hibernator/internal/scheduler"
+	hibernatorv1alpha1 "github.com/ardikabs/hibernator/api/v1alpha1"
+	"github.com/ardikabs/hibernator/internal/recovery"
+	"github.com/ardikabs/hibernator/internal/restore"
+	"github.com/ardikabs/hibernator/internal/scheduler"
 )
 
 const (
@@ -128,20 +130,27 @@ func (r *HibernatePlanReconciler) Reconcile(ctx context.Context, req ctrl.Reques
 	// Determine desired phase based on schedule
 	var desiredPhase hibernatorv1alpha1.PlanPhase
 	if shouldHibernate {
-		if plan.Status.Phase == hibernatorv1alpha1.PhaseActive {
+		switch plan.Status.Phase {
+		case hibernatorv1alpha1.PhaseActive:
+
 			desiredPhase = hibernatorv1alpha1.PhaseHibernating
-		} else if plan.Status.Phase == hibernatorv1alpha1.PhaseHibernated {
-			desiredPhase = hibernatorv1alpha1.PhaseHibernated // Stay hibernated
-		} else {
-			desiredPhase = plan.Status.Phase // Continue current operation
+		case hibernatorv1alpha1.PhaseHibernated:
+			// Stay hibernated
+			desiredPhase = hibernatorv1alpha1.PhaseHibernated
+		default:
+			// Continue current operation
+			desiredPhase = plan.Status.Phase
 		}
 	} else {
-		if plan.Status.Phase == hibernatorv1alpha1.PhaseHibernated {
+		switch plan.Status.Phase {
+		case hibernatorv1alpha1.PhaseHibernated:
 			desiredPhase = hibernatorv1alpha1.PhaseWakingUp
-		} else if plan.Status.Phase == hibernatorv1alpha1.PhaseActive {
-			desiredPhase = hibernatorv1alpha1.PhaseActive // Stay active
-		} else {
-			desiredPhase = plan.Status.Phase // Continue current operation
+		case hibernatorv1alpha1.PhaseActive:
+			// Stay active
+			desiredPhase = hibernatorv1alpha1.PhaseActive
+		default:
+			// Continue current operation
+			desiredPhase = plan.Status.Phase
 		}
 	}
 
@@ -164,8 +173,8 @@ func (r *HibernatePlanReconciler) Reconcile(ctx context.Context, req ctrl.Reques
 		return r.reconcileWakeUp(ctx, log, &plan)
 
 	case hibernatorv1alpha1.PhaseError:
-		// TODO: Handle error recovery
-		log.Info("plan in error state, manual intervention may be required")
+		// Handle error recovery with retry logic
+		return r.handleErrorRecovery(ctx, log, &plan)
 	}
 
 	// Requeue based on schedule (next hibernate or wake-up time)
@@ -683,13 +692,77 @@ func (r *HibernatePlanReconciler) getRunnerImage() string {
 	return RunnerImage
 }
 
-// Ensure json is used
-var _ = json.Marshal
+// handleErrorRecovery implements error recovery with exponential backoff.
+func (r *HibernatePlanReconciler) handleErrorRecovery(ctx context.Context, log logr.Logger, plan *hibernatorv1alpha1.HibernatePlan) (ctrl.Result, error) {
+	log.Info("handling error recovery",
+		"retryCount", plan.Status.RetryCount,
+		"errorMessage", plan.Status.ErrorMessage,
+	)
+
+	// Create a dummy error from the stored error message
+	var lastErr error
+	if plan.Status.ErrorMessage != "" {
+		lastErr = fmt.Errorf("%s", plan.Status.ErrorMessage)
+	}
+
+	// Determine recovery strategy
+	strategy := recovery.DetermineRecoveryStrategy(plan, lastErr)
+
+	log.Info("recovery strategy determined",
+		"shouldRetry", strategy.ShouldRetry,
+		"retryAfter", strategy.RetryAfter,
+		"classification", strategy.Classification,
+		"reason", strategy.Reason,
+	)
+
+	if !strategy.ShouldRetry {
+		// Max retries exceeded or permanent error
+		log.Error(lastErr, "error recovery aborted", "reason", strategy.Reason)
+
+		// Stay in error state, requiring manual intervention
+		return ctrl.Result{}, nil
+	}
+
+	if strategy.RetryAfter > 0 {
+		// Still waiting for backoff period
+		log.Info("waiting for backoff period", "retryAfter", strategy.RetryAfter)
+		return ctrl.Result{RequeueAfter: strategy.RetryAfter}, nil
+	}
+
+	// Ready to retry - determine which phase to transition to
+	log.Info("attempting error recovery")
+	recovery.RecordRetryAttempt(plan, lastErr)
+
+	// Evaluate current schedule to determine target phase
+	shouldHibernate, _, err := r.evaluateSchedule(plan)
+	if err != nil {
+		log.Error(err, "failed to evaluate schedule during recovery")
+		return ctrl.Result{RequeueAfter: time.Minute}, nil
+	}
+
+	// Transition to appropriate phase
+	if shouldHibernate {
+		plan.Status.Phase = hibernatorv1alpha1.PhaseHibernating
+		log.Info("transitioning to hibernating phase for recovery", "attempt", plan.Status.RetryCount)
+	} else {
+		plan.Status.Phase = hibernatorv1alpha1.PhaseWakingUp
+		log.Info("transitioning to waking up phase for recovery", "attempt", plan.Status.RetryCount)
+	}
+
+	if err := r.Status().Update(ctx, plan); err != nil {
+		return ctrl.Result{}, err
+	}
+
+	return ctrl.Result{Requeue: true}, nil
+}
 
 // SetupWithManager sets up the controller with the Manager.
 func (r *HibernatePlanReconciler) SetupWithManager(mgr ctrl.Manager) error {
 	return ctrl.NewControllerManagedBy(mgr).
 		For(&hibernatorv1alpha1.HibernatePlan{}).
 		Owns(&batchv1.Job{}).
+		Owns(&corev1.ServiceAccount{}).
+		Owns(&corev1.Secret{}).
+		Owns(&corev1.ConfigMap{}).
 		Complete(r)
 }

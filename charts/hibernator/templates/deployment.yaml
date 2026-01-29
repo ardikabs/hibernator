@@ -1,0 +1,109 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "hibernator.fullname" . }}-controller
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "hibernator.labels" . | nindent 4 }}
+    app.kubernetes.io/component: controller
+spec:
+  {{- if not .Values.autoscaling.enabled }}
+  replicas: {{ .Values.replicaCount }}
+  {{- end }}
+  selector:
+    matchLabels:
+      {{- include "hibernator.selectorLabels" . | nindent 6 }}
+      app.kubernetes.io/component: controller
+  template:
+    metadata:
+      {{- with .Values.podAnnotations }}
+      annotations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      labels:
+        {{- include "hibernator.selectorLabels" . | nindent 8 }}
+        app.kubernetes.io/component: controller
+    spec:
+      {{- with .Values.imagePullSecrets }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      serviceAccountName: {{ include "hibernator.serviceAccountName" . }}
+      securityContext:
+        {{- toYaml .Values.podSecurityContext | nindent 8 }}
+
+      containers:
+        - name: controller
+          securityContext:
+            {{- toYaml .Values.securityContext | nindent 12 }}
+          image: "{{ .Values.image.controller.repository }}:{{ .Values.image.controller.tag | default .Chart.AppVersion }}"
+          imagePullPolicy: {{ .Values.image.controller.pullPolicy }}
+
+          ports:
+            - name: webhook
+              containerPort: {{ .Values.webhook.port }}
+              protocol: TCP
+            - name: metrics
+              containerPort: 8080
+              protocol: TCP
+
+          env:
+            - name: RUNNER_IMAGE
+              value: "{{ .Values.image.runner.repository }}:{{ .Values.image.runner.tag | default .Chart.AppVersion }}"
+            - name: CONTROL_PLANE_ENDPOINT
+              value: {{ .Values.controlPlane.endpoint }}
+            - name: LEADER_ELECTION_ENABLED
+              value: "{{ .Values.leaderElection.enabled }}"
+            - name: LEADER_ELECTION_NAMESPACE
+              value: {{ .Values.leaderElection.namespace | default .Release.Namespace }}
+            - name: WORKERS
+              value: "{{ .Values.operator.workers }}"
+            - name: SYNC_PERIOD
+              value: {{ .Values.operator.syncPeriod }}
+            - name: FINALIZER_NAME
+              value: {{ .Values.operator.finalizerName }}
+
+          livenessProbe:
+            httpGet:
+              path: /healthz
+              port: 8080
+            initialDelaySeconds: 15
+            periodSeconds: 20
+
+          readinessProbe:
+            httpGet:
+              path: /readyz
+              port: 8080
+            initialDelaySeconds: 5
+            periodSeconds: 10
+
+          resources:
+            {{- toYaml .Values.resources.controller | nindent 12 }}
+
+          volumeMounts:
+            - name: webhook-certs
+              mountPath: {{ .Values.webhook.certs.certDir }}
+              readOnly: true
+            - name: tmp
+              mountPath: /tmp
+
+      volumes:
+        - name: webhook-certs
+          secret:
+            secretName: {{ .Values.webhook.certs.secretName }}
+            optional: true
+        - name: tmp
+          emptyDir: {}
+
+      {{- with .Values.nodeSelector }}
+      nodeSelector:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.affinity }}
+      affinity:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.tolerations }}
+      tolerations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}

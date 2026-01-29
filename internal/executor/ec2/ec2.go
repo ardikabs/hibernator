@@ -16,6 +16,7 @@ import (
 	"github.com/aws/aws-sdk-go-v2/credentials/stscreds"
 	"github.com/aws/aws-sdk-go-v2/service/ec2"
 	"github.com/aws/aws-sdk-go-v2/service/ec2/types"
+	"github.com/aws/aws-sdk-go-v2/service/sts"
 
 	"github.com/ardikabs/hibernator/internal/executor"
 )
@@ -189,10 +190,9 @@ func (e *Executor) loadAWSConfig(ctx context.Context, spec executor.Spec) (aws.C
 	}
 
 	if spec.ConnectorConfig.AWS.AssumeRoleArn != "" {
-		stsClient := stscreds.NewAssumeRoleProvider(
-			stscreds.NewAssumeRoleProvider(nil, spec.ConnectorConfig.AWS.AssumeRoleArn),
-		)
-		cfg.Credentials = aws.NewCredentialsCache(stsClient)
+		stsClient := sts.NewFromConfig(cfg)
+		creds := stscreds.NewAssumeRoleProvider(stsClient, spec.ConnectorConfig.AWS.AssumeRoleArn)
+		cfg.Credentials = aws.NewCredentialsCache(creds)
 	}
 
 	return cfg, nil

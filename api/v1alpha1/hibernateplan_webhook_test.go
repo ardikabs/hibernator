@@ -39,7 +39,7 @@ func TestHibernatePlan_ValidateCreate(t *testing.T) {
 				ObjectMeta: metav1.ObjectMeta{Name: "test"},
 				Spec: HibernatePlanSpec{
 					Schedule: validSchedule(),
-					Execution: ExecutionConfig{
+					Execution: Execution{
 						Strategy: ExecutionStrategy{Type: StrategySequential},
 					},
 					Targets: []Target{
@@ -64,7 +64,7 @@ func TestHibernatePlan_ValidateCreate(t *testing.T) {
 							},
 						},
 					},
-					Execution: ExecutionConfig{
+					Execution: Execution{
 						Strategy: ExecutionStrategy{Type: StrategySequential},
 					},
 					Targets: []Target{
@@ -89,7 +89,7 @@ func TestHibernatePlan_ValidateCreate(t *testing.T) {
 							},
 						},
 					},
-					Execution: ExecutionConfig{
+					Execution: Execution{
 						Strategy: ExecutionStrategy{Type: StrategySequential},
 					},
 					Targets: []Target{
@@ -105,7 +105,7 @@ func TestHibernatePlan_ValidateCreate(t *testing.T) {
 				ObjectMeta: metav1.ObjectMeta{Name: "test"},
 				Spec: HibernatePlanSpec{
 					Schedule: validSchedule(),
-					Execution: ExecutionConfig{
+					Execution: Execution{
 						Strategy: ExecutionStrategy{Type: StrategySequential},
 					},
 					Targets: []Target{
@@ -122,7 +122,7 @@ func TestHibernatePlan_ValidateCreate(t *testing.T) {
 				ObjectMeta: metav1.ObjectMeta{Name: "test"},
 				Spec: HibernatePlanSpec{
 					Schedule: validSchedule(),
-					Execution: ExecutionConfig{
+					Execution: Execution{
 						Strategy: ExecutionStrategy{Type: StrategySequential},
 					},
 					Targets: []Target{
@@ -138,7 +138,7 @@ func TestHibernatePlan_ValidateCreate(t *testing.T) {
 				ObjectMeta: metav1.ObjectMeta{Name: "test"},
 				Spec: HibernatePlanSpec{
 					Schedule: validSchedule(),
-					Execution: ExecutionConfig{
+					Execution: Execution{
 						Strategy: ExecutionStrategy{
 							Type: StrategyDAG,
 							Dependencies: []Dependency{
@@ -163,7 +163,7 @@ func TestHibernatePlan_ValidateCreate(t *testing.T) {
 				ObjectMeta: metav1.ObjectMeta{Name: "test"},
 				Spec: HibernatePlanSpec{
 					Schedule: validSchedule(),
-					Execution: ExecutionConfig{
+					Execution: Execution{
 						Strategy: ExecutionStrategy{
 							Type: StrategyDAG,
 							Dependencies: []Dependency{
@@ -187,7 +187,7 @@ func TestHibernatePlan_ValidateCreate(t *testing.T) {
 				ObjectMeta: metav1.ObjectMeta{Name: "test"},
 				Spec: HibernatePlanSpec{
 					Schedule: validSchedule(),
-					Execution: ExecutionConfig{
+					Execution: Execution{
 						Strategy: ExecutionStrategy{
 							Type: StrategyDAG,
 							Dependencies: []Dependency{
@@ -208,7 +208,7 @@ func TestHibernatePlan_ValidateCreate(t *testing.T) {
 				ObjectMeta: metav1.ObjectMeta{Name: "test"},
 				Spec: HibernatePlanSpec{
 					Schedule: validSchedule(),
-					Execution: ExecutionConfig{
+					Execution: Execution{
 						Strategy: ExecutionStrategy{
 							Type: StrategyStaged,
 							Stages: []Stage{
@@ -232,7 +232,7 @@ func TestHibernatePlan_ValidateCreate(t *testing.T) {
 				ObjectMeta: metav1.ObjectMeta{Name: "test"},
 				Spec: HibernatePlanSpec{
 					Schedule: validSchedule(),
-					Execution: ExecutionConfig{
+					Execution: Execution{
 						Strategy: ExecutionStrategy{
 							Type: StrategyStaged,
 							Stages: []Stage{
@@ -254,7 +254,7 @@ func TestHibernatePlan_ValidateCreate(t *testing.T) {
 				ObjectMeta: metav1.ObjectMeta{Name: "test"},
 				Spec: HibernatePlanSpec{
 					Schedule: validSchedule(),
-					Execution: ExecutionConfig{
+					Execution: Execution{
 						Strategy: ExecutionStrategy{
 							Type: StrategyStaged,
 							Stages: []Stage{

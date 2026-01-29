@@ -1,4 +1,4 @@
-# RFC-001: User-Friendly Schedule Format Migration
+# RFC-0002: User-Friendly Schedule Format Migration
 
 **Status**: Implemented
 **Author**: Hibernator Team

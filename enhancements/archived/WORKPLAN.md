@@ -590,7 +590,10 @@ executor.Shutdown(...)
 
 | Component | Status | Notes |
 |-----------|--------|-------|
-| Runner integration | 🔄 | Update runner main.go with streaming |
+| Runner integration | ✅ | Streaming fully integrated with progress, logs, completion |
+| Karpenter executor | ✅ | NodePool scaling implementation complete |
+| Restore data consumption | ✅ | Load RestoreData during WakeUp complete |
+| GCP executor implementation | ⏳ | GKE and Cloud SQL API integration pending |
 | E2E tests | ⏳ | Full hibernation cycle tests |
 | Helm chart | ⏳ | Deployment packaging |
 | Documentation | ⏳ | User guide, API reference |

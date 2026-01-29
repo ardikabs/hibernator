@@ -1,0 +1,122 @@
+---
+apiVersion: apiextensions.k8s.io/v1
+kind: CustomResourceDefinition
+metadata:
+  annotations:
+    controller-gen.kubebuilder.io/version: v0.20.0
+  name: cloudproviders.hibernator.ardikabs.com
+spec:
+  group: hibernator.ardikabs.com
+  names:
+    kind: CloudProvider
+    listKind: CloudProviderList
+    plural: cloudproviders
+    singular: cloudprovider
+  scope: Namespaced
+  versions:
+  - additionalPrinterColumns:
+    - jsonPath: .spec.type
+      name: Type
+      type: string
+    - jsonPath: .status.ready
+      name: Ready
+      type: boolean
+    - jsonPath: .metadata.creationTimestamp
+      name: Age
+      type: date
+    name: v1alpha1
+    schema:
+      openAPIV3Schema:
+        description: CloudProvider is the Schema for the cloudproviders API.
+        properties:
+          apiVersion:
+            description: |-
+              APIVersion defines the versioned schema of this representation of an object.
+              Servers should convert recognized schemas to the latest internal value, and
+              may reject unrecognized values.
+              More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#resources
+            type: string
+          kind:
+            description: |-
+              Kind is a string value representing the REST resource this object represents.
+              Servers may infer this from the endpoint the client submits requests to.
+              Cannot be updated.
+              In CamelCase.
+              More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#types-kinds
+            type: string
+          metadata:
+            type: object
+          spec:
+            description: CloudProviderSpec defines the desired state of CloudProvider.
+            properties:
+              aws:
+                description: AWS holds AWS-specific configuration (required when Type=aws).
+                properties:
+                  accountId:
+                    description: AccountId is the AWS account ID.
+                    type: string
+                  auth:
+                    description: Auth configures authentication.
+                    properties:
+                      serviceAccount:
+                        description: ServiceAccount configures IRSA-based authentication.
+                        properties:
+                          assumeRoleArn:
+                            description: AssumeRoleArn is the IAM role ARN to assume.
+                            type: string
+                        required:
+                        - assumeRoleArn
+                        type: object
+                      static:
+                        description: Static configures static credential-based authentication.
+                        properties:
+                          secretRef:
+                            description: SecretRef references a Secret containing
+                              credentials.
+                            properties:
+                              name:
+                                type: string
+                              namespace:
+                                type: string
+                            required:
+                            - name
+                            type: object
+                        required:
+                        - secretRef
+                        type: object
+                    type: object
+                  region:
+                    description: Region is the AWS region.
+                    type: string
+                required:
+                - accountId
+                - auth
+                - region
+                type: object
+              type:
+                description: Type of cloud provider.
+                enum:
+                - aws
+                type: string
+            required:
+            - type
+            type: object
+          status:
+            description: CloudProviderStatus defines the observed state of CloudProvider.
+            properties:
+              lastValidated:
+                description: LastValidated is when credentials were last validated.
+                format: date-time
+                type: string
+              message:
+                description: Message provides status details.
+                type: string
+              ready:
+                description: Ready indicates if the provider is ready to use.
+                type: boolean
+            type: object
+        type: object
+    served: true
+    storage: true
+    subresources:
+      status: {}

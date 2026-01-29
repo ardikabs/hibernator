@@ -1,0 +1,344 @@
+---
+apiVersion: apiextensions.k8s.io/v1
+kind: CustomResourceDefinition
+metadata:
+  annotations:
+    controller-gen.kubebuilder.io/version: v0.20.0
+  name: hibernateplans.hibernator.ardikabs.com
+spec:
+  group: hibernator.ardikabs.com
+  names:
+    kind: HibernatePlan
+    listKind: HibernatePlanList
+    plural: hibernateplans
+    singular: hibernateplan
+  scope: Namespaced
+  versions:
+  - additionalPrinterColumns:
+    - jsonPath: .status.phase
+      name: Phase
+      type: string
+    - jsonPath: .metadata.creationTimestamp
+      name: Age
+      type: date
+    name: v1alpha1
+    schema:
+      openAPIV3Schema:
+        description: HibernatePlan is the Schema for the hibernateplans API.
+        properties:
+          apiVersion:
+            description: |-
+              APIVersion defines the versioned schema of this representation of an object.
+              Servers should convert recognized schemas to the latest internal value, and
+              may reject unrecognized values.
+              More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#resources
+            type: string
+          kind:
+            description: |-
+              Kind is a string value representing the REST resource this object represents.
+              Servers may infer this from the endpoint the client submits requests to.
+              Cannot be updated.
+              In CamelCase.
+              More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#types-kinds
+            type: string
+          metadata:
+            type: object
+          spec:
+            description: HibernatePlanSpec defines the desired state of HibernatePlan.
+            properties:
+              behavior:
+                description: Behavior defines how failures are handled.
+                properties:
+                  failFast:
+                    default: true
+                    description: FailFast stops execution on first failure.
+                    type: boolean
+                  mode:
+                    default: Strict
+                    description: Mode determines how failures are handled.
+                    enum:
+                    - Strict
+                    - BestEffort
+                    type: string
+                  retries:
+                    default: 3
+                    description: Retries is the maximum number of retry attempts for
+                      failed operations.
+                    format: int32
+                    maximum: 10
+                    minimum: 0
+                    type: integer
+                type: object
+              execution:
+                description: Execution defines the execution strategy.
+                properties:
+                  strategy:
+                    description: ExecutionStrategy defines how targets are executed.
+                    properties:
+                      dependencies:
+                        description: Dependencies define DAG edges (only valid when
+                          Type=DAG).
+                        items:
+                          description: Dependency represents a DAG edge (from -> to).
+                          properties:
+                            from:
+                              description: From is the source target name.
+                              type: string
+                            to:
+                              description: To is the destination target name that
+                                depends on From.
+                              type: string
+                          required:
+                          - from
+                          - to
+                          type: object
+                        type: array
+                      maxConcurrency:
+                        description: MaxConcurrency limits concurrent executions (for
+                          Parallel/DAG/Staged).
+                        format: int32
+                        minimum: 1
+                        type: integer
+                      stages:
+                        description: Stages define execution groups (only valid when
+                          Type=Staged).
+                        items:
+                          description: Stage defines a group of targets to execute
+                            together.
+                          properties:
+                            maxConcurrency:
+                              description: MaxConcurrency limits parallelism within
+                                this stage.
+                              format: int32
+                              minimum: 1
+                              type: integer
+                            name:
+                              description: Name of the stage.
+                              type: string
+                            parallel:
+                              default: false
+                              description: Parallel indicates if targets in this stage
+                                run in parallel.
+                              type: boolean
+                            targets:
+                              description: Targets are the names of targets in this
+                                stage.
+                              items:
+                                type: string
+                              type: array
+                          required:
+                          - name
+                          - targets
+                          type: object
+                        type: array
+                      type:
+                        description: Type of execution strategy.
+                        enum:
+                        - Sequential
+                        - Parallel
+                        - DAG
+                        - Staged
+                        type: string
+                    required:
+                    - type
+                    type: object
+                required:
+                - strategy
+                type: object
+              schedule:
+                description: Schedule defines when hibernation occurs.
+                properties:
+                  offHours:
+                    description: OffHours defines when hibernation should occur.
+                    items:
+                      description: OffHourWindow defines a time window for hibernation.
+                      properties:
+                        daysOfWeek:
+                          description: |-
+                            DaysOfWeek specifies which days this window applies to.
+                            Valid values: MON, TUE, WED, THU, FRI, SAT, SUN
+                          items:
+                            enum:
+                            - MON
+                            - TUE
+                            - WED
+                            - THU
+                            - FRI
+                            - SAT
+                            - SUN
+                            type: string
+                          minItems: 1
+                          type: array
+                        end:
+                          description: End time in HH:MM format (e.g., "06:00").
+                          pattern: ^([0-1]?[0-9]|2[0-3]):[0-5][0-9]$
+                          type: string
+                        start:
+                          description: Start time in HH:MM format (e.g., "20:00").
+                          pattern: ^([0-1]?[0-9]|2[0-3]):[0-5][0-9]$
+                          type: string
+                      required:
+                      - daysOfWeek
+                      - end
+                      - start
+                      type: object
+                    minItems: 1
+                    type: array
+                  timezone:
+                    description: Timezone for schedule evaluation (e.g., "Asia/Jakarta").
+                    type: string
+                required:
+                - offHours
+                - timezone
+                type: object
+              targets:
+                description: Targets are the resources to hibernate.
+                items:
+                  description: Target defines a hibernation target.
+                  properties:
+                    connectorRef:
+                      description: ConnectorRef references the connector for this
+                        target.
+                      properties:
+                        kind:
+                          description: Kind of the connector (CloudProvider or K8SCluster).
+                          enum:
+                          - CloudProvider
+                          - K8SCluster
+                          type: string
+                        name:
+                          description: Name of the connector resource.
+                          type: string
+                        namespace:
+                          description: Namespace of the connector resource (defaults
+                            to plan namespace).
+                          type: string
+                      required:
+                      - kind
+                      - name
+                      type: object
+                    name:
+                      description: Name is the unique identifier for this target within
+                        the plan.
+                      type: string
+                    parameters:
+                      description: Parameters are executor-specific configuration.
+                      type: object
+                      x-kubernetes-preserve-unknown-fields: true
+                    type:
+                      description: Type of the target (e.g., eks, rds, ec2).
+                      type: string
+                  required:
+                  - connectorRef
+                  - name
+                  - type
+                  type: object
+                minItems: 1
+                type: array
+            required:
+            - execution
+            - schedule
+            - targets
+            type: object
+          status:
+            description: HibernatePlanStatus defines the observed state of HibernatePlan.
+            properties:
+              errorMessage:
+                description: ErrorMessage provides details about the error that caused
+                  PhaseError.
+                type: string
+              executions:
+                description: Executions is the per-target execution ledger.
+                items:
+                  description: ExecutionStatus represents per-target execution status.
+                  properties:
+                    attempts:
+                      description: Attempts is the number of execution attempts.
+                      format: int32
+                      type: integer
+                    connectorSecretRef:
+                      description: ConnectorSecretRef is the namespace/name of connector
+                        secret.
+                      type: string
+                    executor:
+                      description: Executor used for this target.
+                      type: string
+                    finishedAt:
+                      description: FinishedAt is when execution finished.
+                      format: date-time
+                      type: string
+                    jobRef:
+                      description: JobRef is the namespace/name of the runner Job.
+                      type: string
+                    logsRef:
+                      description: LogsRef is the reference to logs (stream id or
+                        object path).
+                      type: string
+                    message:
+                      description: Message provides human-readable status.
+                      type: string
+                    restoreConfigMapRef:
+                      description: RestoreConfigMapRef is the namespace/name of restore
+                        hints ConfigMap.
+                      type: string
+                    restoreRef:
+                      description: RestoreRef is the reference to restore metadata
+                        artifact.
+                      type: string
+                    serviceAccountRef:
+                      description: ServiceAccountRef is the namespace/name of ephemeral
+                        SA.
+                      type: string
+                    startedAt:
+                      description: StartedAt is when execution started.
+                      format: date-time
+                      type: string
+                    state:
+                      description: State of execution.
+                      enum:
+                      - Pending
+                      - Running
+                      - Completed
+                      - Failed
+                      type: string
+                    target:
+                      description: Target identifier (type/name).
+                      type: string
+                  required:
+                  - state
+                  - target
+                  type: object
+                type: array
+              lastRetryTime:
+                description: LastRetryTime is when the last retry attempt was made.
+                format: date-time
+                type: string
+              lastTransitionTime:
+                description: LastTransitionTime is when the phase last changed.
+                format: date-time
+                type: string
+              observedGeneration:
+                description: ObservedGeneration is the last observed generation.
+                format: int64
+                type: integer
+              phase:
+                description: Phase is the overall plan phase.
+                enum:
+                - Pending
+                - Active
+                - Hibernating
+                - Hibernated
+                - WakingUp
+                - Error
+                type: string
+              retryCount:
+                description: RetryCount tracks the number of retry attempts for error
+                  recovery.
+                format: int32
+                type: integer
+            type: object
+        type: object
+    served: true
+    storage: true
+    subresources:
+      status: {}

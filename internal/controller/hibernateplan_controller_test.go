@@ -97,11 +97,16 @@ var _ = Describe("HibernatePlan Controller", func() {
 				},
 				Spec: hibernatorv1alpha1.HibernatePlanSpec{
 					Schedule: hibernatorv1alpha1.Schedule{
-						Hibernate: "0 20 * * 1-5",
-						WakeUp:    "0 6 * * 1-5",
-						Timezone:  "UTC",
+						Timezone: "UTC",
+						OffHours: []hibernatorv1alpha1.OffHourWindow{
+							{
+								Start:      "20:00",
+								End:        "06:00",
+								DaysOfWeek: []string{"MON", "TUE", "WED", "THU", "FRI"},
+							},
+						},
 					},
-					Execution: hibernatorv1alpha1.ExecutionConfig{
+					Execution: hibernatorv1alpha1.Execution{
 						Strategy: hibernatorv1alpha1.ExecutionStrategy{
 							Type: hibernatorv1alpha1.StrategySequential,
 						},
@@ -131,7 +136,8 @@ var _ = Describe("HibernatePlan Controller", func() {
 				return err == nil
 			}, timeout, interval).Should(BeTrue())
 
-			Expect(createdPlan.Spec.Schedule.Hibernate).To(Equal("0 20 * * 1-5"))
+			Expect(createdPlan.Spec.Schedule.Timezone).To(Equal("UTC"))
+			Expect(createdPlan.Spec.Schedule.OffHours).To(HaveLen(1))
 		})
 
 		It("Should add finalizer to the plan", func() {
@@ -143,11 +149,16 @@ var _ = Describe("HibernatePlan Controller", func() {
 				},
 				Spec: hibernatorv1alpha1.HibernatePlanSpec{
 					Schedule: hibernatorv1alpha1.Schedule{
-						Hibernate: "0 20 * * 1-5",
-						WakeUp:    "0 6 * * 1-5",
-						Timezone:  "UTC",
+						Timezone: "UTC",
+						OffHours: []hibernatorv1alpha1.OffHourWindow{
+							{
+								Start:      "20:00",
+								End:        "06:00",
+								DaysOfWeek: []string{"MON", "TUE", "WED", "THU", "FRI"},
+							},
+						},
 					},
-					Execution: hibernatorv1alpha1.ExecutionConfig{
+					Execution: hibernatorv1alpha1.Execution{
 						Strategy: hibernatorv1alpha1.ExecutionStrategy{
 							Type: hibernatorv1alpha1.StrategySequential,
 						},
@@ -212,6 +223,45 @@ var _ = Describe("HibernatePlan Controller", func() {
 			window := scheduler.ScheduleWindow{
 				HibernateCron: "0 20 * * 1-5",
 				WakeUpCron:    "0 6 * * 1-5",
+				Timezone:      "UTC",
+			}
+
+			// Test during work hours (should be active)
+			workTime := time.Date(2026, 1, 28, 14, 0, 0, 0, time.UTC) // Wed 2 PM
+			result, err := evaluator.Evaluate(window, workTime)
+			Expect(err).NotTo(HaveOccurred())
+			Expect(result.ShouldHibernate).To(BeFalse())
+			Expect(result.CurrentState).To(Equal("active"))
+
+			// Test during night hours (should be hibernated)
+			nightTime := time.Date(2026, 1, 28, 23, 0, 0, 0, time.UTC) // Wed 11 PM
+			result, err = evaluator.Evaluate(window, nightTime)
+			Expect(err).NotTo(HaveOccurred())
+			Expect(result.ShouldHibernate).To(BeTrue())
+			Expect(result.CurrentState).To(Equal("hibernated"))
+		})
+
+		It("Should work with converted OffHourWindow format", func() {
+			evaluator := scheduler.NewScheduleEvaluator()
+
+			// Define user-friendly off-hour window
+			offHours := []scheduler.OffHourWindow{
+				{
+					Start:      "20:00",
+					End:        "06:00",
+					DaysOfWeek: []string{"MON", "TUE", "WED", "THU", "FRI"},
+				},
+			}
+
+			// Convert to cron expressions
+			hibernateCron, wakeUpCron, err := scheduler.ConvertOffHoursToCron(offHours)
+			Expect(err).NotTo(HaveOccurred())
+			Expect(hibernateCron).To(Equal("0 20 * * 1,2,3,4,5"))
+			Expect(wakeUpCron).To(Equal("0 6 * * 1,2,3,4,5"))
+
+			window := scheduler.ScheduleWindow{
+				HibernateCron: hibernateCron,
+				WakeUpCron:    wakeUpCron,
 				Timezone:      "UTC",
 			}
 

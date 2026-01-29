@@ -26,9 +26,13 @@ import (
 
 	hibernatorv1alpha1 "github.com/ardikabs/hibernator/api/v1alpha1"
 	"github.com/ardikabs/hibernator/internal/executor"
+	"github.com/ardikabs/hibernator/internal/executor/cloudsql"
 	"github.com/ardikabs/hibernator/internal/executor/ec2"
 	"github.com/ardikabs/hibernator/internal/executor/eks"
+	"github.com/ardikabs/hibernator/internal/executor/gke"
+	"github.com/ardikabs/hibernator/internal/executor/karpenter"
 	"github.com/ardikabs/hibernator/internal/executor/rds"
+	"github.com/ardikabs/hibernator/internal/restore"
 	streamclient "github.com/ardikabs/hibernator/internal/streaming/client"
 )
 
@@ -219,8 +223,9 @@ func run(ctx context.Context, log logr.Logger, cfg *Config) error {
 	registerExecutors(registry, log)
 
 	// Get the executor
-	exec, err := registry.Get(cfg.TargetType)
-	if err != nil {
+	exec, ok := registry.Get(cfg.TargetType)
+	if !ok {
+		err := fmt.Errorf("executor not found: %s", cfg.TargetType)
 		reportError(ctx, streamClient, log, "Failed to get executor", err)
 		return fmt.Errorf("get executor: %w", err)
 	}
@@ -246,7 +251,7 @@ func run(ctx context.Context, log logr.Logger, cfg *Config) error {
 
 	// Validate the spec
 	reportProgress(ctx, streamClient, log, "validating", 30, "Validating executor spec")
-	if err := exec.Validate(ctx, spec); err != nil {
+	if err := exec.Validate(*spec); err != nil {
 		reportError(ctx, streamClient, log, "Spec validation failed", err)
 		return fmt.Errorf("validate spec: %w", err)
 	}
@@ -260,9 +265,17 @@ func run(ctx context.Context, log logr.Logger, cfg *Config) error {
 
 	switch cfg.Operation {
 	case "shutdown":
-		restoreData, err = exec.Shutdown(ctx, spec)
+		rd, err := exec.Shutdown(ctx, *spec)
+		if err == nil {
+			restoreData = &rd
+		}
 	case "wakeup":
-		restoreData, err = exec.WakeUp(ctx, spec)
+		// For wakeup, we need to load restore data first
+		rd, err := loadRestoreData(ctx, k8sClient, cfg)
+		if err != nil {
+			return fmt.Errorf("load restore data: %w", err)
+		}
+		err = exec.WakeUp(ctx, *spec, *rd)
 	default:
 		err = fmt.Errorf("unknown operation: %s", cfg.Operation)
 	}
@@ -304,24 +317,38 @@ func run(ctx context.Context, log logr.Logger, cfg *Config) error {
 
 func registerExecutors(registry *executor.Registry, log logr.Logger) {
 	// Register EKS executor
-	eksExec := eks.NewExecutor(log.WithName("eks"))
+	eksExec := eks.New()
 	registry.Register(eksExec)
 
 	// Register RDS executor
-	rdsExec := rds.NewExecutor(log.WithName("rds"))
+	rdsExec := rds.New()
 	registry.Register(rdsExec)
 
 	// Register EC2 executor
-	ec2Exec := ec2.NewExecutor(log.WithName("ec2"))
+	ec2Exec := ec2.New()
 	registry.Register(ec2Exec)
 
-	log.Info("registered executors", "count", 3)
+	// Register Karpenter executor
+	karpenterExec := karpenter.New()
+	registry.Register(karpenterExec)
+
+	// Register GKE executor
+	gkeExec := gke.New()
+	registry.Register(gkeExec)
+
+	// Register Cloud SQL executor
+	cloudsqlExec := cloudsql.New()
+	registry.Register(cloudsqlExec)
+
+	log.Info("registered executors", "count", 6)
 }
 
 func buildExecutorSpec(ctx context.Context, k8sClient client.Client, cfg *Config, params map[string]interface{}) (*executor.Spec, error) {
+	paramsBytes, _ := json.Marshal(params)
 	spec := &executor.Spec{
 		TargetName: cfg.Target,
-		Parameters: params,
+		TargetType: cfg.TargetType,
+		Parameters: paramsBytes,
 	}
 
 	// Load connector configuration
@@ -337,12 +364,13 @@ func buildExecutorSpec(ctx context.Context, k8sClient client.Client, cfg *Config
 		}
 
 		// Build AWS config from provider
-		if provider.Spec.Type == hibernatorv1alpha1.ProviderAWS {
-			spec.AWSConfig = &executor.AWSConfig{
-				Region: provider.Spec.AWS.Region,
+		if provider.Spec.Type == hibernatorv1alpha1.CloudProviderAWS {
+			spec.ConnectorConfig.AWS = &executor.AWSConnectorConfig{
+				Region:    provider.Spec.AWS.Region,
+				AccountID: provider.Spec.AWS.AccountId,
 			}
-			if provider.Spec.AWS.AssumeRoleARN != "" {
-				spec.AWSConfig.AssumeRoleARN = provider.Spec.AWS.AssumeRoleARN
+			if provider.Spec.AWS.Auth.ServiceAccount != nil {
+				spec.ConnectorConfig.AWS.AssumeRoleArn = provider.Spec.AWS.Auth.ServiceAccount.AssumeRoleArn
 			}
 		}
 
@@ -357,24 +385,45 @@ func buildExecutorSpec(ctx context.Context, k8sClient client.Client, cfg *Config
 		}
 
 		// Build cluster config
-		spec.ClusterConfig = &executor.ClusterConfig{
-			Name: cluster.Spec.ClusterName,
-		}
-
-		switch cluster.Spec.Type {
-		case hibernatorv1alpha1.ClusterTypeEKS:
-			spec.ClusterConfig.Type = "eks"
-			spec.ClusterConfig.Region = cluster.Spec.EKS.Region
-		case hibernatorv1alpha1.ClusterTypeGKE:
-			spec.ClusterConfig.Type = "gke"
-			spec.ClusterConfig.Project = cluster.Spec.GKE.ProjectID
-			spec.ClusterConfig.Region = cluster.Spec.GKE.Zone
-		default:
-			spec.ClusterConfig.Type = "generic"
+		if cluster.Spec.EKS != nil {
+			spec.ConnectorConfig.K8S = &executor.K8SConnectorConfig{
+				ClusterName: cluster.Spec.EKS.Name,
+				Region:      cluster.Spec.EKS.Region,
+			}
+		} else if cluster.Spec.GKE != nil {
+			spec.ConnectorConfig.K8S = &executor.K8SConnectorConfig{
+				ClusterName: cluster.Spec.GKE.Name,
+				Region:      cluster.Spec.GKE.Location,
+			}
 		}
 	}
 
 	return spec, nil
+}
+
+func loadRestoreData(ctx context.Context, k8sClient client.Client, cfg *Config) (*executor.RestoreData, error) {
+	// Use restore manager to load data from ConfigMap
+	restoreMgr := restore.NewManager(k8sClient)
+
+	data, err := restoreMgr.Load(ctx, cfg.Namespace, cfg.Plan, cfg.Target)
+	if err != nil {
+		return nil, fmt.Errorf("load from ConfigMap: %w", err)
+	}
+
+	if data == nil {
+		return nil, fmt.Errorf("no restore data found for plan=%s target=%s", cfg.Plan, cfg.Target)
+	}
+
+	// Convert restore.Data to executor.RestoreData
+	stateBytes, err := json.Marshal(data.State)
+	if err != nil {
+		return nil, fmt.Errorf("marshal state: %w", err)
+	}
+
+	return &executor.RestoreData{
+		Type: data.Executor,
+		Data: stateBytes,
+	}, nil
 }
 
 func saveRestoreData(ctx context.Context, k8sClient client.Client, cfg *Config, data *executor.RestoreData) error {

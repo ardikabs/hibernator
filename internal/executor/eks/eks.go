@@ -16,6 +16,8 @@ import (
 	"github.com/aws/aws-sdk-go-v2/credentials/stscreds"
 	"github.com/aws/aws-sdk-go-v2/service/autoscaling"
 	"github.com/aws/aws-sdk-go-v2/service/eks"
+	"github.com/aws/aws-sdk-go-v2/service/eks/types"
+	"github.com/aws/aws-sdk-go-v2/service/sts"
 
 	"github.com/ardikabs/hibernator/internal/executor"
 )
@@ -196,10 +198,9 @@ func (e *Executor) loadAWSConfig(ctx context.Context, spec executor.Spec) (aws.C
 
 	// Assume role if configured
 	if spec.ConnectorConfig.AWS != nil && spec.ConnectorConfig.AWS.AssumeRoleArn != "" {
-		stsClient := stscreds.NewAssumeRoleProvider(
-			stscreds.NewAssumeRoleProvider(nil, spec.ConnectorConfig.AWS.AssumeRoleArn),
-		)
-		cfg.Credentials = aws.NewCredentialsCache(stsClient)
+		stsClient := sts.NewFromConfig(cfg)
+		creds := stscreds.NewAssumeRoleProvider(stsClient, spec.ConnectorConfig.AWS.AssumeRoleArn)
+		cfg.Credentials = aws.NewCredentialsCache(creds)
 	}
 
 	return cfg, nil
@@ -235,7 +236,7 @@ func (e *Executor) scaleNodeGroupToZero(ctx context.Context, eksClient *eks.Clie
 	_, err = eksClient.UpdateNodegroupConfig(ctx, &eks.UpdateNodegroupConfigInput{
 		ClusterName:   aws.String(clusterName),
 		NodegroupName: aws.String(ngName),
-		ScalingConfig: &eks.NodegroupScalingConfig{
+		ScalingConfig: &types.NodegroupScalingConfig{
 			MinSize:     aws.Int32(0),
 			DesiredSize: aws.Int32(0),
 			MaxSize:     aws.Int32(state.MaxSize), // Keep max
@@ -252,7 +253,7 @@ func (e *Executor) restoreNodeGroup(ctx context.Context, client *eks.Client, clu
 	_, err := client.UpdateNodegroupConfig(ctx, &eks.UpdateNodegroupConfigInput{
 		ClusterName:   aws.String(clusterName),
 		NodegroupName: aws.String(ngName),
-		ScalingConfig: &eks.NodegroupScalingConfig{
+		ScalingConfig: &types.NodegroupScalingConfig{
 			MinSize:     aws.Int32(state.MinSize),
 			DesiredSize: aws.Int32(state.DesiredSize),
 			MaxSize:     aws.Int32(state.MaxSize),

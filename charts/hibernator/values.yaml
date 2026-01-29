@@ -1,0 +1,131 @@
+# Default values for Hibernator Operator
+
+replicaCount: 2
+
+image:
+  controller:
+    repository: ghcr.io/ardikabs/hibernator
+    pullPolicy: IfNotPresent
+    tag: "latest"
+
+  runner:
+    repository: ghcr.io/ardikabs/hibernator-runner
+    pullPolicy: IfNotPresent
+    tag: "latest"
+
+imagePullSecrets: []
+nameOverride: ""
+fullnameOverride: ""
+
+serviceAccount:
+  create: true
+  annotations:
+    # IRSA annotations for AWS (uncomment and fill if using AWS)
+    # eks.amazonaws.com/role-arn: arn:aws:iam::ACCOUNT_ID:role/hibernator-controller
+  name: ""
+
+rbac:
+  create: true
+
+podAnnotations: {}
+
+podSecurityContext:
+  runAsNonRoot: true
+  runAsUser: 65532
+  fsGroup: 65532
+
+securityContext:
+  allowPrivilegeEscalation: false
+  capabilities:
+    drop:
+      - ALL
+  readOnlyRootFilesystem: true
+
+resources:
+  controller:
+    limits:
+      cpu: 500m
+      memory: 512Mi
+    requests:
+      cpu: 250m
+      memory: 256Mi
+
+  runner:
+    limits:
+      cpu: 1000m
+      memory: 1Gi
+    requests:
+      cpu: 500m
+      memory: 512Mi
+
+autoscaling:
+  enabled: false
+  minReplicas: 2
+  maxReplicas: 4
+  targetCPUUtilizationPercentage: 80
+  targetMemoryUtilizationPercentage: 80
+
+nodeSelector: {}
+
+tolerations: []
+
+affinity: {}
+
+# Leader election configuration
+leaderElection:
+  enabled: true
+  namespace: ""
+
+# Webhook configuration
+webhook:
+  enabled: true
+  port: 9443
+  certManager:
+    enabled: true
+    issuer: selfsigned-issuer
+  certs:
+    # If certManager is disabled, provide custom certs
+    secretName: webhook-server-cert
+    certDir: /tmp/k8s-webhook-server/serving-certs
+
+# Control plane configuration
+controlPlane:
+  endpoint: "https://hibernator-webhook.hibernator-system.svc:9443"
+
+# Operator configuration
+operator:
+  # Number of concurrent reconciliations
+  workers: 1
+
+  # Sync period for reconciliation
+  syncPeriod: 10m
+
+  # Cleanup finalizer name
+  finalizerName: hibernator.ardikabs.com/finalizer
+
+# CRD configuration
+crds:
+  create: true
+  upgrade: true
+
+# Namespace where the operator is installed
+namespace: hibernator-system
+
+# Additional labels to apply to all resources
+labels: {}
+
+# Additional annotations to apply to all resources
+annotations: {}
+
+# Example AWS CloudProvider to create (optional)
+# aws:
+#   enabled: false
+#   accountId: "123456789012"
+#   region: "us-east-1"
+#   role: "hibernator-controller"
+
+# Example GCP CloudProvider to create (optional)
+# gcp:
+#   enabled: false
+#   projectId: "my-project"
+#   region: "us-central1"

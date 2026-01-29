@@ -160,22 +160,42 @@ Last updated: 2026-01-29
 | gRPC client | `internal/streaming/client/grpc.go` | Log buffering, heartbeat, projected token from `/var/run/secrets/stream/token` |
 | Webhook client | `internal/streaming/client/webhook.go` | HTTP fallback with same StreamingClient interface |
 | Auto-select client | `internal/streaming/client/client.go` | Factory that tries gRPC first, falls back to webhook |
-| Runner streaming integration | `cmd/runner/main.go` | Progress reporting, completion handling, error streaming |
+| Runner streaming integration | `cmd/runner/main.go` | Progress reporting (10%, 20%, 30%, 50%, 90%), completion handling, error streaming, heartbeat |
 
-### Next Steps (P2/P3)
+### Completed (Schedule Format Migration & Additional Executors - P2/P3)
+
+| Component | File(s) | Notes |
+|-----------|---------|-------|
+| Schedule conversion tests | `internal/scheduler/schedule_test.go` | 14 test cases for ConvertOffHoursToCron: valid windows, multiple days, overnight windows, invalid formats |
+| Controller schedule tests | `internal/controller/hibernateplan_controller_test.go` | Added test for schedule evaluation with converted OffHourWindow format |
+| Sample configurations | `config/samples/hibernateplan_samples.yaml` | All samples updated to start/end/daysOfWeek format |
+| Karpenter executor | `internal/executor/karpenter/karpenter.go` | NodePool scaling with disruption budget and resource limit management |
+| Restore data consumption | `cmd/runner/main.go` | WakeUp operation loads RestoreData from ConfigMap and passes to executors |
+| GKE executor | `internal/executor/gke/gke.go` | GKE node pool scaling (placeholder for GCP API implementation) |
+| Cloud SQL executor | `internal/executor/cloudsql/cloudsql.go` | Cloud SQL instance stop/start (placeholder for GCP API implementation) |
+| Prometheus metrics | `internal/metrics/metrics.go` | Execution duration, success/failure counters, reconcile metrics, restore data size |
+| Error recovery | `internal/recovery/recovery.go` | Automatic retry with exponential backoff, error classification (transient vs permanent), configurable retry limits |
+
+### Next Steps
+
+**Current Focus (AWS/EKS Priority):**
 
 | Priority | Task | Description |
 |----------|------|-------------|
-| P2 | Karpenter executor | NodePool scale to zero, provisioner pause |
-| P2 | Consume restore data on wake-up | Load RestoreData in runner during WakeUp operation |
-| P3 | GCP/Azure executors | GKE, Cloud SQL, Compute Engine; AKS, Azure SQL |
-| P3 | Metrics & observability | Prometheus metrics, structured logging, trace context |
-| P3 | Error recovery logic | Automatic retry/recovery from PhaseError state |
+| P1 | E2E tests | Full hibernation cycle integration tests for AWS executors |
+| P1 | Helm chart | Deployment packaging and installation |
 
-### Known Gaps (Further Reduced)
+**Future Work (Lower Priority):**
 
-- **Restore flow consumption**: RestoreData saved but wake-up flow doesn't yet load it
-- **Error recovery**: PhaseError state exists but no automatic retry/recovery logic
+| Priority | Task | Description |
+|----------|------|-------------|
+| P3 | Complete GCP API integration | Implement actual google.golang.org/api calls for GKE and Cloud SQL |
+| P3 | Azure executors | AKS, Azure SQL executors |
+
+### Known Gaps
+
+- **GCP API integration**: GKE and Cloud SQL executors are placeholders pending google.golang.org/api implementation
+- **Azure support**: No Azure executor implementations yet
 - **Artifact storage**: Only ConfigMap supported; object-store integration pending
 
 ## Alternatives considered

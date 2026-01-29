@@ -273,8 +273,11 @@ func (c *WebhookClient) Close() error {
 // sendHeartbeat sends a single heartbeat.
 func (c *WebhookClient) sendHeartbeat(ctx context.Context) error {
 	payload := streamingv1alpha1.WebhookPayload{
-		Type:        "heartbeat",
-		ExecutionID: c.executionID,
+		Type: "heartbeat",
+		Heartbeat: &streamingv1alpha1.HeartbeatRequest{
+			ExecutionID: c.executionID,
+			Timestamp:   time.Now(),
+		},
 	}
 
 	body, err := json.Marshal(payload)

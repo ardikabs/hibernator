@@ -1,0 +1,69 @@
+{{- if .Values.rbac.create }}
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: {{ include "hibernator.fullname" . }}-controller
+  labels:
+    {{- include "hibernator.labels" . | nindent 4 }}
+rules:
+  # CRD management
+  - apiGroups: [""]
+    resources: ["namespaces"]
+    verbs: ["get", "list", "watch"]
+
+  # HibernatorPlan
+  - apiGroups: ["hibernator.ardikabs.com"]
+    resources: ["hibernateplans"]
+    verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
+  - apiGroups: ["hibernator.ardikabs.com"]
+    resources: ["hibernateplans/status"]
+    verbs: ["get", "patch", "update"]
+  - apiGroups: ["hibernator.ardikabs.com"]
+    resources: ["hibernateplans/finalizers"]
+    verbs: ["update"]
+
+  # CloudProvider
+  - apiGroups: ["hibernator.ardikabs.com"]
+    resources: ["cloudproviders"]
+    verbs: ["get", "list", "watch"]
+
+  # K8SCluster
+  - apiGroups: ["hibernator.ardikabs.com"]
+    resources: ["k8sclusters"]
+    verbs: ["get", "list", "watch"]
+
+  # Job management
+  - apiGroups: ["batch"]
+    resources: ["jobs"]
+    verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
+
+  # Pod management for logs
+  - apiGroups: [""]
+    resources: ["pods", "pods/log"]
+    verbs: ["get", "list", "watch"]
+
+  # ConfigMap management for restore data
+  - apiGroups: [""]
+    resources: ["configmaps"]
+    verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
+
+  # Secret management for connectors
+  - apiGroups: [""]
+    resources: ["secrets"]
+    verbs: ["get", "list"]
+
+  # ServiceAccount management
+  - apiGroups: [""]
+    resources: ["serviceaccounts"]
+    verbs: ["get", "list", "watch", "create", "delete"]
+
+  # Events
+  - apiGroups: [""]
+    resources: ["events"]
+    verbs: ["create", "patch"]
+
+  # Lease for leader election
+  - apiGroups: ["coordination.k8s.io"]
+    resources: ["leases"]
+    verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
+{{- end }}

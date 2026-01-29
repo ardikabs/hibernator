@@ -14,12 +14,12 @@ func TestScheduleEvaluator_Evaluate(t *testing.T) {
 	evaluator := NewScheduleEvaluator()
 
 	tests := []struct {
-		name            string
-		window          ScheduleWindow
-		now             time.Time
-		wantHibernate   bool
-		wantState       string
-		wantErr         bool
+		name          string
+		window        ScheduleWindow
+		now           time.Time
+		wantHibernate bool
+		wantState     string
+		wantErr       bool
 	}{
 		{
 			name: "active during work hours",
@@ -170,5 +170,197 @@ func TestScheduleEvaluator_NextRequeueTime(t *testing.T) {
 	expectedDuration := 6*time.Hour + 10*time.Second
 	if requeueDuration != expectedDuration {
 		t.Errorf("NextRequeueTime() = %v, want %v", requeueDuration, expectedDuration)
+	}
+}
+
+func TestConvertOffHoursToCron(t *testing.T) {
+	tests := []struct {
+		name              string
+		windows           []OffHourWindow
+		wantHibernateCron string
+		wantWakeUpCron    string
+		wantErr           bool
+	}{
+		{
+			name: "valid single window weekdays",
+			windows: []OffHourWindow{
+				{
+					Start:      "20:00",
+					End:        "06:00",
+					DaysOfWeek: []string{"MON", "TUE", "WED", "THU", "FRI"},
+				},
+			},
+			wantHibernateCron: "0 20 * * 1,2,3,4,5",
+			wantWakeUpCron:    "0 6 * * 1,2,3,4,5",
+			wantErr:           false,
+		},
+		{
+			name: "valid single window with all days",
+			windows: []OffHourWindow{
+				{
+					Start:      "22:30",
+					End:        "08:15",
+					DaysOfWeek: []string{"SUN", "MON", "TUE", "WED", "THU", "FRI", "SAT"},
+				},
+			},
+			wantHibernateCron: "30 22 * * 0,1,2,3,4,5,6",
+			wantWakeUpCron:    "15 8 * * 0,1,2,3,4,5,6",
+			wantErr:           false,
+		},
+		{
+			name: "valid single window weekend only",
+			windows: []OffHourWindow{
+				{
+					Start:      "23:00",
+					End:        "07:00",
+					DaysOfWeek: []string{"SAT", "SUN"},
+				},
+			},
+			wantHibernateCron: "0 23 * * 6,0",
+			wantWakeUpCron:    "0 7 * * 6,0",
+			wantErr:           false,
+		},
+		{
+			name: "overnight window end before start",
+			windows: []OffHourWindow{
+				{
+					Start:      "20:00",
+					End:        "06:00",
+					DaysOfWeek: []string{"MON"},
+				},
+			},
+			wantHibernateCron: "0 20 * * 1",
+			wantWakeUpCron:    "0 6 * * 1",
+			wantErr:           false,
+		},
+		{
+			name: "case insensitive days",
+			windows: []OffHourWindow{
+				{
+					Start:      "18:00",
+					End:        "09:00",
+					DaysOfWeek: []string{"mon", "Wed", "FRI"},
+				},
+			},
+			wantHibernateCron: "0 18 * * 1,3,5",
+			wantWakeUpCron:    "0 9 * * 1,3,5",
+			wantErr:           false,
+		},
+		{
+			name:    "empty windows",
+			windows: []OffHourWindow{},
+			wantErr: true,
+		},
+		{
+			name: "invalid start time format",
+			windows: []OffHourWindow{
+				{
+					Start:      "25:00",
+					End:        "06:00",
+					DaysOfWeek: []string{"MON"},
+				},
+			},
+			wantErr: true,
+		},
+		{
+			name: "invalid start time hour",
+			windows: []OffHourWindow{
+				{
+					Start:      "24:00",
+					End:        "06:00",
+					DaysOfWeek: []string{"MON"},
+				},
+			},
+			wantErr: true,
+		},
+		{
+			name: "invalid start time minute",
+			windows: []OffHourWindow{
+				{
+					Start:      "20:60",
+					End:        "06:00",
+					DaysOfWeek: []string{"MON"},
+				},
+			},
+			wantErr: true,
+		},
+		{
+			name: "invalid end time format missing leading zero",
+			windows: []OffHourWindow{
+				{
+					Start:      "20:00",
+					End:        "6",
+					DaysOfWeek: []string{"MON"},
+				},
+			},
+			wantErr: true,
+		},
+		{
+			name: "invalid day name",
+			windows: []OffHourWindow{
+				{
+					Start:      "20:00",
+					End:        "06:00",
+					DaysOfWeek: []string{"MONDAY"},
+				},
+			},
+			wantErr: true,
+		},
+		{
+			name: "invalid day name mixed",
+			windows: []OffHourWindow{
+				{
+					Start:      "20:00",
+					End:        "06:00",
+					DaysOfWeek: []string{"MON", "INVALID", "WED"},
+				},
+			},
+			wantErr: true,
+		},
+		{
+			name: "malformed time no colon",
+			windows: []OffHourWindow{
+				{
+					Start:      "2000",
+					End:        "06:00",
+					DaysOfWeek: []string{"MON"},
+				},
+			},
+			wantErr: true,
+		},
+		{
+			name: "negative hour",
+			windows: []OffHourWindow{
+				{
+					Start:      "-1:00",
+					End:        "06:00",
+					DaysOfWeek: []string{"MON"},
+				},
+			},
+			wantErr: true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			hibernateCron, wakeUpCron, err := ConvertOffHoursToCron(tt.windows)
+
+			if (err != nil) != tt.wantErr {
+				t.Errorf("ConvertOffHoursToCron() error = %v, wantErr %v", err, tt.wantErr)
+				return
+			}
+
+			if tt.wantErr {
+				return
+			}
+
+			if hibernateCron != tt.wantHibernateCron {
+				t.Errorf("ConvertOffHoursToCron() hibernateCron = %v, want %v", hibernateCron, tt.wantHibernateCron)
+			}
+
+			if wakeUpCron != tt.wantWakeUpCron {
+				t.Errorf("ConvertOffHoursToCron() wakeUpCron = %v, want %v", wakeUpCron, tt.wantWakeUpCron)
+			}
+		})
 	}
 }

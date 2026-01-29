@@ -143,6 +143,13 @@ type Behavior struct {
 	// FailFast stops execution on first failure.
 	// +kubebuilder:default=true
 	FailFast bool `json:"failFast,omitempty"`
+
+	// Retries is the maximum number of retry attempts for failed operations.
+	// +kubebuilder:default=3
+	// +kubebuilder:validation:Minimum=0
+	// +kubebuilder:validation:Maximum=10
+	// +optional
+	Retries int32 `json:"retries,omitempty"`
 }
 
 // ConnectorRef references a connector resource.
@@ -271,6 +278,18 @@ type HibernatePlanStatus struct {
 
 	// ObservedGeneration is the last observed generation.
 	ObservedGeneration int64 `json:"observedGeneration,omitempty"`
+
+	// RetryCount tracks the number of retry attempts for error recovery.
+	// +optional
+	RetryCount int32 `json:"retryCount,omitempty"`
+
+	// LastRetryTime is when the last retry attempt was made.
+	// +optional
+	LastRetryTime *metav1.Time `json:"lastRetryTime,omitempty"`
+
+	// ErrorMessage provides details about the error that caused PhaseError.
+	// +optional
+	ErrorMessage string `json:"errorMessage,omitempty"`
 }
 
 // +kubebuilder:object:root=true

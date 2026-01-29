@@ -147,20 +147,14 @@ func (m *RunnerServiceAccountManager) addWorkloadIdentityAnnotations(ctx context
 		}
 
 		switch provider.Spec.Type {
-		case hibernatorv1alpha1.ProviderAWS:
-			if provider.Spec.AWS != nil && provider.Spec.AWS.Auth.Type == hibernatorv1alpha1.AuthTypeServiceAccount {
-				if provider.Spec.AWS.Auth.ServiceAccount != nil && provider.Spec.AWS.Auth.ServiceAccount.RoleARN != "" {
-					sa.Annotations[AnnotationIRSARoleARN] = provider.Spec.AWS.Auth.ServiceAccount.RoleARN
+		case hibernatorv1alpha1.CloudProviderAWS:
+			if provider.Spec.AWS != nil && provider.Spec.AWS.Auth.ServiceAccount != nil {
+				if provider.Spec.AWS.Auth.ServiceAccount.AssumeRoleArn != "" {
+					sa.Annotations[AnnotationIRSARoleARN] = provider.Spec.AWS.Auth.ServiceAccount.AssumeRoleArn
 				}
 			}
 
-		case hibernatorv1alpha1.ProviderGCP:
-			// Add GCP workload identity annotation if configured
-			// TODO: Implement GCP provider config
-
-		case hibernatorv1alpha1.ProviderAzure:
-			// Add Azure workload identity annotation if configured
-			// TODO: Implement Azure provider config
+			// TODO: Add support for other cloud providers (GCP, Azure)
 		}
 	}
 

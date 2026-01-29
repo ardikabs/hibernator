@@ -1,0 +1,91 @@
+# Binaries for programs and plugins
+*.exe
+*.exe~
+*.dll
+*.so
+*.dylib
+bin/
+dist/
+
+# Test binary, built with `go test -c`
+*.test
+
+# Output of the go coverage tool
+*.out
+coverage.txt
+coverage.html
+
+# Dependency directories
+vendor/
+
+# Go workspace file
+go.work
+go.work.sum
+
+# Kubernetes operator tooling
+testbin/
+kubebuilder/
+controller-gen
+kustomize
+setup-envtest
+
+# Environment test binaries (envtest)
+**/testbin/
+
+# Build output
+*.o
+*.a
+*.so
+
+# IDE and editor files
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+.DS_Store
+
+# Temporary files
+tmp/
+temp/
+*.tmp
+
+# Kubernetes configs (sensitive)
+kubeconfig
+*.kubeconfig
+*.key
+*.crt
+*.pem
+
+# Cloud provider credentials
+*.credentials
+aws-credentials
+gcp-credentials
+azure-credentials
+
+# Local development
+.env
+.envrc
+*.local
+
+# Generated files
+*.pb.go
+zz_generated.*
+
+# Test artifacts
+junit-report.xml
+e2e-test-results/
+
+# Docker build cache
+.dockerignore.local
+
+# Helm packages
+*.tgz
+charts/*/charts/
+charts/*/Chart.lock
+
+# Terraform state (if used for testing infrastructure)
+*.tfstate
+*.tfstate.*
+.terraform/
+.terraform.lock.hcl
