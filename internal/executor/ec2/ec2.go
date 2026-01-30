@@ -182,6 +182,9 @@ func (e *Executor) parseParams(raw json.RawMessage) (Parameters, error) {
 }
 
 func (e *Executor) loadAWSConfig(ctx context.Context, spec executor.Spec) (aws.Config, error) {
+	if spec.ConnectorConfig.AWS == nil {
+		return aws.Config{}, fmt.Errorf("AWS connector config is required")
+	}
 	region := spec.ConnectorConfig.AWS.Region
 
 	cfg, err := config.LoadDefaultConfig(ctx, config.WithRegion(region))

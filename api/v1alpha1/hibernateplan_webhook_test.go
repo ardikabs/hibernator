@@ -282,3 +282,135 @@ func TestHibernatePlan_ValidateCreate(t *testing.T) {
 		})
 	}
 }
+
+func TestHibernatePlan_ValidateUpdate(t *testing.T) {
+	oldPlan := &HibernatePlan{
+		ObjectMeta: metav1.ObjectMeta{Name: "test"},
+		Spec: HibernatePlanSpec{
+			Schedule: validSchedule(),
+			Execution: Execution{
+				Strategy: ExecutionStrategy{Type: StrategySequential},
+			},
+			Targets: []Target{
+				{Name: "target1", Type: "ec2", ConnectorRef: ConnectorRef{Kind: "CloudProvider", Name: "aws"}},
+			},
+		},
+	}
+
+	tests := []struct {
+		name    string
+		newPlan *HibernatePlan
+		wantErr bool
+	}{
+		{
+			name: "valid update",
+			newPlan: &HibernatePlan{
+				ObjectMeta: metav1.ObjectMeta{Name: "test"},
+				Spec: HibernatePlanSpec{
+					Schedule: validSchedule(),
+					Execution: Execution{
+						Strategy: ExecutionStrategy{Type: StrategyParallel},
+					},
+					Targets: []Target{
+						{Name: "target1", Type: "ec2", ConnectorRef: ConnectorRef{Kind: "CloudProvider", Name: "aws"}},
+						{Name: "target2", Type: "rds", ConnectorRef: ConnectorRef{Kind: "CloudProvider", Name: "aws"}},
+					},
+				},
+			},
+			wantErr: false,
+		},
+		{
+			name: "invalid update - duplicate targets",
+			newPlan: &HibernatePlan{
+				ObjectMeta: metav1.ObjectMeta{Name: "test"},
+				Spec: HibernatePlanSpec{
+					Schedule: validSchedule(),
+					Execution: Execution{
+						Strategy: ExecutionStrategy{Type: StrategySequential},
+					},
+					Targets: []Target{
+						{Name: "target1", Type: "ec2", ConnectorRef: ConnectorRef{Kind: "CloudProvider", Name: "aws"}},
+						{Name: "target1", Type: "rds", ConnectorRef: ConnectorRef{Kind: "CloudProvider", Name: "aws"}},
+					},
+				},
+			},
+			wantErr: true,
+		},
+		{
+			name: "invalid update - bad time format",
+			newPlan: &HibernatePlan{
+				ObjectMeta: metav1.ObjectMeta{Name: "test"},
+				Spec: HibernatePlanSpec{
+					Schedule: Schedule{
+						Timezone: "UTC",
+						OffHours: []OffHourWindow{
+							{
+								Start:      "invalid",
+								End:        "06:00",
+								DaysOfWeek: []string{"MON"},
+							},
+						},
+					},
+					Execution: Execution{
+						Strategy: ExecutionStrategy{Type: StrategySequential},
+					},
+					Targets: []Target{
+						{Name: "target1", Type: "ec2", ConnectorRef: ConnectorRef{Kind: "CloudProvider", Name: "aws"}},
+					},
+				},
+			},
+			wantErr: true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			_, err := tt.newPlan.ValidateUpdate(context.Background(), runtime.Object(oldPlan), runtime.Object(tt.newPlan))
+			if (err != nil) != tt.wantErr {
+				t.Errorf("ValidateUpdate() error = %v, wantErr %v", err, tt.wantErr)
+			}
+		})
+	}
+}
+
+func TestHibernatePlan_ValidateDelete(t *testing.T) {
+	plan := &HibernatePlan{
+		ObjectMeta: metav1.ObjectMeta{Name: "test"},
+		Spec: HibernatePlanSpec{
+			Schedule: validSchedule(),
+			Execution: Execution{
+				Strategy: ExecutionStrategy{Type: StrategySequential},
+			},
+			Targets: []Target{
+				{Name: "target1", Type: "ec2", ConnectorRef: ConnectorRef{Kind: "CloudProvider", Name: "aws"}},
+			},
+		},
+	}
+
+	warnings, err := plan.ValidateDelete(context.Background(), runtime.Object(plan))
+	if err != nil {
+		t.Errorf("ValidateDelete() unexpected error: %v", err)
+	}
+	if warnings != nil {
+		t.Errorf("ValidateDelete() unexpected warnings: %v", warnings)
+	}
+}
+
+func TestHibernatePlan_ValidateCreate_WrongType(t *testing.T) {
+	plan := &HibernatePlan{}
+	// Pass a wrong type to test the type assertion error
+	wrongType := &CloudProvider{}
+	_, err := plan.ValidateCreate(context.Background(), runtime.Object(wrongType))
+	if err == nil {
+		t.Error("ValidateCreate() expected error for wrong type, got nil")
+	}
+}
+
+func TestHibernatePlan_ValidateUpdate_WrongType(t *testing.T) {
+	plan := &HibernatePlan{}
+	wrongType := &CloudProvider{}
+	_, err := plan.ValidateUpdate(context.Background(), runtime.Object(plan), runtime.Object(wrongType))
+	if err == nil {
+		t.Error("ValidateUpdate() expected error for wrong type, got nil")
+	}
+}

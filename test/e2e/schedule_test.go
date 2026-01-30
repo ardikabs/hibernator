@@ -86,7 +86,7 @@ var _ = Describe("Schedule Evaluation E2E", func() {
 						{
 							Start:      "18:00",
 							End:        "08:00",
-							DaysOfWeek: []string{"Monday", "Tuesday", "Wednesday", "Thursday", "Friday"},
+							DaysOfWeek: []string{"MON", "TUE", "WED", "THU", "FRI"},
 						},
 					},
 				},
@@ -126,7 +126,7 @@ var _ = Describe("Schedule Evaluation E2E", func() {
 		Expect(plan.Spec.Schedule.OffHours).To(HaveLen(1))
 		Expect(plan.Spec.Schedule.OffHours[0].Start).To(Equal("18:00"))
 		Expect(plan.Spec.Schedule.OffHours[0].End).To(Equal("08:00"))
-		Expect(plan.Spec.Schedule.OffHours[0].DaysOfWeek).To(ContainElement("Monday"))
+		Expect(plan.Spec.Schedule.OffHours[0].DaysOfWeek).To(ContainElement("MON"))
 	})
 
 	It("Should handle multiple day-of-week configurations", func() {
@@ -143,7 +143,7 @@ var _ = Describe("Schedule Evaluation E2E", func() {
 						{
 							Start:      "00:00",
 							End:        "23:59",
-							DaysOfWeek: []string{"Saturday", "Sunday"},
+							DaysOfWeek: []string{"SAT", "SUN"},
 						},
 					},
 				},
@@ -198,7 +198,7 @@ var _ = Describe("Schedule Evaluation E2E", func() {
 						{
 							Start:      "20:00",
 							End:        "06:00",
-							DaysOfWeek: []string{"Monday", "Tuesday", "Wednesday", "Thursday", "Friday"},
+							DaysOfWeek: []string{"MON", "TUE", "WED", "THU", "FRI"},
 						},
 					},
 				},
@@ -215,7 +215,7 @@ var _ = Describe("Schedule Evaluation E2E", func() {
 							Kind: "CloudProvider",
 							Name: cloudProvider.Name,
 						},
-					Parameters: &hibernatorv1alpha1.Parameters{Raw: []byte(`{"dbInstanceIdentifier":"tokyo-db"}`)},
+						Parameters: &hibernatorv1alpha1.Parameters{Raw: []byte(`{"dbInstanceIdentifier":"tokyo-db"}`)},
 					},
 				},
 			},

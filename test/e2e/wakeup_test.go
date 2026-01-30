@@ -79,7 +79,7 @@ var _ = Describe("Wakeup Cycle E2E", func() {
 							// Off-hours in past, so should be on-hours now
 							Start:      "01:00",
 							End:        "02:00",
-							DaysOfWeek: []string{"Monday"},
+							DaysOfWeek: []string{"MON"},
 						},
 					},
 				},
@@ -134,9 +134,9 @@ var _ = Describe("Wakeup Cycle E2E", func() {
 			plan.Status.Phase = hibernatorv1alpha1.PhaseHibernated
 			plan.Status.Executions = []hibernatorv1alpha1.ExecutionStatus{
 				{
-					Target:   "eks/test-eks",
-					Executor: "eks",
-					State:    hibernatorv1alpha1.StateCompleted,
+					Target:              "eks/test-eks",
+					Executor:            "eks",
+					State:               hibernatorv1alpha1.StateCompleted,
 					RestoreConfigMapRef: testNamespace + "/restore-data-" + planName,
 				},
 			}

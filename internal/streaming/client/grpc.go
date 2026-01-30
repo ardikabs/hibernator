@@ -97,11 +97,18 @@ func (c *GRPCClient) Connect(ctx context.Context) error {
 		creds = insecure.NewCredentials()
 	}
 
-	// Connect with retry
+	// Connect with retry and context cancellation support
 	var conn *grpc.ClientConn
 	var err error
 
 	for attempt := 0; attempt < 3; attempt++ {
+		// Check for context cancellation before attempting
+		select {
+		case <-ctx.Done():
+			return fmt.Errorf("connection cancelled: %w", ctx.Err())
+		default:
+		}
+
 		conn, err = grpc.NewClient(
 			c.address,
 			grpc.WithTransportCredentials(creds),
@@ -112,7 +119,13 @@ func (c *GRPCClient) Connect(ctx context.Context) error {
 			break
 		}
 		c.log.Error(err, "connection attempt failed", "attempt", attempt+1)
-		time.Sleep(DefaultReconnectDelay)
+
+		// Wait with context cancellation support
+		select {
+		case <-ctx.Done():
+			return fmt.Errorf("connection cancelled during retry: %w", ctx.Err())
+		case <-time.After(DefaultReconnectDelay):
+		}
 	}
 
 	if err != nil {

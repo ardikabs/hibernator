@@ -6,10 +6,12 @@ Licensed under the Apache License, Version 2.0.
 package recovery
 
 import (
+	"errors"
 	"fmt"
 	"strings"
 	"time"
 
+	"github.com/aws/smithy-go"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 
 	hibernatorv1alpha1 "github.com/ardikabs/hibernator/api/v1alpha1"
@@ -32,12 +34,46 @@ type ErrorRecoveryStrategy struct {
 	Reason         string
 }
 
+// transientAWSErrorCodes contains AWS error codes that indicate transient failures.
+var transientAWSErrorCodes = map[string]bool{
+	"Throttling":                             true,
+	"RequestLimitExceeded":                   true,
+	"ServiceUnavailable":                     true,
+	"InternalError":                          true,
+	"RequestTimeout":                         true,
+	"ProvisionedThroughputExceededException": true,
+}
+
+// permanentAWSErrorCodes contains AWS error codes that indicate permanent failures.
+var permanentAWSErrorCodes = map[string]bool{
+	"ResourceNotFoundException":      true,
+	"ValidationException":            true,
+	"InvalidParameterException":      true,
+	"AccessDeniedException":          true,
+	"UnauthorizedException":          true,
+	"ResourceAlreadyExistsException": true,
+}
+
 // ClassifyError determines if an error is transient or permanent.
+// It first checks for AWS SDK typed errors, then falls back to string matching.
 func ClassifyError(err error) ErrorClassification {
 	if err == nil {
 		return ErrorUnknown
 	}
 
+	// Check for AWS API errors using smithy-go interface
+	var apiErr smithy.APIError
+	if errors.As(err, &apiErr) {
+		code := apiErr.ErrorCode()
+		if transientAWSErrorCodes[code] {
+			return ErrorTransient
+		}
+		if permanentAWSErrorCodes[code] {
+			return ErrorPermanent
+		}
+	}
+
+	// Fallback to string matching for non-AWS errors
 	errMsg := strings.ToLower(err.Error())
 
 	transientPatterns := []string{

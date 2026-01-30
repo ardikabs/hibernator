@@ -21,7 +21,7 @@ import (
 	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/client-go/dynamic"
 	"k8s.io/client-go/kubernetes"
-	"k8s.io/client-go/rest"
+	"k8s.io/client-go/tools/clientcmd"
 )
 
 // Executor implements hibernation for Karpenter NodePools.
@@ -237,13 +237,57 @@ func (e *Executor) buildKubernetesClient(ctx context.Context, spec *executor.Spe
 		return nil, nil, fmt.Errorf("describe EKS cluster: %w", err)
 	}
 
-	// Use in-cluster config as placeholder
-	// TODO: Build proper kubeconfig from EKS cluster endpoint and CA
-	_ = clusterOutput
+	if clusterOutput.Cluster == nil || clusterOutput.Cluster.Endpoint == nil {
+		return nil, nil, fmt.Errorf("EKS cluster endpoint not available")
+	}
 
-	restConfig, err := rest.InClusterConfig()
+	// Build kubeconfig from EKS cluster endpoint and CA
+	endpoint := aws.ToString(clusterOutput.Cluster.Endpoint)
+	caCertB64 := aws.ToString(clusterOutput.Cluster.CertificateAuthority.Data)
+
+	if endpoint == "" || caCertB64 == "" {
+		return nil, nil, fmt.Errorf("EKS cluster endpoint or CA certificate missing")
+	}
+
+	// Build kubeconfig YAML from EKS cluster info
+	kubeconfig := fmt.Sprintf(`apiVersion: v1
+clusters:
+- cluster:
+    server: %s
+    certificate-authority-data: %s
+  name: eks-cluster
+contexts:
+- context:
+    cluster: eks-cluster
+    user: eks-user
+  name: eks-context
+current-context: eks-context
+kind: Config
+preferences: {}
+users:
+- name: eks-user
+  user:
+    exec:
+      apiVersion: client.authentication.k8s.io/v1beta1
+      command: aws
+      args:
+        - eks
+        - get-token
+        - --cluster-name
+        - %s
+        - --region
+        - %s
+`, endpoint, caCertB64, spec.ConnectorConfig.K8S.ClusterName, spec.ConnectorConfig.AWS.Region)
+
+	// Parse kubeconfig to get REST config
+	clientConfig, err := clientcmd.NewClientConfigFromBytes([]byte(kubeconfig))
 	if err != nil {
-		return nil, nil, fmt.Errorf("get in-cluster config: %w (EKS external access not implemented)", err)
+		return nil, nil, fmt.Errorf("parse generated kubeconfig: %w", err)
+	}
+
+	restConfig, err := clientConfig.ClientConfig()
+	if err != nil {
+		return nil, nil, fmt.Errorf("build rest config from kubeconfig: %w", err)
 	}
 
 	clientset, err := kubernetes.NewForConfig(restConfig)

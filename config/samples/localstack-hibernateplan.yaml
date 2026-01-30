@@ -1,0 +1,48 @@
+apiVersion: connector.hibernator.ardikabs.com/v1alpha1
+kind: CloudProvider
+metadata:
+  name: localstack
+  namespace: hibernator-system
+spec:
+  type: aws
+  aws:
+    accountId: "000000000000"
+    region: us-east-1
+    auth:
+      static:
+        secretRef:
+          name: localstack-credentials
+          namespace: hibernator-system
+---
+apiVersion: hibernator.ardikabs.com/v1alpha1
+kind: HibernatePlan
+metadata:
+  name: localstack-test
+  namespace: default
+spec:
+  schedule:
+    timezone: UTC
+    offHours:
+      - start: "22:00"
+        end: "06:00"
+        daysOfWeek: ["MON", "TUE", "WED", "THU", "FRI"]
+  execution:
+    strategy:
+      type: Sequential
+  targets:
+    - name: test-ec2-instances
+      type: ec2
+      connectorRef:
+        kind: CloudProvider
+        name: localstack
+      parameters:
+        selector:
+          tags:
+            Hibernate: "true"
+    - name: test-rds-instances
+      type: rds
+      connectorRef:
+        kind: CloudProvider
+        name: localstack
+      parameters:
+        snapshotBeforeStop: false
