@@ -257,7 +257,9 @@ var _ = Describe("HibernatePlan Controller", func() {
 			hibernateCron, wakeUpCron, err := scheduler.ConvertOffHoursToCron(offHours)
 			Expect(err).NotTo(HaveOccurred())
 			Expect(hibernateCron).To(Equal("0 20 * * 1,2,3,4,5"))
-			Expect(wakeUpCron).To(Equal("0 6 * * 1,2,3,4,5"))
+			// For overnight windows (20:00-06:00), wake-up occurs on the next day
+			// MON-FRI hibernation at 20:00 -> TUE-SAT wakeup at 06:00
+			Expect(wakeUpCron).To(Equal("0 6 * * 2,3,4,5,6"))
 
 			window := scheduler.ScheduleWindow{
 				HibernateCron: hibernateCron,

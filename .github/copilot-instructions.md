@@ -167,6 +167,7 @@ Each executor:
 - **Controller Tests**: envtest-based integration tests
 - **E2E Tests**: Full hibernation/wakeup cycle validation
 - **Webhook Tests**: Validation and conversion logic
+- **Coverage Requirement**: Maintain at least 50% unit test coverage for all packages
 
 ### Error Handling
 
@@ -194,6 +195,17 @@ Each executor:
 - **Credential Isolation**: Per-execution Secret mounting
 - **Token Validation**: TokenReview for streaming auth
 - **RBAC**: Minimal permissions for controller and runner
+### Git Workflow (CRITICAL)
+
+**NEVER auto-commit to git.** All git commits must be explicitly requested by the user:
+
+- ✅ **DO**: Use `git add` to stage changes
+- ❌ **DON'T**: Run `git commit` automatically
+- ⏳ **WAIT**: For explicit user instruction: "commit your changes" or "stage and commit"
+- 📝 **FOLLOW**: All git operations require explicit user request
+
+This rule applies to all work on this repository and ensures user retains full control over commit history and messages.
+
 
 ## Common Development Tasks
 

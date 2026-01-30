@@ -3,6 +3,9 @@ Copyright 2026 Ardika Saputro.
 Licensed under the Apache License, Version 2.0.
 */
 
+// Package client provides streaming clients for runner-to-controller communication.
+// It supports both gRPC (preferred) and HTTP webhook transports with automatic fallback.
+// The client handles log streaming, progress reporting, completion notifications, and heartbeats.
 package client
 
 import (

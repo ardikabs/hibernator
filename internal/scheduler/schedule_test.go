@@ -191,7 +191,7 @@ func TestConvertOffHoursToCron(t *testing.T) {
 				},
 			},
 			wantHibernateCron: "0 20 * * 1,2,3,4,5",
-			wantWakeUpCron:    "0 6 * * 1,2,3,4,5",
+			wantWakeUpCron:    "0 6 * * 2,3,4,5,6", // Wake-up on next day: TUE-SAT
 			wantErr:           false,
 		},
 		{
@@ -204,7 +204,7 @@ func TestConvertOffHoursToCron(t *testing.T) {
 				},
 			},
 			wantHibernateCron: "30 22 * * 0,1,2,3,4,5,6",
-			wantWakeUpCron:    "15 8 * * 0,1,2,3,4,5,6",
+			wantWakeUpCron:    "15 8 * * 1,2,3,4,5,6,0", // Wake-up on next day
 			wantErr:           false,
 		},
 		{
@@ -217,7 +217,7 @@ func TestConvertOffHoursToCron(t *testing.T) {
 				},
 			},
 			wantHibernateCron: "0 23 * * 6,0",
-			wantWakeUpCron:    "0 7 * * 6,0",
+			wantWakeUpCron:    "0 7 * * 0,1", // SAT->SUN, SUN->MON
 			wantErr:           false,
 		},
 		{
@@ -230,7 +230,7 @@ func TestConvertOffHoursToCron(t *testing.T) {
 				},
 			},
 			wantHibernateCron: "0 20 * * 1",
-			wantWakeUpCron:    "0 6 * * 1",
+			wantWakeUpCron:    "0 6 * * 2", // Wake-up on TUE
 			wantErr:           false,
 		},
 		{
@@ -243,7 +243,7 @@ func TestConvertOffHoursToCron(t *testing.T) {
 				},
 			},
 			wantHibernateCron: "0 18 * * 1,3,5",
-			wantWakeUpCron:    "0 9 * * 1,3,5",
+			wantWakeUpCron:    "0 9 * * 2,4,6", // Wake-up on TUE, THU, SAT
 			wantErr:           false,
 		},
 		{

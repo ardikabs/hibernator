@@ -166,6 +166,8 @@ type OffHourWindow struct {
 
 // ConvertOffHoursToCron converts OffHourWindow format to cron expressions.
 // Returns hibernateCron and wakeUpCron.
+// For overnight windows (where end time is before start time, e.g., 20:00 to 06:00),
+// the wake-up cron uses the next day's schedule.
 func ConvertOffHoursToCron(windows []OffHourWindow) (string, string, error) {
 	if len(windows) == 0 {
 		return "", "", fmt.Errorf("at least one off-hour window is required")
@@ -193,10 +195,25 @@ func ConvertOffHoursToCron(windows []OffHourWindow) (string, string, error) {
 		return "", "", err
 	}
 
+	// Check if this is an overnight window (end time is before start time)
+	isOvernight := endHour < startHour || (endHour == startHour && endMin < startMin)
+
 	// Build cron expressions
 	// Format: MIN HOUR DAY MONTH DOW
 	hibernateCron := fmt.Sprintf("%d %d * * %s", startMin, startHour, cronDays)
-	wakeUpCron := fmt.Sprintf("%d %d * * %s", endMin, endHour, cronDays)
+
+	var wakeUpCron string
+	if isOvernight {
+		// For overnight windows, wake-up happens on the next day
+		wakeUpDays, err := shiftDaysForward(window.DaysOfWeek)
+		if err != nil {
+			return "", "", fmt.Errorf("failed to shift days for overnight window: %w", err)
+		}
+		wakeUpCron = fmt.Sprintf("%d %d * * %s", endMin, endHour, wakeUpDays)
+	} else {
+		// Same-day window
+		wakeUpCron = fmt.Sprintf("%d %d * * %s", endMin, endHour, cronDays)
+	}
 
 	return hibernateCron, wakeUpCron, nil
 }
@@ -240,4 +257,34 @@ func convertDaysToCron(days []string) (string, error) {
 	}
 
 	return strings.Join(cronDays, ","), nil
+}
+
+// shiftDaysForward shifts each day forward by one (MON->TUE, SUN->MON).
+// Used for overnight windows where wake-up occurs on the next day.
+func shiftDaysForward(days []string) (string, error) {
+	dayOrder := []string{"SUN", "MON", "TUE", "WED", "THU", "FRI", "SAT"}
+	dayMap := map[string]int{
+		"SUN": 0,
+		"MON": 1,
+		"TUE": 2,
+		"WED": 3,
+		"THU": 4,
+		"FRI": 5,
+		"SAT": 6,
+	}
+
+	var shiftedDays []string
+	for _, day := range days {
+		dayUpper := strings.ToUpper(day)
+		idx, ok := dayMap[dayUpper]
+		if !ok {
+			return "", fmt.Errorf("invalid day %q", day)
+		}
+		// Shift forward by 1, wrapping around (SAT -> SUN)
+		nextIdx := (idx + 1) % 7
+		nextDay := dayMap[dayOrder[nextIdx]]
+		shiftedDays = append(shiftedDays, fmt.Sprintf("%d", nextDay))
+	}
+
+	return strings.Join(shiftedDays, ","), nil
 }

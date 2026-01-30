@@ -54,6 +54,21 @@ const (
 
 	// StreamTokenExpirationSeconds is the token expiration time.
 	StreamTokenExpirationSeconds = 600
+
+	// DefaultJobTTLSeconds is the TTL for completed runner jobs (1 hour).
+	DefaultJobTTLSeconds = 3600
+
+	// DefaultJobBackoffLimit is the maximum retries for runner jobs.
+	DefaultJobBackoffLimit = 3
+
+	// StageRequeueInterval is the requeue interval during stage execution.
+	StageRequeueInterval = 5 * time.Second
+
+	// ExecutionRequeueInterval is the requeue interval during execution reconciliation.
+	ExecutionRequeueInterval = 10 * time.Second
+
+	// ScheduleErrorRequeueInterval is the requeue interval when schedule evaluation fails.
+	ScheduleErrorRequeueInterval = time.Minute
 )
 
 // HibernatePlanReconciler reconciles a HibernatePlan object.
@@ -124,7 +139,7 @@ func (r *HibernatePlanReconciler) Reconcile(ctx context.Context, req ctrl.Reques
 	shouldHibernate, requeueAfter, err := r.evaluateSchedule(&plan)
 	if err != nil {
 		log.Error(err, "failed to evaluate schedule")
-		return ctrl.Result{RequeueAfter: time.Minute}, nil
+		return ctrl.Result{RequeueAfter: ScheduleErrorRequeueInterval}, nil
 	}
 
 	// Determine desired phase based on schedule
@@ -132,7 +147,6 @@ func (r *HibernatePlanReconciler) Reconcile(ctx context.Context, req ctrl.Reques
 	if shouldHibernate {
 		switch plan.Status.Phase {
 		case hibernatorv1alpha1.PhaseActive:
-
 			desiredPhase = hibernatorv1alpha1.PhaseHibernating
 		case hibernatorv1alpha1.PhaseHibernated:
 			// Stay hibernated
@@ -408,7 +422,7 @@ func (r *HibernatePlanReconciler) executeStage(ctx context.Context, log logr.Log
 		}
 	}
 
-	return ctrl.Result{RequeueAfter: 5 * time.Second}, nil
+	return ctrl.Result{RequeueAfter: StageRequeueInterval}, nil
 }
 
 // reconcileExecution checks job statuses and progresses through stages.
@@ -492,7 +506,7 @@ func (r *HibernatePlanReconciler) reconcileExecution(ctx context.Context, log lo
 		return ctrl.Result{}, nil
 	}
 
-	return ctrl.Result{RequeueAfter: 10 * time.Second}, nil
+	return ctrl.Result{RequeueAfter: ExecutionRequeueInterval}, nil
 }
 
 // createRunnerJob creates a Kubernetes Job for executing a target.
@@ -506,8 +520,8 @@ func (r *HibernatePlanReconciler) createRunnerJob(ctx context.Context, log logr.
 	}
 
 	// Build job spec
-	backoffLimit := int32(3)
-	ttlSeconds := int32(3600) // Clean up after 1 hour
+	backoffLimit := int32(DefaultJobBackoffLimit)
+	ttlSeconds := int32(DefaultJobTTLSeconds)
 	tokenExpiration := int64(StreamTokenExpirationSeconds)
 
 	job := &batchv1.Job{

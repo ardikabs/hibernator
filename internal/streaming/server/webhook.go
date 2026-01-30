@@ -3,6 +3,9 @@ Copyright 2026 Ardika Saputro.
 Licensed under the Apache License, Version 2.0.
 */
 
+// Package server provides streaming servers for controller-side runner communication.
+// It implements both gRPC and HTTP webhook endpoints for receiving logs, progress reports,
+// and completion notifications from runner pods.
 package server
 
 import (

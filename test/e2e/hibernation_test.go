@@ -77,7 +77,7 @@ var _ = Describe("Hibernation Cycle E2E", func() {
 						{
 							Start:      "00:00",
 							End:        "23:59",
-							DaysOfWeek: []string{"Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"},
+							DaysOfWeek: []string{"MON", "TUE", "WED", "THU", "FRI", "SAT", "SUN"},
 						},
 					},
 				},
