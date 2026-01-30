@@ -80,16 +80,16 @@ The operator separates concerns:
 
 ### Supported Executors
 
-| Executor | Status | Operations |
-|----------|--------|----------|
-| **EKS** | ✅ Stable | ManagedNodeGroups scale-to-zero, Karpenter NodePool management |
-| **RDS** | ✅ Stable | Instance/cluster stop with optional snapshot |
-| **EC2** | ✅ Stable | Tag-based or ID-based instance stop |
-| **Karpenter** | ✅ Stable | NodePool scaling and disruption budget management |
-| **GKE** | 🏗️ Planned | Node pool scaling (GCP API integration) |
-| **Cloud SQL** | 🏗️ Planned | Instance stop/start (GCP API integration) |
-| **AKS** | 📋 Roadmap | Node pool management (Azure API integration) |
-| **Azure SQL** | 📋 Roadmap | Server pause/resume (Azure API integration) |
+| Executor | Connector | Status | Operations |
+|----------|-----------|--------|----------|
+| **EKS** | CloudProvider | ✅ Stable | Managed Node Groups scale-to-zero via AWS API |
+| **Karpenter** | K8SCluster | ✅ Stable | NodePool scaling and disruption budget management via Kubernetes API |
+| **RDS** | CloudProvider | ✅ Stable | Instance/cluster stop with optional snapshot |
+| **EC2** | CloudProvider | ✅ Stable | Tag-based or ID-based instance stop |
+| **GKE** | K8SCluster | 🏗️ Planned | Node pool scaling (GCP API integration) |
+| **Cloud SQL** | CloudProvider | 🏗️ Planned | Instance stop/start (GCP API integration) |
+| **AKS** | K8SCluster | 📋 Roadmap | Node pool management (Azure API integration) |
+| **Azure SQL** | CloudProvider | 📋 Roadmap | Server pause/resume (Azure API integration) |
 
 ### Security & Compliance
 
@@ -174,8 +174,10 @@ spec:
       type: DAG
       maxConcurrency: 3
       dependencies:
+        - from: dev-karpenter
+          to: dev-eks-nodegroups  # Karpenter first, then managed node groups
         - from: dev-db
-          to: dev-cluster  # Shutdown cluster after DB
+          to: dev-eks-nodegroups  # Shutdown cluster after DB
 
   targets:
     - name: dev-db
@@ -185,14 +187,24 @@ spec:
       parameters:
         snapshotBeforeStop: true
 
-    - name: dev-cluster
+    # EKS Managed Node Groups (via AWS API)
+    - name: dev-eks-nodegroups
       type: eks
       connectorRef:
+        kind: CloudProvider
         name: aws-dev
       parameters:
-        computePolicy:
-          mode: Both
-          order: [karpenter, managedNodeGroups]
+        clusterName: dev-cluster
+        nodeGroups: []  # empty means all node groups
+
+    # Karpenter NodePools (via Kubernetes API)
+    - name: dev-karpenter
+      type: karpenter
+      connectorRef:
+        kind: K8SCluster
+        name: dev-cluster
+      parameters:
+        nodePools: []  # empty means all NodePools
 ```
 
 **What happens:**
@@ -397,10 +409,10 @@ make test-coverage
 ├── internal/
 │   ├── controller/                 # Reconciliation logic
 │   ├── executor/                   # Executor implementations
-│   │   ├── eks/                   # EKS ManagedNodeGroups + Karpenter
+│   │   ├── eks/                   # EKS Managed Node Groups (AWS API)
+│   │   ├── karpenter/             # Karpenter NodePools (Kubernetes API)
 │   │   ├── rds/                   # RDS instances/clusters
 │   │   ├── ec2/                   # EC2 instances
-│   │   ├── karpenter/             # Karpenter NodePools
 │   │   ├── gke/                   # GKE node pools (placeholder)
 │   │   └── cloudsql/              # Cloud SQL (placeholder)
 │   ├── scheduler/                 # Schedule evaluation & DAG planner

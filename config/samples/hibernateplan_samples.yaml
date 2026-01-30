@@ -49,6 +49,9 @@ spec:
       type: DAG
       maxConcurrency: 3
       dependencies:
+        # Karpenter nodes first, then EKS managed node groups
+        - from: eks-karpenter
+          to: eks-nodegroups
         # Frontend depends on backend
         - from: frontend-asg
           to: backend-asg
@@ -60,18 +63,26 @@ spec:
           to: database-rds
 
   targets:
-    # EKS node groups
-    - name: eks-nodes
+    # EKS Managed Node Groups (via AWS API)
+    - name: eks-nodegroups
       type: eks
+      connectorRef:
+        kind: CloudProvider
+        name: aws-production
+      parameters:
+        clusterName: production-cluster
+        nodeGroups:
+          - name: app-nodes
+          - name: worker-nodes
+
+    # Karpenter NodePools (via Kubernetes API)
+    - name: eks-karpenter
+      type: karpenter
       connectorRef:
         kind: K8SCluster
         name: eks-production
       parameters:
-        managedNodeGroups:
-          - name: app-nodes
-            minSize: 0
-          - name: worker-nodes
-            minSize: 0
+        nodePools: []  # empty means all NodePools
 
     # RDS database
     - name: database-rds

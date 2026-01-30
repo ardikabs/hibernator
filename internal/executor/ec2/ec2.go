@@ -19,20 +19,16 @@ import (
 	"github.com/aws/aws-sdk-go-v2/service/sts"
 
 	"github.com/ardikabs/hibernator/internal/executor"
+	"github.com/ardikabs/hibernator/pkg/executorparams"
 )
 
 const ExecutorType = "ec2"
 
-// Parameters for the EC2 executor.
-type Parameters struct {
-	Selector Selector `json:"selector"`
-}
+// Parameters is an alias for the shared EC2 parameter type.
+type Parameters = executorparams.EC2Parameters
 
-// Selector defines how to find EC2 instances.
-type Selector struct {
-	Tags        map[string]string `json:"tags,omitempty"`
-	InstanceIDs []string          `json:"instanceIds,omitempty"`
-}
+// Selector is an alias for the shared EC2 selector type.
+type Selector = executorparams.EC2Selector
 
 // RestoreState holds EC2 restore data.
 type RestoreState struct {
@@ -46,11 +42,33 @@ type InstanceState struct {
 }
 
 // Executor implements the EC2 hibernation logic.
-type Executor struct{}
+type Executor struct {
+	ec2Factory EC2ClientFactory
+	awsConfigLoader AWSConfigLoader
+}
 
-// New creates a new EC2 executor.
+// EC2ClientFactory is a function type for creating EC2 clients.
+type EC2ClientFactory func(cfg aws.Config) EC2Client
+
+// AWSConfigLoader is a function type for loading AWS config.
+type AWSConfigLoader func(ctx context.Context, spec executor.Spec) (aws.Config, error)
+
+// New creates a new EC2 executor with real AWS clients.
 func New() *Executor {
-	return &Executor{}
+	return &Executor{
+		ec2Factory: func(cfg aws.Config) EC2Client {
+			return ec2.NewFromConfig(cfg)
+		},
+	}
+}
+
+// NewWithClients creates a new EC2 executor with injected client factories.
+// This is useful for testing with mock clients.
+func NewWithClients(ec2Factory EC2ClientFactory, awsConfigLoader AWSConfigLoader) *Executor {
+	return &Executor{
+		ec2Factory: ec2Factory,
+		awsConfigLoader: awsConfigLoader,
+	}
 }
 
 // Type returns the executor type.
@@ -88,7 +106,7 @@ func (e *Executor) Shutdown(ctx context.Context, spec executor.Spec) (executor.R
 		return executor.RestoreData{}, fmt.Errorf("load AWS config: %w", err)
 	}
 
-	client := ec2.NewFromConfig(cfg)
+	client := e.ec2Factory(cfg)
 
 	// Find instances
 	instances, err := e.findInstances(ctx, client, params.Selector)
@@ -148,7 +166,7 @@ func (e *Executor) WakeUp(ctx context.Context, spec executor.Spec, restore execu
 		return fmt.Errorf("load AWS config: %w", err)
 	}
 
-	client := ec2.NewFromConfig(cfg)
+	client := e.ec2Factory(cfg)
 
 	// Start instances that were previously running
 	var instancesToStart []string
@@ -182,6 +200,10 @@ func (e *Executor) parseParams(raw json.RawMessage) (Parameters, error) {
 }
 
 func (e *Executor) loadAWSConfig(ctx context.Context, spec executor.Spec) (aws.Config, error) {
+	if e.awsConfigLoader != nil {
+		return e.awsConfigLoader(ctx, spec)
+	}
+
 	if spec.ConnectorConfig.AWS == nil {
 		return aws.Config{}, fmt.Errorf("AWS connector config is required")
 	}
@@ -201,7 +223,7 @@ func (e *Executor) loadAWSConfig(ctx context.Context, spec executor.Spec) (aws.C
 	return cfg, nil
 }
 
-func (e *Executor) findInstances(ctx context.Context, client *ec2.Client, selector Selector) ([]types.Instance, error) {
+func (e *Executor) findInstances(ctx context.Context, client EC2Client, selector Selector) ([]types.Instance, error) {
 	input := &ec2.DescribeInstancesInput{}
 
 	// Build filters

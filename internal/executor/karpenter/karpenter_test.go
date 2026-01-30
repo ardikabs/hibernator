@@ -8,273 +8,180 @@ package karpenter
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"testing"
 
 	"github.com/ardikabs/hibernator/internal/executor"
+	"github.com/ardikabs/hibernator/pkg/executorparams"
+	"github.com/stretchr/testify/assert"
 )
+
+// ============================================================================
+// Constructor and Factory Tests
+// ============================================================================
 
 func TestNew(t *testing.T) {
 	e := New()
-	if e == nil {
-		t.Fatal("expected non-nil executor")
+	assert.NotNil(t, e)
+	assert.NotNil(t, e.k8sFactory)
+}
+
+func TestNewWithClients(t *testing.T) {
+	k8sFactory := func(ctx context.Context, spec *executor.Spec) (K8sClient, error) {
+		return nil, nil
 	}
+
+	e := NewWithClients(k8sFactory)
+	assert.NotNil(t, e)
 }
 
 func TestExecutorType(t *testing.T) {
 	e := New()
-	if e.Type() != "karpenter" {
-		t.Errorf("expected type 'karpenter', got %s", e.Type())
-	}
+	assert.Equal(t, "karpenter", e.Type())
 }
+
+// ============================================================================
+// Validation Tests
+// ============================================================================
 
 func TestValidate_MissingK8SConfig(t *testing.T) {
 	e := New()
 	spec := executor.Spec{
-		TargetName: "test-nodepool",
-		TargetType: "karpenter",
-		Parameters: json.RawMessage(`{"nodePools": ["default"]}`),
+		TargetName:      "test-cluster",
+		TargetType:      "karpenter",
+		Parameters:      json.RawMessage(`{}`),
+		ConnectorConfig: executor.ConnectorConfig{},
 	}
 	err := e.Validate(spec)
-	if err == nil {
-		t.Error("expected error for missing K8S config")
-	}
+	assert.Error(t, err)
+	assert.Contains(t, err.Error(), "K8S connector config is required")
 }
 
 func TestValidate_MissingClusterName(t *testing.T) {
 	e := New()
 	spec := executor.Spec{
-		TargetName: "test-nodepool",
+		TargetName: "test-cluster",
 		TargetType: "karpenter",
-		Parameters: json.RawMessage(`{"nodePools": ["default"]}`),
+		Parameters: json.RawMessage(`{}`),
 		ConnectorConfig: executor.ConnectorConfig{
-			K8S: &executor.K8SConnectorConfig{
-				Region: "us-east-1",
-			},
+			K8S: &executor.K8SConnectorConfig{},
 		},
 	}
 	err := e.Validate(spec)
-	if err == nil {
-		t.Error("expected error for missing cluster name")
-	}
+	assert.Error(t, err)
+	assert.Contains(t, err.Error(), "cluster name is required")
 }
 
 func TestValidate_MissingRegion(t *testing.T) {
 	e := New()
 	spec := executor.Spec{
-		TargetName: "test-nodepool",
-		TargetType: "karpenter",
-		Parameters: json.RawMessage(`{"nodePools": ["default"]}`),
-		ConnectorConfig: executor.ConnectorConfig{
-			K8S: &executor.K8SConnectorConfig{
-				ClusterName: "test-cluster",
-			},
-		},
-	}
-	err := e.Validate(spec)
-	if err == nil {
-		t.Error("expected error for missing region")
-	}
-}
-
-func TestValidate_MissingNodePools(t *testing.T) {
-	e := New()
-	spec := executor.Spec{
-		TargetName: "test-nodepool",
+		TargetName: "test-cluster",
 		TargetType: "karpenter",
 		Parameters: json.RawMessage(`{}`),
 		ConnectorConfig: executor.ConnectorConfig{
 			K8S: &executor.K8SConnectorConfig{
-				ClusterName: "test-cluster",
-				Region:      "us-east-1",
+				ClusterName: "my-cluster",
 			},
 		},
 	}
 	err := e.Validate(spec)
-	if err == nil {
-		t.Error("expected error for missing node pools")
-	}
-}
-
-func TestValidate_EmptyNodePools(t *testing.T) {
-	e := New()
-	spec := executor.Spec{
-		TargetName: "test-nodepool",
-		TargetType: "karpenter",
-		Parameters: json.RawMessage(`{"nodePools": []}`),
-		ConnectorConfig: executor.ConnectorConfig{
-			K8S: &executor.K8SConnectorConfig{
-				ClusterName: "test-cluster",
-				Region:      "us-east-1",
-			},
-		},
-	}
-	err := e.Validate(spec)
-	if err == nil {
-		t.Error("expected error for empty node pools")
-	}
+	assert.Error(t, err)
+	assert.Contains(t, err.Error(), "region is required")
 }
 
 func TestValidate_Valid(t *testing.T) {
 	e := New()
 	spec := executor.Spec{
-		TargetName: "test-nodepool",
+		TargetName: "test-cluster",
 		TargetType: "karpenter",
-		Parameters: json.RawMessage(`{"nodePools": ["default", "gpu"]}`),
+		Parameters: json.RawMessage(`{}`),
 		ConnectorConfig: executor.ConnectorConfig{
 			K8S: &executor.K8SConnectorConfig{
-				ClusterName: "test-cluster",
+				ClusterName: "my-cluster",
 				Region:      "us-east-1",
 			},
 		},
 	}
 	err := e.Validate(spec)
-	if err != nil {
-		t.Errorf("unexpected error: %v", err)
-	}
+	assert.NoError(t, err)
 }
 
-func TestNodePoolState_Marshal(t *testing.T) {
-	state := NodePoolState{
-		Name: "default",
-		DisruptionBudgets: map[string]interface{}{
-			"consolidationPolicy": "WhenEmpty",
-		},
-		Limits: map[string]interface{}{
-			"cpu":    "1000",
-			"memory": "1000Gi",
-		},
-	}
-
-	data, err := json.Marshal(state)
-	if err != nil {
-		t.Fatalf("failed to marshal: %v", err)
-	}
-
-	var decoded NodePoolState
-	if err := json.Unmarshal(data, &decoded); err != nil {
-		t.Fatalf("failed to unmarshal: %v", err)
-	}
-
-	if decoded.Name != "default" {
-		t.Errorf("expected name 'default', got %s", decoded.Name)
-	}
-	if decoded.Limits == nil {
-		t.Error("expected limits to be non-nil")
-	}
-	if decoded.DisruptionBudgets == nil {
-		t.Error("expected disruption budgets to be non-nil")
-	}
-}
-
-func TestNodePoolStates_Map(t *testing.T) {
-	states := map[string]NodePoolState{
-		"default": {
-			Name: "default",
-			Limits: map[string]interface{}{
-				"cpu": "100",
-			},
-		},
-		"gpu": {
-			Name: "gpu",
-			Limits: map[string]interface{}{
-				"nvidia.com/gpu": "10",
+func TestValidate_ValidNodePoolList(t *testing.T) {
+	e := New()
+	spec := executor.Spec{
+		TargetName: "test-cluster",
+		TargetType: "karpenter",
+		Parameters: json.RawMessage(`{"nodePools": ["default", "spot"]}`),
+		ConnectorConfig: executor.ConnectorConfig{
+			K8S: &executor.K8SConnectorConfig{
+				ClusterName: "my-cluster",
+				Region:      "us-east-1",
 			},
 		},
 	}
-
-	data, err := json.Marshal(states)
-	if err != nil {
-		t.Fatalf("failed to marshal: %v", err)
-	}
-
-	var decoded map[string]NodePoolState
-	if err := json.Unmarshal(data, &decoded); err != nil {
-		t.Fatalf("failed to unmarshal: %v", err)
-	}
-
-	if len(decoded) != 2 {
-		t.Errorf("expected 2 states, got %d", len(decoded))
-	}
-	if decoded["default"].Name != "default" {
-		t.Error("expected default state")
-	}
-	if decoded["gpu"].Name != "gpu" {
-		t.Error("expected gpu state")
-	}
+	err := e.Validate(spec)
+	assert.NoError(t, err)
 }
 
-func TestParameters_Parse(t *testing.T) {
-	tests := []struct {
-		name      string
-		json      string
-		wantErr   bool
-		wantPools int
-	}{
-		{
-			name:      "single nodepool",
-			json:      `{"nodePools": ["default"]}`,
-			wantPools: 1,
-		},
-		{
-			name:      "multiple nodepools",
-			json:      `{"nodePools": ["default", "gpu", "spot"]}`,
-			wantPools: 3,
-		},
-		{
-			name:    "invalid json",
-			json:    `{invalid}`,
-			wantErr: true,
-		},
-	}
+// ============================================================================
+// Shutdown and WakeUp Error Handling Tests
+// ============================================================================
 
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			var params struct {
-				NodePools []string `json:"nodePools"`
-			}
-			err := json.Unmarshal([]byte(tt.json), &params)
-			if (err != nil) != tt.wantErr {
-				t.Errorf("Unmarshal() error = %v, wantErr %v", err, tt.wantErr)
-			}
-			if !tt.wantErr && len(params.NodePools) != tt.wantPools {
-				t.Errorf("expected %d pools, got %d", tt.wantPools, len(params.NodePools))
-			}
-		})
-	}
-}
-
-func TestExecutor_Shutdown_InvalidParams(t *testing.T) {
+func TestShutdown_InvalidParameters(t *testing.T) {
 	e := New()
 	ctx := context.Background()
 
 	spec := executor.Spec{
-		TargetName: "test-nodepool",
+		TargetName: "test-cluster",
 		TargetType: "karpenter",
 		Parameters: json.RawMessage(`{invalid json}`),
 		ConnectorConfig: executor.ConnectorConfig{
 			K8S: &executor.K8SConnectorConfig{
-				ClusterName: "test-cluster",
+				ClusterName: "my-cluster",
 				Region:      "us-east-1",
 			},
 		},
 	}
 
 	_, err := e.Shutdown(ctx, spec)
-	if err == nil {
-		t.Error("expected error for invalid params")
-	}
+	assert.Error(t, err)
 }
 
-func TestExecutor_WakeUp_InvalidRestoreData(t *testing.T) {
+func TestShutdown_K8sFactoryError(t *testing.T) {
+	k8sFactory := func(ctx context.Context, spec *executor.Spec) (K8sClient, error) {
+		return nil, errors.New("failed to create k8s client")
+	}
+
+	e := NewWithClients(k8sFactory)
+	ctx := context.Background()
+
+	spec := executor.Spec{
+		TargetName: "test-cluster",
+		TargetType: "karpenter",
+		Parameters: json.RawMessage(`{"nodePools": ["default"]}`),
+		ConnectorConfig: executor.ConnectorConfig{
+			K8S: &executor.K8SConnectorConfig{
+				ClusterName: "my-cluster",
+				Region:      "us-east-1",
+			},
+		},
+	}
+
+	_, err := e.Shutdown(ctx, spec)
+	assert.Error(t, err)
+	assert.Contains(t, err.Error(), "create k8s client")
+}
+
+func TestWakeUp_InvalidRestoreData(t *testing.T) {
 	e := New()
 	ctx := context.Background()
 
 	spec := executor.Spec{
-		TargetName: "test-nodepool",
+		TargetName: "test-cluster",
 		TargetType: "karpenter",
 		ConnectorConfig: executor.ConnectorConfig{
 			K8S: &executor.K8SConnectorConfig{
-				ClusterName: "test-cluster",
+				ClusterName: "my-cluster",
 				Region:      "us-east-1",
 			},
 		},
@@ -286,75 +193,153 @@ func TestExecutor_WakeUp_InvalidRestoreData(t *testing.T) {
 	}
 
 	err := e.WakeUp(ctx, spec, restore)
-	if err == nil {
-		t.Error("expected error for invalid restore data")
-	}
+	assert.Error(t, err)
 }
 
-func TestNodePoolState_AllFields(t *testing.T) {
-	state := NodePoolState{
-		Name: "default",
-		Limits: map[string]interface{}{
-			"cpu":    "100",
-			"memory": "1000Gi",
-		},
-		DisruptionBudgets: map[string]interface{}{
-			"consolidationPolicy": "WhenEmpty",
-		},
+func TestWakeUp_K8sFactoryError(t *testing.T) {
+	k8sFactory := func(ctx context.Context, spec *executor.Spec) (K8sClient, error) {
+		return nil, errors.New("failed to create k8s client")
 	}
 
-	data, err := json.Marshal(state)
-	if err != nil {
-		t.Fatalf("marshal error: %v", err)
-	}
+	e := NewWithClients(k8sFactory)
+	ctx := context.Background()
 
-	var decoded NodePoolState
-	if err := json.Unmarshal(data, &decoded); err != nil {
-		t.Fatalf("unmarshal error: %v", err)
-	}
-
-	if decoded.Name != "default" {
-		t.Errorf("expected name 'default', got %s", decoded.Name)
-	}
-	if decoded.Limits == nil {
-		t.Error("expected non-nil Limits")
-	}
-	if decoded.DisruptionBudgets == nil {
-		t.Error("expected non-nil DisruptionBudgets")
-	}
-}
-
-func TestNodePoolState_Empty(t *testing.T) {
-	state := NodePoolState{
-		Name: "empty",
-	}
-
-	if state.Name != "empty" {
-		t.Errorf("expected name 'empty', got %s", state.Name)
-	}
-	if state.Limits != nil {
-		t.Error("expected nil Limits")
-	}
-	if state.DisruptionBudgets != nil {
-		t.Error("expected nil DisruptionBudgets")
-	}
-}
-
-func TestValidate_InvalidParams(t *testing.T) {
-	e := New()
 	spec := executor.Spec{
-		TargetName: "test-nodepool",
+		TargetName: "test-cluster",
 		TargetType: "karpenter",
-		Parameters: json.RawMessage(`{invalid json}`),
 		ConnectorConfig: executor.ConnectorConfig{
 			K8S: &executor.K8SConnectorConfig{
-				ClusterName: "test-cluster",
+				ClusterName: "my-cluster",
 				Region:      "us-east-1",
 			},
 		},
 	}
-	err := e.Validate(spec)
-	if err == nil {
-		t.Error("expected error for invalid params")
+
+	restoreData, _ := json.Marshal(map[string]NodePoolState{})
+	restore := executor.RestoreData{
+		Type: "karpenter",
+		Data: restoreData,
 	}
+
+	err := e.WakeUp(ctx, spec, restore)
+	assert.Error(t, err)
+	assert.Contains(t, err.Error(), "create k8s client")
+}
+
+// ============================================================================
+// Data Type Tests
+// ============================================================================
+
+func TestNodePoolState_JSON(t *testing.T) {
+	state := NodePoolState{
+		Name: "default",
+		DisruptionBudgets: map[string]interface{}{
+			"consolidateAfter": "30s",
+		},
+		Limits: map[string]interface{}{
+			"cpu":    "1000",
+			"memory": "1000Gi",
+		},
+	}
+
+	data, err := json.Marshal(state)
+	assert.NoError(t, err)
+
+	var decoded NodePoolState
+	err = json.Unmarshal(data, &decoded)
+	assert.NoError(t, err)
+	assert.Equal(t, "default", decoded.Name)
+	assert.NotNil(t, decoded.DisruptionBudgets)
+	assert.NotNil(t, decoded.Limits)
+}
+
+func TestKarpenterParameters_JSON(t *testing.T) {
+	params := executorparams.KarpenterParameters{
+		NodePools: []string{"default", "spot"},
+	}
+
+	data, _ := json.Marshal(params)
+	var decoded executorparams.KarpenterParameters
+	json.Unmarshal(data, &decoded)
+
+	assert.Equal(t, 2, len(decoded.NodePools))
+	assert.Equal(t, "default", decoded.NodePools[0])
+	assert.Equal(t, "spot", decoded.NodePools[1])
+}
+
+func TestNodePoolState_Empty(t *testing.T) {
+	emptyState := make(map[string]NodePoolState)
+	data, _ := json.Marshal(emptyState)
+
+	var decoded map[string]NodePoolState
+	err := json.Unmarshal(data, &decoded)
+	assert.NoError(t, err)
+	assert.Equal(t, 0, len(decoded))
+}
+
+func TestRestoreData_NodePoolStates(t *testing.T) {
+	states := map[string]NodePoolState{
+		"default": {
+			Name: "default",
+			DisruptionBudgets: map[string]interface{}{"consolidateAfter": "30s"},
+			Limits: map[string]interface{}{"cpu": "1000"},
+		},
+		"spot": {
+			Name: "spot",
+			Limits: map[string]interface{}{"cpu": "500"},
+		},
+	}
+
+	data, err := json.Marshal(states)
+	assert.NoError(t, err)
+
+	var decoded map[string]NodePoolState
+	err = json.Unmarshal(data, &decoded)
+	assert.NoError(t, err)
+	assert.Equal(t, 2, len(decoded))
+	assert.Equal(t, "default", decoded["default"].Name)
+	assert.Equal(t, "spot", decoded["spot"].Name)
+}
+
+func TestExecutorType_Constant(t *testing.T) {
+	e := New()
+	assert.Equal(t, "karpenter", e.Type())
+}
+
+func TestKarpenterParameters_Empty(t *testing.T) {
+	params := executorparams.KarpenterParameters{
+		NodePools: []string{},
+	}
+
+	data, _ := json.Marshal(params)
+	var decoded executorparams.KarpenterParameters
+	json.Unmarshal(data, &decoded)
+
+	assert.Equal(t, 0, len(decoded.NodePools))
+}
+
+func TestNodePoolState_AllFields(t *testing.T) {
+	state := NodePoolState{
+		Name: "premium",
+		DisruptionBudgets: map[string]interface{}{
+			"consolidateAfter":    "30s",
+			"expireAfter":         "720h",
+			"budgetPercentage":    10,
+			"nodesMaxUnavailable": 5,
+		},
+		Limits: map[string]interface{}{
+			"cpu":    "1000",
+			"memory": "1000Gi",
+		},
+	}
+
+	data, err := json.Marshal(state)
+	assert.NoError(t, err)
+
+	var decoded NodePoolState
+	err = json.Unmarshal(data, &decoded)
+	assert.NoError(t, err)
+	assert.Equal(t, "premium", decoded.Name)
+	assert.NotNil(t, decoded.DisruptionBudgets)
+	assert.NotNil(t, decoded.Limits)
 }

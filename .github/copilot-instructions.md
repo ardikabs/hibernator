@@ -234,14 +234,23 @@ This rule applies to all work on this repository and ensures user retains full c
 
 ### Running Tests
 
+**IMPORTANT**: Only run tests on specific files/packages involved in the change, not the entire codebase. This improves efficiency and reduces noise from unrelated test failures.
+
 ```bash
-# Unit tests
+# Target specific package tests (PREFERRED)
+go test ./internal/executor/karpenter/... -v
+go test ./pkg/executorparams/... -v
+
+# Multiple related packages
+go test ./internal/executor/eks/... ./internal/executor/karpenter/... -v
+
+# Unit tests for all (only when necessary)
 go test ./...
 
-# Controller tests (requires envtest)
+# Controller tests (requires envtest - skip unless changes affect controller)
 go test ./internal/controller/...
 
-# E2E tests (after fixing API mismatches)
+# E2E tests (requires envtest binaries - skip unless testing full integration)
 go test ./test/e2e/... -v
 
 # With Ginkgo

@@ -11,6 +11,7 @@ import (
 	"fmt"
 
 	"github.com/ardikabs/hibernator/internal/executor"
+	"github.com/ardikabs/hibernator/pkg/executorparams"
 )
 
 // Executor implements hibernation for GCP Cloud SQL instances.
@@ -28,10 +29,7 @@ func (e *Executor) Type() string {
 
 // Validate validates the executor spec.
 func (e *Executor) Validate(spec executor.Spec) error {
-	var params struct {
-		InstanceName string `json:"instanceName"`
-		Project      string `json:"project"`
-	}
+	var params executorparams.CloudSQLParameters
 	if err := json.Unmarshal(spec.Parameters, &params); err != nil {
 		return fmt.Errorf("parse parameters: %w", err)
 	}
@@ -48,10 +46,7 @@ func (e *Executor) Validate(spec executor.Spec) error {
 
 // Shutdown stops a Cloud SQL instance.
 func (e *Executor) Shutdown(ctx context.Context, spec executor.Spec) (executor.RestoreData, error) {
-	var params struct {
-		InstanceName string `json:"instanceName"`
-		Project      string `json:"project"`
-	}
+	var params executorparams.CloudSQLParameters
 	if err := json.Unmarshal(spec.Parameters, &params); err != nil {
 		return executor.RestoreData{}, fmt.Errorf("parse parameters: %w", err)
 	}

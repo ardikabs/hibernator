@@ -11,6 +11,7 @@ import (
 	"fmt"
 
 	"github.com/ardikabs/hibernator/internal/executor"
+	"github.com/ardikabs/hibernator/pkg/executorparams"
 	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/config"
 	"github.com/aws/aws-sdk-go-v2/credentials/stscreds"
@@ -25,11 +26,33 @@ import (
 )
 
 // Executor implements hibernation for Karpenter NodePools.
-type Executor struct{}
+type Executor struct {
+	k8sFactory K8sClientFactory
+}
 
-// New creates a new Karpenter executor.
+// K8sClientFactory is a function type for creating Kubernetes dynamic clients.
+type K8sClientFactory func(ctx context.Context, spec *executor.Spec) (K8sClient, error)
+
+// New creates a new Karpenter executor with real Kubernetes clients.
 func New() *Executor {
-	return &Executor{}
+	return &Executor{
+		k8sFactory: func(ctx context.Context, spec *executor.Spec) (K8sClient, error) {
+			executor := &Executor{}
+			_, dynamicClient, err := executor.buildKubernetesClient(ctx, spec)
+			if err != nil {
+				return nil, err
+			}
+			return dynamicClient, nil
+		},
+	}
+}
+
+// NewWithClients creates a new Karpenter executor with injected client factory.
+// This is useful for testing with mock clients.
+func NewWithClients(k8sFactory K8sClientFactory) *Executor {
+	return &Executor{
+		k8sFactory: k8sFactory,
+	}
 }
 
 // Type returns the executor type.
@@ -49,15 +72,12 @@ func (e *Executor) Validate(spec executor.Spec) error {
 		return fmt.Errorf("region is required")
 	}
 
-	var params struct {
-		NodePools []string `json:"nodePools"`
-	}
-	if err := json.Unmarshal(spec.Parameters, &params); err != nil {
-		return fmt.Errorf("parse parameters: %w", err)
-	}
-
-	if len(params.NodePools) == 0 {
-		return fmt.Errorf("at least one NodePool must be specified")
+	// NodePools is optional - empty means all NodePools
+	var params executorparams.KarpenterParameters
+	if len(spec.Parameters) > 0 {
+		if err := json.Unmarshal(spec.Parameters, &params); err != nil {
+			return fmt.Errorf("parse parameters: %w", err)
+		}
 	}
 
 	return nil
@@ -65,24 +85,39 @@ func (e *Executor) Validate(spec executor.Spec) error {
 
 // Shutdown scales Karpenter NodePools to zero by setting disruption budgets and resource limits.
 func (e *Executor) Shutdown(ctx context.Context, spec executor.Spec) (executor.RestoreData, error) {
-	var params struct {
-		NodePools []string `json:"nodePools"`
-	}
-	if err := json.Unmarshal(spec.Parameters, &params); err != nil {
-		return executor.RestoreData{}, fmt.Errorf("parse parameters: %w", err)
+	var params executorparams.KarpenterParameters
+	if len(spec.Parameters) > 0 {
+		if err := json.Unmarshal(spec.Parameters, &params); err != nil {
+			return executor.RestoreData{}, fmt.Errorf("parse parameters: %w", err)
+		}
 	}
 
-	// Build clients
-	_, dynamicClient, err := e.buildKubernetesClient(ctx, &spec)
+	// Build clients using injected factory
+	dynamicClient, err := e.k8sFactory(ctx, &spec)
 	if err != nil {
 		return executor.RestoreData{}, fmt.Errorf("build kubernetes client: %w", err)
+	}
+
+	// Determine target NodePools
+	targetNodePools := params.NodePools
+	if len(targetNodePools) == 0 {
+		// Empty nodePools means all NodePools in the cluster
+		discovered, err := e.listAllNodePools(ctx, dynamicClient)
+		if err != nil {
+			return executor.RestoreData{}, fmt.Errorf("list all NodePools: %w", err)
+		}
+		targetNodePools = discovered
+	}
+
+	if len(targetNodePools) == 0 {
+		return executor.RestoreData{}, fmt.Errorf("no NodePools found in cluster")
 	}
 
 	// Store original state
 	nodePoolStates := make(map[string]NodePoolState)
 
 	// Process each NodePool
-	for _, nodePoolName := range params.NodePools {
+	for _, nodePoolName := range targetNodePools {
 		state, err := e.scaleDownNodePool(ctx, dynamicClient, nodePoolName)
 		if err != nil {
 			return executor.RestoreData{}, fmt.Errorf("scale down NodePool %s: %w", nodePoolName, err)
@@ -113,8 +148,8 @@ func (e *Executor) WakeUp(ctx context.Context, spec executor.Spec, restore execu
 		return fmt.Errorf("unmarshal restore data: %w", err)
 	}
 
-	// Build clients
-	_, dynamicClient, err := e.buildKubernetesClient(ctx, &spec)
+	// Build clients using injected factory
+	dynamicClient, err := e.k8sFactory(ctx, &spec)
 	if err != nil {
 		return fmt.Errorf("build kubernetes client: %w", err)
 	}
@@ -129,6 +164,27 @@ func (e *Executor) WakeUp(ctx context.Context, spec executor.Spec, restore execu
 	return nil
 }
 
+// listAllNodePools discovers all Karpenter NodePools in the cluster.
+func (e *Executor) listAllNodePools(ctx context.Context, client K8sClient) ([]string, error) {
+	nodePoolGVR := schema.GroupVersionResource{
+		Group:    "karpenter.sh",
+		Version:  "v1",
+		Resource: "nodepools",
+	}
+
+	list, err := client.Resource(nodePoolGVR).List(ctx, metav1.ListOptions{})
+	if err != nil {
+		return nil, fmt.Errorf("list NodePools: %w", err)
+	}
+
+	var names []string
+	for _, item := range list.Items {
+		names = append(names, item.GetName())
+	}
+
+	return names, nil
+}
+
 // NodePoolState stores the original state of a NodePool before hibernation.
 type NodePoolState struct {
 	Name              string                 `json:"name"`
@@ -137,7 +193,7 @@ type NodePoolState struct {
 }
 
 // scaleDownNodePool scales a NodePool to prevent new nodes from being created.
-func (e *Executor) scaleDownNodePool(ctx context.Context, client dynamic.Interface, nodePoolName string) (NodePoolState, error) {
+func (e *Executor) scaleDownNodePool(ctx context.Context, client K8sClient, nodePoolName string) (NodePoolState, error) {
 	nodePoolGVR := schema.GroupVersionResource{
 		Group:    "karpenter.sh",
 		Version:  "v1",
@@ -185,7 +241,7 @@ func (e *Executor) scaleDownNodePool(ctx context.Context, client dynamic.Interfa
 }
 
 // restoreNodePool restores a NodePool to its original configuration.
-func (e *Executor) restoreNodePool(ctx context.Context, client dynamic.Interface, nodePoolName string, state NodePoolState) error {
+func (e *Executor) restoreNodePool(ctx context.Context, client K8sClient, nodePoolName string, state NodePoolState) error {
 	nodePoolGVR := schema.GroupVersionResource{
 		Group:    "karpenter.sh",
 		Version:  "v1",

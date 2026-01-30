@@ -11,6 +11,7 @@ import (
 	"fmt"
 
 	"github.com/ardikabs/hibernator/internal/executor"
+	"github.com/ardikabs/hibernator/pkg/executorparams"
 )
 
 // Executor implements hibernation for GKE node pools.
@@ -38,9 +39,7 @@ func (e *Executor) Validate(spec executor.Spec) error {
 		return fmt.Errorf("region is required")
 	}
 
-	var params struct {
-		NodePools []string `json:"nodePools"`
-	}
+	var params executorparams.GKEParameters
 	if err := json.Unmarshal(spec.Parameters, &params); err != nil {
 		return fmt.Errorf("parse parameters: %w", err)
 	}
@@ -54,9 +53,7 @@ func (e *Executor) Validate(spec executor.Spec) error {
 
 // Shutdown scales GKE node pools to zero.
 func (e *Executor) Shutdown(ctx context.Context, spec executor.Spec) (executor.RestoreData, error) {
-	var params struct {
-		NodePools []string `json:"nodePools"`
-	}
+	var params executorparams.GKEParameters
 	if err := json.Unmarshal(spec.Parameters, &params); err != nil {
 		return executor.RestoreData{}, fmt.Errorf("parse parameters: %w", err)
 	}

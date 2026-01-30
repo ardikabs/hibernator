@@ -176,6 +176,23 @@ Last updated: 2026-01-29
 | Prometheus metrics | `internal/metrics/metrics.go` | Execution duration, success/failure counters, reconcile metrics, restore data size |
 | Error recovery | `internal/recovery/recovery.go` | Automatic retry with exponential backoff, error classification (transient vs permanent), configurable retry limits |
 
+### Completed (Shared Executor Parameters Package - P2)
+
+| Component | File(s) | Notes |
+|-----------|---------|-------|
+| Shared parameter types | `pkg/executorparams/params.go` | Unified parameter structs for all executors (EC2, RDS, EKS, Karpenter, GKE, CloudSQL) |
+| Validation registry | `pkg/executorparams/validation.go` | Centralized validation with known-field detection, warnings for unknown fields |
+| Validation tests | `pkg/executorparams/validation_test.go` | 23 unit tests covering all executor parameter validation |
+| Executor integration | `internal/executor/*/` | All executors updated to use type aliases from shared package |
+| Webhook integration | `api/v1alpha1/hibernateplan_webhook.go` | Admission validation imports shared package for early parameter validation |
+
+**Design rationale for shared package:**
+- **Single source of truth**: Parameter schemas defined once in `pkg/executorparams`, used by both webhook admission and executor runtime
+- **Reduced schema drift**: No duplicate structs that could diverge between validation and execution
+- **Clean layering**: Executors remain independent from API/webhook packages (both import inward to `pkg/`)
+- **Admission warnings**: Unknown fields detected at webhook admission and returned as warnings (not errors)
+- **Runtime validation**: Executors maintain strict validation in `Validate()` method for required fields
+
 ### Next Steps
 
 **Current Focus (AWS/EKS Priority):**

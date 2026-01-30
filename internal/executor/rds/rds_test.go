@@ -10,24 +10,41 @@ import (
 	"encoding/json"
 	"testing"
 
+	"github.com/aws/aws-sdk-go-v2/aws"
+	"github.com/aws/aws-sdk-go-v2/service/rds"
+	"github.com/aws/aws-sdk-go-v2/service/rds/types"
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/mock"
+
 	"github.com/ardikabs/hibernator/internal/executor"
+	"github.com/ardikabs/hibernator/internal/executor/rds/mocks"
 )
 
 func TestNew(t *testing.T) {
 	e := New()
-	if e == nil {
-		t.Fatal("expected non-nil executor")
+	assert.NotNil(t, e)
+	assert.NotNil(t, e.rdsFactory)
+	assert.NotNil(t, e.stsFactory)
+}
+
+func TestNewWithClients(t *testing.T) {
+	mockRDS := &mocks.RDSClient{}
+	mockSTS := &mocks.STSClient{}
+
+	rdsFactory := func(cfg aws.Config) RDSClient {
+		return mockRDS
 	}
+	stsFactory := func(cfg aws.Config) STSClient {
+		return mockSTS
+	}
+
+	e := NewWithClients(rdsFactory, stsFactory, nil)
+	assert.NotNil(t, e)
 }
 
 func TestExecutorType(t *testing.T) {
 	e := New()
-	if e.Type() != ExecutorType {
-		t.Errorf("expected type '%s', got %s", ExecutorType, e.Type())
-	}
-	if e.Type() != "rds" {
-		t.Errorf("expected type 'rds', got %s", e.Type())
-	}
+	assert.Equal(t, "rds", e.Type())
 }
 
 func TestValidate_MissingAWSConfig(t *testing.T) {
@@ -38,9 +55,7 @@ func TestValidate_MissingAWSConfig(t *testing.T) {
 		Parameters: json.RawMessage(`{}`),
 	}
 	err := e.Validate(spec)
-	if err == nil {
-		t.Error("expected error for missing AWS config")
-	}
+	assert.Error(t, err)
 }
 
 func TestValidate_WithAWSConfig(t *testing.T) {
@@ -56,68 +71,351 @@ func TestValidate_WithAWSConfig(t *testing.T) {
 		},
 	}
 	err := e.Validate(spec)
-	if err != nil {
-		t.Errorf("unexpected error: %v", err)
-	}
+	assert.NoError(t, err)
 }
 
-func TestParameters_Unmarshal(t *testing.T) {
-	tests := []struct {
-		name    string
-		json    string
-		wantErr bool
-		check   func(Parameters) bool
-	}{
-		{
-			name:    "empty parameters",
-			json:    `{}`,
-			wantErr: false,
-		},
-		{
-			name:    "with snapshot before stop",
-			json:    `{"snapshotBeforeStop": true}`,
-			wantErr: false,
-			check:   func(p Parameters) bool { return p.SnapshotBeforeStop },
-		},
-		{
-			name:    "with instance ID",
-			json:    `{"instanceId": "db-instance-1"}`,
-			wantErr: false,
-			check:   func(p Parameters) bool { return p.InstanceID == "db-instance-1" },
-		},
-		{
-			name:    "with cluster ID",
-			json:    `{"clusterId": "aurora-cluster-1"}`,
-			wantErr: false,
-			check:   func(p Parameters) bool { return p.ClusterID == "aurora-cluster-1" },
-		},
-		{
-			name:    "full config",
-			json:    `{"instanceId": "db-1", "snapshotBeforeStop": true}`,
-			wantErr: false,
-		},
-		{
-			name:    "invalid json",
-			json:    `{invalid}`,
-			wantErr: true,
+func TestShutdown_MissingTarget(t *testing.T) {
+	e := New()
+	ctx := context.Background()
+
+	spec := executor.Spec{
+		TargetName: "test-db",
+		TargetType: "rds",
+		Parameters: json.RawMessage(`{}`),
+		ConnectorConfig: executor.ConnectorConfig{
+			AWS: &executor.AWSConnectorConfig{Region: "us-east-1"},
 		},
 	}
 
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			var params Parameters
-			err := json.Unmarshal([]byte(tt.json), &params)
-			if (err != nil) != tt.wantErr {
-				t.Errorf("Unmarshal() error = %v, wantErr %v", err, tt.wantErr)
-			}
-			if tt.check != nil && !tt.check(params) {
-				t.Error("check failed")
-			}
-		})
-	}
+	_, err := e.Shutdown(ctx, spec)
+	assert.Error(t, err)
+	assert.Contains(t, err.Error(), "either instanceId or clusterId")
 }
 
-func TestRestoreState_Marshal(t *testing.T) {
+func TestShutdown_InvalidParameters(t *testing.T) {
+	e := New()
+	ctx := context.Background()
+
+	spec := executor.Spec{
+		TargetName: "test-db",
+		TargetType: "rds",
+		Parameters: json.RawMessage(`{invalid json}`),
+		ConnectorConfig: executor.ConnectorConfig{
+			AWS: &executor.AWSConnectorConfig{Region: "us-east-1"},
+		},
+	}
+
+	_, err := e.Shutdown(ctx, spec)
+	assert.Error(t, err)
+	assert.Contains(t, err.Error(), "parse parameters")
+}
+
+func TestShutdown_StopInstance(t *testing.T) {
+	ctx := context.Background()
+	mockRDS := &mocks.RDSClient{}
+	mockSTS := &mocks.STSClient{}
+
+	mockRDS.On("DescribeDBInstances", mock.Anything, mock.Anything).Return(&rds.DescribeDBInstancesOutput{
+		DBInstances: []types.DBInstance{
+			{
+				DBInstanceStatus: aws.String("available"),
+				DBInstanceClass:  aws.String("db.t3.medium"),
+			},
+		},
+	}, nil)
+	mockRDS.On("StopDBInstance", mock.Anything, mock.Anything).Return(&rds.StopDBInstanceOutput{}, nil)
+
+	e := NewWithClients(
+		func(cfg aws.Config) RDSClient { return mockRDS },
+		func(cfg aws.Config) STSClient { return mockSTS },
+		nil,
+	)
+
+	spec := executor.Spec{
+		TargetName: "test-db",
+		TargetType: "rds",
+		Parameters: json.RawMessage(`{"instanceId": "db-instance-1"}`),
+		ConnectorConfig: executor.ConnectorConfig{
+			AWS: &executor.AWSConnectorConfig{Region: "us-east-1"},
+		},
+	}
+
+	restore, err := e.Shutdown(ctx, spec)
+	assert.NoError(t, err)
+
+	var state RestoreState
+	err = json.Unmarshal(restore.Data, &state)
+	assert.NoError(t, err)
+	assert.Equal(t, "db-instance-1", state.InstanceID)
+	assert.Equal(t, "db.t3.medium", state.InstanceType)
+	assert.False(t, state.WasStopped)
+
+	mockRDS.AssertExpectations(t)
+}
+
+func TestShutdown_StopInstanceAlreadyStopped(t *testing.T) {
+	ctx := context.Background()
+	mockRDS := &mocks.RDSClient{}
+	mockSTS := &mocks.STSClient{}
+
+	mockRDS.On("DescribeDBInstances", mock.Anything, mock.Anything).Return(&rds.DescribeDBInstancesOutput{
+		DBInstances: []types.DBInstance{
+			{DBInstanceStatus: aws.String("stopped")},
+		},
+	}, nil)
+
+	e := NewWithClients(
+		func(cfg aws.Config) RDSClient { return mockRDS },
+		func(cfg aws.Config) STSClient { return mockSTS },
+		nil,
+	)
+
+	spec := executor.Spec{
+		TargetName: "test-db",
+		TargetType: "rds",
+		Parameters: json.RawMessage(`{"instanceId": "db-instance-1"}`),
+		ConnectorConfig: executor.ConnectorConfig{
+			AWS: &executor.AWSConnectorConfig{Region: "us-east-1"},
+		},
+	}
+
+	restore, err := e.Shutdown(ctx, spec)
+	assert.NoError(t, err)
+
+	var state RestoreState
+	err = json.Unmarshal(restore.Data, &state)
+	assert.NoError(t, err)
+	assert.True(t, state.WasStopped)
+	mockRDS.AssertNotCalled(t, "StopDBInstance", mock.Anything, mock.Anything)
+}
+
+func TestShutdown_StopCluster(t *testing.T) {
+	ctx := context.Background()
+	mockRDS := &mocks.RDSClient{}
+	mockSTS := &mocks.STSClient{}
+
+	mockRDS.On("DescribeDBClusters", mock.Anything, mock.Anything).Return(&rds.DescribeDBClustersOutput{
+		DBClusters: []types.DBCluster{
+			{Status: aws.String("available")},
+		},
+	}, nil)
+	mockRDS.On("StopDBCluster", mock.Anything, mock.Anything).Return(&rds.StopDBClusterOutput{}, nil)
+
+	e := NewWithClients(
+		func(cfg aws.Config) RDSClient { return mockRDS },
+		func(cfg aws.Config) STSClient { return mockSTS },
+		nil,
+	)
+
+	spec := executor.Spec{
+		TargetName: "test-db",
+		TargetType: "rds",
+		Parameters: json.RawMessage(`{"clusterId": "cluster-1"}`),
+		ConnectorConfig: executor.ConnectorConfig{
+			AWS: &executor.AWSConnectorConfig{Region: "us-east-1"},
+		},
+	}
+
+	restore, err := e.Shutdown(ctx, spec)
+	assert.NoError(t, err)
+
+	var state RestoreState
+	err = json.Unmarshal(restore.Data, &state)
+	assert.NoError(t, err)
+	assert.Equal(t, "cluster-1", state.ClusterID)
+
+	mockRDS.AssertExpectations(t)
+}
+
+func TestShutdown_StopClusterAlreadyStopped(t *testing.T) {
+	ctx := context.Background()
+	mockRDS := &mocks.RDSClient{}
+	mockSTS := &mocks.STSClient{}
+
+	mockRDS.On("DescribeDBClusters", mock.Anything, mock.Anything).Return(&rds.DescribeDBClustersOutput{
+		DBClusters: []types.DBCluster{
+			{Status: aws.String("stopped")},
+		},
+	}, nil)
+
+	e := NewWithClients(
+		func(cfg aws.Config) RDSClient { return mockRDS },
+		func(cfg aws.Config) STSClient { return mockSTS },
+		nil,
+	)
+
+	spec := executor.Spec{
+		TargetName: "test-db",
+		TargetType: "rds",
+		Parameters: json.RawMessage(`{"clusterId": "cluster-1"}`),
+		ConnectorConfig: executor.ConnectorConfig{
+			AWS: &executor.AWSConnectorConfig{Region: "us-east-1"},
+		},
+	}
+
+	restore, err := e.Shutdown(ctx, spec)
+	assert.NoError(t, err)
+
+	var state RestoreState
+	err = json.Unmarshal(restore.Data, &state)
+	assert.NoError(t, err)
+	assert.True(t, state.WasStopped)
+	mockRDS.AssertNotCalled(t, "StopDBCluster", mock.Anything, mock.Anything)
+}
+
+func TestWakeUp_StartInstance(t *testing.T) {
+	ctx := context.Background()
+	mockRDS := &mocks.RDSClient{}
+	mockSTS := &mocks.STSClient{}
+
+	mockRDS.On("DescribeDBInstances", mock.Anything, mock.Anything).Return(&rds.DescribeDBInstancesOutput{
+		DBInstances: []types.DBInstance{
+			{DBInstanceStatus: aws.String("stopped")},
+		},
+	}, nil)
+	mockRDS.On("StartDBInstance", mock.Anything, mock.Anything).Return(&rds.StartDBInstanceOutput{}, nil)
+
+	e := NewWithClients(
+		func(cfg aws.Config) RDSClient { return mockRDS },
+		func(cfg aws.Config) STSClient { return mockSTS },
+		nil,
+	)
+
+	restoreData, _ := json.Marshal(RestoreState{InstanceID: "db-instance-1"})
+	restore := executor.RestoreData{Type: "rds", Data: restoreData}
+
+	spec := executor.Spec{
+		TargetName: "test-db",
+		TargetType: "rds",
+		ConnectorConfig: executor.ConnectorConfig{
+			AWS: &executor.AWSConnectorConfig{Region: "us-east-1"},
+		},
+	}
+
+	err := e.WakeUp(ctx, spec, restore)
+	assert.NoError(t, err)
+	mockRDS.AssertExpectations(t)
+}
+
+func TestWakeUp_InstanceAlreadyRunning(t *testing.T) {
+	ctx := context.Background()
+	mockRDS := &mocks.RDSClient{}
+	mockSTS := &mocks.STSClient{}
+
+	mockRDS.On("DescribeDBInstances", mock.Anything, mock.Anything).Return(&rds.DescribeDBInstancesOutput{
+		DBInstances: []types.DBInstance{
+			{DBInstanceStatus: aws.String("available")},
+		},
+	}, nil)
+
+	e := NewWithClients(
+		func(cfg aws.Config) RDSClient { return mockRDS },
+		func(cfg aws.Config) STSClient { return mockSTS },
+		nil,
+	)
+
+	restoreData, _ := json.Marshal(RestoreState{InstanceID: "db-instance-1"})
+	restore := executor.RestoreData{Type: "rds", Data: restoreData}
+
+	spec := executor.Spec{
+		TargetName: "test-db",
+		TargetType: "rds",
+		ConnectorConfig: executor.ConnectorConfig{
+			AWS: &executor.AWSConnectorConfig{Region: "us-east-1"},
+		},
+	}
+
+	err := e.WakeUp(ctx, spec, restore)
+	assert.NoError(t, err)
+	mockRDS.AssertNotCalled(t, "StartDBInstance", mock.Anything, mock.Anything)
+}
+
+func TestWakeUp_StartCluster(t *testing.T) {
+	ctx := context.Background()
+	mockRDS := &mocks.RDSClient{}
+	mockSTS := &mocks.STSClient{}
+
+	mockRDS.On("DescribeDBClusters", mock.Anything, mock.Anything).Return(&rds.DescribeDBClustersOutput{
+		DBClusters: []types.DBCluster{
+			{Status: aws.String("stopped")},
+		},
+	}, nil)
+	mockRDS.On("StartDBCluster", mock.Anything, mock.Anything).Return(&rds.StartDBClusterOutput{}, nil)
+
+	e := NewWithClients(
+		func(cfg aws.Config) RDSClient { return mockRDS },
+		func(cfg aws.Config) STSClient { return mockSTS },
+		nil,
+	)
+
+	restoreData, _ := json.Marshal(RestoreState{ClusterID: "cluster-1"})
+	restore := executor.RestoreData{Type: "rds", Data: restoreData}
+
+	spec := executor.Spec{
+		TargetName: "test-db",
+		TargetType: "rds",
+		ConnectorConfig: executor.ConnectorConfig{
+			AWS: &executor.AWSConnectorConfig{Region: "us-east-1"},
+		},
+	}
+
+	err := e.WakeUp(ctx, spec, restore)
+	assert.NoError(t, err)
+	mockRDS.AssertExpectations(t)
+}
+
+func TestWakeUp_ClusterAlreadyRunning(t *testing.T) {
+	ctx := context.Background()
+	mockRDS := &mocks.RDSClient{}
+	mockSTS := &mocks.STSClient{}
+
+	mockRDS.On("DescribeDBClusters", mock.Anything, mock.Anything).Return(&rds.DescribeDBClustersOutput{
+		DBClusters: []types.DBCluster{
+			{Status: aws.String("available")},
+		},
+	}, nil)
+
+	e := NewWithClients(
+		func(cfg aws.Config) RDSClient { return mockRDS },
+		func(cfg aws.Config) STSClient { return mockSTS },
+		nil,
+	)
+
+	restoreData, _ := json.Marshal(RestoreState{ClusterID: "cluster-1"})
+	restore := executor.RestoreData{Type: "rds", Data: restoreData}
+
+	spec := executor.Spec{
+		TargetName: "test-db",
+		TargetType: "rds",
+		ConnectorConfig: executor.ConnectorConfig{
+			AWS: &executor.AWSConnectorConfig{Region: "us-east-1"},
+		},
+	}
+
+	err := e.WakeUp(ctx, spec, restore)
+	assert.NoError(t, err)
+	mockRDS.AssertNotCalled(t, "StartDBCluster", mock.Anything, mock.Anything)
+}
+
+func TestWakeUp_InvalidRestoreData(t *testing.T) {
+	e := New()
+	ctx := context.Background()
+
+	spec := executor.Spec{
+		TargetName: "test-db",
+		TargetType: "rds",
+		ConnectorConfig: executor.ConnectorConfig{
+			AWS: &executor.AWSConnectorConfig{Region: "us-east-1"},
+		},
+	}
+
+	restore := executor.RestoreData{Type: "rds", Data: json.RawMessage(`{invalid json}`)}
+
+	err := e.WakeUp(ctx, spec, restore)
+	assert.Error(t, err)
+}
+
+func TestRestoreState_JSON(t *testing.T) {
 	state := RestoreState{
 		InstanceID:   "db-instance-1",
 		SnapshotID:   "snap-123",
@@ -126,27 +424,15 @@ func TestRestoreState_Marshal(t *testing.T) {
 	}
 
 	data, err := json.Marshal(state)
-	if err != nil {
-		t.Fatalf("failed to marshal: %v", err)
-	}
+	assert.NoError(t, err)
 
 	var decoded RestoreState
-	if err := json.Unmarshal(data, &decoded); err != nil {
-		t.Fatalf("failed to unmarshal: %v", err)
-	}
-
-	if decoded.InstanceID != "db-instance-1" {
-		t.Errorf("expected instance ID 'db-instance-1', got %s", decoded.InstanceID)
-	}
-	if decoded.SnapshotID != "snap-123" {
-		t.Errorf("expected snapshot ID 'snap-123', got %s", decoded.SnapshotID)
-	}
-	if decoded.WasStopped {
-		t.Error("expected WasStopped to be false")
-	}
-	if decoded.InstanceType != "db.t3.medium" {
-		t.Errorf("expected instance type 'db.t3.medium', got %s", decoded.InstanceType)
-	}
+	err = json.Unmarshal(data, &decoded)
+	assert.NoError(t, err)
+	assert.Equal(t, "db-instance-1", decoded.InstanceID)
+	assert.Equal(t, "snap-123", decoded.SnapshotID)
+	assert.False(t, decoded.WasStopped)
+	assert.Equal(t, "db.t3.medium", decoded.InstanceType)
 }
 
 func TestRestoreState_Cluster(t *testing.T) {
@@ -156,242 +442,32 @@ func TestRestoreState_Cluster(t *testing.T) {
 	}
 
 	data, err := json.Marshal(state)
-	if err != nil {
-		t.Fatalf("failed to marshal: %v", err)
-	}
+	assert.NoError(t, err)
 
 	var decoded RestoreState
-	if err := json.Unmarshal(data, &decoded); err != nil {
-		t.Fatalf("failed to unmarshal: %v", err)
-	}
-
-	if decoded.ClusterID != "aurora-cluster-1" {
-		t.Errorf("expected cluster ID 'aurora-cluster-1', got %s", decoded.ClusterID)
-	}
+	err = json.Unmarshal(data, &decoded)
+	assert.NoError(t, err)
+	assert.Equal(t, "aurora-cluster-1", decoded.ClusterID)
 }
 
-func TestParameters_InstanceAndCluster(t *testing.T) {
+func TestParameters_JSON(t *testing.T) {
 	params := Parameters{
 		InstanceID:         "db-1",
 		ClusterID:          "cluster-1",
 		SnapshotBeforeStop: true,
 	}
 
-	if params.InstanceID != "db-1" {
-		t.Errorf("expected instance ID 'db-1', got %s", params.InstanceID)
-	}
-	if params.ClusterID != "cluster-1" {
-		t.Errorf("expected cluster ID 'cluster-1', got %s", params.ClusterID)
-	}
-	if !params.SnapshotBeforeStop {
-		t.Error("expected SnapshotBeforeStop to be true")
-	}
-}
+	data, err := json.Marshal(params)
+	assert.NoError(t, err)
 
-func TestExecutor_ParseParams(t *testing.T) {
-	e := New()
-
-	tests := []struct {
-		name    string
-		raw     json.RawMessage
-		wantErr bool
-		check   func(Parameters) bool
-	}{
-		{
-			name:    "empty raw message",
-			raw:     nil,
-			wantErr: false,
-		},
-		{
-			name:    "empty json",
-			raw:     json.RawMessage(`{}`),
-			wantErr: false,
-		},
-		{
-			name:    "with instance ID",
-			raw:     json.RawMessage(`{"instanceId": "db-instance-1"}`),
-			wantErr: false,
-			check:   func(p Parameters) bool { return p.InstanceID == "db-instance-1" },
-		},
-		{
-			name:    "with cluster ID",
-			raw:     json.RawMessage(`{"clusterId": "aurora-cluster-1"}`),
-			wantErr: false,
-			check:   func(p Parameters) bool { return p.ClusterID == "aurora-cluster-1" },
-		},
-		{
-			name:    "with snapshot option",
-			raw:     json.RawMessage(`{"snapshotBeforeStop": true}`),
-			wantErr: false,
-			check:   func(p Parameters) bool { return p.SnapshotBeforeStop },
-		},
-		{
-			name:    "full parameters",
-			raw:     json.RawMessage(`{"instanceId": "db-1", "snapshotBeforeStop": true}`),
-			wantErr: false,
-			check: func(p Parameters) bool {
-				return p.InstanceID == "db-1" && p.SnapshotBeforeStop
-			},
-		},
-		{
-			name:    "invalid json",
-			raw:     json.RawMessage(`{invalid`),
-			wantErr: true,
-		},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			params, err := e.parseParams(tt.raw)
-			if (err != nil) != tt.wantErr {
-				t.Errorf("parseParams() error = %v, wantErr %v", err, tt.wantErr)
-				return
-			}
-			if tt.check != nil && !tt.check(params) {
-				t.Error("check failed")
-			}
-		})
-	}
-}
-
-func TestExecutor_LoadAWSConfig_NilConfig(t *testing.T) {
-	e := New()
-	ctx := context.Background()
-
-	spec := executor.Spec{
-		TargetName: "test-db",
-		TargetType: "rds",
-	}
-
-	_, err := e.loadAWSConfig(ctx, spec)
-	if err == nil {
-		t.Error("expected error for nil AWS config")
-	}
-	if err.Error() != "AWS connector config is required" {
-		t.Errorf("unexpected error: %v", err)
-	}
-}
-
-func TestExecutor_Shutdown_MissingTarget(t *testing.T) {
-	e := New()
-	ctx := context.Background()
-
-	spec := executor.Spec{
-		TargetName: "test-db",
-		TargetType: "rds",
-		Parameters: json.RawMessage(`{}`), // No instanceId or clusterId
-		ConnectorConfig: executor.ConnectorConfig{
-			AWS: &executor.AWSConnectorConfig{
-				Region: "us-east-1",
-			},
-		},
-	}
-
-	// This will fail because neither instanceId nor clusterId is specified
-	_, err := e.Shutdown(ctx, spec)
-	if err == nil {
-		t.Error("expected error for missing target")
-	}
-}
-
-func TestExecutor_Shutdown_InvalidParams(t *testing.T) {
-	e := New()
-	ctx := context.Background()
-
-	spec := executor.Spec{
-		TargetName: "test-db",
-		TargetType: "rds",
-		Parameters: json.RawMessage(`{invalid json}`),
-		ConnectorConfig: executor.ConnectorConfig{
-			AWS: &executor.AWSConnectorConfig{
-				Region: "us-east-1",
-			},
-		},
-	}
-
-	_, err := e.Shutdown(ctx, spec)
-	if err == nil {
-		t.Error("expected error for invalid params")
-	}
-}
-
-func TestExecutor_WakeUp_InvalidRestoreData(t *testing.T) {
-	e := New()
-	ctx := context.Background()
-
-	spec := executor.Spec{
-		TargetName: "test-db",
-		TargetType: "rds",
-		ConnectorConfig: executor.ConnectorConfig{
-			AWS: &executor.AWSConnectorConfig{
-				Region: "us-east-1",
-			},
-		},
-	}
-
-	restore := executor.RestoreData{
-		Type: "rds",
-		Data: json.RawMessage(`{invalid json}`),
-	}
-
-	err := e.WakeUp(ctx, spec, restore)
-	if err == nil {
-		t.Error("expected error for invalid restore data")
-	}
-}
-
-func TestRestoreState_AllFields(t *testing.T) {
-	state := RestoreState{
-		InstanceID:   "db-instance",
-		ClusterID:    "db-cluster",
-		SnapshotID:   "snap-123",
-		WasStopped:   true,
-		InstanceType: "db.r5.large",
-	}
-
-	data, err := json.Marshal(state)
-	if err != nil {
-		t.Fatalf("marshal error: %v", err)
-	}
-
-	var decoded RestoreState
-	if err := json.Unmarshal(data, &decoded); err != nil {
-		t.Fatalf("unmarshal error: %v", err)
-	}
-
-	if decoded.InstanceID != state.InstanceID {
-		t.Errorf("InstanceID mismatch: got %s, want %s", decoded.InstanceID, state.InstanceID)
-	}
-	if decoded.ClusterID != state.ClusterID {
-		t.Errorf("ClusterID mismatch: got %s, want %s", decoded.ClusterID, state.ClusterID)
-	}
-	if decoded.SnapshotID != state.SnapshotID {
-		t.Errorf("SnapshotID mismatch: got %s, want %s", decoded.SnapshotID, state.SnapshotID)
-	}
-	if decoded.WasStopped != state.WasStopped {
-		t.Errorf("WasStopped mismatch: got %v, want %v", decoded.WasStopped, state.WasStopped)
-	}
-	if decoded.InstanceType != state.InstanceType {
-		t.Errorf("InstanceType mismatch: got %s, want %s", decoded.InstanceType, state.InstanceType)
-	}
+	var decoded Parameters
+	err = json.Unmarshal(data, &decoded)
+	assert.NoError(t, err)
+	assert.Equal(t, "db-1", decoded.InstanceID)
+	assert.Equal(t, "cluster-1", decoded.ClusterID)
+	assert.True(t, decoded.SnapshotBeforeStop)
 }
 
 func TestExecutorType_Constant(t *testing.T) {
-	if ExecutorType != "rds" {
-		t.Errorf("ExecutorType = %s, want 'rds'", ExecutorType)
-	}
-}
-
-func TestParameters_Defaults(t *testing.T) {
-	var params Parameters
-
-	if params.SnapshotBeforeStop {
-		t.Error("default SnapshotBeforeStop should be false")
-	}
-	if params.InstanceID != "" {
-		t.Error("default InstanceID should be empty")
-	}
-	if params.ClusterID != "" {
-		t.Error("default ClusterID should be empty")
-	}
+	assert.Equal(t, "rds", ExecutorType)
 }

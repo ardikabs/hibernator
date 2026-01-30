@@ -8,29 +8,72 @@ package eks
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"testing"
 
+	"github.com/aws/aws-sdk-go-v2/aws"
+	"github.com/aws/aws-sdk-go-v2/service/eks"
+	"github.com/aws/aws-sdk-go-v2/service/eks/types"
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/mock"
+
 	"github.com/ardikabs/hibernator/internal/executor"
+	"github.com/ardikabs/hibernator/internal/executor/eks/mocks"
 )
 
 func TestNew(t *testing.T) {
 	e := New()
-	if e == nil {
-		t.Fatal("expected non-nil executor")
-	}
+	assert.NotNil(t, e)
+	assert.NotNil(t, e.eksFactory)
+	assert.NotNil(t, e.stsFactory)
+}
+
+func TestNewWithClients(t *testing.T) {
+	mockEKS := &mocks.EKSClient{}
+	mockSTS := &mocks.STSClient{}
+
+	eksFactory := func(cfg aws.Config) EKSClient { return mockEKS }
+	stsFactory := func(cfg aws.Config) STSClient { return mockSTS }
+
+	e := NewWithClients(eksFactory, stsFactory, nil)
+	assert.NotNil(t, e)
 }
 
 func TestExecutorType(t *testing.T) {
 	e := New()
-	if e.Type() != ExecutorType {
-		t.Errorf("expected type '%s', got %s", ExecutorType, e.Type())
-	}
-	if e.Type() != "eks" {
-		t.Errorf("expected type 'eks', got %s", e.Type())
-	}
+	assert.Equal(t, "eks", e.Type())
+	assert.Equal(t, ExecutorType, e.Type())
 }
 
-func TestValidate_MissingK8SConfig(t *testing.T) {
+func TestValidate_MissingAWSConfig(t *testing.T) {
+	e := New()
+	spec := executor.Spec{
+		TargetName:      "test-cluster",
+		TargetType:      "eks",
+		Parameters:      json.RawMessage(`{"clusterName": "my-cluster"}`),
+		ConnectorConfig: executor.ConnectorConfig{},
+	}
+	err := e.Validate(spec)
+	assert.Error(t, err)
+	assert.Contains(t, err.Error(), "AWS connector config required")
+}
+
+func TestValidate_MissingRegion(t *testing.T) {
+	e := New()
+	spec := executor.Spec{
+		TargetName: "test-cluster",
+		TargetType: "eks",
+		Parameters: json.RawMessage(`{"clusterName": "my-cluster"}`),
+		ConnectorConfig: executor.ConnectorConfig{
+			AWS: &executor.AWSConnectorConfig{},
+		},
+	}
+	err := e.Validate(spec)
+	assert.Error(t, err)
+	assert.Contains(t, err.Error(), "region is required")
+}
+
+func TestValidate_MissingClusterName(t *testing.T) {
 	e := New()
 	spec := executor.Spec{
 		TargetName: "test-cluster",
@@ -41,237 +84,223 @@ func TestValidate_MissingK8SConfig(t *testing.T) {
 		},
 	}
 	err := e.Validate(spec)
-	if err == nil {
-		t.Error("expected error for missing K8S config")
-	}
+	assert.Error(t, err)
+	assert.Contains(t, err.Error(), "clusterName is required")
 }
 
-func TestValidate_WithK8SConfig(t *testing.T) {
+func TestValidate_Valid(t *testing.T) {
 	e := New()
 	spec := executor.Spec{
 		TargetName: "test-cluster",
 		TargetType: "eks",
-		Parameters: json.RawMessage(`{}`),
+		Parameters: json.RawMessage(`{"clusterName": "my-cluster"}`),
 		ConnectorConfig: executor.ConnectorConfig{
-			K8S: &executor.K8SConnectorConfig{
-				ClusterName: "test-cluster",
-				Region:      "us-east-1",
-			},
+			AWS: &executor.AWSConnectorConfig{Region: "us-east-1"},
 		},
 	}
 	err := e.Validate(spec)
-	if err != nil {
-		t.Errorf("unexpected error: %v", err)
-	}
+	assert.NoError(t, err)
 }
 
-func TestParameters_Unmarshal(t *testing.T) {
-	tests := []struct {
-		name    string
-		json    string
-		wantErr bool
-	}{
-		{
-			name:    "empty parameters",
-			json:    `{}`,
-			wantErr: false,
-		},
-		{
-			name:    "with compute policy",
-			json:    `{"computePolicy": {"mode": "Both", "order": ["karpenter", "managedNodeGroups"]}}`,
-			wantErr: false,
-		},
-		{
-			name:    "with karpenter config",
-			json:    `{"karpenter": {"targetNodePools": ["default"], "strategy": "DeleteNodes"}}`,
-			wantErr: false,
-		},
-		{
-			name:    "with managed node groups",
-			json:    `{"managedNodeGroups": {"strategy": "ScaleToZero"}}`,
-			wantErr: false,
-		},
-		{
-			name:    "invalid json",
-			json:    `{invalid}`,
-			wantErr: true,
-		},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			var params Parameters
-			err := json.Unmarshal([]byte(tt.json), &params)
-			if (err != nil) != tt.wantErr {
-				t.Errorf("Unmarshal() error = %v, wantErr %v", err, tt.wantErr)
-			}
-		})
-	}
-}
-
-func TestRestoreState_Marshal(t *testing.T) {
-	state := RestoreState{
-		ManagedNodeGroups: map[string]NodeGroupState{
-			"ng-1": {DesiredSize: 3, MinSize: 1, MaxSize: 5},
-		},
-		Karpenter: &KarpenterState{
-			NodePools: []string{"default"},
-		},
-	}
-
-	data, err := json.Marshal(state)
-	if err != nil {
-		t.Fatalf("failed to marshal: %v", err)
-	}
-
-	var decoded RestoreState
-	if err := json.Unmarshal(data, &decoded); err != nil {
-		t.Fatalf("failed to unmarshal: %v", err)
-	}
-
-	if decoded.ManagedNodeGroups["ng-1"].DesiredSize != 3 {
-		t.Error("expected desired size 3")
-	}
-	if len(decoded.Karpenter.NodePools) != 1 {
-		t.Error("expected 1 node pool")
-	}
-}
-
-func TestNodeGroupState(t *testing.T) {
-	state := NodeGroupState{
-		DesiredSize: 2,
-		MinSize:     1,
-		MaxSize:     10,
-	}
-	if state.DesiredSize != 2 {
-		t.Errorf("expected desired 2, got %d", state.DesiredSize)
-	}
-	if state.MinSize != 1 {
-		t.Errorf("expected min 1, got %d", state.MinSize)
-	}
-	if state.MaxSize != 10 {
-		t.Errorf("expected max 10, got %d", state.MaxSize)
-	}
-}
-
-func TestComputePolicy(t *testing.T) {
-	policy := ComputePolicy{
-		Mode:  "Both",
-		Order: []string{"karpenter", "managedNodeGroups"},
-	}
-	if policy.Mode != "Both" {
-		t.Errorf("expected mode 'Both', got %s", policy.Mode)
-	}
-	if len(policy.Order) != 2 {
-		t.Errorf("expected 2 order items, got %d", len(policy.Order))
-	}
-}
-
-func TestKarpenterConfig(t *testing.T) {
-	karpenter := Karpenter{
-		TargetNodePools: []string{"default", "gpu"},
-		Strategy:        "DeleteNodes",
-	}
-	if karpenter.Strategy != "DeleteNodes" {
-		t.Errorf("expected strategy 'DeleteNodes', got %s", karpenter.Strategy)
-	}
-	if len(karpenter.TargetNodePools) != 2 {
-		t.Errorf("expected 2 node pools, got %d", len(karpenter.TargetNodePools))
-	}
-}
-
-func TestManagedNGsConfig(t *testing.T) {
-	mng := ManagedNGs{
-		Strategy: "ScaleToZero",
-	}
-	if mng.Strategy != "ScaleToZero" {
-		t.Errorf("expected strategy 'ScaleToZero', got %s", mng.Strategy)
-	}
-}
-
-func TestExecutor_ParseParams(t *testing.T) {
+func TestValidate_WithNodeGroups(t *testing.T) {
 	e := New()
+	spec := executor.Spec{
+		TargetName: "test-cluster",
+		TargetType: "eks",
+		Parameters: json.RawMessage(`{"clusterName": "my-cluster", "nodeGroups": [{"name": "ng-1"}, {"name": "ng-2"}]}`),
+		ConnectorConfig: executor.ConnectorConfig{
+			AWS: &executor.AWSConnectorConfig{Region: "us-east-1"},
+		},
+	}
+	err := e.Validate(spec)
+	assert.NoError(t, err)
+}
 
-	tests := []struct {
-		name    string
-		raw     json.RawMessage
-		wantErr bool
-		check   func(Parameters) bool
-	}{
-		{
-			name:    "empty raw message",
-			raw:     nil,
-			wantErr: false,
-		},
-		{
-			name:    "empty json object",
-			raw:     json.RawMessage(`{}`),
-			wantErr: false,
-		},
-		{
-			name:    "with compute policy mode",
-			raw:     json.RawMessage(`{"computePolicy": {"mode": "Both"}}`),
-			wantErr: false,
-			check:   func(p Parameters) bool { return p.ComputePolicy.Mode == "Both" },
-		},
-		{
-			name:    "with karpenter config",
-			raw:     json.RawMessage(`{"karpenter": {"targetNodePools": ["default"], "strategy": "DeleteNodes"}}`),
-			wantErr: false,
-			check: func(p Parameters) bool {
-				return p.Karpenter != nil && p.Karpenter.Strategy == "DeleteNodes" && len(p.Karpenter.TargetNodePools) == 1
+func TestShutdown_WithSpecificNodeGroups(t *testing.T) {
+	ctx := context.Background()
+
+	mockEKS := &mocks.EKSClient{}
+
+	// Setup expectations for DescribeNodegroup calls
+	mockEKS.On("DescribeNodegroup", mock.Anything, &eks.DescribeNodegroupInput{
+		ClusterName:   aws.String("my-cluster"),
+		NodegroupName: aws.String("ng-1"),
+	}).Return(&eks.DescribeNodegroupOutput{
+		Nodegroup: &types.Nodegroup{
+			ScalingConfig: &types.NodegroupScalingConfig{
+				DesiredSize: aws.Int32(3),
+				MinSize:     aws.Int32(1),
+				MaxSize:     aws.Int32(5),
 			},
 		},
-		{
-			name:    "with managed node groups",
-			raw:     json.RawMessage(`{"managedNodeGroups": {"strategy": "ScaleToZero"}}`),
-			wantErr: false,
-			check:   func(p Parameters) bool { return p.ManagedNGs != nil && p.ManagedNGs.Strategy == "ScaleToZero" },
-		},
-		{
-			name:    "invalid json",
-			raw:     json.RawMessage(`{invalid`),
-			wantErr: true,
-		},
-	}
+	}, nil)
 
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			params, err := e.parseParams(tt.raw)
-			if (err != nil) != tt.wantErr {
-				t.Errorf("parseParams() error = %v, wantErr %v", err, tt.wantErr)
-				return
-			}
-			if tt.check != nil && !tt.check(params) {
-				t.Error("check failed")
-			}
-		})
-	}
-}
+	// Setup expectations for UpdateNodegroupConfig calls
+	mockEKS.On("UpdateNodegroupConfig", mock.Anything, mock.MatchedBy(func(input *eks.UpdateNodegroupConfigInput) bool {
+		return aws.ToString(input.ClusterName) == "my-cluster" &&
+			aws.ToString(input.NodegroupName) == "ng-1" &&
+			aws.ToInt32(input.ScalingConfig.DesiredSize) == 0
+	})).Return(&eks.UpdateNodegroupConfigOutput{}, nil)
 
-func TestExecutor_Shutdown_InvalidParams(t *testing.T) {
-	e := New()
-	ctx := context.Background()
+	eksFactory := func(cfg aws.Config) EKSClient { return mockEKS }
+	stsFactory := func(cfg aws.Config) STSClient { return &mocks.STSClient{} }
+
+	e := NewWithClients(eksFactory, stsFactory, nil)
 
 	spec := executor.Spec{
 		TargetName: "test-cluster",
 		TargetType: "eks",
-		Parameters: json.RawMessage(`{invalid json}`),
+		Parameters: json.RawMessage(`{"clusterName": "my-cluster", "nodeGroups": [{"name": "ng-1"}]}`),
 		ConnectorConfig: executor.ConnectorConfig{
-			K8S: &executor.K8SConnectorConfig{
-				ClusterName: "test-cluster",
-				Region:      "us-east-1",
+			AWS: &executor.AWSConnectorConfig{Region: "us-east-1"},
+		},
+	}
+
+	restore, err := e.Shutdown(ctx, spec)
+	assert.NoError(t, err)
+	assert.Equal(t, "eks", restore.Type)
+
+	var state RestoreState
+	err = json.Unmarshal(restore.Data, &state)
+	assert.NoError(t, err)
+	assert.Equal(t, "my-cluster", state.ClusterName)
+	assert.Equal(t, 1, len(state.NodeGroups))
+	assert.Equal(t, int32(3), state.NodeGroups["ng-1"].DesiredSize)
+	assert.Equal(t, int32(1), state.NodeGroups["ng-1"].MinSize)
+
+	mockEKS.AssertExpectations(t)
+}
+
+func TestShutdown_WithListAllNodeGroups(t *testing.T) {
+	ctx := context.Background()
+
+	mockEKS := &mocks.EKSClient{}
+
+	// Setup expectation for ListNodegroups
+	mockEKS.On("ListNodegroups", mock.Anything, &eks.ListNodegroupsInput{
+		ClusterName: aws.String("my-cluster"),
+	}).Return(&eks.ListNodegroupsOutput{
+		Nodegroups: []string{"ng-1", "ng-2"},
+	}, nil)
+
+	// Setup expectations for DescribeNodegroup calls for both node groups
+	mockEKS.On("DescribeNodegroup", mock.Anything, mock.MatchedBy(func(input *eks.DescribeNodegroupInput) bool {
+		return aws.ToString(input.ClusterName) == "my-cluster"
+	})).Return(&eks.DescribeNodegroupOutput{
+		Nodegroup: &types.Nodegroup{
+			ScalingConfig: &types.NodegroupScalingConfig{
+				DesiredSize: aws.Int32(3),
+				MinSize:     aws.Int32(1),
+				MaxSize:     aws.Int32(5),
 			},
+		},
+	}, nil)
+
+	// Setup expectations for UpdateNodegroupConfig calls
+	mockEKS.On("UpdateNodegroupConfig", mock.Anything, mock.MatchedBy(func(input *eks.UpdateNodegroupConfigInput) bool {
+		return aws.ToString(input.ClusterName) == "my-cluster" &&
+			aws.ToInt32(input.ScalingConfig.DesiredSize) == 0
+	})).Return(&eks.UpdateNodegroupConfigOutput{}, nil)
+
+	eksFactory := func(cfg aws.Config) EKSClient { return mockEKS }
+	stsFactory := func(cfg aws.Config) STSClient { return &mocks.STSClient{} }
+
+	e := NewWithClients(eksFactory, stsFactory, nil)
+
+	spec := executor.Spec{
+		TargetName: "test-cluster",
+		TargetType: "eks",
+		Parameters: json.RawMessage(`{"clusterName": "my-cluster"}`), // Empty nodeGroups means all
+		ConnectorConfig: executor.ConnectorConfig{
+			AWS: &executor.AWSConnectorConfig{Region: "us-east-1"},
+		},
+	}
+
+	restore, err := e.Shutdown(ctx, spec)
+	assert.NoError(t, err)
+
+	var state RestoreState
+	err = json.Unmarshal(restore.Data, &state)
+	assert.NoError(t, err)
+	assert.Equal(t, 2, len(state.NodeGroups))
+
+	mockEKS.AssertExpectations(t)
+}
+
+func TestShutdown_DescribeNodegroupError(t *testing.T) {
+	ctx := context.Background()
+
+	mockEKS := &mocks.EKSClient{}
+
+	// Setup expectation to return error
+	mockEKS.On("DescribeNodegroup", mock.Anything, mock.Anything).
+		Return(nil, errors.New("access denied"))
+
+	eksFactory := func(cfg aws.Config) EKSClient { return mockEKS }
+	stsFactory := func(cfg aws.Config) STSClient { return &mocks.STSClient{} }
+
+	e := NewWithClients(eksFactory, stsFactory, nil)
+
+	spec := executor.Spec{
+		TargetName: "test-cluster",
+		TargetType: "eks",
+		Parameters: json.RawMessage(`{"clusterName": "my-cluster", "nodeGroups": [{"name": "ng-1"}]}`),
+		ConnectorConfig: executor.ConnectorConfig{
+			AWS: &executor.AWSConnectorConfig{Region: "us-east-1"},
 		},
 	}
 
 	_, err := e.Shutdown(ctx, spec)
-	if err == nil {
-		t.Error("expected error for invalid params")
-	}
+	assert.Error(t, err)
+	assert.Contains(t, err.Error(), "access denied")
 }
 
-func TestExecutor_WakeUp_InvalidRestoreData(t *testing.T) {
+func TestWakeUp_RestoreNodeGroups(t *testing.T) {
+	ctx := context.Background()
+
+	mockEKS := &mocks.EKSClient{}
+
+	// Setup expectation for UpdateNodegroupConfig call during restore
+	mockEKS.On("UpdateNodegroupConfig", mock.Anything, mock.MatchedBy(func(input *eks.UpdateNodegroupConfigInput) bool {
+		return aws.ToString(input.ClusterName) == "my-cluster" &&
+			aws.ToString(input.NodegroupName) == "ng-1" &&
+			aws.ToInt32(input.ScalingConfig.DesiredSize) == 3 // Restored to original
+	})).Return(&eks.UpdateNodegroupConfigOutput{}, nil)
+
+	eksFactory := func(cfg aws.Config) EKSClient { return mockEKS }
+	stsFactory := func(cfg aws.Config) STSClient { return &mocks.STSClient{} }
+
+	e := NewWithClients(eksFactory, stsFactory, nil)
+
+	restoreState := RestoreState{
+		ClusterName: "my-cluster",
+		NodeGroups: map[string]NodeGroupState{
+			"ng-1": {DesiredSize: 3, MinSize: 1, MaxSize: 5},
+		},
+	}
+
+	restoreData, _ := json.Marshal(restoreState)
+
+	spec := executor.Spec{
+		TargetName: "test-cluster",
+		TargetType: "eks",
+		ConnectorConfig: executor.ConnectorConfig{
+			AWS: &executor.AWSConnectorConfig{Region: "us-east-1"},
+		},
+	}
+
+	restore := executor.RestoreData{
+		Type: "eks",
+		Data: restoreData,
+	}
+
+	err := e.WakeUp(ctx, spec, restore)
+	assert.NoError(t, err)
+
+	mockEKS.AssertExpectations(t)
+}
+
+func TestWakeUp_InvalidRestoreData(t *testing.T) {
 	e := New()
 	ctx := context.Background()
 
@@ -279,10 +308,7 @@ func TestExecutor_WakeUp_InvalidRestoreData(t *testing.T) {
 		TargetName: "test-cluster",
 		TargetType: "eks",
 		ConnectorConfig: executor.ConnectorConfig{
-			K8S: &executor.K8SConnectorConfig{
-				ClusterName: "test-cluster",
-				Region:      "us-east-1",
-			},
+			AWS: &executor.AWSConnectorConfig{Region: "us-east-1"},
 		},
 	}
 
@@ -292,132 +318,84 @@ func TestExecutor_WakeUp_InvalidRestoreData(t *testing.T) {
 	}
 
 	err := e.WakeUp(ctx, spec, restore)
-	if err == nil {
-		t.Error("expected error for invalid restore data")
-	}
+	assert.Error(t, err)
 }
 
-func TestRestoreState_AllFields(t *testing.T) {
+func TestShutdown_InvalidParameters(t *testing.T) {
+	e := New()
+	ctx := context.Background()
+
+	spec := executor.Spec{
+		TargetName: "test-cluster",
+		TargetType: "eks",
+		Parameters: json.RawMessage(`{invalid json}`),
+		ConnectorConfig: executor.ConnectorConfig{
+			AWS: &executor.AWSConnectorConfig{Region: "us-east-1"},
+		},
+	}
+
+	_, err := e.Shutdown(ctx, spec)
+	assert.Error(t, err)
+}
+
+// ============================================================================
+// Data type tests
+// ============================================================================
+
+func TestRestoreState_JSON(t *testing.T) {
 	state := RestoreState{
-		ManagedNodeGroups: map[string]NodeGroupState{
+		ClusterName: "my-cluster",
+		NodeGroups: map[string]NodeGroupState{
 			"ng-1": {DesiredSize: 3, MinSize: 1, MaxSize: 5},
 			"ng-2": {DesiredSize: 5, MinSize: 2, MaxSize: 10},
 		},
-		Karpenter: &KarpenterState{
-			NodePools: []string{"default", "gpu"},
+	}
+
+	data, err := json.Marshal(state)
+	assert.NoError(t, err)
+
+	var decoded RestoreState
+	err = json.Unmarshal(data, &decoded)
+	assert.NoError(t, err)
+	assert.Equal(t, "my-cluster", decoded.ClusterName)
+	assert.Equal(t, 2, len(decoded.NodeGroups))
+	assert.Equal(t, int32(3), decoded.NodeGroups["ng-1"].DesiredSize)
+	assert.Equal(t, int32(5), decoded.NodeGroups["ng-2"].DesiredSize)
+}
+
+func TestNodeGroupState_JSON(t *testing.T) {
+	state := NodeGroupState{
+		DesiredSize: 3,
+		MinSize:     1,
+		MaxSize:     5,
+	}
+
+	data, _ := json.Marshal(state)
+	var decoded NodeGroupState
+	json.Unmarshal(data, &decoded)
+
+	assert.Equal(t, int32(3), decoded.DesiredSize)
+	assert.Equal(t, int32(1), decoded.MinSize)
+	assert.Equal(t, int32(5), decoded.MaxSize)
+}
+
+func TestParameters_JSON(t *testing.T) {
+	params := Parameters{
+		ClusterName: "my-cluster",
+		NodeGroups: []NodeGroup{
+			{Name: "ng-1"},
+			{Name: "ng-2"},
 		},
 	}
 
-	data, err := json.Marshal(state)
-	if err != nil {
-		t.Fatalf("marshal error: %v", err)
-	}
+	data, _ := json.Marshal(params)
+	var decoded Parameters
+	json.Unmarshal(data, &decoded)
 
-	var decoded RestoreState
-	if err := json.Unmarshal(data, &decoded); err != nil {
-		t.Fatalf("unmarshal error: %v", err)
-	}
-
-	if len(decoded.ManagedNodeGroups) != 2 {
-		t.Errorf("expected 2 node groups, got %d", len(decoded.ManagedNodeGroups))
-	}
-
-	ng1 := decoded.ManagedNodeGroups["ng-1"]
-	if ng1.DesiredSize != 3 || ng1.MinSize != 1 || ng1.MaxSize != 5 {
-		t.Error("ng-1 state mismatch")
-	}
-
-	if decoded.Karpenter == nil {
-		t.Fatal("expected Karpenter state")
-	}
-	if len(decoded.Karpenter.NodePools) != 2 {
-		t.Errorf("expected 2 node pools, got %d", len(decoded.Karpenter.NodePools))
-	}
+	assert.Equal(t, "my-cluster", decoded.ClusterName)
+	assert.Equal(t, 2, len(decoded.NodeGroups))
 }
 
 func TestExecutorType_Constant(t *testing.T) {
-	if ExecutorType != "eks" {
-		t.Errorf("ExecutorType = %s, want 'eks'", ExecutorType)
-	}
-}
-
-func TestParameters_Defaults(t *testing.T) {
-	var params Parameters
-
-	if params.ComputePolicy.Mode != "" {
-		t.Error("default ComputePolicy.Mode should be empty")
-	}
-	if params.Karpenter != nil {
-		t.Error("default Karpenter should be nil")
-	}
-	if params.ManagedNGs != nil {
-		t.Error("default ManagedNGs should be nil")
-	}
-}
-
-func TestKarpenterState_Marshal(t *testing.T) {
-	state := KarpenterState{
-		NodePools: []string{"default", "spot", "gpu"},
-	}
-
-	data, err := json.Marshal(state)
-	if err != nil {
-		t.Fatalf("marshal error: %v", err)
-	}
-
-	var decoded KarpenterState
-	if err := json.Unmarshal(data, &decoded); err != nil {
-		t.Fatalf("unmarshal error: %v", err)
-	}
-
-	if len(decoded.NodePools) != 3 {
-		t.Errorf("expected 3 node pools, got %d", len(decoded.NodePools))
-	}
-}
-
-func TestRestoreState_EmptyNodeGroups(t *testing.T) {
-	state := RestoreState{
-		ManagedNodeGroups: make(map[string]NodeGroupState),
-	}
-
-	data, err := json.Marshal(state)
-	if err != nil {
-		t.Fatalf("marshal error: %v", err)
-	}
-
-	var decoded RestoreState
-	if err := json.Unmarshal(data, &decoded); err != nil {
-		t.Fatalf("unmarshal error: %v", err)
-	}
-
-	if len(decoded.ManagedNodeGroups) != 0 {
-		t.Errorf("expected 0 node groups, got %d", len(decoded.ManagedNodeGroups))
-	}
-}
-
-func TestComputePolicy_WithOrder(t *testing.T) {
-	policy := ComputePolicy{
-		Mode:  "Both",
-		Order: []string{"managedNodeGroups", "karpenter"},
-	}
-
-	data, err := json.Marshal(policy)
-	if err != nil {
-		t.Fatalf("marshal error: %v", err)
-	}
-
-	var decoded ComputePolicy
-	if err := json.Unmarshal(data, &decoded); err != nil {
-		t.Fatalf("unmarshal error: %v", err)
-	}
-
-	if decoded.Mode != "Both" {
-		t.Errorf("expected mode 'Both', got %s", decoded.Mode)
-	}
-	if len(decoded.Order) != 2 {
-		t.Errorf("expected 2 order items, got %d", len(decoded.Order))
-	}
-	if decoded.Order[0] != "managedNodeGroups" {
-		t.Errorf("expected first order 'managedNodeGroups', got %s", decoded.Order[0])
-	}
+	assert.Equal(t, "eks", ExecutorType)
 }

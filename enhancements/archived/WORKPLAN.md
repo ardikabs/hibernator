@@ -232,7 +232,7 @@ spec:
           order: [karpenter, managedNodeGroups]
 
         karpenter:
-          targetNodePools: ["default"] # optional, unset = all
+          nodePools: ["default"] # optional, empty = all NodePools
           strategy: DeleteNodes
 
         managedNodeGroups:
