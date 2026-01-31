@@ -39,6 +39,7 @@ func main() {
 	var enableLeaderElection bool
 	var runnerImage string
 	var controlPlaneEndpoint string
+	var runnerServiceAccount string
 
 	flag.StringVar(&metricsAddr, "metrics-bind-address", ":8080", "The address the metric endpoint binds to.")
 	flag.StringVar(&probeAddr, "health-probe-bind-address", ":8081", "The address the probe endpoint binds to.")
@@ -49,6 +50,8 @@ func main() {
 		"The runner container image to use for execution jobs.")
 	flag.StringVar(&controlPlaneEndpoint, "control-plane-endpoint", "",
 		"The endpoint for runner streaming callbacks.")
+	flag.StringVar(&runnerServiceAccount, "runner-service-account", "hibernator-runner",
+		"The ServiceAccount name used by runner pods.")
 
 	opts := zap.Options{
 		Development: true,
@@ -82,6 +85,7 @@ func main() {
 		RestoreManager:       restore.NewManager(mgr.GetClient()),
 		ControlPlaneEndpoint: controlPlaneEndpoint,
 		RunnerImage:          runnerImage,
+		RunnerServiceAccount: runnerServiceAccount,
 	}).SetupWithManager(mgr); err != nil {
 		setupLog.Error(err, "unable to create controller", "controller", "HibernatePlan")
 		os.Exit(1)

@@ -13,23 +13,19 @@ import (
 	"time"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
-	"github.com/aws/aws-sdk-go-v2/config"
-	"github.com/aws/aws-sdk-go-v2/credentials/stscreds"
 	"github.com/aws/aws-sdk-go-v2/service/rds"
 	"github.com/aws/aws-sdk-go-v2/service/rds/types"
 	"github.com/aws/aws-sdk-go-v2/service/sts"
 
 	"github.com/ardikabs/hibernator/internal/executor"
+	"github.com/ardikabs/hibernator/pkg/awsutil"
+	"github.com/ardikabs/hibernator/pkg/executorparams"
 )
 
 const ExecutorType = "rds"
 
-// Parameters for the RDS executor.
-type Parameters struct {
-	SnapshotBeforeStop bool   `json:"snapshotBeforeStop,omitempty"`
-	InstanceID         string `json:"instanceId,omitempty"`
-	ClusterID          string `json:"clusterId,omitempty"`
-}
+// Parameters is an alias for the shared RDS parameter type.
+type Parameters = executorparams.RDSParameters
 
 // RestoreState holds RDS restore data.
 type RestoreState struct {
@@ -41,11 +37,41 @@ type RestoreState struct {
 }
 
 // Executor implements the RDS hibernation logic.
-type Executor struct{}
+type Executor struct {
+	rdsFactory      RDSClientFactory
+	stsFactory      STSClientFactory
+	awsConfigLoader AWSConfigLoader
+}
+
+// RDSClientFactory is a function type for creating RDS clients.
+type RDSClientFactory func(cfg aws.Config) RDSClient
+
+// STSClientFactory is a function type for creating STS clients.
+type STSClientFactory func(cfg aws.Config) STSClient
+
+// AWSConfigLoader is a function type for loading AWS config.
+type AWSConfigLoader func(ctx context.Context, spec executor.Spec) (aws.Config, error)
 
 // New creates a new RDS executor.
 func New() *Executor {
-	return &Executor{}
+	return &Executor{
+		rdsFactory: func(cfg aws.Config) RDSClient {
+			return rds.NewFromConfig(cfg)
+		},
+		stsFactory: func(cfg aws.Config) STSClient {
+			return sts.NewFromConfig(cfg)
+		},
+	}
+}
+
+// NewWithClients creates a new RDS executor with injected client factories.
+// This is useful for testing with mock clients.
+func NewWithClients(rdsFactory RDSClientFactory, stsFactory STSClientFactory, awsConfigLoader AWSConfigLoader) *Executor {
+	return &Executor{
+		rdsFactory:      rdsFactory,
+		stsFactory:      stsFactory,
+		awsConfigLoader: awsConfigLoader,
+	}
 }
 
 // Type returns the executor type.
@@ -73,8 +99,8 @@ func (e *Executor) Shutdown(ctx context.Context, spec executor.Spec) (executor.R
 		return executor.RestoreData{}, fmt.Errorf("load AWS config: %w", err)
 	}
 
-	client := rds.NewFromConfig(cfg)
-	restoreState := RestoreState{}
+	client := e.rdsFactory(cfg)
+	var restoreState RestoreState
 
 	if params.InstanceID != "" {
 		state, err := e.stopInstance(ctx, client, params)
@@ -115,7 +141,7 @@ func (e *Executor) WakeUp(ctx context.Context, spec executor.Spec, restore execu
 		return fmt.Errorf("load AWS config: %w", err)
 	}
 
-	client := rds.NewFromConfig(cfg)
+	client := e.rdsFactory(cfg)
 
 	if restoreState.InstanceID != "" {
 		if err := e.startInstance(ctx, client, restoreState.InstanceID); err != nil {
@@ -142,26 +168,18 @@ func (e *Executor) parseParams(raw json.RawMessage) (Parameters, error) {
 }
 
 func (e *Executor) loadAWSConfig(ctx context.Context, spec executor.Spec) (aws.Config, error) {
+	if e.awsConfigLoader != nil {
+		return e.awsConfigLoader(ctx, spec)
+	}
+
 	if spec.ConnectorConfig.AWS == nil {
 		return aws.Config{}, fmt.Errorf("AWS connector config is required")
 	}
-	region := spec.ConnectorConfig.AWS.Region
 
-	cfg, err := config.LoadDefaultConfig(ctx, config.WithRegion(region))
-	if err != nil {
-		return aws.Config{}, err
-	}
-
-	if spec.ConnectorConfig.AWS.AssumeRoleArn != "" {
-		stsClient := sts.NewFromConfig(cfg)
-		creds := stscreds.NewAssumeRoleProvider(stsClient, spec.ConnectorConfig.AWS.AssumeRoleArn)
-		cfg.Credentials = aws.NewCredentialsCache(creds)
-	}
-
-	return cfg, nil
+	return awsutil.BuildAWSConfig(ctx, spec.ConnectorConfig.AWS)
 }
 
-func (e *Executor) stopInstance(ctx context.Context, client *rds.Client, params Parameters) (RestoreState, error) {
+func (e *Executor) stopInstance(ctx context.Context, client RDSClient, params Parameters) (RestoreState, error) {
 	// Get instance info
 	desc, err := client.DescribeDBInstances(ctx, &rds.DescribeDBInstancesInput{
 		DBInstanceIdentifier: aws.String(params.InstanceID),
@@ -218,7 +236,7 @@ func (e *Executor) stopInstance(ctx context.Context, client *rds.Client, params 
 	return state, nil
 }
 
-func (e *Executor) stopCluster(ctx context.Context, client *rds.Client, params Parameters) (RestoreState, error) {
+func (e *Executor) stopCluster(ctx context.Context, client RDSClient, params Parameters) (RestoreState, error) {
 	// Get cluster info
 	desc, err := client.DescribeDBClusters(ctx, &rds.DescribeDBClustersInput{
 		DBClusterIdentifier: aws.String(params.ClusterID),
@@ -274,7 +292,7 @@ func (e *Executor) stopCluster(ctx context.Context, client *rds.Client, params P
 	return state, nil
 }
 
-func (e *Executor) startInstance(ctx context.Context, client *rds.Client, instanceID string) error {
+func (e *Executor) startInstance(ctx context.Context, client RDSClient, instanceID string) error {
 	// Check current status
 	desc, err := client.DescribeDBInstances(ctx, &rds.DescribeDBInstancesInput{
 		DBInstanceIdentifier: aws.String(instanceID),
@@ -298,7 +316,7 @@ func (e *Executor) startInstance(ctx context.Context, client *rds.Client, instan
 	return err
 }
 
-func (e *Executor) startCluster(ctx context.Context, client *rds.Client, clusterID string) error {
+func (e *Executor) startCluster(ctx context.Context, client RDSClient, clusterID string) error {
 	// Check current status
 	desc, err := client.DescribeDBClusters(ctx, &rds.DescribeDBClustersInput{
 		DBClusterIdentifier: aws.String(clusterID),

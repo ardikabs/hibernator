@@ -17,6 +17,8 @@ import (
 	logf "sigs.k8s.io/controller-runtime/pkg/log"
 	"sigs.k8s.io/controller-runtime/pkg/webhook"
 	"sigs.k8s.io/controller-runtime/pkg/webhook/admission"
+
+	"github.com/ardikabs/hibernator/pkg/executorparams"
 )
 
 var hibernateplanlog = logf.Log.WithName("hibernateplan-resource")
@@ -69,8 +71,9 @@ func (r *HibernatePlan) validate(plan *HibernatePlan) (admission.Warnings, error
 	allErrs = append(allErrs, scheduleErrs...)
 
 	// Validate targets
-	targetErrs := r.validateTargets(plan)
+	targetErrs, targetWarnings := r.validateTargets(plan)
 	allErrs = append(allErrs, targetErrs...)
+	warnings = append(warnings, targetWarnings...)
 
 	// Validate execution strategy
 	strategyErrs, strategyWarnings := r.validateStrategy(plan)
@@ -166,8 +169,9 @@ func (r *HibernatePlan) validateSchedule(plan *HibernatePlan) field.ErrorList {
 }
 
 // validateTargets validates target configuration.
-func (r *HibernatePlan) validateTargets(plan *HibernatePlan) field.ErrorList {
+func (r *HibernatePlan) validateTargets(plan *HibernatePlan) (field.ErrorList, admission.Warnings) {
 	var errs field.ErrorList
+	var warnings admission.Warnings
 	targetsPath := field.NewPath("spec", "targets")
 
 	// Check for duplicate target names
@@ -203,7 +207,7 @@ func (r *HibernatePlan) validateTargets(plan *HibernatePlan) field.ErrorList {
 		}
 
 		// Validate target type
-		validTypes := []string{"eks", "rds", "ec2", "asg", "karpenter", "gke", "cloudsql"}
+		validTypes := []string{"eks", "rds", "ec2", "asg", "karpenter", "gke", "cloudsql", "workloadscaler"}
 		isValidType := false
 		for _, vt := range validTypes {
 			if target.Type == vt {
@@ -218,9 +222,28 @@ func (r *HibernatePlan) validateTargets(plan *HibernatePlan) field.ErrorList {
 				validTypes,
 			))
 		}
+
+		// Validate target parameters using executor-specific validators
+		var paramsRaw []byte
+		if target.Parameters != nil {
+			paramsRaw = target.Parameters.Raw
+		}
+		if result := executorparams.ValidateParams(target.Type, paramsRaw); result != nil {
+			paramPath := targetsPath.Index(i).Child("parameters")
+
+			// Add errors
+			for _, errMsg := range result.Errors {
+				errs = append(errs, field.Invalid(paramPath, target.Parameters, errMsg))
+			}
+
+			// Add warnings (unknown fields, etc.)
+			for _, warnMsg := range result.Warnings {
+				warnings = append(warnings, fmt.Sprintf("target %q: %s", target.Name, warnMsg))
+			}
+		}
 	}
 
-	return errs
+	return errs, warnings
 }
 
 // validateStrategy validates the execution strategy.

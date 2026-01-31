@@ -61,3 +61,14 @@ Create the name of the service account to use
 {{- default "default" .Values.serviceAccount.name }}
 {{- end }}
 {{- end }}
+
+{{/*
+Create the name of the runner service account to use
+*/}}
+{{- define "hibernator.runnerServiceAccountName" -}}
+{{- if .Values.runnerServiceAccount.create }}
+{{- default "hibernator-runner" .Values.runnerServiceAccount.name }}
+{{- else }}
+{{- default "hibernator-runner" .Values.runnerServiceAccount.name }}
+{{- end }}
+{{- end }}

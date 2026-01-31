@@ -39,6 +39,9 @@ spec:
           image: "{{ .Values.image.controller.repository }}:{{ .Values.image.controller.tag | default .Chart.AppVersion }}"
           imagePullPolicy: {{ .Values.image.controller.pullPolicy }}
 
+          args:
+            - --runner-service-account={{ include "hibernator.runnerServiceAccountName" . }}
+
           ports:
             - name: webhook
               containerPort: {{ .Values.webhook.port }}

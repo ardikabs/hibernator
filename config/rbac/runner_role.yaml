@@ -16,7 +16,6 @@ rules:
       - k8sclusters
     verbs:
       - get
-      - list
 
   # Read secrets for connector credentials
   - apiGroups:

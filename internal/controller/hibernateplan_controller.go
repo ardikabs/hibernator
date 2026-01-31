@@ -85,6 +85,9 @@ type HibernatePlanReconciler struct {
 
 	// RunnerImage is the runner container image.
 	RunnerImage string
+
+	// RunnerServiceAccount is the ServiceAccount used by runner pods.
+	RunnerServiceAccount string
 }
 
 // +kubebuilder:rbac:groups=hibernator.ardikabs.com,resources=hibernateplans,verbs=get;list;watch;create;update;patch;delete
@@ -93,8 +96,7 @@ type HibernatePlanReconciler struct {
 // +kubebuilder:rbac:groups=hibernator.ardikabs.com,resources=cloudproviders,verbs=get;list;watch
 // +kubebuilder:rbac:groups=hibernator.ardikabs.com,resources=k8sclusters,verbs=get;list;watch
 // +kubebuilder:rbac:groups=batch,resources=jobs,verbs=get;list;watch;create;update;patch;delete
-// +kubebuilder:rbac:groups="",resources=serviceaccounts,verbs=get;list;watch;create;delete
-// +kubebuilder:rbac:groups="",resources=secrets,verbs=get;list;watch;create;delete
+// +kubebuilder:rbac:groups="",resources=secrets,verbs=get;list;watch
 // +kubebuilder:rbac:groups="",resources=configmaps,verbs=get;list;watch;create;update;patch;delete
 // +kubebuilder:rbac:groups="",resources=events,verbs=create;patch
 
@@ -523,6 +525,10 @@ func (r *HibernatePlanReconciler) createRunnerJob(ctx context.Context, log logr.
 	backoffLimit := int32(DefaultJobBackoffLimit)
 	ttlSeconds := int32(DefaultJobTTLSeconds)
 	tokenExpiration := int64(StreamTokenExpirationSeconds)
+	runnerServiceAccount := r.RunnerServiceAccount
+	if runnerServiceAccount == "" {
+		runnerServiceAccount = "hibernator-runner"
+	}
 
 	job := &batchv1.Job{
 		ObjectMeta: metav1.ObjectMeta{
@@ -555,7 +561,7 @@ func (r *HibernatePlanReconciler) createRunnerJob(ctx context.Context, log logr.
 				},
 				Spec: corev1.PodSpec{
 					RestartPolicy:      corev1.RestartPolicyNever,
-					ServiceAccountName: fmt.Sprintf("hibernator-runner-%s", plan.Name),
+					ServiceAccountName: runnerServiceAccount,
 					Containers: []corev1.Container{
 						{
 							Name:  "runner",
@@ -775,8 +781,6 @@ func (r *HibernatePlanReconciler) SetupWithManager(mgr ctrl.Manager) error {
 	return ctrl.NewControllerManagedBy(mgr).
 		For(&hibernatorv1alpha1.HibernatePlan{}).
 		Owns(&batchv1.Job{}).
-		Owns(&corev1.ServiceAccount{}).
-		Owns(&corev1.Secret{}).
 		Owns(&corev1.ConfigMap{}).
 		Complete(r)
 }

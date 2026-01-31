@@ -78,18 +78,7 @@ rules:
       - delete
 
   # ServiceAccount management for runner pods
-  - apiGroups:
-      - ""
-    resources:
-      - serviceaccounts
-    verbs:
-      - get
-      - list
-      - watch
-      - create
-      - delete
-
-  # Secret management for connectors
+  # Secret management for connectors (read-only)
   - apiGroups:
       - ""
     resources:
@@ -98,8 +87,6 @@ rules:
       - get
       - list
       - watch
-      - create
-      - delete
 
   # ConfigMap for restore data storage
   - apiGroups:
@@ -193,6 +180,7 @@ spec:
             - --leader-elect
             - --metrics-bind-address=:8080
             - --health-probe-bind-address=:8081
+            - --runner-service-account=hibernator-runner
           ports:
             - name: metrics
               containerPort: 8080

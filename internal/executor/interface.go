@@ -10,6 +10,9 @@ import (
 	"context"
 	"encoding/json"
 	"sync"
+
+	"github.com/ardikabs/hibernator/pkg/awsutil"
+	"github.com/ardikabs/hibernator/pkg/k8sutil"
 )
 
 // RestoreData holds restore metadata produced by Shutdown.
@@ -41,18 +44,10 @@ type ConnectorConfig struct {
 }
 
 // AWSConnectorConfig holds AWS connector settings.
-type AWSConnectorConfig struct {
-	Region        string
-	AccountID     string
-	AssumeRoleArn string
-}
+type AWSConnectorConfig = awsutil.AWSConnectorConfig
 
 // K8SConnectorConfig holds Kubernetes connector settings.
-type K8SConnectorConfig struct {
-	ClusterName string
-	Region      string
-	Kubeconfig  []byte
-}
+type K8SConnectorConfig = k8sutil.K8SConnectorConfig
 
 // Executor is the interface that all executors must implement.
 type Executor interface {

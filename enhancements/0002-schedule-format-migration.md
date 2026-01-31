@@ -1,9 +1,16 @@
-# RFC-0002: User-Friendly Schedule Format Migration
+<!--
+RFC: 0002
+Title: User-Friendly Schedule Format Migration
+Author: Hibernator Team
+Status: Implemented
+Date: 2026-01-29
+-->
 
-**Status**: Implemented
-**Author**: Hibernator Team
-**Created**: 2026-01-29
-**Updated**: 2026-01-29
+# RFC 0002 — User-Friendly Schedule Format Migration
+
+**Keywords:** Schedule-Format, Time-Windows, Cron-Conversion, API-Design, Timezone-Aware, Validation, User-Experience, Migration, OffHourWindow, Conversion
+
+**Status:** Implemented ✅
 
 ## Summary
 

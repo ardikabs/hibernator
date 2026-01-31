@@ -3,7 +3,9 @@ Copyright 2026 Ardika Saputro.
 Licensed under the Apache License, Version 2.0.
 */
 
-// Package eks implements the EKS executor for hibernating EKS clusters.
+// Package eks implements the EKS executor for hibernating EKS Managed Node Groups.
+// This executor uses AWS API to scale node groups to zero.
+// For Karpenter NodePools, use the separate Karpenter executor.
 package eks
 
 import (
@@ -12,46 +14,27 @@ import (
 	"fmt"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
-	"github.com/aws/aws-sdk-go-v2/config"
-	"github.com/aws/aws-sdk-go-v2/credentials/stscreds"
-	"github.com/aws/aws-sdk-go-v2/service/autoscaling"
 	"github.com/aws/aws-sdk-go-v2/service/eks"
 	"github.com/aws/aws-sdk-go-v2/service/eks/types"
 	"github.com/aws/aws-sdk-go-v2/service/sts"
 
 	"github.com/ardikabs/hibernator/internal/executor"
+	"github.com/ardikabs/hibernator/pkg/awsutil"
+	"github.com/ardikabs/hibernator/pkg/executorparams"
 )
 
 const ExecutorType = "eks"
 
-// Parameters for the EKS executor.
-type Parameters struct {
-	ComputePolicy ComputePolicy `json:"computePolicy,omitempty"`
-	Karpenter     *Karpenter    `json:"karpenter,omitempty"`
-	ManagedNGs    *ManagedNGs   `json:"managedNodeGroups,omitempty"`
-}
+// Parameters is an alias for the shared EKS parameter type.
+type Parameters = executorparams.EKSParameters
 
-// ComputePolicy defines which compute resources to manage.
-type ComputePolicy struct {
-	Mode  string   `json:"mode,omitempty"`  // Both, Karpenter, ManagedNodeGroups
-	Order []string `json:"order,omitempty"` // Order of operations
-}
+// NodeGroup is an alias for the shared EKS node group type.
+type NodeGroup = executorparams.EKSNodeGroup
 
-// Karpenter configuration.
-type Karpenter struct {
-	TargetNodePools []string `json:"targetNodePools,omitempty"`
-	Strategy        string   `json:"strategy,omitempty"` // DeleteNodes
-}
-
-// ManagedNGs configuration.
-type ManagedNGs struct {
-	Strategy string `json:"strategy,omitempty"` // ScaleToZero
-}
-
-// RestoreState holds EKS restore data.
+// RestoreState holds EKS restore data for managed node groups.
 type RestoreState struct {
-	ManagedNodeGroups map[string]NodeGroupState `json:"managedNodeGroups,omitempty"`
-	Karpenter         *KarpenterState           `json:"karpenter,omitempty"`
+	ClusterName string                    `json:"clusterName"`
+	NodeGroups  map[string]NodeGroupState `json:"nodeGroups"`
 }
 
 // NodeGroupState holds state for a managed node group.
@@ -61,17 +44,42 @@ type NodeGroupState struct {
 	MaxSize     int32 `json:"max"`
 }
 
-// KarpenterState holds Karpenter-related state.
-type KarpenterState struct {
-	NodePools []string `json:"nodePools,omitempty"`
+// Executor implements the EKS hibernation logic for Managed Node Groups.
+type Executor struct {
+	eksFactory      EKSClientFactory
+	stsFactory      STSClientFactory
+	awsConfigLoader AWSConfigLoader
 }
 
-// Executor implements the EKS hibernation logic.
-type Executor struct{}
+// EKSClientFactory is a function type for creating EKS clients.
+type EKSClientFactory func(cfg aws.Config) EKSClient
 
-// New creates a new EKS executor.
+// STSClientFactory is a function type for creating STS clients.
+type STSClientFactory func(cfg aws.Config) STSClient
+
+// AWSConfigLoader is a function type for loading AWS config.
+type AWSConfigLoader func(ctx context.Context, spec executor.Spec) (aws.Config, error)
+
+// New creates a new EKS executor with real AWS clients.
 func New() *Executor {
-	return &Executor{}
+	return &Executor{
+		eksFactory: func(cfg aws.Config) EKSClient {
+			return eks.NewFromConfig(cfg)
+		},
+		stsFactory: func(cfg aws.Config) STSClient {
+			return sts.NewFromConfig(cfg)
+		},
+	}
+}
+
+// NewWithClients creates a new EKS executor with injected client factories.
+// This is useful for testing with mock clients.
+func NewWithClients(eksFactory EKSClientFactory, stsFactory STSClientFactory, awsConfigLoader AWSConfigLoader) *Executor {
+	return &Executor{
+		eksFactory:      eksFactory,
+		stsFactory:      stsFactory,
+		awsConfigLoader: awsConfigLoader,
+	}
 }
 
 // Type returns the executor type.
@@ -81,13 +89,28 @@ func (e *Executor) Type() string {
 
 // Validate validates the executor spec.
 func (e *Executor) Validate(spec executor.Spec) error {
-	if spec.ConnectorConfig.K8S == nil {
-		return fmt.Errorf("K8S connector config required for EKS executor")
+	if spec.ConnectorConfig.AWS == nil {
+		return fmt.Errorf("AWS connector config required for EKS executor")
 	}
+	if spec.ConnectorConfig.AWS.Region == "" {
+		return fmt.Errorf("AWS region is required")
+	}
+
+	var params Parameters
+	if len(spec.Parameters) > 0 {
+		if err := json.Unmarshal(spec.Parameters, &params); err != nil {
+			return fmt.Errorf("parse parameters: %w", err)
+		}
+	}
+
+	if params.ClusterName == "" {
+		return fmt.Errorf("clusterName is required")
+	}
+
 	return nil
 }
 
-// Shutdown performs EKS cluster hibernation.
+// Shutdown performs EKS Managed Node Group hibernation by scaling to zero.
 func (e *Executor) Shutdown(ctx context.Context, spec executor.Spec) (executor.RestoreData, error) {
 	params, err := e.parseParams(spec.Parameters)
 	if err != nil {
@@ -99,37 +122,39 @@ func (e *Executor) Shutdown(ctx context.Context, spec executor.Spec) (executor.R
 		return executor.RestoreData{}, fmt.Errorf("load AWS config: %w", err)
 	}
 
-	clusterName := spec.ConnectorConfig.K8S.ClusterName
+	eksClient := e.eksFactory(cfg)
+	clusterName := params.ClusterName
+
 	restoreState := RestoreState{
-		ManagedNodeGroups: make(map[string]NodeGroupState),
+		ClusterName: clusterName,
+		NodeGroups:  make(map[string]NodeGroupState),
 	}
 
-	// Handle Managed Node Groups
-	if params.ManagedNGs != nil || params.ComputePolicy.Mode == "Both" || params.ComputePolicy.Mode == "ManagedNodeGroups" {
-		eksClient := eks.NewFromConfig(cfg)
-		asgClient := autoscaling.NewFromConfig(cfg)
-
-		nodeGroups, err := e.listNodeGroups(ctx, eksClient, clusterName)
+	// Determine target node groups
+	var targetNodeGroups []string
+	if len(params.NodeGroups) == 0 {
+		// Empty means all node groups in the cluster
+		targetNodeGroups, err = e.listNodeGroups(ctx, eksClient, clusterName)
 		if err != nil {
 			return executor.RestoreData{}, fmt.Errorf("list node groups: %w", err)
 		}
-
-		for _, ng := range nodeGroups {
-			state, err := e.scaleNodeGroupToZero(ctx, eksClient, asgClient, clusterName, ng)
-			if err != nil {
-				return executor.RestoreData{}, fmt.Errorf("scale node group %s: %w", ng, err)
-			}
-			restoreState.ManagedNodeGroups[ng] = state
+	} else {
+		for _, ng := range params.NodeGroups {
+			targetNodeGroups = append(targetNodeGroups, ng.Name)
 		}
 	}
 
-	// Handle Karpenter (simplified - would need k8s client in real impl)
-	if params.Karpenter != nil || params.ComputePolicy.Mode == "Both" || params.ComputePolicy.Mode == "Karpenter" {
-		restoreState.Karpenter = &KarpenterState{
-			NodePools: params.Karpenter.TargetNodePools,
+	if len(targetNodeGroups) == 0 {
+		return executor.RestoreData{}, fmt.Errorf("no node groups found in cluster %s", clusterName)
+	}
+
+	// Scale each node group to zero
+	for _, ngName := range targetNodeGroups {
+		state, err := e.scaleNodeGroupToZero(ctx, eksClient, clusterName, ngName)
+		if err != nil {
+			return executor.RestoreData{}, fmt.Errorf("scale node group %s: %w", ngName, err)
 		}
-		// In real implementation: delete Karpenter nodes via k8s API
-		// This is a placeholder for MVP
+		restoreState.NodeGroups[ngName] = state
 	}
 
 	restoreData, err := json.Marshal(restoreState)
@@ -143,7 +168,7 @@ func (e *Executor) Shutdown(ctx context.Context, spec executor.Spec) (executor.R
 	}, nil
 }
 
-// WakeUp restores the EKS cluster.
+// WakeUp restores EKS Managed Node Groups to their original scaling configuration.
 func (e *Executor) WakeUp(ctx context.Context, spec executor.Spec, restore executor.RestoreData) error {
 	var restoreState RestoreState
 	if err := json.Unmarshal(restore.Data, &restoreState); err != nil {
@@ -155,21 +180,14 @@ func (e *Executor) WakeUp(ctx context.Context, spec executor.Spec, restore execu
 		return fmt.Errorf("load AWS config: %w", err)
 	}
 
-	clusterName := spec.ConnectorConfig.K8S.ClusterName
+	eksClient := e.eksFactory(cfg)
 
-	// Restore Managed Node Groups
-	if len(restoreState.ManagedNodeGroups) > 0 {
-		eksClient := eks.NewFromConfig(cfg)
-
-		for ngName, state := range restoreState.ManagedNodeGroups {
-			if err := e.restoreNodeGroup(ctx, eksClient, clusterName, ngName, state); err != nil {
-				return fmt.Errorf("restore node group %s: %w", ngName, err)
-			}
+	// Restore each node group
+	for ngName, state := range restoreState.NodeGroups {
+		if err := e.restoreNodeGroup(ctx, eksClient, restoreState.ClusterName, ngName, state); err != nil {
+			return fmt.Errorf("restore node group %s: %w", ngName, err)
 		}
 	}
-
-	// Karpenter nodes will be recreated automatically by Karpenter controller
-	// when workloads are scheduled
 
 	return nil
 }
@@ -186,27 +204,18 @@ func (e *Executor) parseParams(raw json.RawMessage) (Parameters, error) {
 }
 
 func (e *Executor) loadAWSConfig(ctx context.Context, spec executor.Spec) (aws.Config, error) {
-	region := spec.ConnectorConfig.K8S.Region
-	if spec.ConnectorConfig.AWS != nil {
-		region = spec.ConnectorConfig.AWS.Region
+	if e.awsConfigLoader != nil {
+		return e.awsConfigLoader(ctx, spec)
 	}
 
-	cfg, err := config.LoadDefaultConfig(ctx, config.WithRegion(region))
-	if err != nil {
-		return aws.Config{}, err
+	if spec.ConnectorConfig.AWS == nil {
+		return aws.Config{}, fmt.Errorf("AWS connector config is required")
 	}
 
-	// Assume role if configured
-	if spec.ConnectorConfig.AWS != nil && spec.ConnectorConfig.AWS.AssumeRoleArn != "" {
-		stsClient := sts.NewFromConfig(cfg)
-		creds := stscreds.NewAssumeRoleProvider(stsClient, spec.ConnectorConfig.AWS.AssumeRoleArn)
-		cfg.Credentials = aws.NewCredentialsCache(creds)
-	}
-
-	return cfg, nil
+	return awsutil.BuildAWSConfig(ctx, spec.ConnectorConfig.AWS)
 }
 
-func (e *Executor) listNodeGroups(ctx context.Context, client *eks.Client, clusterName string) ([]string, error) {
+func (e *Executor) listNodeGroups(ctx context.Context, client EKSClient, clusterName string) ([]string, error) {
 	out, err := client.ListNodegroups(ctx, &eks.ListNodegroupsInput{
 		ClusterName: aws.String(clusterName),
 	})
@@ -216,7 +225,7 @@ func (e *Executor) listNodeGroups(ctx context.Context, client *eks.Client, clust
 	return out.Nodegroups, nil
 }
 
-func (e *Executor) scaleNodeGroupToZero(ctx context.Context, eksClient *eks.Client, asgClient *autoscaling.Client, clusterName, ngName string) (NodeGroupState, error) {
+func (e *Executor) scaleNodeGroupToZero(ctx context.Context, eksClient EKSClient, clusterName, ngName string) (NodeGroupState, error) {
 	// Get current state
 	desc, err := eksClient.DescribeNodegroup(ctx, &eks.DescribeNodegroupInput{
 		ClusterName:   aws.String(clusterName),
@@ -249,7 +258,7 @@ func (e *Executor) scaleNodeGroupToZero(ctx context.Context, eksClient *eks.Clie
 	return state, nil
 }
 
-func (e *Executor) restoreNodeGroup(ctx context.Context, client *eks.Client, clusterName, ngName string, state NodeGroupState) error {
+func (e *Executor) restoreNodeGroup(ctx context.Context, client EKSClient, clusterName, ngName string, state NodeGroupState) error {
 	_, err := client.UpdateNodegroupConfig(ctx, &eks.UpdateNodegroupConfigInput{
 		ClusterName:   aws.String(clusterName),
 		NodegroupName: aws.String(ngName),

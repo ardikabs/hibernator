@@ -27,6 +27,27 @@ func validSchedule() Schedule {
 	}
 }
 
+// ec2Params returns valid EC2 executor parameters.
+func ec2Params() *Parameters {
+	return &Parameters{
+		Raw: []byte(`{"selector": {"instanceIds": ["i-1234567890abcdef0"]}}`),
+	}
+}
+
+// rdsParams returns valid RDS executor parameters.
+func rdsParams() *Parameters {
+	return &Parameters{
+		Raw: []byte(`{"instanceId": "my-db-instance"}`),
+	}
+}
+
+// eksParams returns valid EKS executor parameters.
+func eksParams() *Parameters {
+	return &Parameters{
+		Raw: []byte(`{"clusterName": "my-cluster"}`),
+	}
+}
+
 func TestHibernatePlan_ValidateCreate(t *testing.T) {
 	tests := []struct {
 		name    string
@@ -43,7 +64,7 @@ func TestHibernatePlan_ValidateCreate(t *testing.T) {
 						Strategy: ExecutionStrategy{Type: StrategySequential},
 					},
 					Targets: []Target{
-						{Name: "target1", Type: "ec2", ConnectorRef: ConnectorRef{Kind: "CloudProvider", Name: "aws"}},
+						{Name: "target1", Type: "ec2", ConnectorRef: ConnectorRef{Kind: "CloudProvider", Name: "aws"}, Parameters: ec2Params()},
 					},
 				},
 			},
@@ -68,7 +89,7 @@ func TestHibernatePlan_ValidateCreate(t *testing.T) {
 						Strategy: ExecutionStrategy{Type: StrategySequential},
 					},
 					Targets: []Target{
-						{Name: "target1", Type: "ec2", ConnectorRef: ConnectorRef{Kind: "CloudProvider", Name: "aws"}},
+						{Name: "target1", Type: "ec2", ConnectorRef: ConnectorRef{Kind: "CloudProvider", Name: "aws"}, Parameters: ec2Params()},
 					},
 				},
 			},
@@ -93,7 +114,7 @@ func TestHibernatePlan_ValidateCreate(t *testing.T) {
 						Strategy: ExecutionStrategy{Type: StrategySequential},
 					},
 					Targets: []Target{
-						{Name: "target1", Type: "ec2", ConnectorRef: ConnectorRef{Kind: "CloudProvider", Name: "aws"}},
+						{Name: "target1", Type: "ec2", ConnectorRef: ConnectorRef{Kind: "CloudProvider", Name: "aws"}, Parameters: ec2Params()},
 					},
 				},
 			},
@@ -109,8 +130,8 @@ func TestHibernatePlan_ValidateCreate(t *testing.T) {
 						Strategy: ExecutionStrategy{Type: StrategySequential},
 					},
 					Targets: []Target{
-						{Name: "target1", Type: "ec2", ConnectorRef: ConnectorRef{Kind: "CloudProvider", Name: "aws"}},
-						{Name: "target1", Type: "rds", ConnectorRef: ConnectorRef{Kind: "CloudProvider", Name: "aws"}},
+						{Name: "target1", Type: "ec2", ConnectorRef: ConnectorRef{Kind: "CloudProvider", Name: "aws"}, Parameters: ec2Params()},
+						{Name: "target1", Type: "rds", ConnectorRef: ConnectorRef{Kind: "CloudProvider", Name: "aws"}, Parameters: rdsParams()},
 					},
 				},
 			},
@@ -126,7 +147,7 @@ func TestHibernatePlan_ValidateCreate(t *testing.T) {
 						Strategy: ExecutionStrategy{Type: StrategySequential},
 					},
 					Targets: []Target{
-						{Name: "target1", Type: "ec2", ConnectorRef: ConnectorRef{Kind: "Invalid", Name: "aws"}},
+						{Name: "target1", Type: "ec2", ConnectorRef: ConnectorRef{Kind: "Invalid", Name: "aws"}, Parameters: ec2Params()},
 					},
 				},
 			},
@@ -149,9 +170,9 @@ func TestHibernatePlan_ValidateCreate(t *testing.T) {
 						},
 					},
 					Targets: []Target{
-						{Name: "a", Type: "ec2", ConnectorRef: ConnectorRef{Kind: "CloudProvider", Name: "aws"}},
-						{Name: "b", Type: "ec2", ConnectorRef: ConnectorRef{Kind: "CloudProvider", Name: "aws"}},
-						{Name: "c", Type: "ec2", ConnectorRef: ConnectorRef{Kind: "CloudProvider", Name: "aws"}},
+						{Name: "a", Type: "ec2", ConnectorRef: ConnectorRef{Kind: "CloudProvider", Name: "aws"}, Parameters: ec2Params()},
+						{Name: "b", Type: "ec2", ConnectorRef: ConnectorRef{Kind: "CloudProvider", Name: "aws"}, Parameters: ec2Params()},
+						{Name: "c", Type: "ec2", ConnectorRef: ConnectorRef{Kind: "CloudProvider", Name: "aws"}, Parameters: ec2Params()},
 					},
 				},
 			},
@@ -173,9 +194,9 @@ func TestHibernatePlan_ValidateCreate(t *testing.T) {
 						},
 					},
 					Targets: []Target{
-						{Name: "frontend", Type: "ec2", ConnectorRef: ConnectorRef{Kind: "CloudProvider", Name: "aws"}},
-						{Name: "backend", Type: "ec2", ConnectorRef: ConnectorRef{Kind: "CloudProvider", Name: "aws"}},
-						{Name: "database", Type: "rds", ConnectorRef: ConnectorRef{Kind: "CloudProvider", Name: "aws"}},
+						{Name: "frontend", Type: "ec2", ConnectorRef: ConnectorRef{Kind: "CloudProvider", Name: "aws"}, Parameters: ec2Params()},
+						{Name: "backend", Type: "ec2", ConnectorRef: ConnectorRef{Kind: "CloudProvider", Name: "aws"}, Parameters: ec2Params()},
+						{Name: "database", Type: "rds", ConnectorRef: ConnectorRef{Kind: "CloudProvider", Name: "aws"}, Parameters: rdsParams()},
 					},
 				},
 			},
@@ -196,7 +217,7 @@ func TestHibernatePlan_ValidateCreate(t *testing.T) {
 						},
 					},
 					Targets: []Target{
-						{Name: "frontend", Type: "ec2", ConnectorRef: ConnectorRef{Kind: "CloudProvider", Name: "aws"}},
+						{Name: "frontend", Type: "ec2", ConnectorRef: ConnectorRef{Kind: "CloudProvider", Name: "aws"}, Parameters: ec2Params()},
 					},
 				},
 			},
@@ -218,9 +239,9 @@ func TestHibernatePlan_ValidateCreate(t *testing.T) {
 						},
 					},
 					Targets: []Target{
-						{Name: "a", Type: "ec2", ConnectorRef: ConnectorRef{Kind: "CloudProvider", Name: "aws"}},
-						{Name: "b", Type: "ec2", ConnectorRef: ConnectorRef{Kind: "CloudProvider", Name: "aws"}},
-						{Name: "c", Type: "rds", ConnectorRef: ConnectorRef{Kind: "CloudProvider", Name: "aws"}},
+						{Name: "a", Type: "ec2", ConnectorRef: ConnectorRef{Kind: "CloudProvider", Name: "aws"}, Parameters: ec2Params()},
+						{Name: "b", Type: "ec2", ConnectorRef: ConnectorRef{Kind: "CloudProvider", Name: "aws"}, Parameters: ec2Params()},
+						{Name: "c", Type: "rds", ConnectorRef: ConnectorRef{Kind: "CloudProvider", Name: "aws"}, Parameters: rdsParams()},
 					},
 				},
 			},
@@ -292,7 +313,7 @@ func TestHibernatePlan_ValidateUpdate(t *testing.T) {
 				Strategy: ExecutionStrategy{Type: StrategySequential},
 			},
 			Targets: []Target{
-				{Name: "target1", Type: "ec2", ConnectorRef: ConnectorRef{Kind: "CloudProvider", Name: "aws"}},
+				{Name: "target1", Type: "ec2", ConnectorRef: ConnectorRef{Kind: "CloudProvider", Name: "aws"}, Parameters: ec2Params()},
 			},
 		},
 	}
@@ -312,8 +333,8 @@ func TestHibernatePlan_ValidateUpdate(t *testing.T) {
 						Strategy: ExecutionStrategy{Type: StrategyParallel},
 					},
 					Targets: []Target{
-						{Name: "target1", Type: "ec2", ConnectorRef: ConnectorRef{Kind: "CloudProvider", Name: "aws"}},
-						{Name: "target2", Type: "rds", ConnectorRef: ConnectorRef{Kind: "CloudProvider", Name: "aws"}},
+						{Name: "target1", Type: "ec2", ConnectorRef: ConnectorRef{Kind: "CloudProvider", Name: "aws"}, Parameters: ec2Params()},
+						{Name: "target2", Type: "rds", ConnectorRef: ConnectorRef{Kind: "CloudProvider", Name: "aws"}, Parameters: rdsParams()},
 					},
 				},
 			},
@@ -329,8 +350,8 @@ func TestHibernatePlan_ValidateUpdate(t *testing.T) {
 						Strategy: ExecutionStrategy{Type: StrategySequential},
 					},
 					Targets: []Target{
-						{Name: "target1", Type: "ec2", ConnectorRef: ConnectorRef{Kind: "CloudProvider", Name: "aws"}},
-						{Name: "target1", Type: "rds", ConnectorRef: ConnectorRef{Kind: "CloudProvider", Name: "aws"}},
+						{Name: "target1", Type: "ec2", ConnectorRef: ConnectorRef{Kind: "CloudProvider", Name: "aws"}, Parameters: ec2Params()},
+						{Name: "target1", Type: "rds", ConnectorRef: ConnectorRef{Kind: "CloudProvider", Name: "aws"}, Parameters: rdsParams()},
 					},
 				},
 			},
@@ -355,7 +376,7 @@ func TestHibernatePlan_ValidateUpdate(t *testing.T) {
 						Strategy: ExecutionStrategy{Type: StrategySequential},
 					},
 					Targets: []Target{
-						{Name: "target1", Type: "ec2", ConnectorRef: ConnectorRef{Kind: "CloudProvider", Name: "aws"}},
+						{Name: "target1", Type: "ec2", ConnectorRef: ConnectorRef{Kind: "CloudProvider", Name: "aws"}, Parameters: ec2Params()},
 					},
 				},
 			},

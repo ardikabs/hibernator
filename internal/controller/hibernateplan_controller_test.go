@@ -282,6 +282,75 @@ var _ = Describe("HibernatePlan Controller", func() {
 			Expect(result.CurrentState).To(Equal("hibernated"))
 		})
 	})
+
+	Context("When creating runner jobs", func() {
+		It("Should use configured runner ServiceAccount", func() {
+			reconciler := &HibernatePlanReconciler{
+				Client:               k8sClient,
+				Log:                  ctrl.Log.WithName("controllers").WithName("HibernatePlan"),
+				Scheme:               scheme.Scheme,
+				Planner:              scheduler.NewPlanner(),
+				ScheduleEvaluator:    scheduler.NewScheduleEvaluator(),
+				RestoreManager:       restore.NewManager(k8sClient),
+				ControlPlaneEndpoint: "",
+				RunnerImage:          "",
+				RunnerServiceAccount: "runner-fixed-sa",
+			}
+
+			plan := &hibernatorv1alpha1.HibernatePlan{
+				TypeMeta: metav1.TypeMeta{
+					APIVersion: "hibernator.ardikabs.com/v1alpha1",
+					Kind:       "HibernatePlan",
+				},
+				ObjectMeta: metav1.ObjectMeta{
+					Name:      "runner-sa-plan",
+					Namespace: "test-ns",
+				},
+				Spec: hibernatorv1alpha1.HibernatePlanSpec{
+					Schedule: hibernatorv1alpha1.Schedule{
+						Timezone: "UTC",
+						OffHours: []hibernatorv1alpha1.OffHourWindow{
+							{
+								Start:      "20:00",
+								End:        "06:00",
+								DaysOfWeek: []string{"MON"},
+							},
+						},
+					},
+					Execution: hibernatorv1alpha1.Execution{
+						Strategy: hibernatorv1alpha1.ExecutionStrategy{Type: hibernatorv1alpha1.StrategySequential},
+					},
+					Targets: []hibernatorv1alpha1.Target{
+						{
+							Name: "target1",
+							Type: "ec2",
+							ConnectorRef: hibernatorv1alpha1.ConnectorRef{
+								Kind: "CloudProvider",
+								Name: "aws",
+							},
+						},
+					},
+				},
+			}
+
+			Expect(k8sClient.Create(ctx, plan)).To(Succeed())
+
+			target := &plan.Spec.Targets[0]
+			err := reconciler.createRunnerJob(ctx, reconciler.Log, plan, target, "shutdown")
+			Expect(err).NotTo(HaveOccurred())
+
+			var jobs batchv1.JobList
+			Eventually(func() int {
+				_ = k8sClient.List(ctx, &jobs, client.InNamespace("test-ns"), client.MatchingLabels{
+					LabelPlan:   plan.Name,
+					LabelTarget: target.Name,
+				})
+				return len(jobs.Items)
+			}, timeout, interval).Should(BeNumerically(">", 0))
+
+			Expect(jobs.Items[0].Spec.Template.Spec.ServiceAccountName).To(Equal("runner-fixed-sa"))
+		})
+	})
 })
 
 // Helper for setting up controller with manager

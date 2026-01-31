@@ -8,6 +8,10 @@ Date: 2026-01-29
 
 # RFC 0003 — Temporary Schedule Exceptions and Overrides
 
+**Keywords:** Schedule-Exceptions, Maintenance-Windows, Lead-Time, Time-Bound, Extend, Suspend, Replace, Emergency-Events, Validation, Status-Tracking
+
+**Status:** Proposed (Not Yet Implemented)
+
 ## Summary
 
 Introduce time-bound schedule exceptions to handle temporary deviations from the planned hibernation schedule. Exceptions are part of the schedule configuration and allow teams to add hibernation windows, prevent hibernation (suspend), or completely replace the schedule without modifying the base HibernatePlan.

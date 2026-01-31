@@ -55,17 +55,20 @@ spec:
                   accountId:
                     description: AccountId is the AWS account ID.
                     type: string
+                  assumeRoleArn:
+                    description: |-
+                      AssumeRoleArn is the IAM role ARN to assume (optional).
+                      Can be used with both ServiceAccount (IRSA) and Static authentication.
+                      When using IRSA: the pod's SA credentials are used to assume this role.
+                      When using Static: the static credentials are used to assume this role.
+                    type: string
                   auth:
-                    description: Auth configures authentication.
+                    description: |-
+                      Auth configures authentication method.
+                      At least one of Auth.ServiceAccount or Auth.Static must be specified.
                     properties:
                       serviceAccount:
                         description: ServiceAccount configures IRSA-based authentication.
-                        properties:
-                          assumeRoleArn:
-                            description: AssumeRoleArn is the IAM role ARN to assume.
-                            type: string
-                        required:
-                        - assumeRoleArn
                         type: object
                       static:
                         description: Static configures static credential-based authentication.

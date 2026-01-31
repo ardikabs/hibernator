@@ -28,11 +28,15 @@ type AWSAuth struct {
 	Static *StaticAuth `json:"static,omitempty"`
 }
 
-// ServiceAccountAuth configures IRSA.
+// ServiceAccountAuth configures IRSA (IAM Roles for Service Accounts).
+// When specified (even as empty struct), indicates that the runner pod's
+// ServiceAccount should be used for authentication via workload identity.
+// The pod's ServiceAccount must have appropriate cloud provider annotations
+// (e.g., eks.amazonaws.com/role-arn for AWS IRSA).
+// +kubebuilder:validation:Optional
 type ServiceAccountAuth struct {
-	// AssumeRoleArn is the IAM role ARN to assume.
-	// +kubebuilder:validation:Required
-	AssumeRoleArn string `json:"assumeRoleArn"`
+	// No fields - presence of this struct indicates IRSA authentication mode.
+	// Future enhancement: could add explicit ServiceAccount name/namespace.
 }
 
 // StaticAuth configures static credentials.
@@ -57,7 +61,15 @@ type AWSConfig struct {
 	// +kubebuilder:validation:Required
 	Region string `json:"region"`
 
-	// Auth configures authentication.
+	// AssumeRoleArn is the IAM role ARN to assume (optional).
+	// Can be used with both ServiceAccount (IRSA) and Static authentication.
+	// When using IRSA: the pod's SA credentials are used to assume this role.
+	// When using Static: the static credentials are used to assume this role.
+	// +optional
+	AssumeRoleArn string `json:"assumeRoleArn,omitempty"`
+
+	// Auth configures authentication method.
+	// At least one of Auth.ServiceAccount or Auth.Static must be specified.
 	// +kubebuilder:validation:Required
 	Auth AWSAuth `json:"auth"`
 }

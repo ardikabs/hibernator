@@ -50,12 +50,11 @@ var _ = Describe("Schedule Evaluation E2E", func() {
 			Spec: hibernatorv1alpha1.CloudProviderSpec{
 				Type: "aws",
 				AWS: &hibernatorv1alpha1.AWSConfig{
-					AccountId: "123456789012",
-					Region:    "us-east-1",
+					AccountId:     "123456789012",
+					Region:        "us-east-1",
+					AssumeRoleArn: "arn:aws:iam::123456789012:role/hibernator",
 					Auth: hibernatorv1alpha1.AWSAuth{
-						ServiceAccount: &hibernatorv1alpha1.ServiceAccountAuth{
-							AssumeRoleArn: "arn:aws:iam::123456789012:role/hibernator",
-						},
+							ServiceAccount: &hibernatorv1alpha1.ServiceAccountAuth{},
 					},
 				},
 			},
@@ -104,7 +103,7 @@ var _ = Describe("Schedule Evaluation E2E", func() {
 							Name: cloudProvider.Name,
 						},
 						Parameters: &hibernatorv1alpha1.Parameters{
-							Raw: []byte(`{"instanceIds":["i-1234567890abcdef0"]}`),
+							Raw: []byte(`{"selector":{"instanceIds":["i-1234567890abcdef0"]}}`),
 						},
 					},
 				},
@@ -161,7 +160,7 @@ var _ = Describe("Schedule Evaluation E2E", func() {
 							Name: cloudProvider.Name,
 						},
 						Parameters: &hibernatorv1alpha1.Parameters{
-							Raw: []byte(`{"dbInstanceIdentifier":"weekend-db"}`),
+							Raw: []byte(`{"instanceId":"weekend-db"}`),
 						},
 					},
 				},

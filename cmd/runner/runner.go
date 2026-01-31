@@ -7,11 +7,15 @@ package main
 
 import (
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"time"
 
+	"github.com/aws/aws-sdk-go-v2/aws"
+	"github.com/aws/aws-sdk-go-v2/service/eks"
 	"github.com/go-logr/logr"
+	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/config"
@@ -20,6 +24,7 @@ import (
 	"github.com/ardikabs/hibernator/internal/executor"
 	"github.com/ardikabs/hibernator/internal/restore"
 	streamclient "github.com/ardikabs/hibernator/internal/streaming/client"
+	"github.com/ardikabs/hibernator/pkg/awsutil"
 )
 
 // runner encapsulates the execution context and dependencies.
@@ -230,28 +235,96 @@ func (r *runner) buildExecutorSpec(ctx context.Context, params map[string]interf
 	return spec, nil
 }
 
+const (
+	awsAccessKeyIDKey     = "AWS_ACCESS_KEY_ID"
+	awsSecretAccessKeyKey = "AWS_SECRET_ACCESS_KEY"
+	kubeconfigKey         = "kubeconfig"
+)
+
+func resolveNamespace(defaultNamespace, override string) string {
+	if override != "" {
+		return override
+	}
+	return defaultNamespace
+}
+
 // loadCloudProviderConfig populates the spec with CloudProvider configuration.
 func (r *runner) loadCloudProviderConfig(ctx context.Context, spec *executor.Spec) error {
+	provider, err := r.getCloudProvider(ctx, r.cfg.ConnectorNamespace, r.cfg.ConnectorName)
+	if err != nil {
+		return err
+	}
+
+	awsCfg, err := r.buildAWSConnectorConfig(ctx, &provider)
+	if err != nil {
+		return err
+	}
+
+	spec.ConnectorConfig.AWS = awsCfg
+	return nil
+}
+
+func (r *runner) getCloudProvider(ctx context.Context, namespace, name string) (hibernatorv1alpha1.CloudProvider, error) {
 	var provider hibernatorv1alpha1.CloudProvider
 	key := client.ObjectKey{
-		Namespace: r.cfg.ConnectorNamespace,
-		Name:      r.cfg.ConnectorName,
+		Namespace: namespace,
+		Name:      name,
 	}
 	if err := r.k8sClient.Get(ctx, key, &provider); err != nil {
-		return fmt.Errorf("get CloudProvider: %w", err)
+		return provider, fmt.Errorf("get CloudProvider: %w", err)
+	}
+	return provider, nil
+}
+
+func (r *runner) buildAWSConnectorConfig(ctx context.Context, provider *hibernatorv1alpha1.CloudProvider) (*executor.AWSConnectorConfig, error) {
+	if provider.Spec.Type != hibernatorv1alpha1.CloudProviderAWS {
+		return nil, fmt.Errorf("unsupported cloud provider type: %s", provider.Spec.Type)
+	}
+	if provider.Spec.AWS == nil {
+		return nil, fmt.Errorf("AWS config is required")
 	}
 
-	if provider.Spec.Type == hibernatorv1alpha1.CloudProviderAWS {
-		spec.ConnectorConfig.AWS = &executor.AWSConnectorConfig{
-			Region:    provider.Spec.AWS.Region,
-			AccountID: provider.Spec.AWS.AccountId,
-		}
-		if provider.Spec.AWS.Auth.ServiceAccount != nil {
-			spec.ConnectorConfig.AWS.AssumeRoleArn = provider.Spec.AWS.Auth.ServiceAccount.AssumeRoleArn
-		}
+	awsCfg := &executor.AWSConnectorConfig{
+		Region:    provider.Spec.AWS.Region,
+		AccountID: provider.Spec.AWS.AccountId,
 	}
 
-	return nil
+	// AssumeRoleArn is now at AWS spec level (cross-cutting for both auth methods)
+	if provider.Spec.AWS.AssumeRoleArn != "" {
+		awsCfg.AssumeRoleArn = provider.Spec.AWS.AssumeRoleArn
+	}
+
+	if provider.Spec.AWS.Auth.Static != nil {
+		ref := provider.Spec.AWS.Auth.Static.SecretRef
+		secretNamespace := resolveNamespace(provider.Namespace, ref.Namespace)
+		secret, err := r.getSecret(ctx, secretNamespace, ref.Name)
+		if err != nil {
+			return nil, err
+		}
+
+		accessKeyID := string(secret.Data[awsAccessKeyIDKey])
+		secretAccessKey := string(secret.Data[awsSecretAccessKeyKey])
+		if accessKeyID == "" || secretAccessKey == "" {
+			return nil, fmt.Errorf("AWS static credentials must include %s and %s", awsAccessKeyIDKey, awsSecretAccessKeyKey)
+		}
+
+		awsCfg.AccessKeyID = accessKeyID
+		awsCfg.SecretAccessKey = secretAccessKey
+	}
+
+	return awsCfg, nil
+}
+
+func (r *runner) getSecret(ctx context.Context, namespace, name string) (*corev1.Secret, error) {
+	var secret corev1.Secret
+	key := client.ObjectKey{
+		Namespace: namespace,
+		Name:      name,
+	}
+	if err := r.k8sClient.Get(ctx, key, &secret); err != nil {
+		return nil, fmt.Errorf("get Secret %s/%s: %w", namespace, name, err)
+	}
+	return &secret, nil
 }
 
 // loadK8SClusterConfig populates the spec with K8SCluster configuration.
@@ -265,12 +338,101 @@ func (r *runner) loadK8SClusterConfig(ctx context.Context, spec *executor.Spec) 
 		return fmt.Errorf("get K8SCluster: %w", err)
 	}
 
+	if cluster.Spec.EKS != nil && cluster.Spec.K8S != nil {
+		return fmt.Errorf("spec.eks and spec.k8s are mutually exclusive")
+	}
+
 	if cluster.Spec.EKS != nil {
-		spec.ConnectorConfig.K8S = &executor.K8SConnectorConfig{
-			ClusterName: cluster.Spec.EKS.Name,
-			Region:      cluster.Spec.EKS.Region,
+		if cluster.Spec.ProviderRef == nil {
+			return fmt.Errorf("providerRef is required for EKS clusters")
 		}
-	} else if cluster.Spec.GKE != nil {
+
+		providerNamespace := resolveNamespace(cluster.Namespace, cluster.Spec.ProviderRef.Namespace)
+		provider, err := r.getCloudProvider(ctx, providerNamespace, cluster.Spec.ProviderRef.Name)
+		if err != nil {
+			return err
+		}
+
+		awsCfg, err := r.buildAWSConnectorConfig(ctx, &provider)
+		if err != nil {
+			return err
+		}
+
+		if cluster.Spec.EKS.Region != "" {
+			awsCfg.Region = cluster.Spec.EKS.Region
+		}
+
+		awsSDKConfig, err := awsutil.BuildAWSConfig(ctx, awsCfg)
+		if err != nil {
+			return err
+		}
+
+		eksClient := eks.NewFromConfig(awsSDKConfig)
+		clusterInfo, err := eksClient.DescribeCluster(ctx, &eks.DescribeClusterInput{
+			Name: aws.String(cluster.Spec.EKS.Name),
+		})
+		if err != nil {
+			return fmt.Errorf("describe EKS cluster: %w", err)
+		}
+
+		if clusterInfo.Cluster == nil {
+			return fmt.Errorf("EKS cluster %s not found", cluster.Spec.EKS.Name)
+		}
+
+		endpoint := aws.ToString(clusterInfo.Cluster.Endpoint)
+		if endpoint == "" {
+			return fmt.Errorf("EKS cluster endpoint not available")
+		}
+
+		caData := aws.ToString(clusterInfo.Cluster.CertificateAuthority.Data)
+		if caData == "" {
+			return fmt.Errorf("EKS cluster certificate authority data missing")
+		}
+
+		decodedCA, err := base64.StdEncoding.DecodeString(caData)
+		if err != nil {
+			return fmt.Errorf("decode EKS certificate authority data: %w", err)
+		}
+
+		spec.ConnectorConfig.K8S = &executor.K8SConnectorConfig{
+			ClusterName:     cluster.Spec.EKS.Name,
+			Region:          cluster.Spec.EKS.Region,
+			ClusterEndpoint: endpoint,
+			ClusterCAData:   decodedCA,
+			UseEKSToken:     true,
+			AWS:             awsCfg,
+		}
+		return nil
+	}
+
+	if cluster.Spec.K8S != nil {
+		if cluster.Spec.K8S.InCluster {
+			spec.ConnectorConfig.K8S = &executor.K8SConnectorConfig{}
+			return nil
+		}
+
+		if cluster.Spec.K8S.KubeconfigRef != nil {
+			ref := cluster.Spec.K8S.KubeconfigRef
+			secretNamespace := resolveNamespace(cluster.Namespace, ref.Namespace)
+			secret, err := r.getSecret(ctx, secretNamespace, ref.Name)
+			if err != nil {
+				return err
+			}
+			kubeconfigBytes := secret.Data[kubeconfigKey]
+			if len(kubeconfigBytes) == 0 {
+				return fmt.Errorf("kubeconfig secret %s/%s missing %s key", secretNamespace, ref.Name, kubeconfigKey)
+			}
+
+			spec.ConnectorConfig.K8S = &executor.K8SConnectorConfig{
+				Kubeconfig: kubeconfigBytes,
+			}
+			return nil
+		}
+
+		return fmt.Errorf("kubeconfigRef or inCluster must be specified for K8S access")
+	}
+
+	if cluster.Spec.GKE != nil {
 		spec.ConnectorConfig.K8S = &executor.K8SConnectorConfig{
 			ClusterName: cluster.Spec.GKE.Name,
 			Region:      cluster.Spec.GKE.Location,

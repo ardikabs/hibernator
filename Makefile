@@ -16,6 +16,7 @@ GOCMD ?= go
 # Tool binaries
 CONTROLLER_GEN ?= $(GOBIN)/controller-gen
 ENVTEST ?= $(GOBIN)/setup-envtest
+MOCKERY ?= $(GOBIN)/mockery
 
 # Test configuration
 COVERAGE_DIR ?= .coverage
@@ -245,5 +246,42 @@ envtest: ## Download envtest locally if necessary.
 		go install sigs.k8s.io/controller-runtime/tools/setup-envtest@latest; \
 	}
 
+.PHONY: mockery
+mockery: ## Download mockery locally if necessary.
+	@test -s $(MOCKERY) || { \
+		echo "$(CYAN)Installing mockery...$(RESET)"; \
+		go install github.com/vektra/mockery/v2@latest; \
+	}
+
+.PHONY: mocks-eks
+mocks-eks: mockery ## Generate mocks for EKS executor clients.
+	@echo "$(CYAN)Generating mocks for EKS executor...$(RESET)"
+	$(MOCKERY) --name=EKSClient --dir=./internal/executor/eks --output=./internal/executor/eks/mocks --outpkg=mocks
+	$(MOCKERY) --name=STSClient --dir=./internal/executor/eks --output=./internal/executor/eks/mocks --outpkg=mocks
+	@echo "$(GREEN)EKS mocks generated$(RESET)"
+
+.PHONY: mocks-ec2
+mocks-ec2: mockery ## Generate mocks for EC2 executor client.
+	@echo "$(CYAN)Generating mocks for EC2 executor...$(RESET)"
+	$(MOCKERY) --name=EC2Client --dir=./internal/executor/ec2 --output=./internal/executor/ec2/mocks --outpkg=mocks
+	@echo "$(GREEN)EC2 mocks generated$(RESET)"
+
+.PHONY: mocks-karpenter
+mocks-karpenter: mockery ## Generate mocks for Karpenter executor client.
+	@echo "$(CYAN)Generating mocks for Karpenter executor...$(RESET)"
+	$(MOCKERY) --name=K8sClient --dir=./internal/executor/karpenter --output=./internal/executor/karpenter/mocks --outpkg=mocks
+	@echo "$(GREEN)Karpenter mocks generated$(RESET)"
+
+.PHONY: mocks-rds
+mocks-rds: mockery ## Generate mocks for RDS executor clients.
+	@echo "$(CYAN)Generating mocks for RDS executor...$(RESET)"
+	$(MOCKERY) --name=RDSClient --dir=./internal/executor/rds --output=./internal/executor/rds/mocks --outpkg=mocks
+	$(MOCKERY) --name=STSClient --dir=./internal/executor/rds --output=./internal/executor/rds/mocks --outpkg=mocks
+	@echo "$(GREEN)RDS mocks generated$(RESET)"
+
+.PHONY: mocks-all
+mocks-all: mocks-eks mocks-ec2 mocks-karpenter mocks-rds ## Generate all executor mocks.
+	@echo "$(GREEN)All mocks generated successfully$(RESET)"
+
 .PHONY: tools
-tools: controller-gen envtest ## Install all required tools.
+tools: controller-gen envtest mockery ## Install all required tools.
