@@ -6,15 +6,13 @@ metadata:
   name: aws-production
   namespace: hibernator-system
 spec:
-  type: AWS
+  type: aws
   aws:
+    accountId: "123456789012"
     region: us-west-2
+    assumeRoleArn: arn:aws:iam::123456789012:role/HibernatorRole
     auth:
-      type: ServiceAccount
-      serviceAccount:
-        name: hibernator-runner
-        namespace: hibernator-system
-        roleARN: arn:aws:iam::123456789012:role/HibernatorRole
+      serviceAccount: {}
 ---
 # Example: K8SCluster for EKS
 apiVersion: hibernator.ardikabs.com/v1alpha1
@@ -23,12 +21,11 @@ metadata:
   name: eks-production
   namespace: hibernator-system
 spec:
-  type: EKS
-  clusterName: production-cluster
+  providerRef:
+    name: aws-production
   eks:
+    name: production-cluster
     region: us-west-2
-    providerRef:
-      name: aws-production
 ---
 # Example: HibernatePlan with DAG strategy
 apiVersion: hibernator.ardikabs.com/v1alpha1
@@ -91,7 +88,7 @@ spec:
         kind: CloudProvider
         name: aws-production
       parameters:
-        instanceIdentifier: production-db
+        instanceId: production-db
         snapshotBeforeStop: true
 
     # Frontend ASG (via EC2 instances)
@@ -101,9 +98,10 @@ spec:
         kind: CloudProvider
         name: aws-production
       parameters:
-        tags:
-          Environment: production
-          Component: frontend
+        selector:
+          tags:
+            Environment: production
+            Component: frontend
 
     # Backend ASG
     - name: backend-asg
@@ -112,9 +110,10 @@ spec:
         kind: CloudProvider
         name: aws-production
       parameters:
-        tags:
-          Environment: production
-          Component: backend
+        selector:
+          tags:
+            Environment: production
+            Component: backend
 
     # Worker ASG
     - name: worker-asg
@@ -123,9 +122,10 @@ spec:
         kind: CloudProvider
         name: aws-production
       parameters:
-        tags:
-          Environment: production
-          Component: worker
+        selector:
+          tags:
+            Environment: production
+            Component: worker
 
   behavior:
     mode: BestEffort
@@ -175,8 +175,9 @@ spec:
         kind: CloudProvider
         name: aws-production
       parameters:
-        tags:
-          Name: dev-frontend-web
+        selector:
+          tags:
+            Name: dev-frontend-web
 
     - name: frontend-api
       type: ec2
@@ -184,8 +185,9 @@ spec:
         kind: CloudProvider
         name: aws-production
       parameters:
-        tags:
-          Name: dev-frontend-api
+        selector:
+          tags:
+            Name: dev-frontend-api
 
     - name: backend-service
       type: ec2
@@ -193,8 +195,9 @@ spec:
         kind: CloudProvider
         name: aws-production
       parameters:
-        tags:
-          Name: dev-backend
+        selector:
+          tags:
+            Name: dev-backend
 
     - name: worker-service
       type: ec2
@@ -202,8 +205,9 @@ spec:
         kind: CloudProvider
         name: aws-production
       parameters:
-        tags:
-          Name: dev-worker
+        selector:
+          tags:
+            Name: dev-worker
 
     - name: cache-redis
       type: ec2
@@ -211,8 +215,9 @@ spec:
         kind: CloudProvider
         name: aws-production
       parameters:
-        tags:
-          Name: dev-redis
+        selector:
+          tags:
+            Name: dev-redis
 
     - name: database
       type: rds
@@ -220,7 +225,7 @@ spec:
         kind: CloudProvider
         name: aws-production
       parameters:
-        instanceIdentifier: dev-database
+        instanceId: dev-database
 
   behavior:
     mode: Strict
@@ -253,9 +258,10 @@ spec:
         name: aws-production
         namespace: hibernator-system
       parameters:
-        instanceIds:
-          - i-0123456789abcdef0
-          - i-0123456789abcdef1
+        selector:
+          instanceIds:
+            - i-0123456789abcdef0
+            - i-0123456789abcdef1
 
     - name: app-database
       type: rds
@@ -264,7 +270,48 @@ spec:
         name: aws-production
         namespace: hibernator-system
       parameters:
-        instanceIdentifier: simple-app-db
+        instanceId: simple-app-db
 
   behavior:
     mode: BestEffort
+
+---
+# Example: HibernatePlan with WorkloadScaler executor
+apiVersion: hibernator.ardikabs.com/v1alpha1
+kind: HibernatePlan
+metadata:
+  name: workload-scaler-plan
+  namespace: hibernator-system
+spec:
+  schedule:
+    timezone: America/New_York
+    offHours:
+      - start: "20:00"
+        end: "06:00"
+        daysOfWeek: ["MON", "TUE", "WED", "THU", "FRI"]
+
+  execution:
+    strategy:
+      type: Sequential
+
+  targets:
+    - name: scale-deployments
+      type: workloadscaler
+      connectorRef:
+        kind: K8SCluster
+        name: eks-production
+        namespace: hibernator-system
+      parameters:
+        includedGroups:
+          - Deployment
+          - StatefulSet
+        namespace:
+          literals:
+            - app-team-a
+            - app-team-b
+        workloadSelector:
+          matchLabels:
+            app.kubernetes.io/part-of: payments
+
+  behavior:
+    mode: Strict
