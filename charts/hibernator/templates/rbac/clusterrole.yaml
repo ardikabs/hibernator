@@ -52,11 +52,6 @@ rules:
     resources: ["secrets"]
     verbs: ["get", "list"]
 
-  # ServiceAccount management
-  - apiGroups: [""]
-    resources: ["serviceaccounts"]
-    verbs: ["get", "list", "watch", "create", "delete"]
-
   # Events
   - apiGroups: [""]
     resources: ["events"]

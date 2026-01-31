@@ -7,18 +7,15 @@ metadata:
     {{- include "hibernator.labels" . | nindent 4 }}
     app.kubernetes.io/component: runner
 rules:
-  # Token review for streaming auth
-  - apiGroups: ["authentication.k8s.io"]
-    resources: ["tokenreviews"]
-    verbs: ["create"]
+  - apiGroups: ["hibernator.ardikabs.com"]
+    resources: ["cloudproviders", "k8sclusters"]
+    verbs: ["get"]
 
-  # ConfigMap access for restore data
-  - apiGroups: [""]
-    resources: ["configmaps"]
-    verbs: ["get", "list", "watch", "create", "update", "patch"]
-
-  # Secrets for credentials
   - apiGroups: [""]
     resources: ["secrets"]
-    verbs: ["get", "list"]
+    verbs: ["get"]
+
+  - apiGroups: [""]
+    resources: ["configmaps"]
+    verbs: ["get", "create", "update", "patch"]
 {{- end }}

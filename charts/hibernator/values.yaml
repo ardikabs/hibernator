@@ -24,6 +24,11 @@ serviceAccount:
     # eks.amazonaws.com/role-arn: arn:aws:iam::ACCOUNT_ID:role/hibernator-controller
   name: ""
 
+runnerServiceAccount:
+  create: true
+  annotations: {}
+  name: "hibernator-runner"
+
 rbac:
   create: true
 
