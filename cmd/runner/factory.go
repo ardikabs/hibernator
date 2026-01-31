@@ -18,6 +18,7 @@ import (
 	"github.com/ardikabs/hibernator/internal/executor/gke"
 	"github.com/ardikabs/hibernator/internal/executor/karpenter"
 	"github.com/ardikabs/hibernator/internal/executor/rds"
+	"github.com/ardikabs/hibernator/internal/executor/workloadscaler"
 )
 
 // ExecutorFactory creates executor instances.
@@ -68,6 +69,11 @@ func newExecutorFactoryRegistry() *executorFactoryRegistry {
 				factory:        func() executor.Executor { return cloudsql.New() },
 				defaultEnabled: false,
 				description:    "GCP Cloud SQL instances (pending API integration)",
+			},
+			"workloadscaler": {
+				factory:        func() executor.Executor { return workloadscaler.New() },
+				defaultEnabled: true,
+				description:    "Kubernetes workload scaling via scale subresource",
 			},
 		},
 	}

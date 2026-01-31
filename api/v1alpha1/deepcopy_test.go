@@ -265,9 +265,7 @@ func TestCloudProvider_DeepCopy(t *testing.T) {
 				AccountId: "123456789012",
 				Region:    "us-east-1",
 				Auth: AWSAuth{
-					ServiceAccount: &ServiceAccountAuth{
-						AssumeRoleArn: "arn:aws:iam::123456789012:role/test",
-					},
+					ServiceAccount: &ServiceAccountAuth{},
 				},
 			},
 		},

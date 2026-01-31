@@ -530,9 +530,7 @@ func TestCloudProviderType_Constants(t *testing.T) {
 
 func TestAWSAuth_Marshal(t *testing.T) {
 	auth := AWSAuth{
-		ServiceAccount: &ServiceAccountAuth{
-			AssumeRoleArn: "arn:aws:iam::123456789012:role/test-role",
-		},
+		ServiceAccount: &ServiceAccountAuth{},
 	}
 
 	data, err := json.Marshal(auth)
@@ -548,9 +546,7 @@ func TestAWSAuth_Marshal(t *testing.T) {
 	if result.ServiceAccount == nil {
 		t.Fatal("ServiceAccount is nil")
 	}
-	if result.ServiceAccount.AssumeRoleArn != auth.ServiceAccount.AssumeRoleArn {
-		t.Errorf("AssumeRoleArn: got %q, want %q", result.ServiceAccount.AssumeRoleArn, auth.ServiceAccount.AssumeRoleArn)
-	}
+	// AssumeRoleArn is now at AWS spec level, not in ServiceAccountAuth
 }
 
 func TestAWSAuth_StaticCredentials(t *testing.T) {
@@ -586,9 +582,7 @@ func TestAWSConfig_Marshal(t *testing.T) {
 		AccountId: "123456789012",
 		Region:    "ap-southeast-3",
 		Auth: AWSAuth{
-			ServiceAccount: &ServiceAccountAuth{
-				AssumeRoleArn: "arn:aws:iam::123456789012:role/hibernator",
-			},
+			ServiceAccount: &ServiceAccountAuth{},
 		},
 	}
 
@@ -617,9 +611,7 @@ func TestCloudProviderSpec_Marshal(t *testing.T) {
 			AccountId: "123456789012",
 			Region:    "us-east-1",
 			Auth: AWSAuth{
-				ServiceAccount: &ServiceAccountAuth{
-					AssumeRoleArn: "arn:aws:iam::123456789012:role/test",
-				},
+				ServiceAccount: &ServiceAccountAuth{},
 			},
 		},
 	}

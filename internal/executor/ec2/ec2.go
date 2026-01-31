@@ -12,13 +12,11 @@ import (
 	"fmt"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
-	"github.com/aws/aws-sdk-go-v2/config"
-	"github.com/aws/aws-sdk-go-v2/credentials/stscreds"
 	"github.com/aws/aws-sdk-go-v2/service/ec2"
 	"github.com/aws/aws-sdk-go-v2/service/ec2/types"
-	"github.com/aws/aws-sdk-go-v2/service/sts"
 
 	"github.com/ardikabs/hibernator/internal/executor"
+	"github.com/ardikabs/hibernator/pkg/awsutil"
 	"github.com/ardikabs/hibernator/pkg/executorparams"
 )
 
@@ -43,7 +41,7 @@ type InstanceState struct {
 
 // Executor implements the EC2 hibernation logic.
 type Executor struct {
-	ec2Factory EC2ClientFactory
+	ec2Factory      EC2ClientFactory
 	awsConfigLoader AWSConfigLoader
 }
 
@@ -66,7 +64,7 @@ func New() *Executor {
 // This is useful for testing with mock clients.
 func NewWithClients(ec2Factory EC2ClientFactory, awsConfigLoader AWSConfigLoader) *Executor {
 	return &Executor{
-		ec2Factory: ec2Factory,
+		ec2Factory:      ec2Factory,
 		awsConfigLoader: awsConfigLoader,
 	}
 }
@@ -207,20 +205,8 @@ func (e *Executor) loadAWSConfig(ctx context.Context, spec executor.Spec) (aws.C
 	if spec.ConnectorConfig.AWS == nil {
 		return aws.Config{}, fmt.Errorf("AWS connector config is required")
 	}
-	region := spec.ConnectorConfig.AWS.Region
 
-	cfg, err := config.LoadDefaultConfig(ctx, config.WithRegion(region))
-	if err != nil {
-		return aws.Config{}, err
-	}
-
-	if spec.ConnectorConfig.AWS.AssumeRoleArn != "" {
-		stsClient := sts.NewFromConfig(cfg)
-		creds := stscreds.NewAssumeRoleProvider(stsClient, spec.ConnectorConfig.AWS.AssumeRoleArn)
-		cfg.Credentials = aws.NewCredentialsCache(creds)
-	}
-
-	return cfg, nil
+	return awsutil.BuildAWSConfig(ctx, spec.ConnectorConfig.AWS)
 }
 
 func (e *Executor) findInstances(ctx context.Context, client EC2Client, selector Selector) ([]types.Instance, error) {

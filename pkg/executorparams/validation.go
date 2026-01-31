@@ -156,6 +156,9 @@ func init() {
 
 	// CloudSQL validator
 	Register("cloudsql", []string{"instanceName", "project"}, validateCloudSQLParams)
+
+	// WorkloadScaler validator
+	Register("workloadscaler", []string{"includedGroups", "namespace", "workloadSelector"}, validateWorkloadScalerParams)
 }
 
 // validateEC2Params validates EC2 executor parameters.
@@ -297,4 +300,81 @@ func validateCloudSQLParams(params []byte) *Result {
 	}
 
 	return result
+}
+
+// validateWorkloadScalerParams validates WorkloadScaler executor parameters.
+func validateWorkloadScalerParams(params []byte) *Result {
+	result := &Result{}
+
+	if len(params) == 0 {
+		result.AddError("parameters required: namespace must be specified")
+		return result
+	}
+
+	var p WorkloadScalerParameters
+	if err := json.Unmarshal(params, &p); err != nil {
+		result.AddError("invalid JSON format: %v", err)
+		return result
+	}
+
+	// Validate namespace selector (required)
+	if len(p.Namespace.Literals) == 0 && len(p.Namespace.Selector) == 0 {
+		result.AddError("namespace must specify either literals or selector")
+	}
+
+	// Check mutual exclusivity
+	if len(p.Namespace.Literals) > 0 && len(p.Namespace.Selector) > 0 {
+		result.AddError("namespace.literals and namespace.selector are mutually exclusive")
+	}
+
+	// Validate includedGroups defaults to Deployment if empty (no validation error)
+	// Empty workloadSelector is valid (means all workloads in namespace)
+
+	// Validate workloadSelector if present
+	if p.WorkloadSelector != nil {
+		if err := validateLabelSelector(p.WorkloadSelector); err != nil {
+			result.AddError("workloadSelector validation failed: %v", err)
+		}
+	}
+
+	return result
+}
+
+// validateLabelSelector validates a LabelSelector structure.
+func validateLabelSelector(ls *LabelSelector) error {
+	if ls == nil {
+		return nil
+	}
+
+	// Validate matchExpressions
+	for i, req := range ls.MatchExpressions {
+		if req.Key == "" {
+			return fmt.Errorf("matchExpressions[%d].key is required", i)
+		}
+
+		validOperators := map[string]bool{
+			"In":           true,
+			"NotIn":        true,
+			"Exists":       true,
+			"DoesNotExist": true,
+		}
+
+		if !validOperators[req.Operator] {
+			return fmt.Errorf("matchExpressions[%d].operator must be one of: In, NotIn, Exists, DoesNotExist", i)
+		}
+
+		// Validate values based on operator
+		switch req.Operator {
+		case "In", "NotIn":
+			if len(req.Values) == 0 {
+				return fmt.Errorf("matchExpressions[%d].values must be non-empty for operator %s", i, req.Operator)
+			}
+		case "Exists", "DoesNotExist":
+			if len(req.Values) > 0 {
+				return fmt.Errorf("matchExpressions[%d].values must be empty for operator %s", i, req.Operator)
+			}
+		}
+	}
+
+	return nil
 }

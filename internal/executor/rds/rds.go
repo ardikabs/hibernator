@@ -13,13 +13,12 @@ import (
 	"time"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
-	"github.com/aws/aws-sdk-go-v2/config"
-	"github.com/aws/aws-sdk-go-v2/credentials/stscreds"
 	"github.com/aws/aws-sdk-go-v2/service/rds"
 	"github.com/aws/aws-sdk-go-v2/service/rds/types"
 	"github.com/aws/aws-sdk-go-v2/service/sts"
 
 	"github.com/ardikabs/hibernator/internal/executor"
+	"github.com/ardikabs/hibernator/pkg/awsutil"
 	"github.com/ardikabs/hibernator/pkg/executorparams"
 )
 
@@ -176,20 +175,8 @@ func (e *Executor) loadAWSConfig(ctx context.Context, spec executor.Spec) (aws.C
 	if spec.ConnectorConfig.AWS == nil {
 		return aws.Config{}, fmt.Errorf("AWS connector config is required")
 	}
-	region := spec.ConnectorConfig.AWS.Region
 
-	cfg, err := config.LoadDefaultConfig(ctx, config.WithRegion(region))
-	if err != nil {
-		return aws.Config{}, err
-	}
-
-	if spec.ConnectorConfig.AWS.AssumeRoleArn != "" {
-		stsClient := e.stsFactory(cfg)
-		creds := stscreds.NewAssumeRoleProvider(stsClient, spec.ConnectorConfig.AWS.AssumeRoleArn)
-		cfg.Credentials = aws.NewCredentialsCache(creds)
-	}
-
-	return cfg, nil
+	return awsutil.BuildAWSConfig(ctx, spec.ConnectorConfig.AWS)
 }
 
 func (e *Executor) stopInstance(ctx context.Context, client RDSClient, params Parameters) (RestoreState, error) {

@@ -12,17 +12,10 @@ import (
 
 	"github.com/ardikabs/hibernator/internal/executor"
 	"github.com/ardikabs/hibernator/pkg/executorparams"
-	"github.com/aws/aws-sdk-go-v2/aws"
-	"github.com/aws/aws-sdk-go-v2/config"
-	"github.com/aws/aws-sdk-go-v2/credentials/stscreds"
-	"github.com/aws/aws-sdk-go-v2/service/eks"
-	"github.com/aws/aws-sdk-go-v2/service/sts"
+	"github.com/ardikabs/hibernator/pkg/k8sutil"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime/schema"
-	"k8s.io/client-go/dynamic"
-	"k8s.io/client-go/kubernetes"
-	"k8s.io/client-go/tools/clientcmd"
 )
 
 // Executor implements hibernation for Karpenter NodePools.
@@ -37,8 +30,7 @@ type K8sClientFactory func(ctx context.Context, spec *executor.Spec) (K8sClient,
 func New() *Executor {
 	return &Executor{
 		k8sFactory: func(ctx context.Context, spec *executor.Spec) (K8sClient, error) {
-			executor := &Executor{}
-			_, dynamicClient, err := executor.buildKubernetesClient(ctx, spec)
+			dynamicClient, _, err := k8sutil.BuildClients(ctx, spec.ConnectorConfig.K8S)
 			if err != nil {
 				return nil, err
 			}
@@ -274,111 +266,4 @@ func (e *Executor) restoreNodePool(ctx context.Context, client K8sClient, nodePo
 	}
 
 	return nil
-}
-
-// buildKubernetesClient builds a Kubernetes client for the EKS cluster.
-func (e *Executor) buildKubernetesClient(ctx context.Context, spec *executor.Spec) (*kubernetes.Clientset, dynamic.Interface, error) {
-	// Build AWS config
-	cfg, err := e.buildAWSConfig(ctx, spec)
-	if err != nil {
-		return nil, nil, fmt.Errorf("build AWS config: %w", err)
-	}
-
-	// Get EKS cluster info
-	eksClient := eks.NewFromConfig(cfg)
-	clusterOutput, err := eksClient.DescribeCluster(ctx, &eks.DescribeClusterInput{
-		Name: aws.String(spec.ConnectorConfig.K8S.ClusterName),
-	})
-	if err != nil {
-		return nil, nil, fmt.Errorf("describe EKS cluster: %w", err)
-	}
-
-	if clusterOutput.Cluster == nil || clusterOutput.Cluster.Endpoint == nil {
-		return nil, nil, fmt.Errorf("EKS cluster endpoint not available")
-	}
-
-	// Build kubeconfig from EKS cluster endpoint and CA
-	endpoint := aws.ToString(clusterOutput.Cluster.Endpoint)
-	caCertB64 := aws.ToString(clusterOutput.Cluster.CertificateAuthority.Data)
-
-	if endpoint == "" || caCertB64 == "" {
-		return nil, nil, fmt.Errorf("EKS cluster endpoint or CA certificate missing")
-	}
-
-	// Build kubeconfig YAML from EKS cluster info
-	kubeconfig := fmt.Sprintf(`apiVersion: v1
-clusters:
-- cluster:
-    server: %s
-    certificate-authority-data: %s
-  name: eks-cluster
-contexts:
-- context:
-    cluster: eks-cluster
-    user: eks-user
-  name: eks-context
-current-context: eks-context
-kind: Config
-preferences: {}
-users:
-- name: eks-user
-  user:
-    exec:
-      apiVersion: client.authentication.k8s.io/v1beta1
-      command: aws
-      args:
-        - eks
-        - get-token
-        - --cluster-name
-        - %s
-        - --region
-        - %s
-`, endpoint, caCertB64, spec.ConnectorConfig.K8S.ClusterName, spec.ConnectorConfig.AWS.Region)
-
-	// Parse kubeconfig to get REST config
-	clientConfig, err := clientcmd.NewClientConfigFromBytes([]byte(kubeconfig))
-	if err != nil {
-		return nil, nil, fmt.Errorf("parse generated kubeconfig: %w", err)
-	}
-
-	restConfig, err := clientConfig.ClientConfig()
-	if err != nil {
-		return nil, nil, fmt.Errorf("build rest config from kubeconfig: %w", err)
-	}
-
-	clientset, err := kubernetes.NewForConfig(restConfig)
-	if err != nil {
-		return nil, nil, fmt.Errorf("create kubernetes clientset: %w", err)
-	}
-
-	dynamicClient, err := dynamic.NewForConfig(restConfig)
-	if err != nil {
-		return nil, nil, fmt.Errorf("create dynamic client: %w", err)
-	}
-
-	return clientset, dynamicClient, nil
-}
-
-// buildAWSConfig builds AWS SDK config with optional role assumption.
-func (e *Executor) buildAWSConfig(ctx context.Context, spec *executor.Spec) (aws.Config, error) {
-	var opts []func(*config.LoadOptions) error
-
-	// Set region
-	if spec.ConnectorConfig.K8S != nil && spec.ConnectorConfig.K8S.Region != "" {
-		opts = append(opts, config.WithRegion(spec.ConnectorConfig.K8S.Region))
-	}
-
-	cfg, err := config.LoadDefaultConfig(ctx, opts...)
-	if err != nil {
-		return aws.Config{}, fmt.Errorf("load AWS config: %w", err)
-	}
-
-	// Assume role if specified
-	if spec.ConnectorConfig.AWS != nil && spec.ConnectorConfig.AWS.AssumeRoleArn != "" {
-		stsClient := sts.NewFromConfig(cfg)
-		creds := stscreds.NewAssumeRoleProvider(stsClient, spec.ConnectorConfig.AWS.AssumeRoleArn)
-		cfg.Credentials = creds
-	}
-
-	return cfg, nil
 }

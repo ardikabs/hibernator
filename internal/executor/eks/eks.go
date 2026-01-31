@@ -14,13 +14,12 @@ import (
 	"fmt"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
-	"github.com/aws/aws-sdk-go-v2/config"
-	"github.com/aws/aws-sdk-go-v2/credentials/stscreds"
 	"github.com/aws/aws-sdk-go-v2/service/eks"
 	"github.com/aws/aws-sdk-go-v2/service/eks/types"
 	"github.com/aws/aws-sdk-go-v2/service/sts"
 
 	"github.com/ardikabs/hibernator/internal/executor"
+	"github.com/ardikabs/hibernator/pkg/awsutil"
 	"github.com/ardikabs/hibernator/pkg/executorparams"
 )
 
@@ -47,8 +46,8 @@ type NodeGroupState struct {
 
 // Executor implements the EKS hibernation logic for Managed Node Groups.
 type Executor struct {
-	eksFactory EKSClientFactory
-	stsFactory STSClientFactory
+	eksFactory      EKSClientFactory
+	stsFactory      STSClientFactory
 	awsConfigLoader AWSConfigLoader
 }
 
@@ -77,8 +76,8 @@ func New() *Executor {
 // This is useful for testing with mock clients.
 func NewWithClients(eksFactory EKSClientFactory, stsFactory STSClientFactory, awsConfigLoader AWSConfigLoader) *Executor {
 	return &Executor{
-		eksFactory: eksFactory,
-		stsFactory: stsFactory,
+		eksFactory:      eksFactory,
+		stsFactory:      stsFactory,
 		awsConfigLoader: awsConfigLoader,
 	}
 }
@@ -209,21 +208,11 @@ func (e *Executor) loadAWSConfig(ctx context.Context, spec executor.Spec) (aws.C
 		return e.awsConfigLoader(ctx, spec)
 	}
 
-	region := spec.ConnectorConfig.AWS.Region
-
-	cfg, err := config.LoadDefaultConfig(ctx, config.WithRegion(region))
-	if err != nil {
-		return aws.Config{}, err
+	if spec.ConnectorConfig.AWS == nil {
+		return aws.Config{}, fmt.Errorf("AWS connector config is required")
 	}
 
-	// Assume role if configured
-	if spec.ConnectorConfig.AWS.AssumeRoleArn != "" {
-		stsClient := e.stsFactory(cfg)
-		creds := stscreds.NewAssumeRoleProvider(stsClient, spec.ConnectorConfig.AWS.AssumeRoleArn)
-		cfg.Credentials = aws.NewCredentialsCache(creds)
-	}
-
-	return cfg, nil
+	return awsutil.BuildAWSConfig(ctx, spec.ConnectorConfig.AWS)
 }
 
 func (e *Executor) listNodeGroups(ctx context.Context, client EKSClient, clusterName string) ([]string, error) {

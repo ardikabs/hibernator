@@ -62,3 +62,51 @@ type CloudSQLParameters struct {
 	InstanceName string `json:"instanceName"`
 	Project      string `json:"project"`
 }
+
+// WorkloadScalerParameters defines the expected parameters for the workloadscaler executor.
+type WorkloadScalerParameters struct {
+	// IncludedGroups specifies which workload kinds to scale. Defaults to [Deployment].
+	IncludedGroups []string `json:"includedGroups,omitempty"`
+
+	// Namespace specifies the namespace scope for discovery (exactly one must be set).
+	Namespace NamespaceSelector `json:"namespace"`
+
+	// WorkloadSelector filters workloads by labels (optional).
+	WorkloadSelector *LabelSelector `json:"workloadSelector,omitempty"`
+}
+
+// NamespaceSelector defines how to select namespaces.
+type NamespaceSelector struct {
+	// Literals is a list of explicit namespace names.
+	Literals []string `json:"literals,omitempty"`
+
+	// Selector is a label selector for namespaces (mutually exclusive with Literals).
+	Selector map[string]string `json:"selector,omitempty"`
+}
+
+// LabelSelector defines a label selector for Kubernetes resources.
+type LabelSelector struct {
+	// MatchLabels is a map of {key,value} pairs. A single {key,value} in the matchLabels
+	// map is equivalent to an element of matchExpressions, whose key field is "key", the
+	// operator is "In", and the values array contains only "value".
+	MatchLabels map[string]string `json:"matchLabels,omitempty"`
+
+	// MatchExpressions is a list of label selector requirements. The requirements are ANDed.
+	MatchExpressions []LabelSelectorRequirement `json:"matchExpressions,omitempty"`
+}
+
+// LabelSelectorRequirement is a selector that contains values, a key, and an operator that
+// relates the key and values.
+type LabelSelectorRequirement struct {
+	// Key is the label key that the selector applies to.
+	Key string `json:"key"`
+
+	// Operator represents a key's relationship to a set of values.
+	// Valid operators are In, NotIn, Exists and DoesNotExist.
+	Operator string `json:"operator"`
+
+	// Values is an array of string values. If the operator is In or NotIn,
+	// the values array must be non-empty. If the operator is Exists or DoesNotExist,
+	// the values array must be empty.
+	Values []string `json:"values,omitempty"`
+}
