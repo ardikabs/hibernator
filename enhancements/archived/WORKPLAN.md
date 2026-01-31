@@ -122,13 +122,14 @@ spec:
   aws:
     accountId: "123456789012"
     region: ap-southeast-3
+    # Optional: AssumeRoleArn can be used with both auth methods
+    assumeRoleArn: arn:aws:iam::123456789012:role/hibernator-target
 
     auth:
-      # Exactly one of the following must be specified
+      # At least one of the following must be specified
 
-      serviceAccount:
-        # IRSA or projected SA → STS AssumeRole
-        assumeRoleArn: arn:aws:iam::123456789012:role/hibernator-target
+      serviceAccount: {}
+        # IRSA: Empty struct indicates use pod's ServiceAccount identity
 
       # static:
       #   secretRef:

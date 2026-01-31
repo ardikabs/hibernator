@@ -260,8 +260,12 @@ ginkgo -v test/e2e/
 ### Building and Running
 
 ```bash
-# Build binaries
+# Build binaries (outputs go to bin/ directory)
 make build
+
+# Build binaries manually (ensure output goes to bin/)
+go build -o bin/controller ./cmd/controller
+go build -o bin/runner ./cmd/runner
 
 # Run controller locally
 make run
@@ -275,6 +279,8 @@ make install
 # Deploy to cluster
 make deploy
 ```
+
+**Build Output Convention**: All Go binaries built from `cmd/*` must be placed in the `bin/` directory. This keeps the repository root clean and provides a consistent location for all executable artifacts.
 
 ## API Conventions
 
@@ -354,12 +360,28 @@ targets:
 4. **Atomic Commits**: One logical change per commit with clear messages
 5. **Code Review**: All changes require review before merge
 
+## RFC Registry & Keyword Index
+
+**Use this index to match user requests to relevant RFCs via keyword detection:**
+
+| RFC | Status | Keywords | Use When |
+|-----|--------|----------|----------|
+| [RFC-0001](../enhancements/0001-hibernate-operator.md) | In Progress 🚀 | Architecture, Control-Plane, Executors, Streaming, Security, Scheduling, Dependency-Resolution, Job-Lifecycle, RBAC, Restore-Metadata | User asks about operator architecture, execution model, streaming auth, security, or job lifecycle |
+| [RFC-0002](../enhancements/0002-schedule-format-migration.md) | Implemented ✅ | Schedule-Format, Time-Windows, Cron-Conversion, API-Design, Timezone-Aware, Validation, User-Experience, Migration, OffHourWindow, Conversion | User asks about schedule validation, time windows, cron conversion, timezone handling, or API changes |
+| [RFC-0003](../enhancements/0003-schedule-exceptions.md) | Proposed (Not Yet) | Schedule-Exceptions, Maintenance-Windows, Lead-Time, Time-Bound, Extend, Suspend, Replace, Emergency-Events, Validation, Status-Tracking | User asks about schedule exceptions, emergency overrides, maintenance windows, or time-bound deviations |
+| [RFC-0004](../enhancements/0004-scale-subresource-executor.md) | Draft | Executors, Kubernetes, Scale-Subresource, Downscale, Restore-Metadata, RBAC | User asks about workload downscaling, scale subresource usage, workloadscaler executor, or RBAC for scaling |
+
+**Keyword Matching Strategy:**
+1. Extract keywords from user request
+2. Match against RFC keyword lists above
+3. Reference matching RFC(s) only when keywords align with user context
+4. Use RFC as "least reference" (cite only when directly applicable)
+
 ## References
 
-- **RFC-001**: [Hibernate Operator Design](../enhancements/0001-hibernate-operator.md)
 - **AGENTS.md**: [Agent checklist and handoff procedures](../AGENTS.md)
 - **WORKPLAN.md**: [Detailed technical workplan](../enhancements/archived/WORKPLAN.md) (historical reference)
 
 ---
 
-**Remember**: This project follows strict principles defined in `.github/instructions/*`. Always review relevant instruction files before implementing features, writing code, or making architectural decisions.
+**Remember**: This project follows strict principles defined in `.github/instructions/*`. Always review relevant instruction files before implementing features, writing code, or making architectural decisions. **When user keywords match RFC keywords, reference the relevant RFC for context.**
