@@ -360,6 +360,174 @@ targets:
 4. **Atomic Commits**: One logical change per commit with clear messages
 5. **Code Review**: All changes require review before merge
 
+## User Journey Documentation Standards
+
+**When implementing a new RFC or major feature, corresponding user journey documentation must be created.**
+
+### Purpose: The User-Technical Bridge
+
+User journeys serve as a **critical bridge between user needs and technical implementation**. They translate high-level user intent into actionable technical specifications:
+
+```
+User Need / Business Goal
+         ↓
+    (User Journey)
+         ↓
+    RFC / Technical Design
+         ↓
+  Code Implementation
+```
+
+**Key Contract:**
+- **User Journeys are NOT optional**: Every RFC that reaches "Implemented" status **must have** corresponding journey documentation
+- **Journeys come WITH the RFC**: Journey documentation is created **when the RFC is decided to be implemented**, not after code is written
+- **Journeys are the interpreter**: They explain user stories and business outcomes in plain language, which technical teams then translate into RFC/code
+- **High-level to low-level translation**: Journeys describe "what users need to accomplish" (high-level); RFCs/code describe "how the system implements it" (low-level)
+
+**Why this matters:**
+- **Clarity**: Non-technical stakeholders understand user workflows
+- **Traceability**: RFC ↔ Journey ↔ Code creates an auditable chain
+- **Scope validation**: Journeys prevent feature creep by clearly defining user outcomes
+- **Documentation**: When code changes, journeys explain why to new developers
+
+### User Journey Structure
+
+All user journeys are located in `docs/user-journey/` and follow this structure:
+
+```markdown
+# [Journey Title]
+
+**Tier:** `[MVP | Enhanced | Advanced]`
+
+**Personas:** [Persona1], [Persona2], [Persona3]
+
+**When:** [Context for when this journey applies]
+
+**Why:** [Business value delivered by this journey]
+
+---
+
+## User Stories
+
+**Story 1:** As a **[Persona]**, I want to **[action]**, so that **[benefit]**.
+
+**Story 2:** As a **[Persona]**, I want to **[action]**, so that **[benefit]**.
+
+---
+
+## When/Context
+
+[Shared context that applies to all stories]
+
+## Business Outcome
+
+[What the user achieves or what problem is solved]
+
+## Step-by-Step Flow
+
+[Numbered steps to accomplish the journey]
+
+## Decision Branches
+
+[Alternative paths or conditional steps]
+
+## Related Journeys
+
+[Links to related user journeys]
+
+## Pain Points Solved
+
+[What problems this journey solves]
+
+## RFC References
+
+- [RFC-XXXX](../enhancements/XXXX-name.md) — Brief description
+```
+
+### When to Create User Journeys
+
+User journeys are created **at RFC approval time**, not after implementation:
+
+1. **RFC Status: Proposed** → No journey required yet (design phase)
+2. **RFC Status: Approved for Implementation** → Create journeys immediately (alongside RFC approval)
+3. **RFC Status: In Progress** → Journeys guide the implementation (user perspective is north star)
+4. **RFC Status: Implemented** → Journeys document the final user-facing feature
+
+**Critical Rule**: Do NOT wait until code is written to create journeys. Journeys should be created WHEN the RFC decision is made to implement, ensuring the technical team has user context and clear business outcomes to guide their work.
+
+### RFC to User Journey Mapping
+
+| RFC | Status | Required Journeys | Documentation |
+|-----|--------|-------------------|---|
+| [RFC-0001](../enhancements/0001-hibernate-operator.md) | Implemented ✅ | `hibernation-plan-initial-design.md`, `deploy-operator-to-cluster.md`, `monitor-hibernation-execution.md` | Document control-plane architecture, Job execution, and status tracking |
+| [RFC-0002](../enhancements/0002-schedule-format-migration.md) | Implemented ✅ | `hibernation-plan-initial-design.md` | Document schedule format with start/end/daysOfWeek syntax |
+| [RFC-0003](../enhancements/0003-schedule-exceptions.md) | Proposed | `create-emergency-exception.md`, `extend-hibernation-for-event.md`, `suspend-hibernation-during-incident.md` | Document time-bound exception types (extend, suspend, replace) |
+| [RFC-0004](../enhancements/0004-scale-subresource-executor.md) | Implemented ✅ | `scale-workloads-in-cluster.md` | Document workload scale subresource executor |
+
+### User Journey as High-Level Interpretation
+
+**User journeys translate technical RFC decisions into user-facing business language:**
+
+- **RFC perspective (Low-level)**: "Implement gRPC streaming authentication with projected tokens and TokenReview validation"
+- **Journey perspective (High-level)**: "As an SRE, I want to see real-time execution logs and progress, so that I can respond quickly to issues"
+
+**The translation chain:**
+```
+User Goal (Real-world problem)
+    ↓
+Journey Story (Plain language outcome)
+    ↓
+RFC (Technical design & architecture)
+    ↓
+Code Implementation (Actual features)
+```
+
+Journeys ensure that **technical teams understand WHY** they're building something, not just WHAT they're building. When a developer reads the journey, they understand the user context that motivated the RFC design.
+
+### User Journey Creation Guidelines
+
+When creating a new user journey:
+
+1. **Choose appropriate tier:**
+   - **MVP**: Core functionality (operator basics, core executors, essential features)
+   - **Enhanced**: Advanced operational features (exceptions, RBAC, multi-environment)
+   - **Advanced**: Enterprise-scale features (cross-account, multi-tenant, audit)
+
+2. **Identify personas:**
+   - Use personas from the existing Personas Reference table in `docs/user-journey/README.md`
+   - Choose personas directly involved in this journey
+   - Add new personas only if they represent a distinct role not in existing set
+
+3. **Write user stories:**
+   - Format: "As a **[Persona]**, I want to **[action]**, so that **[benefit]**."
+   - Use consistent formatting with bold markers around persona and action
+   - One user story per use case; combine related flows
+   - If multiple stories exist, use "## User Stories" (plural) section with Story 1, Story 2, etc.
+
+4. **Include step-by-step flow:**
+   - Numbered steps showing how to accomplish the journey
+   - Include relevant kubectl commands or API calls
+   - Show decision branches (if/then scenarios)
+   - Link to relevant CRD definitions
+
+5. **Link RFC(s):**
+   - Every journey referencing an RFC should include RFC link in "## RFC References" section
+   - Format: `- [RFC-XXXX](../enhancements/XXXX-name.md) — Brief description of RFC relevance`
+
+6. **Register in hub README:**
+   - Add journey name and link to `docs/user-journey/README.md`
+   - Place in correct tier section (MVP, Enhanced, Advanced)
+   - Include status badge (✅ Implemented, 🚀 In Progress, 📋 Planned, ⏳ Proposed)
+
+### User Journey Status Badges
+
+- **✅ Implemented**: Feature is complete and tested; journey reflects current state
+- **🚀 In Progress**: Feature is actively being developed; journey documents target state
+- **📋 Planned**: Feature is planned but not yet started; journey documents intended design
+- **⏳ Proposed**: Feature concept exists but not yet approved; journey is speculative
+- **🔧 Under Maintenance**: Feature exists but documentation needs updates for recent changes
+- **❌ Obsolete**: Feature is deprecated or removed; journey is for historical reference only
+
 ## RFC Registry & Keyword Index
 
 **Use this index to match user requests to relevant RFCs via keyword detection:**

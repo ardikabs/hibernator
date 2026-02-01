@@ -1,6 +1,12 @@
 # Kubernetes-Based Cloud Hibernation Operator – Workplan
 
-## Problem statement
+> **ARCHIVED HISTORICAL DOCUMENT** 📋
+> This workplan contains outdated API examples from earlier design phases. For current implementation details, API examples, and user journeys, see:
+> - Current RFC: `enhancements/0001-hibernate-operator.md`
+> - User Journeys: `docs/user-journey/` directory
+> - Implementation Status: `.github/copilot-instructions.md`
+>
+> The EKS executor examples below show the old `computePolicy` + `managedNodeGroups` structure. The current implementation uses simpler `clusterName` + `nodeGroups[]` parameters. See [eks-managed-nodegroup-hibernation.md](../docs/user-journey/eks-managed-nodegroup-hibernation.md) for current examples.
 
 Design and implement a Kubernetes Operator that acts as a centralized manager for performing full infrastructure shutdown during user-defined off-hours, and restoring resources during on-hours.
 
