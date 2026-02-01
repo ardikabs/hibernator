@@ -7,18 +7,16 @@ package server
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
 	"io"
 	"net"
-	"sync"
-	"time"
 
 	"github.com/go-logr/logr"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 	"k8s.io/client-go/kubernetes"
+	"k8s.io/client-go/tools/record"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
 	streamingv1alpha1 "github.com/ardikabs/hibernator/api/streaming/v1alpha1"
@@ -26,46 +24,8 @@ import (
 	"github.com/ardikabs/hibernator/internal/streaming/auth"
 )
 
-// ExecutionServiceServer implements the gRPC ExecutionService.
-type ExecutionServiceServer struct {
-	log            logr.Logger
-	k8sClient      client.Client
-	restoreManager *restore.Manager
-
-	// executionLogs stores logs per execution ID.
-	executionLogs   map[string][]streamingv1alpha1.LogEntry
-	executionLogsMu sync.RWMutex
-
-	// executionStatus tracks execution progress.
-	executionStatus   map[string]*ExecutionState
-	executionStatusMu sync.RWMutex
-}
-
-// ExecutionState tracks the current state of an execution.
-type ExecutionState struct {
-	ExecutionID     string
-	Phase           string
-	ProgressPercent int32
-	Message         string
-	LastHeartbeat   time.Time
-	StartedAt       time.Time
-	Completed       bool
-	Success         bool
-	Error           string
-}
-
-// NewExecutionServiceServer creates a new execution service server.
-func NewExecutionServiceServer(log logr.Logger, k8sClient client.Client, restoreManager *restore.Manager) *ExecutionServiceServer {
-	return &ExecutionServiceServer{
-		log:             log.WithName("execution-service"),
-		k8sClient:       k8sClient,
-		restoreManager:  restoreManager,
-		executionLogs:   make(map[string][]streamingv1alpha1.LogEntry),
-		executionStatus: make(map[string]*ExecutionState),
-	}
-}
-
-// StreamLogs receives a stream of log entries from a runner.
+// StreamLogs receives a stream of log entries from a runner via gRPC.
+// This is a transport-layer method that delegates to ExecutionServiceServer.
 func (s *ExecutionServiceServer) StreamLogs(stream grpc.ClientStreamingServer[streamingv1alpha1.LogEntry, streamingv1alpha1.StreamLogsResponse]) error {
 	var count int64
 	var executionID string
@@ -73,7 +33,7 @@ func (s *ExecutionServiceServer) StreamLogs(stream grpc.ClientStreamingServer[st
 	for {
 		entry, err := stream.Recv()
 		if err == io.EOF {
-			s.log.Info("log stream completed", "executionId", executionID, "count", count)
+			s.log.V(1).Info("log stream completed", "executionId", executionID, "count", count)
 			return stream.SendAndClose(&streamingv1alpha1.StreamLogsResponse{
 				ReceivedCount: count,
 			})
@@ -83,13 +43,14 @@ func (s *ExecutionServiceServer) StreamLogs(stream grpc.ClientStreamingServer[st
 			return status.Errorf(codes.Internal, "receive error: %v", err)
 		}
 
-		executionID = entry.ExecutionID
+		executionID = entry.ExecutionId
 		count++
 
-		// Store log entry
-		s.executionLogsMu.Lock()
-		s.executionLogs[executionID] = append(s.executionLogs[executionID], *entry)
-		s.executionLogsMu.Unlock()
+		// Delegate to business logic layer
+		if err := s.StoreLog(entry); err != nil {
+			s.log.Error(err, "failed to store log entry")
+			return status.Errorf(codes.Internal, "store error: %v", err)
+		}
 
 		// Log at appropriate level
 		switch entry.Level {
@@ -101,118 +62,6 @@ func (s *ExecutionServiceServer) StreamLogs(stream grpc.ClientStreamingServer[st
 			s.log.V(1).Info(entry.Message, "executionId", executionID, "level", entry.Level, "fields", entry.Fields)
 		}
 	}
-}
-
-// ReportProgress handles progress updates from runners.
-func (s *ExecutionServiceServer) ReportProgress(ctx context.Context, report *streamingv1alpha1.ProgressReport) (*streamingv1alpha1.ProgressResponse, error) {
-	s.log.Info("progress report received",
-		"executionId", report.ExecutionID,
-		"phase", report.Phase,
-		"progress", report.ProgressPercent,
-		"message", report.Message,
-	)
-
-	s.executionStatusMu.Lock()
-	state, exists := s.executionStatus[report.ExecutionID]
-	if !exists {
-		state = &ExecutionState{
-			ExecutionID: report.ExecutionID,
-			StartedAt:   time.Now(),
-		}
-		s.executionStatus[report.ExecutionID] = state
-	}
-	state.Phase = report.Phase
-	state.ProgressPercent = report.ProgressPercent
-	state.Message = report.Message
-	state.LastHeartbeat = time.Now()
-	s.executionStatusMu.Unlock()
-
-	return &streamingv1alpha1.ProgressResponse{Acknowledged: true}, nil
-}
-
-// ReportCompletion handles completion reports from runners.
-func (s *ExecutionServiceServer) ReportCompletion(ctx context.Context, report *streamingv1alpha1.CompletionReport) (*streamingv1alpha1.CompletionResponse, error) {
-	s.log.Info("completion report received",
-		"executionId", report.ExecutionID,
-		"success", report.Success,
-		"duration", report.DurationMs,
-	)
-
-	// Update execution state
-	s.executionStatusMu.Lock()
-	state, exists := s.executionStatus[report.ExecutionID]
-	if !exists {
-		state = &ExecutionState{
-			ExecutionID: report.ExecutionID,
-			StartedAt:   time.Now(),
-		}
-		s.executionStatus[report.ExecutionID] = state
-	}
-	state.Completed = true
-	state.Success = report.Success
-	state.Error = report.ErrorMessage
-	s.executionStatusMu.Unlock()
-
-	var restoreRef string
-
-	// Store restore data if present
-	if len(report.RestoreData) > 0 && s.restoreManager != nil {
-		var restoreState map[string]interface{}
-		if err := json.Unmarshal(report.RestoreData, &restoreState); err != nil {
-			s.log.Error(err, "failed to unmarshal restore data", "executionId", report.ExecutionID)
-		} else {
-			// Extract plan and target from execution ID
-			// Format: <plan>-<target>-<timestamp>
-			// For now, we'll need the caller to provide this context
-			// TODO: Parse from execution ID or require in completion report
-			s.log.Info("restore data received", "executionId", report.ExecutionID, "dataSize", len(report.RestoreData))
-		}
-	}
-
-	return &streamingv1alpha1.CompletionResponse{
-		Acknowledged: true,
-		RestoreRef:   restoreRef,
-	}, nil
-}
-
-// Heartbeat handles heartbeat messages from runners.
-func (s *ExecutionServiceServer) Heartbeat(ctx context.Context, req *streamingv1alpha1.HeartbeatRequest) (*streamingv1alpha1.HeartbeatResponse, error) {
-	s.executionStatusMu.Lock()
-	if state, exists := s.executionStatus[req.ExecutionID]; exists {
-		state.LastHeartbeat = time.Now()
-	}
-	s.executionStatusMu.Unlock()
-
-	return &streamingv1alpha1.HeartbeatResponse{
-		Acknowledged: true,
-		ServerTime:   time.Now(),
-	}, nil
-}
-
-// GetExecutionLogs returns the logs for an execution.
-func (s *ExecutionServiceServer) GetExecutionLogs(executionID string) []streamingv1alpha1.LogEntry {
-	s.executionLogsMu.RLock()
-	defer s.executionLogsMu.RUnlock()
-
-	if logs, exists := s.executionLogs[executionID]; exists {
-		result := make([]streamingv1alpha1.LogEntry, len(logs))
-		copy(result, logs)
-		return result
-	}
-	return nil
-}
-
-// GetExecutionState returns the current state of an execution.
-func (s *ExecutionServiceServer) GetExecutionState(executionID string) *ExecutionState {
-	s.executionStatusMu.RLock()
-	defer s.executionStatusMu.RUnlock()
-
-	if state, exists := s.executionStatus[executionID]; exists {
-		// Return a copy
-		stateCopy := *state
-		return &stateCopy
-	}
-	return nil
 }
 
 // Server wraps the gRPC server with lifecycle management.
@@ -229,6 +78,7 @@ func NewServer(
 	clientset *kubernetes.Clientset,
 	k8sClient client.Client,
 	restoreManager *restore.Manager,
+	eventRecorder record.EventRecorder,
 	log logr.Logger,
 ) *Server {
 	// Create token validator
@@ -241,7 +91,7 @@ func NewServer(
 	)
 
 	// Create and register execution service
-	executionService := NewExecutionServiceServer(log, k8sClient, restoreManager)
+	executionService := NewExecutionServiceServer(k8sClient, restoreManager, eventRecorder)
 
 	// Note: In a real implementation, you would register the generated protobuf service
 	// For now, we use the manual types and handle via the webhook fallback or custom registration

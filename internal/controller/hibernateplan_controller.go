@@ -582,6 +582,14 @@ func (r *HibernatePlanReconciler) createRunnerJob(ctx context.Context, log logr.
 									Value: r.ControlPlaneEndpoint,
 								},
 								{
+									Name:  "HIBERNATOR_WEBSOCKET_ENDPOINT",
+									Value: "ws://hibernator-streaming.hibernator-system.svc.cluster.local:8082",
+								},
+								{
+									Name:  "HIBERNATOR_HTTP_CALLBACK_ENDPOINT",
+									Value: "http://hibernator-streaming.hibernator-system.svc.cluster.local:8082",
+								},
+								{
 									Name:  "HIBERNATOR_TARGET_PARAMS",
 									Value: string(paramsJSON),
 								},

@@ -35,6 +35,7 @@ const (
 // GRPCClient provides streaming communication with the control plane.
 type GRPCClient struct {
 	conn        *grpc.ClientConn
+	client      streamingv1alpha1.ExecutionServiceClient
 	address     string
 	executionID string
 	tokenPath   string
@@ -45,11 +46,6 @@ type GRPCClient struct {
 	heartbeatCtx    context.Context
 	heartbeatCancel context.CancelFunc
 	heartbeatWg     sync.WaitGroup
-
-	// log buffering
-	logBuffer   []streamingv1alpha1.LogEntry
-	logBufferMu sync.Mutex
-	logFlushCh  chan struct{}
 
 	mu sync.Mutex
 }
@@ -75,8 +71,6 @@ func NewGRPCClient(opts GRPCClientOptions) *GRPCClient {
 		tokenPath:   opts.TokenPath,
 		useTLS:      opts.UseTLS,
 		log:         opts.Log.WithName("grpc-client"),
-		logBuffer:   make([]streamingv1alpha1.LogEntry, 0, 100),
-		logFlushCh:  make(chan struct{}, 1),
 	}
 }
 
@@ -133,6 +127,7 @@ func (c *GRPCClient) Connect(ctx context.Context) error {
 	}
 
 	c.conn = conn
+	c.client = streamingv1alpha1.NewExecutionServiceClient(conn)
 	c.log.Info("connected to streaming server", "address", c.address)
 
 	return nil
@@ -181,81 +176,100 @@ func (c *GRPCClient) StopHeartbeat() {
 	c.heartbeatWg.Wait()
 }
 
-// Log sends a log entry to the server.
+// Log sends a log entry to the server immediately via StreamLogs RPC.
 func (c *GRPCClient) Log(ctx context.Context, level, message string, fields map[string]string) error {
-	entry := streamingv1alpha1.LogEntry{
-		ExecutionID: c.executionID,
-		Timestamp:   time.Now(),
+	c.mu.Lock()
+	if c.conn == nil {
+		c.mu.Unlock()
+		return fmt.Errorf("not connected to streaming server")
+	}
+	client := c.client
+	c.mu.Unlock()
+
+	entry := &streamingv1alpha1.LogEntry{
+		ExecutionId: c.executionID,
+		Timestamp:   time.Now().Format(time.RFC3339),
 		Level:       level,
 		Message:     message,
 		Fields:      fields,
 	}
 
-	c.logBufferMu.Lock()
-	c.logBuffer = append(c.logBuffer, entry)
-	shouldFlush := len(c.logBuffer) >= 50
-	c.logBufferMu.Unlock()
+	// Use proto-generated client for StreamLogs (single entry)
+	stream, err := client.StreamLogs(ctx)
+	if err != nil {
+		c.log.V(2).Error(err, "failed to create stream")
+		return fmt.Errorf("failed to create stream: %w", err)
+	}
 
-	if shouldFlush {
-		return c.FlushLogs(ctx)
+	if err := stream.Send(entry); err != nil {
+		c.log.V(2).Error(err, "failed to send log entry")
+		return fmt.Errorf("failed to send log: %w", err)
+	}
+
+	// Close send and receive response
+	_, err = stream.CloseAndRecv()
+	if err != nil {
+		c.log.V(2).Error(err, "failed to close stream")
+		return fmt.Errorf("failed to close stream: %w", err)
 	}
 
 	return nil
 }
 
-// FlushLogs sends all buffered logs to the server.
-func (c *GRPCClient) FlushLogs(ctx context.Context) error {
-	c.logBufferMu.Lock()
-	if len(c.logBuffer) == 0 {
-		c.logBufferMu.Unlock()
-		return nil
-	}
-	logs := c.logBuffer
-	c.logBuffer = make([]streamingv1alpha1.LogEntry, 0, 100)
-	c.logBufferMu.Unlock()
-
-	// Note: In a real implementation with generated protobuf code,
-	// this would use a streaming RPC. For now, we log locally.
-	for _, log := range logs {
-		c.log.V(1).Info(log.Message, "level", log.Level, "fields", log.Fields)
-	}
-
-	c.log.V(1).Info("flushed logs", "count", len(logs))
-	return nil
-}
-
-// ReportProgress sends a progress update to the server.
+// ReportProgress sends a progress update to the server via ReportProgress RPC.
 func (c *GRPCClient) ReportProgress(ctx context.Context, phase string, percent int32, message string) error {
-	c.log.Info("reporting progress",
-		"phase", phase,
-		"percent", percent,
-		"message", message,
-	)
+	c.mu.Lock()
+	if c.conn == nil {
+		c.mu.Unlock()
+		return fmt.Errorf("not connected to streaming server")
+	}
+	client := c.client
+	c.mu.Unlock()
 
-	// Note: In a real implementation with generated protobuf code,
-	// this would call the ReportProgress RPC.
-	// For now, just log locally.
+	report := &streamingv1alpha1.ProgressReport{
+		ExecutionId:     c.executionID,
+		Phase:           phase,
+		ProgressPercent: percent,
+		Message:         message,
+		Timestamp:       time.Now().Format(time.RFC3339),
+	}
 
+	_, err := client.ReportProgress(ctx, report)
+	if err != nil {
+		c.log.Error(err, "failed to report progress")
+		return fmt.Errorf("failed to report progress: %w", err)
+	}
+
+	c.log.Info("reported progress via gRPC", "phase", phase, "percent", percent)
 	return nil
 }
 
-// ReportCompletion sends a completion report to the server.
+// ReportCompletion sends a completion report to the server via ReportCompletion RPC.
 func (c *GRPCClient) ReportCompletion(ctx context.Context, success bool, errorMsg string, durationMs int64, restoreData []byte) error {
-	// Flush remaining logs first
-	if err := c.FlushLogs(ctx); err != nil {
-		c.log.Error(err, "failed to flush logs before completion")
+	c.mu.Lock()
+	if c.conn == nil {
+		c.mu.Unlock()
+		return fmt.Errorf("not connected to streaming server")
+	}
+	client := c.client
+	c.mu.Unlock()
+
+	report := &streamingv1alpha1.CompletionReport{
+		ExecutionId:  c.executionID,
+		Success:      success,
+		ErrorMessage: errorMsg,
+		DurationMs:   durationMs,
+		RestoreData:  restoreData,
+		Timestamp:    time.Now().Format(time.RFC3339),
 	}
 
-	c.log.Info("reporting completion",
-		"success", success,
-		"errorMessage", errorMsg,
-		"durationMs", durationMs,
-		"restoreDataSize", len(restoreData),
-	)
+	_, err := client.ReportCompletion(ctx, report)
+	if err != nil {
+		c.log.Error(err, "failed to report completion")
+		return fmt.Errorf("failed to report completion: %w", err)
+	}
 
-	// Note: In a real implementation with generated protobuf code,
-	// this would call the ReportCompletion RPC.
-
+	c.log.Info("reported completion via gRPC", "success", success)
 	return nil
 }
 
@@ -274,10 +288,28 @@ func (c *GRPCClient) Close() error {
 	return nil
 }
 
-// sendHeartbeat sends a single heartbeat.
+// sendHeartbeat sends a single heartbeat via Heartbeat RPC.
 func (c *GRPCClient) sendHeartbeat(ctx context.Context) error {
-	// Note: In a real implementation, this would call the Heartbeat RPC.
-	c.log.V(2).Info("heartbeat sent")
+	c.mu.Lock()
+	if c.conn == nil {
+		c.mu.Unlock()
+		return fmt.Errorf("not connected")
+	}
+	client := c.client
+	c.mu.Unlock()
+
+	req := &streamingv1alpha1.HeartbeatRequest{
+		ExecutionId: c.executionID,
+		Timestamp:   time.Now().Format(time.RFC3339),
+	}
+
+	_, err := client.Heartbeat(ctx, req)
+	if err != nil {
+		c.log.V(2).Error(err, "heartbeat failed")
+		return fmt.Errorf("heartbeat failed: %w", err)
+	}
+
+	c.log.V(2).Info("heartbeat sent via gRPC")
 	return nil
 }
 

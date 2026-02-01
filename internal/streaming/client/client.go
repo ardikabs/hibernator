@@ -26,11 +26,8 @@ type StreamingClient interface {
 	// StopHeartbeat stops the background heartbeat.
 	StopHeartbeat()
 
-	// Log sends a log entry to the server.
+	// Log sends a log entry to the server immediately.
 	Log(ctx context.Context, level, message string, fields map[string]string) error
-
-	// FlushLogs sends all buffered logs to the server.
-	FlushLogs(ctx context.Context) error
 
 	// ReportProgress sends a progress update to the server.
 	ReportProgress(ctx context.Context, phase string, percent int32, message string) error
@@ -49,6 +46,9 @@ const (
 	// ClientTypeGRPC uses gRPC for streaming.
 	ClientTypeGRPC ClientType = "grpc"
 
+	// ClientTypeWebSocket uses WebSocket for streaming.
+	ClientTypeWebSocket ClientType = "websocket"
+
 	// ClientTypeWebhook uses HTTP webhooks for communication.
 	ClientTypeWebhook ClientType = "webhook"
 
@@ -58,11 +58,14 @@ const (
 
 // ClientConfig contains configuration for creating a streaming client.
 type ClientConfig struct {
-	// Type specifies the client type (grpc, webhook, or auto).
+	// Type specifies the client type (grpc, websocket, webhook, or auto).
 	Type ClientType
 
 	// GRPCAddress is the gRPC server address (e.g., "controller-grpc:9443").
 	GRPCAddress string
+
+	// WebSocketURL is the WebSocket server URL (e.g., "ws://controller:8080" or "http://controller:8080").
+	WebSocketURL string
 
 	// WebhookURL is the webhook server base URL (e.g., "http://controller:8080").
 	WebhookURL string
@@ -95,6 +98,14 @@ func NewClient(cfg ClientConfig) (StreamingClient, error) {
 			Log:         cfg.Log,
 		}), nil
 
+	case ClientTypeWebSocket:
+		return NewWebSocketClient(WebSocketClientOptions{
+			URL:         cfg.WebSocketURL,
+			ExecutionID: cfg.ExecutionID,
+			TokenPath:   cfg.TokenPath,
+			Log:         cfg.Log,
+		}), nil
+
 	case ClientTypeWebhook:
 		return NewWebhookClient(WebhookClientOptions{
 			BaseURL:     cfg.WebhookURL,
@@ -119,9 +130,10 @@ func NewClient(cfg ClientConfig) (StreamingClient, error) {
 	}
 }
 
-// AutoClient attempts gRPC first, then falls back to webhook.
+// AutoClient attempts gRPC first, then WebSocket, then falls back to HTTP callback.
 type AutoClient struct {
 	grpcClient    *GRPCClient
+	wsClient      *WebSocketClient
 	webhookClient *WebhookClient
 	active        StreamingClient
 	cfg           ClientConfig
@@ -138,6 +150,12 @@ func NewAutoClient(cfg ClientConfig) *AutoClient {
 			UseTLS:      cfg.UseTLS,
 			Log:         cfg.Log,
 		}),
+		wsClient: NewWebSocketClient(WebSocketClientOptions{
+			URL:         cfg.WebSocketURL,
+			ExecutionID: cfg.ExecutionID,
+			TokenPath:   cfg.TokenPath,
+			Log:         cfg.Log,
+		}),
 		webhookClient: NewWebhookClient(WebhookClientOptions{
 			BaseURL:     cfg.WebhookURL,
 			ExecutionID: cfg.ExecutionID,
@@ -150,7 +168,7 @@ func NewAutoClient(cfg ClientConfig) *AutoClient {
 	}
 }
 
-// Connect tries gRPC first, then falls back to webhook.
+// Connect tries gRPC first, then WebSocket, then falls back to HTTP callback.
 func (c *AutoClient) Connect(ctx context.Context) error {
 	// Try gRPC first if configured
 	if c.cfg.GRPCAddress != "" {
@@ -160,16 +178,28 @@ func (c *AutoClient) Connect(ctx context.Context) error {
 			c.log.Info("using gRPC transport")
 			return nil
 		} else {
-			c.log.Info("gRPC connection failed, falling back to webhook", "error", err.Error())
+			c.log.Info("gRPC connection failed, trying WebSocket", "error", err.Error())
 		}
 	}
 
-	// Fall back to webhook
+	// Try WebSocket if configured
+	if c.cfg.WebSocketURL != "" {
+		c.log.Info("attempting WebSocket connection", "url", c.cfg.WebSocketURL)
+		if err := c.wsClient.Connect(ctx); err == nil {
+			c.active = c.wsClient
+			c.log.Info("using WebSocket transport")
+			return nil
+		} else {
+			c.log.Info("WebSocket connection failed, falling back to HTTP callback", "error", err.Error())
+		}
+	}
+
+	// Fall back to HTTP callback
 	if c.cfg.WebhookURL != "" {
-		c.log.Info("attempting webhook connection", "url", c.cfg.WebhookURL)
+		c.log.Info("attempting HTTP callback connection", "url", c.cfg.WebhookURL)
 		if err := c.webhookClient.Connect(ctx); err == nil {
 			c.active = c.webhookClient
-			c.log.Info("using webhook transport")
+			c.log.Info("using HTTP callback transport")
 			return nil
 		} else {
 			return err
@@ -203,14 +233,6 @@ func (c *AutoClient) Log(ctx context.Context, level, message string, fields map[
 	return nil
 }
 
-// FlushLogs flushes buffered logs.
-func (c *AutoClient) FlushLogs(ctx context.Context) error {
-	if c.active != nil {
-		return c.active.FlushLogs(ctx)
-	}
-	return nil
-}
-
 // ReportProgress reports execution progress.
 func (c *AutoClient) ReportProgress(ctx context.Context, phase string, percent int32, message string) error {
 	if c.active != nil {
@@ -241,5 +263,6 @@ func (c *AutoClient) Close() error {
 var (
 	_ StreamingClient = (*GRPCClient)(nil)
 	_ StreamingClient = (*WebhookClient)(nil)
+	_ StreamingClient = (*WebSocketClient)(nil)
 	_ StreamingClient = (*AutoClient)(nil)
 )

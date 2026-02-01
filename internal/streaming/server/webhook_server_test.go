@@ -17,6 +17,7 @@ import (
 	"github.com/go-logr/logr"
 
 	streamingv1alpha1 "github.com/ardikabs/hibernator/api/streaming/v1alpha1"
+	"github.com/ardikabs/hibernator/internal/streaming/types"
 )
 
 // mockValidator is a test double for the auth validator
@@ -35,7 +36,7 @@ type mockValidationResult struct {
 
 func TestWebhookServer_HandleHealthz(t *testing.T) {
 	log := logr.Discard()
-	execService := NewExecutionServiceServer(log, nil, nil)
+	execService := NewExecutionServiceServer(nil, nil, nil)
 
 	ws := &WebhookServer{
 		executionService: execService,
@@ -57,7 +58,7 @@ func TestWebhookServer_HandleHealthz(t *testing.T) {
 
 func TestWebhookServer_HandleLogs_MethodNotAllowed(t *testing.T) {
 	log := logr.Discard()
-	execService := NewExecutionServiceServer(log, nil, nil)
+	execService := NewExecutionServiceServer(nil, nil, nil)
 
 	ws := &WebhookServer{
 		executionService: execService,
@@ -76,7 +77,7 @@ func TestWebhookServer_HandleLogs_MethodNotAllowed(t *testing.T) {
 
 func TestWebhookServer_HandleProgress_MethodNotAllowed(t *testing.T) {
 	log := logr.Discard()
-	execService := NewExecutionServiceServer(log, nil, nil)
+	execService := NewExecutionServiceServer(nil, nil, nil)
 
 	ws := &WebhookServer{
 		executionService: execService,
@@ -95,7 +96,7 @@ func TestWebhookServer_HandleProgress_MethodNotAllowed(t *testing.T) {
 
 func TestWebhookServer_HandleCompletion_MethodNotAllowed(t *testing.T) {
 	log := logr.Discard()
-	execService := NewExecutionServiceServer(log, nil, nil)
+	execService := NewExecutionServiceServer(nil, nil, nil)
 
 	ws := &WebhookServer{
 		executionService: execService,
@@ -114,7 +115,7 @@ func TestWebhookServer_HandleCompletion_MethodNotAllowed(t *testing.T) {
 
 func TestWebhookServer_HandleHeartbeat_MethodNotAllowed(t *testing.T) {
 	log := logr.Discard()
-	execService := NewExecutionServiceServer(log, nil, nil)
+	execService := NewExecutionServiceServer(nil, nil, nil)
 
 	ws := &WebhookServer{
 		executionService: execService,
@@ -133,7 +134,7 @@ func TestWebhookServer_HandleHeartbeat_MethodNotAllowed(t *testing.T) {
 
 func TestWebhookServer_HandleCallback_MethodNotAllowed(t *testing.T) {
 	log := logr.Discard()
-	execService := NewExecutionServiceServer(log, nil, nil)
+	execService := NewExecutionServiceServer(nil, nil, nil)
 
 	ws := &WebhookServer{
 		executionService: execService,
@@ -152,7 +153,7 @@ func TestWebhookServer_HandleCallback_MethodNotAllowed(t *testing.T) {
 
 func TestWebhookServer_HandleLogs_NoAuth(t *testing.T) {
 	log := logr.Discard()
-	execService := NewExecutionServiceServer(log, nil, nil)
+	execService := NewExecutionServiceServer(nil, nil, nil)
 
 	// Create a webhook server without a validator (nil validator will cause auth to fail)
 	ws := &WebhookServer{
@@ -174,7 +175,7 @@ func TestWebhookServer_HandleLogs_NoAuth(t *testing.T) {
 
 func TestWebhookServer_ProcessLog(t *testing.T) {
 	log := logr.Discard()
-	execService := NewExecutionServiceServer(log, nil, nil)
+	execService := NewExecutionServiceServer(nil, nil, nil)
 
 	ws := &WebhookServer{
 		executionService: execService,
@@ -188,37 +189,37 @@ func TestWebhookServer_ProcessLog(t *testing.T) {
 		{
 			name: "info log",
 			entry: &streamingv1alpha1.LogEntry{
-				ExecutionID: "exec-1",
+				ExecutionId: "exec-1",
 				Level:       "INFO",
 				Message:     "Info message",
-				Timestamp:   time.Now(),
+				Timestamp:   time.Now().Format(time.RFC3339),
 			},
 		},
 		{
 			name: "error log",
 			entry: &streamingv1alpha1.LogEntry{
-				ExecutionID: "exec-1",
+				ExecutionId: "exec-1",
 				Level:       "ERROR",
 				Message:     "Error message",
-				Timestamp:   time.Now(),
+				Timestamp:   time.Now().Format(time.RFC3339),
 			},
 		},
 		{
 			name: "warn log",
 			entry: &streamingv1alpha1.LogEntry{
-				ExecutionID: "exec-1",
+				ExecutionId: "exec-1",
 				Level:       "WARN",
 				Message:     "Warning message",
-				Timestamp:   time.Now(),
+				Timestamp:   time.Now().Format(time.RFC3339),
 			},
 		},
 		{
 			name: "debug log",
 			entry: &streamingv1alpha1.LogEntry{
-				ExecutionID: "exec-1",
+				ExecutionId: "exec-1",
 				Level:       "DEBUG",
 				Message:     "Debug message",
-				Timestamp:   time.Now(),
+				Timestamp:   time.Now().Format(time.RFC3339),
 			},
 		},
 	}
@@ -228,7 +229,7 @@ func TestWebhookServer_ProcessLog(t *testing.T) {
 			ws.processLog(tt.entry)
 
 			// Verify log was stored
-			logs := execService.GetExecutionLogs(tt.entry.ExecutionID)
+			logs := execService.GetExecutionLogs(tt.entry.ExecutionId)
 			found := false
 			for _, l := range logs {
 				if l.Message == tt.entry.Message {
@@ -296,7 +297,7 @@ func TestWebhookServer_ValidateRequest_InvalidFormat(t *testing.T) {
 
 func TestWebhookServer_HandleCallback_InvalidJSON(t *testing.T) {
 	log := logr.Discard()
-	execService := NewExecutionServiceServer(log, nil, nil)
+	execService := NewExecutionServiceServer(nil, nil, nil)
 
 	ws := &WebhookServer{
 		executionService: execService,
@@ -319,7 +320,7 @@ func TestWebhookServer_HandleCallback_InvalidJSON(t *testing.T) {
 
 func TestWebhookServer_ServerLifecycle(t *testing.T) {
 	log := logr.Discard()
-	execService := NewExecutionServiceServer(log, nil, nil)
+	execService := NewExecutionServiceServer(nil, nil, nil)
 
 	ws := &WebhookServer{
 		executionService: execService,
@@ -342,7 +343,7 @@ func TestWebhookServer_ServerLifecycle(t *testing.T) {
 
 func TestProcessLog_WithFields(t *testing.T) {
 	log := logr.Discard()
-	execService := NewExecutionServiceServer(log, nil, nil)
+	execService := NewExecutionServiceServer(nil, nil, nil)
 
 	ws := &WebhookServer{
 		executionService: execService,
@@ -350,10 +351,10 @@ func TestProcessLog_WithFields(t *testing.T) {
 	}
 
 	entry := &streamingv1alpha1.LogEntry{
-		ExecutionID: "exec-fields",
+		ExecutionId: "exec-fields",
 		Level:       "INFO",
 		Message:     "Message with fields",
-		Timestamp:   time.Now(),
+		Timestamp:   time.Now().Format(time.RFC3339),
 		Fields: map[string]string{
 			"key1": "value1",
 			"key2": "value2",
@@ -374,48 +375,52 @@ func TestProcessLog_WithFields(t *testing.T) {
 func TestWebhookPayload_Types(t *testing.T) {
 	tests := []struct {
 		name        string
-		payload     streamingv1alpha1.WebhookPayload
+		payload     types.WebhookPayload
 		expectedKey string
 	}{
 		{
 			name: "log type",
-			payload: streamingv1alpha1.WebhookPayload{
+			payload: types.WebhookPayload{
 				Type: "log",
-				Log: &streamingv1alpha1.LogEntry{
+				Log: &types.LogEntry{
 					ExecutionID: "exec-1",
 					Message:     "test",
+					Timestamp:   time.Now(),
 				},
 			},
 			expectedKey: "log",
 		},
 		{
 			name: "progress type",
-			payload: streamingv1alpha1.WebhookPayload{
+			payload: types.WebhookPayload{
 				Type: "progress",
-				Progress: &streamingv1alpha1.ProgressReport{
+				Progress: &types.ProgressReport{
 					ExecutionID:     "exec-1",
 					ProgressPercent: 50,
+					Timestamp:       time.Now(),
 				},
 			},
 			expectedKey: "progress",
 		},
 		{
 			name: "completion type",
-			payload: streamingv1alpha1.WebhookPayload{
+			payload: types.WebhookPayload{
 				Type: "completion",
-				Completion: &streamingv1alpha1.CompletionReport{
+				Completion: &types.CompletionReport{
 					ExecutionID: "exec-1",
 					Success:     true,
+					Timestamp:   time.Now(),
 				},
 			},
 			expectedKey: "completion",
 		},
 		{
 			name: "heartbeat type",
-			payload: streamingv1alpha1.WebhookPayload{
+			payload: types.WebhookPayload{
 				Type: "heartbeat",
-				Heartbeat: &streamingv1alpha1.HeartbeatRequest{
+				Heartbeat: &types.HeartbeatRequest{
 					ExecutionID: "exec-1",
+					Timestamp:   time.Now(),
 				},
 			},
 			expectedKey: "heartbeat",
@@ -429,7 +434,7 @@ func TestWebhookPayload_Types(t *testing.T) {
 				t.Fatalf("failed to marshal: %v", err)
 			}
 
-			var decoded streamingv1alpha1.WebhookPayload
+			var decoded types.WebhookPayload
 			if err := json.Unmarshal(data, &decoded); err != nil {
 				t.Fatalf("failed to unmarshal: %v", err)
 			}
@@ -443,7 +448,7 @@ func TestWebhookPayload_Types(t *testing.T) {
 
 func TestWebhookServer_Start_Cancellation(t *testing.T) {
 	log := logr.Discard()
-	execService := NewExecutionServiceServer(log, nil, nil)
+	execService := NewExecutionServiceServer(nil, nil, nil)
 
 	ws := &WebhookServer{
 		executionService: execService,

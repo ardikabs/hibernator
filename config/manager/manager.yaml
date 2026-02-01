@@ -181,12 +181,21 @@ spec:
             - --metrics-bind-address=:8080
             - --health-probe-bind-address=:8081
             - --runner-service-account=hibernator-runner
+            - --enable-streaming=true
+            - --grpc-server-address=:9443
+            - --websocket-server-address=:8082
           ports:
             - name: metrics
               containerPort: 8080
               protocol: TCP
             - name: health
               containerPort: 8081
+              protocol: TCP
+            - name: grpc
+              containerPort: 9443
+              protocol: TCP
+            - name: websocket
+              containerPort: 8082
               protocol: TCP
           securityContext:
             allowPrivilegeEscalation: false
@@ -214,3 +223,26 @@ spec:
               cpu: 10m
               memory: 64Mi
       terminationGracePeriodSeconds: 10
+---
+# Streaming service for gRPC and WebSocket
+apiVersion: v1
+kind: Service
+metadata:
+  name: hibernator-streaming
+  namespace: hibernator-system
+  labels:
+    app.kubernetes.io/name: hibernator
+    app.kubernetes.io/component: streaming
+spec:
+  ports:
+    - name: grpc
+      port: 9443
+      targetPort: grpc
+      protocol: TCP
+    - name: websocket
+      port: 8082
+      targetPort: websocket
+      protocol: TCP
+  selector:
+    app.kubernetes.io/name: hibernator
+    app.kubernetes.io/component: controller

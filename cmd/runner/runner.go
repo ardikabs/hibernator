@@ -25,12 +25,14 @@ import (
 	"github.com/ardikabs/hibernator/internal/restore"
 	streamclient "github.com/ardikabs/hibernator/internal/streaming/client"
 	"github.com/ardikabs/hibernator/pkg/awsutil"
+	"github.com/ardikabs/hibernator/pkg/logsink"
 )
 
 // runner encapsulates the execution context and dependencies.
 type runner struct {
 	cfg          *Config
 	log          logr.Logger
+	logSink      *logsink.DualWriteSink // For graceful shutdown
 	k8sClient    client.Client
 	streamClient streamclient.StreamingClient
 	registry     *executor.Registry
@@ -49,34 +51,55 @@ func newRunner(ctx context.Context, log logr.Logger, cfg *Config) (*runner, erro
 	if err != nil {
 		log.Error(err, "failed to initialize streaming client, continuing without streaming")
 	}
-	r.streamClient = streamClient
+
+	// Wrap logger with DualWriteSink for automatic log streaming
+	if streamClient != nil {
+		r.streamClient = streamClient
+
+		sender := &streamingLogSender{client: streamClient}
+		r.logSink = logsink.NewDualWriteSink(log.GetSink(), sender)
+		r.log = logr.New(r.logSink)
+	}
 
 	// Build Kubernetes client
 	restCfg, err := config.GetConfig()
 	if err != nil {
-		r.reportError(ctx, "Failed to get kubeconfig", err)
+		r.log.Error(err, "failed to get kubeconfig")
 		return nil, fmt.Errorf("get kubeconfig: %w", err)
 	}
 
 	k8sClient, err := client.New(restCfg, client.Options{Scheme: scheme})
 	if err != nil {
-		r.reportError(ctx, "Failed to create k8s client", err)
+		r.log.Error(err, "failed to create k8s client")
 		return nil, fmt.Errorf("create k8s client: %w", err)
 	}
 	r.k8sClient = k8sClient
 
 	// Register executors
 	factory := newExecutorFactoryRegistry()
-	factory.registerTo(r.registry, log)
+	factory.registerTo(r.registry, r.log)
 
 	return r, nil
 }
 
 // close cleans up runner resources.
 func (r *runner) close() {
+	// Stop log sink first to drain remaining logs
+	if r.logSink != nil {
+		r.logSink.Stop()
+	}
 	if r.streamClient != nil {
 		r.streamClient.Close()
 	}
+}
+
+// streamingLogSender adapts StreamingClient to logsink.LogSender interface.
+type streamingLogSender struct {
+	client streamclient.StreamingClient
+}
+
+func (s *streamingLogSender) Log(ctx context.Context, level, message string, fields map[string]string) error {
+	return s.client.Log(ctx, level, message, fields)
 }
 
 // run executes the hibernation operation.
@@ -95,12 +118,6 @@ func (r *runner) run(ctx context.Context) error {
 	// Start heartbeat if streaming is available
 	if r.streamClient != nil {
 		r.streamClient.StartHeartbeat(30 * time.Second)
-		r.streamClient.Log(ctx, "INFO", "Runner started", map[string]string{
-			"operation":  cfg.Operation,
-			"target":     cfg.Target,
-			"targetType": cfg.TargetType,
-			"plan":       cfg.Plan,
-		})
 	}
 
 	// Report progress: initializing
@@ -110,7 +127,7 @@ func (r *runner) run(ctx context.Context) error {
 	exec, ok := r.registry.Get(cfg.TargetType)
 	if !ok {
 		err := fmt.Errorf("executor not found: %s", cfg.TargetType)
-		r.reportError(ctx, "Failed to get executor", err)
+		r.log.Error(err, "failed to get executor")
 		return err
 	}
 
@@ -118,7 +135,7 @@ func (r *runner) run(ctx context.Context) error {
 	var params map[string]interface{}
 	if cfg.TargetParams != "" {
 		if err := json.Unmarshal([]byte(cfg.TargetParams), &params); err != nil {
-			r.reportError(ctx, "Failed to parse target params", err)
+			r.log.Error(err, "failed to parse target params")
 			return fmt.Errorf("parse target params: %w", err)
 		}
 	}
@@ -129,14 +146,14 @@ func (r *runner) run(ctx context.Context) error {
 	// Build executor spec from connector
 	spec, err := r.buildExecutorSpec(ctx, params)
 	if err != nil {
-		r.reportError(ctx, "Failed to build executor spec", err)
+		r.log.Error(err, "failed to build executor spec")
 		return fmt.Errorf("build executor spec: %w", err)
 	}
 
 	// Validate the spec
 	r.reportProgress(ctx, "validating", 30, "Validating executor spec")
 	if err := exec.Validate(*spec); err != nil {
-		r.reportError(ctx, "Spec validation failed", err)
+		r.log.Error(err, "spec validation failed")
 		return fmt.Errorf("validate spec: %w", err)
 	}
 
@@ -505,28 +522,30 @@ func (r *runner) saveRestoreData(ctx context.Context, data *executor.RestoreData
 
 // initStreamingClient initializes the streaming client based on configuration.
 func initStreamingClient(ctx context.Context, log logr.Logger, cfg *Config) (streamclient.StreamingClient, error) {
-	if cfg.GRPCEndpoint == "" && cfg.WebhookEndpoint == "" && cfg.ControlPlaneEndpoint == "" {
+	if cfg.GRPCEndpoint == "" && cfg.WebSocketEndpoint == "" && cfg.HTTPCallbackEndpoint == "" && cfg.ControlPlaneEndpoint == "" {
 		log.Info("no streaming endpoints configured, skipping streaming client")
 		return nil, nil
 	}
 
 	grpcEndpoint := cfg.GRPCEndpoint
-	webhookEndpoint := cfg.WebhookEndpoint
+	webSocketEndpoint := cfg.WebSocketEndpoint
+	httpCallbackEndpoint := cfg.HTTPCallbackEndpoint
 
-	// Legacy support: use ControlPlaneEndpoint if specific endpoints not set
-	if grpcEndpoint == "" && webhookEndpoint == "" && cfg.ControlPlaneEndpoint != "" {
-		webhookEndpoint = cfg.ControlPlaneEndpoint
+	// Legacy: Use ControlPlaneEndpoint if specific endpoints not set
+	if grpcEndpoint == "" && webSocketEndpoint == "" && httpCallbackEndpoint == "" && cfg.ControlPlaneEndpoint != "" {
+		httpCallbackEndpoint = cfg.ControlPlaneEndpoint
 	}
 
 	clientCfg := streamclient.ClientConfig{
-		Type:        streamclient.ClientTypeAuto,
-		GRPCAddress: grpcEndpoint,
-		WebhookURL:  webhookEndpoint,
-		ExecutionID: cfg.ExecutionID,
-		TokenPath:   cfg.TokenPath,
-		UseTLS:      cfg.UseTLS,
-		Timeout:     30 * time.Second,
-		Log:         log,
+		Type:         streamclient.ClientTypeAuto,
+		GRPCAddress:  grpcEndpoint,
+		WebSocketURL: webSocketEndpoint,
+		WebhookURL:   httpCallbackEndpoint,
+		ExecutionID:  cfg.ExecutionID,
+		TokenPath:    cfg.TokenPath,
+		UseTLS:       cfg.UseTLS,
+		Timeout:      30 * time.Second,
+		Log:          log,
 	}
 
 	client, err := streamclient.NewClient(clientCfg)
@@ -540,7 +559,8 @@ func initStreamingClient(ctx context.Context, log logr.Logger, cfg *Config) (str
 
 	log.Info("streaming client connected",
 		"grpcEndpoint", grpcEndpoint,
-		"webhookEndpoint", webhookEndpoint,
+		"webSocketEndpoint", webSocketEndpoint,
+		"httpCallbackEndpoint", httpCallbackEndpoint,
 	)
 
 	return client, nil
@@ -548,8 +568,10 @@ func initStreamingClient(ctx context.Context, log logr.Logger, cfg *Config) (str
 
 // reportProgress reports execution progress via streaming client.
 func (r *runner) reportProgress(ctx context.Context, phase string, percent int32, message string) {
+	// Always log to stdout (via DualWriteSink which also streams)
 	r.log.Info("progress", "phase", phase, "percent", percent, "message", message)
 
+	// Report progress separately via ReportProgress RPC
 	if r.streamClient != nil {
 		if err := r.streamClient.ReportProgress(ctx, phase, percent, message); err != nil {
 			r.log.Error(err, "failed to report progress")
@@ -557,23 +579,16 @@ func (r *runner) reportProgress(ctx context.Context, phase string, percent int32
 	}
 }
 
-// reportError logs and streams an error.
-func (r *runner) reportError(ctx context.Context, message string, err error) {
-	r.log.Error(err, message)
-
-	if r.streamClient != nil {
-		r.streamClient.Log(ctx, "ERROR", fmt.Sprintf("%s: %v", message, err), nil)
-	}
-}
-
 // reportCompletion reports execution completion via streaming client.
 func (r *runner) reportCompletion(ctx context.Context, success bool, errorMsg string, durationMs int64, restoreData []byte) {
+	// Always log to stdout
 	r.log.Info("completion",
 		"success", success,
 		"durationMs", durationMs,
 		"errorMessage", errorMsg,
 	)
 
+	// Stream to control plane if available
 	if r.streamClient != nil {
 		if err := r.streamClient.ReportCompletion(ctx, success, errorMsg, durationMs, restoreData); err != nil {
 			r.log.Error(err, "failed to report completion")

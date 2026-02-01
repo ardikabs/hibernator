@@ -14,13 +14,15 @@ import (
 
 	"github.com/go-logr/logr"
 
+	"github.com/ardikabs/hibernator/internal/streaming/types"
+
 	streamingv1alpha1 "github.com/ardikabs/hibernator/api/streaming/v1alpha1"
 )
 
 // testWebhookServer creates a webhook server with mocked dependencies for testing
 func testWebhookServer(t *testing.T) *WebhookServer {
 	log := logr.Discard()
-	execService := NewExecutionServiceServer(log, nil, nil)
+	execService := NewExecutionServiceServer(nil, nil, nil)
 
 	return &WebhookServer{
 		executionService: execService,
@@ -120,38 +122,38 @@ func TestProcessLog(t *testing.T) {
 		{
 			name: "info level",
 			entry: &streamingv1alpha1.LogEntry{
-				ExecutionID: "exec-log-1",
+				ExecutionId: "exec-log-1",
 				Level:       "INFO",
 				Message:     "Test info message",
-				Timestamp:   time.Now(),
+				Timestamp:   time.Now().Format(time.RFC3339),
 			},
 		},
 		{
 			name: "error level",
 			entry: &streamingv1alpha1.LogEntry{
-				ExecutionID: "exec-log-2",
+				ExecutionId: "exec-log-2",
 				Level:       "ERROR",
 				Message:     "Test error message",
-				Timestamp:   time.Now(),
+				Timestamp:   time.Now().Format(time.RFC3339),
 				Fields:      map[string]string{"error": "test"},
 			},
 		},
 		{
 			name: "warn level",
 			entry: &streamingv1alpha1.LogEntry{
-				ExecutionID: "exec-log-3",
+				ExecutionId: "exec-log-3",
 				Level:       "WARN",
 				Message:     "Test warning message",
-				Timestamp:   time.Now(),
+				Timestamp:   time.Now().Format(time.RFC3339),
 			},
 		},
 		{
 			name: "debug level",
 			entry: &streamingv1alpha1.LogEntry{
-				ExecutionID: "exec-log-4",
+				ExecutionId: "exec-log-4",
 				Level:       "DEBUG",
 				Message:     "Test debug message",
-				Timestamp:   time.Now(),
+				Timestamp:   time.Now().Format(time.RFC3339),
 			},
 		},
 	}
@@ -161,7 +163,7 @@ func TestProcessLog(t *testing.T) {
 			ws.processLog(tt.entry)
 
 			// Verify log was stored
-			logs := ws.executionService.GetExecutionLogs(tt.entry.ExecutionID)
+			logs := ws.executionService.GetExecutionLogs(tt.entry.ExecutionId)
 			if len(logs) != 1 {
 				t.Errorf("expected 1 log, got %d", len(logs))
 			}
@@ -181,10 +183,10 @@ func TestProcessLog_MultipleEntries(t *testing.T) {
 
 	for i := 0; i < 5; i++ {
 		ws.processLog(&streamingv1alpha1.LogEntry{
-			ExecutionID: execID,
+			ExecutionId: execID,
 			Level:       "INFO",
 			Message:     "Log entry",
-			Timestamp:   time.Now(),
+			Timestamp:   time.Now().Format(time.RFC3339),
 		})
 	}
 
@@ -236,12 +238,13 @@ func TestValidateRequest_InvalidFormat(t *testing.T) {
 }
 
 func TestWebhookPayload_UnmarshalLog(t *testing.T) {
-	payload := streamingv1alpha1.WebhookPayload{
+	payload := types.WebhookPayload{
 		Type: "log",
-		Log: &streamingv1alpha1.LogEntry{
+		Log: &types.LogEntry{
 			ExecutionID: "exec-123",
 			Level:       "INFO",
 			Message:     "Test message",
+			Timestamp:   time.Now(),
 		},
 	}
 
@@ -250,7 +253,7 @@ func TestWebhookPayload_UnmarshalLog(t *testing.T) {
 		t.Fatalf("failed to marshal: %v", err)
 	}
 
-	var decoded streamingv1alpha1.WebhookPayload
+	var decoded types.WebhookPayload
 	if err := json.Unmarshal(data, &decoded); err != nil {
 		t.Fatalf("failed to unmarshal: %v", err)
 	}
@@ -267,13 +270,14 @@ func TestWebhookPayload_UnmarshalLog(t *testing.T) {
 }
 
 func TestWebhookPayload_UnmarshalProgress(t *testing.T) {
-	payload := streamingv1alpha1.WebhookPayload{
+	payload := types.WebhookPayload{
 		Type: "progress",
-		Progress: &streamingv1alpha1.ProgressReport{
+		Progress: &types.ProgressReport{
 			ExecutionID:     "exec-456",
 			Phase:           "Running",
 			ProgressPercent: 50,
 			Message:         "Processing",
+			Timestamp:       time.Now(),
 		},
 	}
 
@@ -282,7 +286,7 @@ func TestWebhookPayload_UnmarshalProgress(t *testing.T) {
 		t.Fatalf("failed to marshal: %v", err)
 	}
 
-	var decoded streamingv1alpha1.WebhookPayload
+	var decoded types.WebhookPayload
 	if err := json.Unmarshal(data, &decoded); err != nil {
 		t.Fatalf("failed to unmarshal: %v", err)
 	}
@@ -296,12 +300,13 @@ func TestWebhookPayload_UnmarshalProgress(t *testing.T) {
 }
 
 func TestWebhookPayload_UnmarshalCompletion(t *testing.T) {
-	payload := streamingv1alpha1.WebhookPayload{
+	payload := types.WebhookPayload{
 		Type: "completion",
-		Completion: &streamingv1alpha1.CompletionReport{
+		Completion: &types.CompletionReport{
 			ExecutionID: "exec-789",
 			Success:     true,
 			DurationMs:  5000,
+			Timestamp:   time.Now(),
 		},
 	}
 
@@ -310,7 +315,7 @@ func TestWebhookPayload_UnmarshalCompletion(t *testing.T) {
 		t.Fatalf("failed to marshal: %v", err)
 	}
 
-	var decoded streamingv1alpha1.WebhookPayload
+	var decoded types.WebhookPayload
 	if err := json.Unmarshal(data, &decoded); err != nil {
 		t.Fatalf("failed to unmarshal: %v", err)
 	}
@@ -327,9 +332,9 @@ func TestWebhookPayload_UnmarshalCompletion(t *testing.T) {
 }
 
 func TestWebhookPayload_UnmarshalHeartbeat(t *testing.T) {
-	payload := streamingv1alpha1.WebhookPayload{
+	payload := types.WebhookPayload{
 		Type: "heartbeat",
-		Heartbeat: &streamingv1alpha1.HeartbeatRequest{
+		Heartbeat: &types.HeartbeatRequest{
 			ExecutionID: "exec-hb",
 			Timestamp:   time.Now(),
 		},
@@ -340,7 +345,7 @@ func TestWebhookPayload_UnmarshalHeartbeat(t *testing.T) {
 		t.Fatalf("failed to marshal: %v", err)
 	}
 
-	var decoded streamingv1alpha1.WebhookPayload
+	var decoded types.WebhookPayload
 	if err := json.Unmarshal(data, &decoded); err != nil {
 		t.Fatalf("failed to unmarshal: %v", err)
 	}
@@ -354,7 +359,7 @@ func TestWebhookPayload_UnmarshalHeartbeat(t *testing.T) {
 }
 
 func TestWebhookResponse(t *testing.T) {
-	resp := streamingv1alpha1.WebhookResponse{
+	resp := types.WebhookResponse{
 		Acknowledged: true,
 		Error:        "",
 	}
@@ -364,7 +369,7 @@ func TestWebhookResponse(t *testing.T) {
 		t.Fatalf("failed to marshal: %v", err)
 	}
 
-	var decoded streamingv1alpha1.WebhookResponse
+	var decoded types.WebhookResponse
 	if err := json.Unmarshal(data, &decoded); err != nil {
 		t.Fatalf("failed to unmarshal: %v", err)
 	}
@@ -396,16 +401,16 @@ func TestInvalidPayloadBytes(t *testing.T) {
 }
 
 func TestExecutionState_Lifecycle(t *testing.T) {
-	log := logr.Discard()
-	server := NewExecutionServiceServer(log, nil, nil)
+	server := NewExecutionServiceServer(nil, nil, nil)
 
 	execID := "exec-lifecycle"
 
 	// Start execution
 	_, _ = server.ReportProgress(nil, &streamingv1alpha1.ProgressReport{
-		ExecutionID:     execID,
+		ExecutionId:     execID,
 		Phase:           "Starting",
 		ProgressPercent: 0,
+		Timestamp:       time.Now().Format(time.RFC3339),
 	})
 
 	state := server.GetExecutionState(execID)
@@ -415,9 +420,10 @@ func TestExecutionState_Lifecycle(t *testing.T) {
 
 	// Update progress
 	_, _ = server.ReportProgress(nil, &streamingv1alpha1.ProgressReport{
-		ExecutionID:     execID,
+		ExecutionId:     execID,
 		Phase:           "Running",
 		ProgressPercent: 50,
+		Timestamp:       time.Now().Format(time.RFC3339),
 	})
 
 	state = server.GetExecutionState(execID)
@@ -427,9 +433,10 @@ func TestExecutionState_Lifecycle(t *testing.T) {
 
 	// Complete execution
 	_, _ = server.ReportCompletion(nil, &streamingv1alpha1.CompletionReport{
-		ExecutionID: execID,
+		ExecutionId: execID,
 		Success:     true,
 		DurationMs:  10000,
+		Timestamp:   time.Now().Format(time.RFC3339),
 	})
 
 	state = server.GetExecutionState(execID)

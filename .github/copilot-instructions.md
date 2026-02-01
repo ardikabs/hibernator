@@ -547,7 +547,8 @@ When creating a new user journey:
 
 ## References
 
-- **AGENTS.md**: [Agent checklist and handoff procedures](../AGENTS.md)
+- **RFCs Directory**: [All RFCs](../enhancements/) — Complete list of design documents
+- **User Journey Hub**: [User Journeys](./user-journey/README.md) — Index of all user journey documents
 - **WORKPLAN.md**: [Detailed technical workplan](../enhancements/archived/WORKPLAN.md) (historical reference)
 
 ---
