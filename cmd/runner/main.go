@@ -48,7 +48,8 @@ type Config struct {
 	TokenPath            string // Path to the stream token
 	ControlPlaneEndpoint string // Legacy streaming endpoint
 	GRPCEndpoint         string // gRPC streaming endpoint
-	WebhookEndpoint      string // HTTP webhook endpoint (fallback)
+	WebSocketEndpoint    string // WebSocket streaming endpoint
+	HTTPCallbackEndpoint string // HTTP callback endpoint (fallback)
 	UseTLS               bool   // Enable TLS for gRPC connections
 }
 
@@ -73,7 +74,8 @@ func parseFlags() *Config {
 		"HIBERNATOR_CONNECTOR_NAMESPACE":    &cfg.ConnectorNamespace,
 		"POD_NAMESPACE":                     &cfg.Namespace,
 		"HIBERNATOR_GRPC_ENDPOINT":          &cfg.GRPCEndpoint,
-		"HIBERNATOR_WEBHOOK_ENDPOINT":       &cfg.WebhookEndpoint,
+		"HIBERNATOR_WEBSOCKET_ENDPOINT":     &cfg.WebSocketEndpoint,
+		"HIBERNATOR_HTTP_CALLBACK_ENDPOINT": &cfg.HTTPCallbackEndpoint,
 	}
 	for envKey, target := range envMappings {
 		if v := os.Getenv(envKey); v != "" {

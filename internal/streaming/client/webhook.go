@@ -30,10 +30,6 @@ type WebhookClient struct {
 	tokenPath   string
 	log         logr.Logger
 
-	// log buffering
-	logBuffer   []streamingv1alpha1.LogEntry
-	logBufferMu sync.Mutex
-
 	// heartbeat management
 	heartbeatCtx    context.Context
 	heartbeatCancel context.CancelFunc
@@ -68,7 +64,6 @@ func NewWebhookClient(opts WebhookClientOptions) *WebhookClient {
 		executionID: opts.ExecutionID,
 		tokenPath:   opts.TokenPath,
 		log:         opts.Log.WithName("webhook-client"),
-		logBuffer:   make([]streamingv1alpha1.LogEntry, 0, 100),
 	}
 }
 
@@ -137,65 +132,39 @@ func (c *WebhookClient) StopHeartbeat() {
 	c.heartbeatWg.Wait()
 }
 
-// Log buffers a log entry for batch sending.
+// Log sends a log entry to the server immediately.
 func (c *WebhookClient) Log(ctx context.Context, level, message string, fields map[string]string) error {
-	entry := streamingv1alpha1.LogEntry{
-		ExecutionID: c.executionID,
-		Timestamp:   time.Now(),
+	entry := &streamingv1alpha1.LogEntry{
+		ExecutionId: c.executionID,
+		Timestamp:   time.Now().Format(time.RFC3339),
 		Level:       level,
 		Message:     message,
 		Fields:      fields,
 	}
 
-	c.logBufferMu.Lock()
-	c.logBuffer = append(c.logBuffer, entry)
-	shouldFlush := len(c.logBuffer) >= 50
-	c.logBufferMu.Unlock()
-
-	if shouldFlush {
-		return c.FlushLogs(ctx)
-	}
-
-	return nil
-}
-
-// FlushLogs sends all buffered logs to the server.
-func (c *WebhookClient) FlushLogs(ctx context.Context) error {
-	c.logBufferMu.Lock()
-	if len(c.logBuffer) == 0 {
-		c.logBufferMu.Unlock()
-		return nil
-	}
-	logs := c.logBuffer
-	c.logBuffer = make([]streamingv1alpha1.LogEntry, 0, 100)
-	c.logBufferMu.Unlock()
-
-	body, err := json.Marshal(logs)
+	body, err := json.Marshal([]*streamingv1alpha1.LogEntry{entry})
 	if err != nil {
-		return fmt.Errorf("failed to marshal logs: %w", err)
+		return fmt.Errorf("failed to marshal log: %w", err)
 	}
 
 	resp, err := c.doRequest(ctx, "POST", "/v1alpha1/logs", body)
 	if err != nil {
-		// Re-buffer logs on failure
-		c.logBufferMu.Lock()
-		c.logBuffer = append(logs, c.logBuffer...)
-		c.logBufferMu.Unlock()
+		c.log.V(2).Error(err, "failed to send log")
 		return err
 	}
 	defer resp.Body.Close()
 
-	c.log.V(1).Info("flushed logs", "count", len(logs))
 	return nil
 }
 
 // ReportProgress sends a progress update to the server.
 func (c *WebhookClient) ReportProgress(ctx context.Context, phase string, percent int32, message string) error {
-	report := streamingv1alpha1.ProgressReport{
-		ExecutionID:     c.executionID,
+	report := &streamingv1alpha1.ProgressReport{
+		ExecutionId:     c.executionID,
 		Phase:           phase,
 		ProgressPercent: percent,
 		Message:         message,
+		Timestamp:       time.Now().Format(time.RFC3339),
 	}
 
 	body, err := json.Marshal(report)
@@ -223,17 +192,13 @@ func (c *WebhookClient) ReportProgress(ctx context.Context, phase string, percen
 
 // ReportCompletion sends a completion report to the server.
 func (c *WebhookClient) ReportCompletion(ctx context.Context, success bool, errorMsg string, durationMs int64, restoreData []byte) error {
-	// Flush remaining logs first
-	if err := c.FlushLogs(ctx); err != nil {
-		c.log.Error(err, "failed to flush logs before completion")
-	}
-
-	report := streamingv1alpha1.CompletionReport{
-		ExecutionID:  c.executionID,
+	report := &streamingv1alpha1.CompletionReport{
+		ExecutionId:  c.executionID,
 		Success:      success,
 		ErrorMessage: errorMsg,
 		DurationMs:   durationMs,
 		RestoreData:  restoreData,
+		Timestamp:    time.Now().Format(time.RFC3339),
 	}
 
 	body, err := json.Marshal(report)
@@ -272,15 +237,12 @@ func (c *WebhookClient) Close() error {
 
 // sendHeartbeat sends a single heartbeat.
 func (c *WebhookClient) sendHeartbeat(ctx context.Context) error {
-	payload := streamingv1alpha1.WebhookPayload{
-		Type: "heartbeat",
-		Heartbeat: &streamingv1alpha1.HeartbeatRequest{
-			ExecutionID: c.executionID,
-			Timestamp:   time.Now(),
-		},
+	req := &streamingv1alpha1.HeartbeatRequest{
+		ExecutionId: c.executionID,
+		Timestamp:   time.Now().Format(time.RFC3339),
 	}
 
-	body, err := json.Marshal(payload)
+	body, err := json.Marshal(req)
 	if err != nil {
 		return fmt.Errorf("failed to marshal heartbeat: %w", err)
 	}

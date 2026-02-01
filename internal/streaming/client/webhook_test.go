@@ -102,25 +102,32 @@ func TestWebhookClient_Connect_Failure(t *testing.T) {
 	}
 }
 
-func TestWebhookClient_Log(t *testing.T) {
+func TestWebhookClient_Log_WithServer(t *testing.T) {
+	tmpDir := t.TempDir()
+	tokenPath := filepath.Join(tmpDir, "token")
+	_ = os.WriteFile(tokenPath, []byte("test-token"), 0600)
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/v1alpha1/logs" && r.Method == http.MethodPost {
+			w.WriteHeader(http.StatusOK)
+			return
+		}
+		http.NotFound(w, r)
+	}))
+	defer server.Close()
+
 	opts := WebhookClientOptions{
-		BaseURL:     "http://localhost:8080",
+		BaseURL:     server.URL,
 		ExecutionID: "exec-123",
+		TokenPath:   tokenPath,
 		Log:         logr.Discard(),
 	}
 	client := NewWebhookClient(opts)
 
+	// Log should send immediately (no buffering)
 	err := client.Log(context.Background(), "INFO", "test message", map[string]string{"key": "value"})
 	if err != nil {
 		t.Fatalf("Log() error = %v", err)
-	}
-
-	client.logBufferMu.Lock()
-	bufferLen := len(client.logBuffer)
-	client.logBufferMu.Unlock()
-
-	if bufferLen != 1 {
-		t.Errorf("expected 1 buffered log, got %d", bufferLen)
 	}
 }
 
@@ -204,61 +211,8 @@ func TestWebhookClient_ReadToken_NotFound(t *testing.T) {
 	}
 }
 
-func TestWebhookClient_FlushLogs_Empty(t *testing.T) {
-	opts := WebhookClientOptions{
-		BaseURL:     "http://localhost:8080",
-		ExecutionID: "exec-123",
-		Log:         logr.Discard(),
-	}
-	client := NewWebhookClient(opts)
-
-	err := client.FlushLogs(context.Background())
-	if err != nil {
-		t.Fatalf("FlushLogs() on empty buffer error = %v", err)
-	}
-}
-
-func TestWebhookClient_FlushLogs_WithServer(t *testing.T) {
-	tmpDir := t.TempDir()
-	tokenPath := filepath.Join(tmpDir, "token")
-	_ = os.WriteFile(tokenPath, []byte("test-token"), 0600)
-
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.URL.Path == "/v1alpha1/logs" && r.Method == http.MethodPost {
-			w.WriteHeader(http.StatusOK)
-			return
-		}
-		http.NotFound(w, r)
-	}))
-	defer server.Close()
-
-	opts := WebhookClientOptions{
-		BaseURL:     server.URL,
-		ExecutionID: "exec-123",
-		TokenPath:   tokenPath,
-		Log:         logr.Discard(),
-	}
-	client := NewWebhookClient(opts)
-
-	// Add some logs
-	for i := 0; i < 10; i++ {
-		_ = client.Log(context.Background(), "INFO", "test", nil)
-	}
-
-	err := client.FlushLogs(context.Background())
-	if err != nil {
-		t.Fatalf("FlushLogs() error = %v", err)
-	}
-
-	// Buffer should be empty
-	client.logBufferMu.Lock()
-	bufferLen := len(client.logBuffer)
-	client.logBufferMu.Unlock()
-
-	if bufferLen != 0 {
-		t.Errorf("expected 0 buffered logs after flush, got %d", bufferLen)
-	}
-}
+// TestWebhookClient_FlushLogs tests are removed - Log now sends immediately
+// and FlushLogs was removed from the StreamingClient interface.
 
 func TestWebhookClient_ReportProgress_WithServer(t *testing.T) {
 	tmpDir := t.TempDir()

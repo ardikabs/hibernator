@@ -11,14 +11,11 @@ import (
 	"testing"
 	"time"
 
-	"github.com/go-logr/logr"
-
 	streamingv1alpha1 "github.com/ardikabs/hibernator/api/streaming/v1alpha1"
 )
 
 func TestNewExecutionServiceServer(t *testing.T) {
-	log := logr.Discard()
-	server := NewExecutionServiceServer(log, nil, nil)
+	server := NewExecutionServiceServer(nil, nil, nil)
 
 	if server == nil {
 		t.Fatal("expected non-nil server")
@@ -32,8 +29,7 @@ func TestNewExecutionServiceServer(t *testing.T) {
 }
 
 func TestReportProgress(t *testing.T) {
-	log := logr.Discard()
-	server := NewExecutionServiceServer(log, nil, nil)
+	server := NewExecutionServiceServer(nil, nil, nil)
 
 	tests := []struct {
 		name   string
@@ -42,7 +38,7 @@ func TestReportProgress(t *testing.T) {
 		{
 			name: "new execution",
 			report: &streamingv1alpha1.ProgressReport{
-				ExecutionID:     "exec-001",
+				ExecutionId:     "exec-001",
 				Phase:           "Starting",
 				ProgressPercent: 10,
 				Message:         "Initializing",
@@ -51,7 +47,7 @@ func TestReportProgress(t *testing.T) {
 		{
 			name: "progress update",
 			report: &streamingv1alpha1.ProgressReport{
-				ExecutionID:     "exec-001",
+				ExecutionId:     "exec-001",
 				Phase:           "Running",
 				ProgressPercent: 50,
 				Message:         "Processing targets",
@@ -60,7 +56,7 @@ func TestReportProgress(t *testing.T) {
 		{
 			name: "near completion",
 			report: &streamingv1alpha1.ProgressReport{
-				ExecutionID:     "exec-001",
+				ExecutionId:     "exec-001",
 				Phase:           "Finishing",
 				ProgressPercent: 90,
 				Message:         "Finalizing",
@@ -79,7 +75,7 @@ func TestReportProgress(t *testing.T) {
 			}
 
 			// Verify state was stored
-			state := server.GetExecutionState(tt.report.ExecutionID)
+			state := server.GetExecutionState(tt.report.ExecutionId)
 			if state == nil {
 				t.Fatal("expected state to be stored")
 			}
@@ -97,8 +93,7 @@ func TestReportProgress(t *testing.T) {
 }
 
 func TestReportCompletion(t *testing.T) {
-	log := logr.Discard()
-	server := NewExecutionServiceServer(log, nil, nil)
+	server := NewExecutionServiceServer(nil, nil, nil)
 
 	tests := []struct {
 		name    string
@@ -108,7 +103,7 @@ func TestReportCompletion(t *testing.T) {
 		{
 			name: "successful completion",
 			report: &streamingv1alpha1.CompletionReport{
-				ExecutionID:  "exec-success",
+				ExecutionId:  "exec-success",
 				Success:      true,
 				DurationMs:   5000,
 				ErrorMessage: "",
@@ -118,7 +113,7 @@ func TestReportCompletion(t *testing.T) {
 		{
 			name: "failed completion",
 			report: &streamingv1alpha1.CompletionReport{
-				ExecutionID:  "exec-failed",
+				ExecutionId:  "exec-failed",
 				Success:      false,
 				DurationMs:   3000,
 				ErrorMessage: "connection timeout",
@@ -128,7 +123,7 @@ func TestReportCompletion(t *testing.T) {
 		{
 			name: "completion with restore data",
 			report: &streamingv1alpha1.CompletionReport{
-				ExecutionID: "exec-restore",
+				ExecutionId: "exec-restore",
 				Success:     true,
 				DurationMs:  10000,
 				RestoreData: json.RawMessage(`{"instanceId": "i-12345", "state": "stopped"}`),
@@ -138,7 +133,7 @@ func TestReportCompletion(t *testing.T) {
 		{
 			name: "completion with invalid restore data",
 			report: &streamingv1alpha1.CompletionReport{
-				ExecutionID: "exec-invalid-restore",
+				ExecutionId: "exec-invalid-restore",
 				Success:     true,
 				DurationMs:  1000,
 				RestoreData: json.RawMessage(`{invalid json}`),
@@ -158,7 +153,7 @@ func TestReportCompletion(t *testing.T) {
 					t.Error("expected acknowledged response")
 				}
 
-				state := server.GetExecutionState(tt.report.ExecutionID)
+				state := server.GetExecutionState(tt.report.ExecutionId)
 				if state == nil {
 					t.Fatal("expected state to be stored")
 				}
@@ -177,25 +172,24 @@ func TestReportCompletion(t *testing.T) {
 }
 
 func TestHeartbeat(t *testing.T) {
-	log := logr.Discard()
-	server := NewExecutionServiceServer(log, nil, nil)
+	server := NewExecutionServiceServer(nil, nil, nil)
 
 	// First, create an execution state
 	_, _ = server.ReportProgress(context.Background(), &streamingv1alpha1.ProgressReport{
-		ExecutionID:     "exec-hb",
+		ExecutionId:     "exec-hb",
 		Phase:           "Running",
 		ProgressPercent: 25,
 	})
 
 	// Record initial heartbeat time
 	state := server.GetExecutionState("exec-hb")
-	initialHeartbeat := state.LastHeartbeat
+	initialHeartbeat := state.LastUpdate
 
 	// Wait a bit and send heartbeat
 	time.Sleep(10 * time.Millisecond)
 
 	req := &streamingv1alpha1.HeartbeatRequest{
-		ExecutionID: "exec-hb",
+		ExecutionId: "exec-hb",
 	}
 
 	resp, err := server.Heartbeat(context.Background(), req)
@@ -205,23 +199,22 @@ func TestHeartbeat(t *testing.T) {
 	if !resp.Acknowledged {
 		t.Error("expected acknowledged response")
 	}
-	if resp.ServerTime.IsZero() {
-		t.Error("expected non-zero server time")
+	if resp.ServerTime == "" {
+		t.Error("expected non-empty server time")
 	}
 
 	// Verify heartbeat was updated
 	state = server.GetExecutionState("exec-hb")
-	if !state.LastHeartbeat.After(initialHeartbeat) {
+	if !state.LastUpdate.After(initialHeartbeat) {
 		t.Error("expected heartbeat time to be updated")
 	}
 }
 
 func TestHeartbeat_NonExistentExecution(t *testing.T) {
-	log := logr.Discard()
-	server := NewExecutionServiceServer(log, nil, nil)
+	server := NewExecutionServiceServer(nil, nil, nil)
 
 	req := &streamingv1alpha1.HeartbeatRequest{
-		ExecutionID: "non-existent",
+		ExecutionId: "non-existent",
 	}
 
 	resp, err := server.Heartbeat(context.Background(), req)
@@ -234,15 +227,14 @@ func TestHeartbeat_NonExistentExecution(t *testing.T) {
 }
 
 func TestGetExecutionLogs(t *testing.T) {
-	log := logr.Discard()
-	server := NewExecutionServiceServer(log, nil, nil)
+	server := NewExecutionServiceServer(nil, nil, nil)
 
 	// Add some logs directly
 	server.executionLogsMu.Lock()
-	server.executionLogs["exec-logs"] = []streamingv1alpha1.LogEntry{
-		{ExecutionID: "exec-logs", Level: "INFO", Message: "Starting operation"},
-		{ExecutionID: "exec-logs", Level: "DEBUG", Message: "Processing item 1"},
-		{ExecutionID: "exec-logs", Level: "INFO", Message: "Operation complete"},
+	server.executionLogs["exec-logs"] = []*streamingv1alpha1.LogEntry{
+		{ExecutionId: "exec-logs", Level: "INFO", Message: "Starting operation"},
+		{ExecutionId: "exec-logs", Level: "DEBUG", Message: "Processing item 1"},
+		{ExecutionId: "exec-logs", Level: "INFO", Message: "Operation complete"},
 	}
 	server.executionLogsMu.Unlock()
 
@@ -256,8 +248,7 @@ func TestGetExecutionLogs(t *testing.T) {
 }
 
 func TestGetExecutionLogs_NonExistent(t *testing.T) {
-	log := logr.Discard()
-	server := NewExecutionServiceServer(log, nil, nil)
+	server := NewExecutionServiceServer(nil, nil, nil)
 
 	logs := server.GetExecutionLogs("non-existent")
 	if logs != nil {
@@ -266,8 +257,7 @@ func TestGetExecutionLogs_NonExistent(t *testing.T) {
 }
 
 func TestGetExecutionState_NonExistent(t *testing.T) {
-	log := logr.Discard()
-	server := NewExecutionServiceServer(log, nil, nil)
+	server := NewExecutionServiceServer(nil, nil, nil)
 
 	state := server.GetExecutionState("non-existent")
 	if state != nil {
@@ -276,13 +266,12 @@ func TestGetExecutionState_NonExistent(t *testing.T) {
 }
 
 func TestGetExecutionLogs_ReturnsCopy(t *testing.T) {
-	log := logr.Discard()
-	server := NewExecutionServiceServer(log, nil, nil)
+	server := NewExecutionServiceServer(nil, nil, nil)
 
 	// Add logs
 	server.executionLogsMu.Lock()
-	server.executionLogs["exec-copy"] = []streamingv1alpha1.LogEntry{
-		{ExecutionID: "exec-copy", Message: "Original"},
+	server.executionLogs["exec-copy"] = []*streamingv1alpha1.LogEntry{
+		{ExecutionId: "exec-copy", Message: "Original"},
 	}
 	server.executionLogsMu.Unlock()
 
@@ -298,12 +287,11 @@ func TestGetExecutionLogs_ReturnsCopy(t *testing.T) {
 }
 
 func TestGetExecutionState_ReturnsCopy(t *testing.T) {
-	log := logr.Discard()
-	server := NewExecutionServiceServer(log, nil, nil)
+	server := NewExecutionServiceServer(nil, nil, nil)
 
 	// Create state
 	_, _ = server.ReportProgress(context.Background(), &streamingv1alpha1.ProgressReport{
-		ExecutionID: "exec-state-copy",
+		ExecutionId: "exec-state-copy",
 		Phase:       "Running",
 	})
 
@@ -319,8 +307,7 @@ func TestGetExecutionState_ReturnsCopy(t *testing.T) {
 }
 
 func TestConcurrentAccess(t *testing.T) {
-	log := logr.Discard()
-	server := NewExecutionServiceServer(log, nil, nil)
+	server := NewExecutionServiceServer(nil, nil, nil)
 
 	done := make(chan bool)
 
@@ -331,13 +318,13 @@ func TestConcurrentAccess(t *testing.T) {
 			for j := 0; j < 100; j++ {
 				// Progress updates
 				_, _ = server.ReportProgress(context.Background(), &streamingv1alpha1.ProgressReport{
-					ExecutionID:     execID,
+					ExecutionId:     execID,
 					ProgressPercent: int32((id*100 + j) % 100),
 				})
 
 				// Heartbeats
 				_, _ = server.Heartbeat(context.Background(), &streamingv1alpha1.HeartbeatRequest{
-					ExecutionID: execID,
+					ExecutionId: execID,
 				})
 
 				// Read state
@@ -355,15 +342,14 @@ func TestConcurrentAccess(t *testing.T) {
 }
 
 func TestMultipleExecutions(t *testing.T) {
-	log := logr.Discard()
-	server := NewExecutionServiceServer(log, nil, nil)
+	server := NewExecutionServiceServer(nil, nil, nil)
 
 	execIDs := []string{"exec-1", "exec-2", "exec-3"}
 
 	// Create progress for each execution
 	for i, id := range execIDs {
 		_, err := server.ReportProgress(context.Background(), &streamingv1alpha1.ProgressReport{
-			ExecutionID:     id,
+			ExecutionId:     id,
 			Phase:           "Running",
 			ProgressPercent: int32((i + 1) * 25),
 		})

@@ -21,6 +21,7 @@ import (
 
 	streamingv1alpha1 "github.com/ardikabs/hibernator/api/streaming/v1alpha1"
 	"github.com/ardikabs/hibernator/internal/streaming/auth"
+	"github.com/ardikabs/hibernator/internal/streaming/types"
 )
 
 // WebhookServer handles HTTP webhook callbacks from runners.
@@ -103,7 +104,7 @@ func (ws *WebhookServer) handleCallback(w http.ResponseWriter, r *http.Request) 
 	}
 
 	// Parse payload
-	var payload streamingv1alpha1.WebhookPayload
+	var payload types.WebhookPayload
 	if err := json.NewDecoder(r.Body).Decode(&payload); err != nil {
 		ws.log.Error(err, "failed to decode payload")
 		http.Error(w, "Bad request", http.StatusBadRequest)
@@ -150,17 +151,17 @@ func (ws *WebhookServer) handleCallback(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 
-	var response streamingv1alpha1.WebhookResponse
+	var response types.WebhookResponse
 
 	switch payload.Type {
 	case "log":
 		if payload.Log != nil {
-			ws.processLog(payload.Log)
+			ws.processLog(payload.Log.ToProto())
 			response.Acknowledged = true
 		}
 	case "progress":
 		if payload.Progress != nil {
-			resp, err := ws.executionService.ReportProgress(r.Context(), payload.Progress)
+			resp, err := ws.executionService.ReportProgress(r.Context(), payload.Progress.ToProto())
 			if err != nil {
 				ws.log.Error(err, "failed to process progress")
 				http.Error(w, "Internal error", http.StatusInternalServerError)
@@ -170,7 +171,7 @@ func (ws *WebhookServer) handleCallback(w http.ResponseWriter, r *http.Request) 
 		}
 	case "completion":
 		if payload.Completion != nil {
-			resp, err := ws.executionService.ReportCompletion(r.Context(), payload.Completion)
+			resp, err := ws.executionService.ReportCompletion(r.Context(), payload.Completion.ToProto())
 			if err != nil {
 				ws.log.Error(err, "failed to process completion")
 				http.Error(w, "Internal error", http.StatusInternalServerError)
@@ -181,7 +182,7 @@ func (ws *WebhookServer) handleCallback(w http.ResponseWriter, r *http.Request) 
 		}
 	case "heartbeat":
 		if payload.Heartbeat != nil {
-			resp, err := ws.executionService.Heartbeat(r.Context(), payload.Heartbeat)
+			resp, err := ws.executionService.Heartbeat(r.Context(), payload.Heartbeat.ToProto())
 			if err != nil {
 				ws.log.Error(err, "failed to process heartbeat")
 				http.Error(w, "Internal error", http.StatusInternalServerError)
@@ -212,7 +213,7 @@ func (ws *WebhookServer) handleLogs(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	var entries []streamingv1alpha1.LogEntry
+	var entries []*streamingv1alpha1.LogEntry
 	if err := json.NewDecoder(r.Body).Decode(&entries); err != nil {
 		http.Error(w, "Bad request", http.StatusBadRequest)
 		return
@@ -220,11 +221,11 @@ func (ws *WebhookServer) handleLogs(w http.ResponseWriter, r *http.Request) {
 
 	for _, entry := range entries {
 		// Process each log entry
-		ws.processLog(&entry)
+		ws.processLog(entry)
 	}
 
 	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(streamingv1alpha1.WebhookResponse{
+	json.NewEncoder(w).Encode(types.WebhookResponse{
 		Acknowledged: true,
 	})
 }
@@ -345,24 +346,23 @@ func (ws *WebhookServer) validateRequest(r *http.Request) (*auth.ValidationResul
 func (ws *WebhookServer) processLog(log *streamingv1alpha1.LogEntry) {
 	// Store or forward log entry
 	ws.log.V(2).Info("received log",
-		"executionId", log.ExecutionID,
+		"executionId", log.ExecutionId,
 		"level", log.Level,
 		"message", log.Message,
 	)
 
-	ws.executionService.executionLogsMu.Lock()
-	ws.executionService.executionLogs[log.ExecutionID] = append(
-		ws.executionService.executionLogs[log.ExecutionID],
-		*log,
-	)
-	ws.executionService.executionLogsMu.Unlock()
+	// Delegate to business logic layer
+	if err := ws.executionService.StoreLog(log); err != nil {
+		ws.log.Error(err, "failed to store log entry")
+		return
+	}
 
 	switch log.Level {
 	case "ERROR":
-		ws.log.Error(nil, log.Message, "executionId", log.ExecutionID, "fields", log.Fields)
+		ws.log.Error(nil, log.Message, "executionId", log.ExecutionId, "fields", log.Fields)
 	case "WARN":
-		ws.log.Info(log.Message, "executionId", log.ExecutionID, "level", "warn", "fields", log.Fields)
+		ws.log.Info(log.Message, "executionId", log.ExecutionId, "level", "warn", "fields", log.Fields)
 	default:
-		ws.log.V(1).Info(log.Message, "executionId", log.ExecutionID, "level", log.Level, "fields", log.Fields)
+		ws.log.V(1).Info(log.Message, "executionId", log.ExecutionId, "level", log.Level, "fields", log.Fields)
 	}
 }

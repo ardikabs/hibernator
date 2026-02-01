@@ -7,7 +7,6 @@ package server
 
 import (
 	"testing"
-	"time"
 )
 
 func TestExecutionState_Fields(t *testing.T) {
@@ -16,8 +15,6 @@ func TestExecutionState_Fields(t *testing.T) {
 		Phase:           "Running",
 		ProgressPercent: 50,
 		Message:         "Processing",
-		LastHeartbeat:   time.Now(),
-		StartedAt:       time.Now().Add(-5 * time.Minute),
 		Completed:       false,
 		Success:         false,
 	}

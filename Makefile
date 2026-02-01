@@ -17,6 +17,8 @@ GOCMD ?= go
 CONTROLLER_GEN ?= $(GOBIN)/controller-gen
 ENVTEST ?= $(GOBIN)/setup-envtest
 MOCKERY ?= $(GOBIN)/mockery
+PROTOC_GEN_GO ?= $(GOBIN)/protoc-gen-go
+PROTOC_GEN_GO_GRPC ?= $(GOBIN)/protoc-gen-go-grpc
 
 # Test configuration
 COVERAGE_DIR ?= .coverage
@@ -57,6 +59,21 @@ help: ## Display this help.
 generate: controller-gen ## Generate code (DeepCopy, CRDs).
 	$(CONTROLLER_GEN) object:headerFile="hack/boilerplate.go.txt" paths="./api/..."
 	$(CONTROLLER_GEN) crd paths="./api/..." output:crd:artifacts:config=config/crd/bases
+
+.PHONY: generate-proto
+generate-proto: protoc-gen-go protoc-gen-go-grpc ## Generate protobuf code from .proto files.
+	@echo "$(CYAN)Generating protobuf code...$(RESET)"
+	@command -v protoc >/dev/null 2>&1 || { echo "$(RED)Error: protoc not installed. Install from https://grpc.io/docs/protoc-installation/$(RESET)"; exit 1; }
+	protoc --go_out=. --go_opt=paths=source_relative \
+		--go-grpc_out=. --go-grpc_opt=paths=source_relative \
+		api/streaming/v1alpha1/execution.proto
+	@echo "$(GREEN)Protobuf code generated$(RESET)"
+
+.PHONY: clean-proto
+clean-proto: ## Clean generated protobuf files.
+	@echo "$(CYAN)Cleaning generated protobuf files...$(RESET)"
+	@rm -f api/streaming/v1alpha1/*.pb.go
+	@echo "$(GREEN)Protobuf files cleaned$(RESET)"
 
 .PHONY: fmt
 fmt: ## Run go fmt.
@@ -253,6 +270,20 @@ mockery: ## Download mockery locally if necessary.
 		go install github.com/vektra/mockery/v2@latest; \
 	}
 
+.PHONY: protoc-gen-go
+protoc-gen-go: ## Download protoc-gen-go locally if necessary.
+	@test -s $(PROTOC_GEN_GO) || { \
+		echo "$(CYAN)Installing protoc-gen-go...$(RESET)"; \
+		go install google.golang.org/protobuf/cmd/protoc-gen-go@latest; \
+	}
+
+.PHONY: protoc-gen-go-grpc
+protoc-gen-go-grpc: ## Download protoc-gen-go-grpc locally if necessary.
+	@test -s $(PROTOC_GEN_GO_GRPC) || { \
+		echo "$(CYAN)Installing protoc-gen-go-grpc...$(RESET)"; \
+		go install google.golang.org/grpc/cmd/protoc-gen-go-grpc@latest; \
+	}
+
 .PHONY: mocks-eks
 mocks-eks: mockery ## Generate mocks for EKS executor clients.
 	@echo "$(CYAN)Generating mocks for EKS executor...$(RESET)"
@@ -284,4 +315,4 @@ mocks-all: mocks-eks mocks-ec2 mocks-karpenter mocks-rds ## Generate all executo
 	@echo "$(GREEN)All mocks generated successfully$(RESET)"
 
 .PHONY: tools
-tools: controller-gen envtest mockery ## Install all required tools.
+tools: controller-gen envtest mockery protoc-gen-go protoc-gen-go-grpc ## Install all required tools.

@@ -14,9 +14,9 @@ import (
 )
 
 func TestLogEntryPayload(t *testing.T) {
-	entry := streamingv1alpha1.LogEntry{
-		ExecutionID: "exec-123",
-		Timestamp:   time.Now(),
+	entry := &streamingv1alpha1.LogEntry{
+		ExecutionId: "exec-123",
+		Timestamp:   time.Now().Format(time.RFC3339),
 		Level:       "INFO",
 		Message:     "Test message",
 		Fields:      map[string]string{"key": "value"},
@@ -31,12 +31,12 @@ func TestLogEntryPayload(t *testing.T) {
 }
 
 func TestProgressReportPayload(t *testing.T) {
-	report := streamingv1alpha1.ProgressReport{
-		ExecutionID:     "exec-123",
+	report := &streamingv1alpha1.ProgressReport{
+		ExecutionId:     "exec-123",
 		Phase:           "Executing",
 		ProgressPercent: 50,
 		Message:         "Half done",
-		Timestamp:       time.Now(),
+		Timestamp:   time.Now().Format(time.RFC3339),
 	}
 	data, err := json.Marshal(report)
 	if err != nil {
@@ -48,12 +48,12 @@ func TestProgressReportPayload(t *testing.T) {
 }
 
 func TestCompletionReportPayload(t *testing.T) {
-	report := streamingv1alpha1.CompletionReport{
-		ExecutionID: "exec-123",
+	report := &streamingv1alpha1.CompletionReport{
+		ExecutionId: "exec-123",
 		Success:     true,
 		DurationMs:  5000,
 		RestoreData: []byte(`{"key": "value"}`),
-		Timestamp:   time.Now(),
+		Timestamp:   time.Now().Format(time.RFC3339),
 	}
 	data, err := json.Marshal(report)
 	if err != nil {
@@ -67,11 +67,11 @@ func TestCompletionReportPayload(t *testing.T) {
 func TestLogEntry_Levels(t *testing.T) {
 	levels := []string{"DEBUG", "INFO", "WARN", "ERROR"}
 	for _, level := range levels {
-		entry := streamingv1alpha1.LogEntry{
-			ExecutionID: "exec-123",
+		entry := &streamingv1alpha1.LogEntry{
+			ExecutionId: "exec-123",
 			Level:       level,
 			Message:     "Test",
-			Timestamp:   time.Now(),
+			Timestamp:   time.Now().Format(time.RFC3339),
 		}
 		if entry.Level != level {
 			t.Errorf("expected level %s", level)
