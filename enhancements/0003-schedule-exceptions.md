@@ -653,31 +653,34 @@ Draft → Pending Approval → Approved → Active → Expired
 **On-Call Engineer Workflow (Real-world scenario):**
 
 ```yaml
-# Step 1: On-call engineer creates HibernatePlan with exception
+# Step 1: On-call engineer creates ScheduleException with approval requirement
 # Directly specifies approver emails (no role mapping needed)
 apiVersion: hibernator.ardikabs.com/v1alpha1
-kind: HibernatePlan
+kind: ScheduleException
 metadata:
-  name: event-support
+  name: on-site-event
+  namespace: hibernator-system
 spec:
-  schedule:
-    timezone: "America/New_York"
-    offHours: [...]
-    exceptions:
-      - name: "on-site-event"
-        approvalRequired: true
-        approverEmails:  # On-call specifies approvers by email
-          - "bob@company.com"      # Engineering Head email
-          - "carol@company.com"    # Manager email
-        type: "extend"
-        windows: [...]
-        validFrom: "2026-01-29T00:00:00Z"
-        validUntil: "2026-02-28T23:59:59Z"
+  planRef:
+    name: event-support  # References existing HibernatePlan
+  
+  approvalRequired: true
+  approverEmails:  # On-call specifies approvers by email
+    - "bob@company.com"      # Engineering Head email
+    - "carol@company.com"    # Manager email
+  
+  type: extend
+  validFrom: "2026-01-29T00:00:00Z"
+  validUntil: "2026-02-28T23:59:59Z"
+  windows:
+    - start: "06:00"
+      end: "11:00"
+      daysOfWeek: ["SAT", "SUN"]
 ```
 
 **Workflow:**
 
-1. **On-call engineer applies HibernatePlan**
+1. **On-call engineer applies ScheduleException**
    - Sets `approverEmails` with specific approver email addresses
    - No role lookup needed (direct email specification)
 
@@ -699,12 +702,12 @@ spec:
 5. **Approver clicks [APPROVE] or [REJECT]**
    - Slack bot calls controller endpoint
    - Controller verifies approver's Slack user matches email
-   - Updates HibernatePlan status with approval/rejection
+   - Updates ScheduleException status with approval/rejection
 
 6. **When all approvals received**
    - Exception state transitions to "Active"
    - Controller sends confirmation to all approvers
-   - Hibernation plan starts executing
+   - HibernatePlan controller detects active exception and applies it
 
 **Benefits of this approach:**
 - On-call engineer has full control (specifies exact approvers)
@@ -716,32 +719,43 @@ spec:
 
 **Approval Workflow (Core Orchestration):**
 
-1. **User creates/updates exception** via kubectl plugin or direct manifest edit
+1. **User creates ScheduleException** via kubectl or manifest file
    ```yaml
-   exceptions:
-     - name: "on-site-event"
-       approvalRequired: true
-       approverEmails:       # On-call specifies approver emails
-         - "bob@company.com"
-         - "carol@company.com"
-       # ... rest of exception config
+   apiVersion: hibernator.ardikabs.com/v1alpha1
+   kind: ScheduleException
+   metadata:
+     name: on-site-event
+     namespace: hibernator-system
+   spec:
+     planRef:
+       name: event-support
+     approvalRequired: true
+     approverEmails:  # On-call specifies approver emails
+       - "bob@company.com"
+       - "carol@company.com"
+     type: extend
+     validFrom: "2026-01-29T00:00:00Z"
+     validUntil: "2026-02-28T23:59:59Z"
+     windows:
+       - start: "06:00"
+         end: "11:00"
+         daysOfWeek: ["SAT", "SUN"]
    ```
 
 2. **Exception created in "Pending" state**
    ```yaml
+   # ScheduleException status field
    status:
-     activeExceptions: []
-     pendingApprovals:
-       - name: "on-site-event"
-         state: "Pending"
-         requestedBy: "alice"
-         requestedAt: "2026-01-29T10:00:00Z"
-         requiredApprovals:
-           - email: "bob@company.com"
-             status: "pending"
-           - email: "carol@company.com"
-             status: "pending"
-         approvals: []  # Empty until approved
+     state: Pending
+     approvalState: Pending
+     requestedBy: "alice"
+     requestedAt: "2026-01-29T10:00:00Z"
+     requiredApprovals:
+       - email: "bob@company.com"
+         status: "pending"
+       - email: "carol@company.com"
+         status: "pending"
+     approvals: []  # Empty until approved
    ```
 
 3. **Notification sent to approvers via Slack DM**

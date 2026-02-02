@@ -13,9 +13,8 @@ Hibernator is a Kubernetes operator that provides centralized, declarative manag
 **Key capabilities:**
 - 🕐 **Timezone-aware scheduling** with start/end times and day-of-week patterns
 - ⏸️ **Schedule exceptions** with lead-time grace periods (extend, suspend, replace)
-- ✅ **Multi-channel approval workflows** (Slack DM, kubectl, SSO/URL, Dashboard)
 - 🔗 **Dependency orchestration** using DAG, Staged, Parallel, or Sequential strategies
-- 🔌 **Pluggable executor model** for EKS, RDS, EC2, Karpenter, GKE, Cloud SQL
+- 🔌 **Pluggable executor model** for AWS (EKS, RDS, EC2, Karpenter)
 - 🔒 **Isolated runner jobs** with scoped RBAC, IRSA, and projected ServiceAccount tokens
 - 📊 **Real-time progress streaming** via gRPC (preferred) or HTTP webhooks (fallback)
 - 💾 **Durable restore metadata** persisted in ConfigMaps for safe recovery
@@ -64,7 +63,7 @@ Hibernator is a Kubernetes operator that provides centralized, declarative manag
 
 The operator separates concerns:
 - **Control Plane**: Schedules executions, manages Jobs, aggregates status, serves streaming API
-- **Runner Jobs**: Isolated Kubernetes Jobs per target, each with dedicated ServiceAccount and executor
+- **Runner Jobs**: Isolated Kubernetes Jobs per target, using shared ServiceAccount (configured at controller level) with RBAC-scoped permissions
 - **Executors**: Pluggable implementations (EKS, RDS, EC2) handling resource-specific shutdown/wakeup logic
 
 ## Features
@@ -84,6 +83,7 @@ The operator separates concerns:
 |----------|-----------|--------|----------|
 | **EKS** | CloudProvider | ✅ Stable | Managed Node Groups scale-to-zero via AWS API |
 | **Karpenter** | K8SCluster | ✅ Stable | NodePool scaling and disruption budget management via Kubernetes API |
+| **WorkloadScaler** | K8SCluster | ✅ Stable | Generic workload downscaling via scale subresource (Deployments, StatefulSets, etc.) |
 | **RDS** | CloudProvider | ✅ Stable | Instance/cluster stop with optional snapshot |
 | **EC2** | CloudProvider | ✅ Stable | Tag-based or ID-based instance stop |
 | **GKE** | K8SCluster | 🏗️ Planned | Node pool scaling (GCP API integration) |
@@ -93,27 +93,28 @@ The operator separates concerns:
 
 ### Security & Compliance
 
-- **RBAC-scoped runners**: Each Job uses ephemeral ServiceAccount with minimal permissions
+- **RBAC-scoped runners**: All runner Jobs use a shared ServiceAccount (`--runner-service-account` flag) with minimal permissions
 - **IRSA/Workload Identity**: Cloud credentials via Kubernetes ServiceAccount projection
 - **TokenReview authentication**: Streaming auth using projected SA tokens with custom audience (`hibernator-control-plane`)
 - **Audit trail**: Kubernetes API audit logs + object-store access logs + execution ledger in CR status
 
-### Schedule Exceptions & Approval Workflows
+### Schedule Exceptions
 
-Handle temporary deviations from base schedule:
+Handle temporary deviations from base schedule using independent `ScheduleException` CRDs:
+
+**Key Features:**
+- **Independent CRD**: Exceptions reference HibernatePlan via `planRef` (not embedded in plan spec)
+- **GitOps-friendly**: Create/delete exceptions without modifying plan spec
+- **Single active exception per plan**: Simplifies merge semantics and ensures predictable behavior
+- **Automatic expiration**: Controller transitions to `Expired` state when `validUntil` passes
+- **Audit trail**: Exception history tracked in HibernatePlan status (max 10 entries)
 
 **Exception Types:**
-- **extend**: Add hibernation windows (e.g., weekend event support)
-- **suspend**: Prevent hibernation with lead-time buffer (e.g., maintenance window)
-- **replace**: Fully override base schedule (e.g., holiday mode)
+- **extend**: Add hibernation windows (union with base schedule)
+- **suspend**: Prevent hibernation with optional lead-time buffer (carve-out from schedule)
+- **replace**: Completely override base schedule during exception period
 
-**Approval Options:**
-- **Slack DM**: Direct messages to approvers with [APPROVE] buttons (on-call specifies emails)
-- **kubectl plugin**: CLI-based approval for engineering teams
-- **SSO/URL**: Enterprise approval links with organization authentication
-- **Dashboard UI**: Web-based approval interface with real-time tracking
-
-See [`enhancements/0003-schedule-exceptions.md`](enhancements/0003-schedule-exceptions.md) for complete details.
+See [`enhancements/0003-schedule-exceptions.md`](enhancements/0003-schedule-exceptions.md) for detailed design and future approval workflow plans.
 
 ## Quick Start
 
@@ -138,7 +139,7 @@ kubectl apply -f config/rbac/
 
 ### Create Your First HibernatePlan
 
-**Basic example with schedule exceptions:**
+**Basic example:**
 
 ```yaml
 apiVersion: hibernator.ardikabs.com/v1alpha1
@@ -153,21 +154,6 @@ spec:
       - start: "20:00"
         end: "06:00"
         daysOfWeek: ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday"]
-
-    # NEW: Temporary exceptions for special events
-    exceptions:
-      - name: "on-site-event"
-        type: "extend"  # Add hibernation during event
-        validFrom: "2026-02-10T00:00:00Z"
-        validUntil: "2026-02-15T23:59:59Z"
-        approvalRequired: true
-        approverEmails:  # On-call specifies approvers
-          - "engineering-head@company.com"
-          - "manager@company.com"
-        windows:
-          - start: "06:00"
-            end: "11:00"
-            daysOfWeek: ["Saturday", "Sunday"]
 
   execution:
     strategy:
@@ -207,12 +193,33 @@ spec:
         nodePools: []  # empty means all NodePools
 ```
 
+**Adding a temporary exception:**
+
+```yaml
+---
+apiVersion: hibernator.ardikabs.com/v1alpha1
+kind: ScheduleException
+metadata:
+  name: on-site-event
+  namespace: hibernator-system
+spec:
+  planRef:
+    name: dev-offhours  # References the HibernatePlan above
+  type: extend  # Add hibernation windows
+  validFrom: "2026-02-10T00:00:00Z"
+  validUntil: "2026-02-15T23:59:59Z"
+  windows:
+    - start: "06:00"
+      end: "11:00"
+      daysOfWeek: ["SAT", "SUN"]
+```
+
 **What happens:**
-1. On-call engineer specifies exception with `approverEmails`
-2. Controller sends Slack DM to approvers with [APPROVE] button
-3. Approvers click button → exception becomes active
-4. During event period, services stay awake (exception takes precedence)
-5. After event expires, normal hibernation resumes
+1. ScheduleException references `dev-offhours` plan via `planRef`
+2. Controller detects active exception and applies it to schedule evaluation
+3. During Feb 10-15, services hibernate Sat-Sun 06:00-11:00 (in addition to weekday nights)
+4. After Feb 15, exception auto-expires and plan reverts to base schedule
+5. Exception CR remains with `state: Expired` for audit trail
 
 ### Monitor Execution
 
@@ -222,6 +229,12 @@ kubectl get hibernateplan dev-offhours -n hibernator-system -w
 
 # Check execution details
 kubectl get hibernateplan dev-offhours -n hibernator-system -o jsonpath='{.status.executions[*]}' | jq
+
+# View active exceptions
+kubectl get scheduleexception -n hibernator-system
+
+# Check exception status
+kubectl get scheduleexception on-site-event -n hibernator-system -o yaml
 
 # View runner job logs
 kubectl logs -n hibernator-system -l hibernator/plan=dev-offhours
@@ -281,15 +294,19 @@ spec:
 - [x] Prometheus metrics for observability
 - [x] E2E test suite (hibernation, wakeup, schedule, recovery cycles)
 - [x] Production-ready Helm charts with RBAC, webhook, monitoring
+- [x] Schedule Exceptions (RFC-0003 Phases 1-3)
+  - [x] Independent ScheduleException CRD with planRef
+  - [x] Three exception types: extend, suspend (with lead time), replace
+  - [x] Automatic expiration and state management
+  - [x] Exception history tracking in plan status
 
-### 🚧 In Progress (P3 - RFC-0003 Implementation)
+### 🚧 In Progress (P3)
 
-- [ ] **Schedule Exceptions & Approval Workflow** (RFC-0003)
-  - [ ] Three exception types: extend, suspend (with lead time), replace
-  - [ ] Four approval options: Slack DM, kubectl plugin, SSO/URL, Dashboard UI
-  - [ ] On-call engineer workflow with email-based approver notification
-  - [ ] Multi-stage approval state machine (Pending → Approved → Active → Expired)
-  - [ ] Full audit trail for compliance
+- [ ] **Schedule Exception Approval Workflows** (RFC-0003 Phase 4)
+  - [ ] Slack DM approval integration with email-based approver notification
+  - [ ] kubectl plugin for CLI-based approvals
+  - [ ] SSO/URL-based approval workflow for enterprise
+  - [ ] Dashboard UI for exception management
 
 ### 📋 Planned (P3-P4)
 
@@ -306,12 +323,12 @@ spec:
 ### 📚 Reference Documentation
 
 See the following for detailed information:
+
 - **Copilot Instructions**: [`.github/copilot-instructions.md`](.github/copilot-instructions.md) — Project architecture, status, development guidelines
 - **Core Principles**: [`.github/instructions/`](.github/instructions/) — Design principles, security, testing, concurrency, API design
 - **Architecture RFC**: [`enhancements/0001-hibernate-operator.md`](enhancements/0001-hibernate-operator.md) — Control Plane + Runner Model design
-- **Schedule Exceptions RFC**: [`enhancements/0003-schedule-exceptions.md`](enhancements/0003-schedule-exceptions.md) — Approval workflow with multi-channel support
-- **Detailed Workplan**: [`enhancements/archived/WORKPLAN.md`](enhancements/archived/WORKPLAN.md) — Historical design decisions and milestones
-- **Agent Guide**: [`AGENTS.md`](AGENTS.md) — Repository conventions and development procedures
+- **Schedule Exceptions RFC**: [`enhancements/0003-schedule-exceptions.md`](enhancements/0003-schedule-exceptions.md) — Temporary schedule deviations and exception types
+- **Historical Workplan**: [`enhancements/archived/WORKPLAN.md`](enhancements/archived/WORKPLAN.md) — Original design decisions and milestones
 
 ## Development
 
@@ -426,8 +443,6 @@ make test-coverage
 │   ├── schedule_test.go           # Schedule evaluation
 │   ├── recovery_test.go           # Error recovery
 │   └── README.md                  # Test documentation
-├── AGENTS.md                        # Agent onboarding & repository conventions
-├── CHANGELOG.md                     # Release notes
 └── README.md                        # This file
 ```
 
@@ -435,24 +450,22 @@ make test-coverage
 
 Contributions welcome! Please:
 
-1. **Start with documentation**: Read [`.github/copilot-instructions.md`](.github/copilot-instructions.md) for project overview
-2. **Follow principles**: Check [`.github/instructions/`](.github/instructions/) for design and coding guidelines
-3. **Review conventions**: See [`AGENTS.md`](AGENTS.md) for repository conventions and development procedures
-4. **Check priorities**: See [`.github/copilot-instructions.md`](.github/copilot-instructions.md#current-implementation-status) for current work
-5. **Open discussion**: Discuss major changes in issues before implementation
-6. **Write tests**: Add unit tests for all new code and integration tests for features
-7. **Update docs**: Keep this README and RFCs updated with your changes
+1. **Read the documentation**: Start with [`.github/copilot-instructions.md`](.github/copilot-instructions.md) for project overview
+2. **Follow principles**: Review [`.github/instructions/`](.github/instructions/) for design and coding guidelines
+3. **Check current work**: See [implementation status](.github/copilot-instructions.md#implementation-status) for priorities
+4. **Discuss first**: Open an issue for major changes before implementation
+5. **Write tests**: Add unit tests for all new code and integration tests for features
+6. **Update docs**: Keep this README and RFCs synchronized with your changes
 
 ## License
 
-Apache License 2.0 - see [LICENSE](LICENSE) for details.
+Apache License 2.0
 
 ## Quick Links
 
 - **Copilot Instructions**: [`.github/copilot-instructions.md`](.github/copilot-instructions.md) — Project guidance & implementation status
 - **Development Principles**: [`.github/instructions/`](.github/instructions/) — Security, testing, concurrency, API design
 - **Architecture RFC**: [`enhancements/0001-hibernate-operator.md`](enhancements/0001-hibernate-operator.md) — Control Plane + Runner Model
-- **Schedule Exceptions RFC**: [`enhancements/0003-schedule-exceptions.md`](enhancements/0003-schedule-exceptions.md) — Approval workflows
-- **Agent Guide**: [`AGENTS.md`](AGENTS.md) — Repository conventions
+- **Schedule Exceptions RFC**: [`enhancements/0003-schedule-exceptions.md`](enhancements/0003-schedule-exceptions.md) — Exception types and future approval workflows
 - **Helm Chart**: [`charts/hibernator/`](charts/hibernator/) — Production deployment
 - **E2E Tests**: [`test/e2e/`](test/e2e/) — Integration test suite
