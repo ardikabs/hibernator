@@ -36,7 +36,7 @@ type mockValidationResult struct {
 
 func TestWebhookServer_HandleHealthz(t *testing.T) {
 	log := logr.Discard()
-	execService := NewExecutionServiceServer(nil, nil, nil)
+	execService := NewExecutionServiceServer(nil, nil)
 
 	ws := &WebhookServer{
 		executionService: execService,
@@ -58,7 +58,7 @@ func TestWebhookServer_HandleHealthz(t *testing.T) {
 
 func TestWebhookServer_HandleLogs_MethodNotAllowed(t *testing.T) {
 	log := logr.Discard()
-	execService := NewExecutionServiceServer(nil, nil, nil)
+	execService := NewExecutionServiceServer(nil, nil)
 
 	ws := &WebhookServer{
 		executionService: execService,
@@ -77,7 +77,7 @@ func TestWebhookServer_HandleLogs_MethodNotAllowed(t *testing.T) {
 
 func TestWebhookServer_HandleProgress_MethodNotAllowed(t *testing.T) {
 	log := logr.Discard()
-	execService := NewExecutionServiceServer(nil, nil, nil)
+	execService := NewExecutionServiceServer(nil, nil)
 
 	ws := &WebhookServer{
 		executionService: execService,
@@ -96,7 +96,7 @@ func TestWebhookServer_HandleProgress_MethodNotAllowed(t *testing.T) {
 
 func TestWebhookServer_HandleCompletion_MethodNotAllowed(t *testing.T) {
 	log := logr.Discard()
-	execService := NewExecutionServiceServer(nil, nil, nil)
+	execService := NewExecutionServiceServer(nil, nil)
 
 	ws := &WebhookServer{
 		executionService: execService,
@@ -115,7 +115,7 @@ func TestWebhookServer_HandleCompletion_MethodNotAllowed(t *testing.T) {
 
 func TestWebhookServer_HandleHeartbeat_MethodNotAllowed(t *testing.T) {
 	log := logr.Discard()
-	execService := NewExecutionServiceServer(nil, nil, nil)
+	execService := NewExecutionServiceServer(nil, nil)
 
 	ws := &WebhookServer{
 		executionService: execService,
@@ -134,7 +134,7 @@ func TestWebhookServer_HandleHeartbeat_MethodNotAllowed(t *testing.T) {
 
 func TestWebhookServer_HandleCallback_MethodNotAllowed(t *testing.T) {
 	log := logr.Discard()
-	execService := NewExecutionServiceServer(nil, nil, nil)
+	execService := NewExecutionServiceServer(nil, nil)
 
 	ws := &WebhookServer{
 		executionService: execService,
@@ -153,7 +153,7 @@ func TestWebhookServer_HandleCallback_MethodNotAllowed(t *testing.T) {
 
 func TestWebhookServer_HandleLogs_NoAuth(t *testing.T) {
 	log := logr.Discard()
-	execService := NewExecutionServiceServer(nil, nil, nil)
+	execService := NewExecutionServiceServer(nil, nil)
 
 	// Create a webhook server without a validator (nil validator will cause auth to fail)
 	ws := &WebhookServer{
@@ -175,7 +175,7 @@ func TestWebhookServer_HandleLogs_NoAuth(t *testing.T) {
 
 func TestWebhookServer_ProcessLog(t *testing.T) {
 	log := logr.Discard()
-	execService := NewExecutionServiceServer(nil, nil, nil)
+	execService := NewExecutionServiceServer(nil, nil)
 
 	ws := &WebhookServer{
 		executionService: execService,
@@ -285,7 +285,7 @@ func TestWebhookServer_ValidateRequest_InvalidFormat(t *testing.T) {
 
 func TestWebhookServer_HandleCallback_InvalidJSON(t *testing.T) {
 	log := logr.Discard()
-	execService := NewExecutionServiceServer(nil, nil, nil)
+	execService := NewExecutionServiceServer(nil, nil)
 
 	ws := &WebhookServer{
 		executionService: execService,
@@ -308,7 +308,7 @@ func TestWebhookServer_HandleCallback_InvalidJSON(t *testing.T) {
 
 func TestWebhookServer_ServerLifecycle(t *testing.T) {
 	log := logr.Discard()
-	execService := NewExecutionServiceServer(nil, nil, nil)
+	execService := NewExecutionServiceServer(nil, nil)
 
 	ws := &WebhookServer{
 		executionService: execService,
@@ -331,7 +331,7 @@ func TestWebhookServer_ServerLifecycle(t *testing.T) {
 
 func TestProcessLog_WithFields(t *testing.T) {
 	log := logr.Discard()
-	execService := NewExecutionServiceServer(nil, nil, nil)
+	execService := NewExecutionServiceServer(nil, nil)
 
 	ws := &WebhookServer{
 		executionService: execService,
@@ -429,7 +429,7 @@ func TestWebhookPayload_Types(t *testing.T) {
 
 func TestWebhookServer_Start_Cancellation(t *testing.T) {
 	log := logr.Discard()
-	execService := NewExecutionServiceServer(nil, nil, nil)
+	execService := NewExecutionServiceServer(nil, nil)
 
 	ws := &WebhookServer{
 		executionService: execService,

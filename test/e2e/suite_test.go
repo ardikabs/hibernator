@@ -39,7 +39,6 @@ import (
 
 	hibernatorv1alpha1 "github.com/ardikabs/hibernator/api/v1alpha1"
 	"github.com/ardikabs/hibernator/internal/controller"
-	"github.com/ardikabs/hibernator/internal/restore"
 	"github.com/ardikabs/hibernator/internal/scheduler"
 )
 
@@ -103,7 +102,6 @@ var _ = BeforeSuite(func() {
 	// Initialize scheduler components
 	planner := scheduler.NewPlanner()
 	evaluator := scheduler.NewScheduleEvaluator()
-	restoreManager := restore.NewManager(k8sClient)
 
 	reconciler = &controller.HibernatePlanReconciler{
 		Client:               mgr.GetClient(),
@@ -111,7 +109,6 @@ var _ = BeforeSuite(func() {
 		Scheme:               mgr.GetScheme(),
 		Planner:              planner,
 		ScheduleEvaluator:    evaluator,
-		RestoreManager:       restoreManager,
 		ControlPlaneEndpoint: "https://hibernator.example.com",
 		RunnerImage:          "ghcr.io/ardikabs/hibernator-runner:test",
 	}

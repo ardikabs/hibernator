@@ -21,7 +21,6 @@ import (
 
 	hibernatorv1alpha1 "github.com/ardikabs/hibernator/api/v1alpha1"
 	"github.com/ardikabs/hibernator/internal/controller"
-	"github.com/ardikabs/hibernator/internal/restore"
 	"github.com/ardikabs/hibernator/internal/scheduler"
 	"github.com/ardikabs/hibernator/internal/streaming/auth"
 	"github.com/ardikabs/hibernator/internal/streaming/server"
@@ -95,7 +94,6 @@ func main() {
 		Scheme:               mgr.GetScheme(),
 		Planner:              scheduler.NewPlanner(),
 		ScheduleEvaluator:    scheduler.NewScheduleEvaluator(),
-		RestoreManager:       restore.NewManager(mgr.GetClient()),
 		ControlPlaneEndpoint: controlPlaneEndpoint,
 		RunnerImage:          runnerImage,
 		RunnerServiceAccount: runnerServiceAccount,
@@ -166,11 +164,11 @@ func startStreamingServers(mgr ctrl.Manager, grpcAddr, wsAddr string) error {
 	eventRecorder := mgr.GetEventRecorderFor("hibernator-streaming")
 
 	// Create shared execution service
-	restoreManager := restore.NewManager(mgr.GetClient())
-	execService := server.NewExecutionServiceServer(mgr.GetClient(), restoreManager, eventRecorder)
+	// Runners persist restore data directly to ConfigMap - controller only orchestrates
+	execService := server.NewExecutionServiceServer(mgr.GetClient(), eventRecorder)
 
 	// Start gRPC server
-	grpcServer := server.NewServer(grpcAddr, clientset, mgr.GetClient(), restoreManager, eventRecorder, log)
+	grpcServer := server.NewServer(grpcAddr, clientset, mgr.GetClient(), eventRecorder, log)
 	go func() {
 		if err := grpcServer.Start(ctx); err != nil {
 			log.Error(err, "gRPC server failed")

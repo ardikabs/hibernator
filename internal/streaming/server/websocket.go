@@ -296,8 +296,8 @@ func (s *WebSocketServer) processMessage(executionID string, msg *WebSocketMessa
 
 // handleLog processes a log entry.
 func (s *WebSocketServer) handleLog(ctx context.Context, entry *streamingv1alpha1.LogEntry) error {
-	// Delegate to business logic layer (StoreLog emits logs with full context)
-	if err := s.execService.StoreLog(ctx, entry); err != nil {
+	// Delegate to business logic layer (EmitLog pipes logs with full context)
+	if err := s.execService.EmitLog(ctx, entry); err != nil {
 		s.log.Error(err, "failed to process log entry")
 		return err
 	}

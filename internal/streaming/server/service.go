@@ -15,7 +15,6 @@ import (
 
 	streamingv1alpha1 "github.com/ardikabs/hibernator/api/streaming/v1alpha1"
 	hibernatorv1alpha1 "github.com/ardikabs/hibernator/api/v1alpha1"
-	"github.com/ardikabs/hibernator/internal/restore"
 )
 
 const (
@@ -49,10 +48,9 @@ type ExecutionState struct {
 
 // ExecutionServiceServer implements the business logic for execution tracking
 type ExecutionServiceServer struct {
-	log            logr.Logger
-	k8sClient      client.Client
-	restoreManager *restore.Manager
-	eventRecorder  record.EventRecorder
+	log           logr.Logger
+	k8sClient     client.Client
+	eventRecorder record.EventRecorder
 
 	executionStatus   map[string]*ExecutionState
 	executionStatusMu sync.RWMutex
@@ -66,7 +64,6 @@ type ExecutionServiceServer struct {
 // NewExecutionServiceServer creates a new ExecutionServiceServer
 func NewExecutionServiceServer(
 	k8sClient client.Client,
-	restoreManager *restore.Manager,
 	eventRecorder record.EventRecorder,
 ) *ExecutionServiceServer {
 	logger := log.Log.WithName("execution-service")
@@ -74,17 +71,16 @@ func NewExecutionServiceServer(
 	return &ExecutionServiceServer{
 		log:             logger,
 		k8sClient:       k8sClient,
-		restoreManager:  restoreManager,
 		eventRecorder:   eventRecorder,
 		executionStatus: make(map[string]*ExecutionState),
 		metadataCache:   make(map[string]*ExecutionMetadata),
 	}
 }
 
-// StoreLog emits a log entry to the controller logs with execution context.
-// This replaces in-memory storage with direct log emission, allowing logs to be
+// EmitLog forwards a log entry to the controller's logging sink with execution context.
+// Logs are piped to the same output as controller logs, allowing them to be
 // viewed via "kubectl logs" on the controller pod with full execution context.
-func (s *ExecutionServiceServer) StoreLog(ctx context.Context, entry *streamingv1alpha1.LogEntry) error {
+func (s *ExecutionServiceServer) EmitLog(ctx context.Context, entry *streamingv1alpha1.LogEntry) error {
 	if entry == nil {
 		return fmt.Errorf("log entry is nil")
 	}
@@ -255,19 +251,8 @@ func (s *ExecutionServiceServer) ReportCompletion(ctx context.Context, req *stre
 		}
 	}
 
-	// Handle restore data if provided
-	if len(req.RestoreData) > 0 {
-		logger.Info("Storing restore data", "executionId", req.ExecutionId)
-		if err := s.storeRestoreData(ctx, req.ExecutionId, string(req.RestoreData)); err != nil {
-			logger.Error(err, "Failed to store restore data")
-			return &streamingv1alpha1.CompletionResponse{
-				Acknowledged: false,
-			}, err
-		}
-	}
-
-	// Evict metadata cache for completed execution
-	s.evictMetadataCache(req.ExecutionId)
+	// Clean up all execution state (metadata cache + execution status)
+	s.cleanupExecution(req.ExecutionId)
 
 	return &streamingv1alpha1.CompletionResponse{
 		Acknowledged: true,
@@ -329,6 +314,55 @@ func (s *ExecutionServiceServer) evictMetadataCache(executionID string) {
 	s.metadataCacheMu.Unlock()
 }
 
+// cleanupExecution removes all state for a completed or failed execution.
+// This prevents memory leaks by cleaning both metadataCache and executionStatus.
+func (s *ExecutionServiceServer) cleanupExecution(executionID string) {
+	s.evictMetadataCache(executionID)
+
+	s.executionStatusMu.Lock()
+	delete(s.executionStatus, executionID)
+	s.executionStatusMu.Unlock()
+}
+
+// StartCleanupRoutine starts a background goroutine to clean up stale executions.
+// This handles cases where runners crash without calling ReportCompletion.
+// staleDuration defines how long an execution can be idle before cleanup (e.g., 1 hour).
+func (s *ExecutionServiceServer) StartCleanupRoutine(ctx context.Context, staleDuration time.Duration) {
+	ticker := time.NewTicker(staleDuration / 2)
+	defer ticker.Stop()
+
+	for {
+		select {
+		case <-ctx.Done():
+			s.log.Info("stopping cleanup routine")
+			return
+		case <-ticker.C:
+			s.cleanupStaleExecutions(staleDuration)
+		}
+	}
+}
+
+// cleanupStaleExecutions removes executions that haven't been updated within staleDuration.
+func (s *ExecutionServiceServer) cleanupStaleExecutions(staleDuration time.Duration) {
+	now := time.Now()
+	var staleIDs []string
+
+	// Collect stale execution IDs (read lock)
+	s.executionStatusMu.RLock()
+	for id, state := range s.executionStatus {
+		if now.Sub(state.LastUpdate) > staleDuration {
+			staleIDs = append(staleIDs, id)
+		}
+	}
+	s.executionStatusMu.RUnlock()
+
+	// Clean up stale executions
+	for _, id := range staleIDs {
+		s.log.Info("cleaning up stale execution", "executionId", id, "staleDuration", staleDuration)
+		s.cleanupExecution(id)
+	}
+}
+
 // getExecutionMetadata retrieves metadata about an execution by querying the runner Job.
 // It queries Jobs by the execution ID label and extracts namespace, plan name, and target name.
 func (s *ExecutionServiceServer) getExecutionMetadata(ctx context.Context, executionID string) (*ExecutionMetadata, error) {
@@ -388,16 +422,4 @@ func (s *ExecutionServiceServer) fetchHibernatePlan(ctx context.Context, namespa
 		return nil, err
 	}
 	return plan, nil
-}
-
-// storeRestoreData stores restore data for an execution
-func (s *ExecutionServiceServer) storeRestoreData(ctx context.Context, executionID string, restoreData string) error {
-	// This is a placeholder - actual implementation would use restoreManager
-	// to persist the restore data to ConfigMap or other storage
-	logger := log.FromContext(ctx)
-	logger.Info("Restore data storage requested",
-		"executionId", executionID,
-		"dataLength", len(restoreData),
-	)
-	return nil
 }

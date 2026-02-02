@@ -27,7 +27,6 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/log/zap"
 
 	hibernatorv1alpha1 "github.com/ardikabs/hibernator/api/v1alpha1"
-	"github.com/ardikabs/hibernator/internal/restore"
 	"github.com/ardikabs/hibernator/internal/scheduler"
 )
 
@@ -187,34 +186,8 @@ var _ = Describe("HibernatePlan Controller", func() {
 		})
 	})
 
-	Context("When testing restore manager", func() {
-		It("Should save and load restore data", func() {
-			restoreMgr := restore.NewManager(k8sClient)
-
-			data := &restore.Data{
-				Target:   "test-target",
-				Executor: "eks",
-				Version:  1,
-				State: map[string]interface{}{
-					"nodeGroups": []interface{}{
-						map[string]interface{}{
-							"name":    "ng-1",
-							"minSize": float64(2),
-						},
-					},
-				},
-			}
-
-			err := restoreMgr.Save(ctx, "test-ns", "restore-test", "test-target", data)
-			Expect(err).NotTo(HaveOccurred())
-
-			loaded, err := restoreMgr.Load(ctx, "test-ns", "restore-test", "test-target")
-			Expect(err).NotTo(HaveOccurred())
-			Expect(loaded).NotTo(BeNil())
-			Expect(loaded.Target).To(Equal("test-target"))
-			Expect(loaded.Executor).To(Equal("eks"))
-		})
-	})
+	// Note: RestoreManager tests are in internal/restore/manager_test.go
+	// The controller does not use RestoreManager - runners persist restore data directly
 
 	Context("When testing schedule evaluation", func() {
 		It("Should correctly determine hibernation state", func() {
@@ -291,7 +264,6 @@ var _ = Describe("HibernatePlan Controller", func() {
 				Scheme:               scheme.Scheme,
 				Planner:              scheduler.NewPlanner(),
 				ScheduleEvaluator:    scheduler.NewScheduleEvaluator(),
-				RestoreManager:       restore.NewManager(k8sClient),
 				ControlPlaneEndpoint: "",
 				RunnerImage:          "",
 				RunnerServiceAccount: "runner-fixed-sa",
@@ -361,7 +333,6 @@ func setupControllerWithManager(mgr ctrl.Manager) error {
 		Scheme:            mgr.GetScheme(),
 		Planner:           scheduler.NewPlanner(),
 		ScheduleEvaluator: scheduler.NewScheduleEvaluator(),
-		RestoreManager:    restore.NewManager(mgr.GetClient()),
 	}).SetupWithManager(mgr)
 }
 

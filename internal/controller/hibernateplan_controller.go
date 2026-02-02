@@ -25,7 +25,6 @@ import (
 
 	hibernatorv1alpha1 "github.com/ardikabs/hibernator/api/v1alpha1"
 	"github.com/ardikabs/hibernator/internal/recovery"
-	"github.com/ardikabs/hibernator/internal/restore"
 	"github.com/ardikabs/hibernator/internal/scheduler"
 )
 
@@ -80,7 +79,6 @@ type HibernatePlanReconciler struct {
 	Scheme            *runtime.Scheme
 	Planner           *scheduler.Planner
 	ScheduleEvaluator *scheduler.ScheduleEvaluator
-	RestoreManager    *restore.Manager
 
 	// ControlPlaneEndpoint is the endpoint for runner streaming.
 	ControlPlaneEndpoint string

@@ -7,7 +7,6 @@ package server
 
 import (
 	"context"
-	"encoding/json"
 	"testing"
 	"time"
 
@@ -23,14 +22,14 @@ import (
 )
 
 func TestNewExecutionServiceServer(t *testing.T) {
-	server := NewExecutionServiceServer(nil, nil, nil)
+	server := NewExecutionServiceServer(nil, nil)
 
 	require.NotNil(t, server, "expected non-nil server")
 	assert.NotNil(t, server.executionStatus, "expected executionStatus to be initialized")
 }
 
 func TestReportProgress(t *testing.T) {
-	server := NewExecutionServiceServer(nil, nil, nil)
+	server := NewExecutionServiceServer(nil, nil)
 
 	tests := []struct {
 		name   string
@@ -85,7 +84,7 @@ func TestReportProgress(t *testing.T) {
 }
 
 func TestReportCompletion(t *testing.T) {
-	server := NewExecutionServiceServer(nil, nil, nil)
+	server := NewExecutionServiceServer(nil, nil)
 
 	tests := []struct {
 		name    string
@@ -112,26 +111,6 @@ func TestReportCompletion(t *testing.T) {
 			},
 			wantErr: false,
 		},
-		{
-			name: "completion with restore data",
-			report: &streamingv1alpha1.CompletionReport{
-				ExecutionId: "exec-restore",
-				Success:     true,
-				DurationMs:  10000,
-				RestoreData: json.RawMessage(`{"instanceId": "i-12345", "state": "stopped"}`),
-			},
-			wantErr: false,
-		},
-		{
-			name: "completion with invalid restore data",
-			report: &streamingv1alpha1.CompletionReport{
-				ExecutionId: "exec-invalid-restore",
-				Success:     true,
-				DurationMs:  1000,
-				RestoreData: json.RawMessage(`{invalid json}`),
-			},
-			wantErr: false, // Should log error but not fail
-		},
 	}
 
 	for _, tt := range tests {
@@ -146,21 +125,18 @@ func TestReportCompletion(t *testing.T) {
 			require.NoError(t, err)
 			assert.True(t, resp.Acknowledged, "expected acknowledged response")
 
-			// Verify state was stored internally
+			// Verify state was cleaned up after completion
 			server.executionStatusMu.RLock()
-			state, exists := server.executionStatus[tt.report.ExecutionId]
+			_, exists := server.executionStatus[tt.report.ExecutionId]
 			server.executionStatusMu.RUnlock()
 
-			require.True(t, exists, "expected state to be stored")
-			assert.True(t, state.Completed, "expected completed to be true")
-			assert.Equal(t, tt.report.Success, state.Success)
-			assert.Equal(t, tt.report.ErrorMessage, state.Error)
+			assert.False(t, exists, "expected state to be cleaned up after completion")
 		})
 	}
 }
 
 func TestHeartbeat(t *testing.T) {
-	server := NewExecutionServiceServer(nil, nil, nil)
+	server := NewExecutionServiceServer(nil, nil)
 
 	// First, create an execution state
 	_, _ = server.ReportProgress(context.Background(), &streamingv1alpha1.ProgressReport{
@@ -195,7 +171,7 @@ func TestHeartbeat(t *testing.T) {
 }
 
 func TestHeartbeat_NonExistentExecution(t *testing.T) {
-	server := NewExecutionServiceServer(nil, nil, nil)
+	server := NewExecutionServiceServer(nil, nil)
 
 	req := &streamingv1alpha1.HeartbeatRequest{
 		ExecutionId: "non-existent",
@@ -206,7 +182,7 @@ func TestHeartbeat_NonExistentExecution(t *testing.T) {
 	assert.True(t, resp.Acknowledged, "expected acknowledged response even for non-existent execution")
 }
 
-func TestStoreLog(t *testing.T) {
+func TestEmitLog(t *testing.T) {
 	// Create a fake client with a runner Job
 	scheme := runtime.NewScheme()
 	require.NoError(t, batchv1.AddToScheme(scheme))
@@ -229,9 +205,9 @@ func TestStoreLog(t *testing.T) {
 		WithObjects(job).
 		Build()
 
-	server := NewExecutionServiceServer(fakeClient, nil, nil)
+	server := NewExecutionServiceServer(fakeClient, nil)
 
-	// Test storing a log entry
+	// Test emitting a log entry
 	entry := &streamingv1alpha1.LogEntry{
 		ExecutionId: "test-plan-test-target-1234567890",
 		Timestamp:   time.Now().Format(time.RFC3339),
@@ -242,18 +218,18 @@ func TestStoreLog(t *testing.T) {
 		},
 	}
 
-	err := server.StoreLog(context.Background(), entry)
+	err := server.EmitLog(context.Background(), entry)
 	require.NoError(t, err)
 }
 
-func TestStoreLog_NilEntry(t *testing.T) {
-	server := NewExecutionServiceServer(nil, nil, nil)
+func TestEmitLog_NilEntry(t *testing.T) {
+	server := NewExecutionServiceServer(nil, nil)
 
-	err := server.StoreLog(context.Background(), nil)
+	err := server.EmitLog(context.Background(), nil)
 	require.Error(t, err, "expected error for nil entry")
 }
 
-func TestStoreLog_JobNotFound(t *testing.T) {
+func TestEmitLog_JobNotFound(t *testing.T) {
 	// Create a fake client without any Jobs
 	scheme := runtime.NewScheme()
 	require.NoError(t, batchv1.AddToScheme(scheme))
@@ -262,9 +238,9 @@ func TestStoreLog_JobNotFound(t *testing.T) {
 		WithScheme(scheme).
 		Build()
 
-	server := NewExecutionServiceServer(fakeClient, nil, nil)
+	server := NewExecutionServiceServer(fakeClient, nil)
 
-	// Test storing a log entry when Job doesn't exist
+	// Test emitting a log entry when Job doesn't exist
 	entry := &streamingv1alpha1.LogEntry{
 		ExecutionId: "nonexistent-execution",
 		Timestamp:   time.Now().Format(time.RFC3339),
@@ -273,8 +249,8 @@ func TestStoreLog_JobNotFound(t *testing.T) {
 	}
 
 	// Should not error - just logs with "unknown" metadata
-	err := server.StoreLog(context.Background(), entry)
-	require.NoError(t, err, "StoreLog() should not error when Job not found")
+	err := server.EmitLog(context.Background(), entry)
+	require.NoError(t, err, "EmitLog() should not error when Job not found")
 }
 
 func TestGetExecutionMetadata(t *testing.T) {
@@ -299,7 +275,7 @@ func TestGetExecutionMetadata(t *testing.T) {
 		WithObjects(job).
 		Build()
 
-	server := NewExecutionServiceServer(fakeClient, nil, nil)
+	server := NewExecutionServiceServer(fakeClient, nil)
 
 	meta, err := server.getExecutionMetadata(context.Background(), "my-plan-my-target-1234567890")
 	require.NoError(t, err)
@@ -318,7 +294,7 @@ func TestGetExecutionMetadata_NotFound(t *testing.T) {
 		WithScheme(scheme).
 		Build()
 
-	server := NewExecutionServiceServer(fakeClient, nil, nil)
+	server := NewExecutionServiceServer(fakeClient, nil)
 
 	_, err := server.getExecutionMetadata(context.Background(), "nonexistent-execution")
 	require.Error(t, err, "expected error for non-existent execution")
@@ -345,7 +321,7 @@ func TestGetExecutionMetadata_MissingPlanLabel(t *testing.T) {
 		WithObjects(job).
 		Build()
 
-	server := NewExecutionServiceServer(fakeClient, nil, nil)
+	server := NewExecutionServiceServer(fakeClient, nil)
 
 	_, err := server.getExecutionMetadata(context.Background(), "broken-execution")
 	require.Error(t, err, "expected error for missing plan label")
@@ -373,7 +349,7 @@ func TestGetOrCacheExecutionMetadata(t *testing.T) {
 		WithObjects(job).
 		Build()
 
-	server := NewExecutionServiceServer(fakeClient, nil, nil)
+	server := NewExecutionServiceServer(fakeClient, nil)
 
 	// First call should query K8s API and cache the result
 	meta1, err := server.getOrCacheExecutionMetadata(context.Background(), "cached-exec-123")
@@ -394,7 +370,7 @@ func TestGetOrCacheExecutionMetadata(t *testing.T) {
 }
 
 func TestEvictMetadataCache(t *testing.T) {
-	server := NewExecutionServiceServer(nil, nil, nil)
+	server := NewExecutionServiceServer(nil, nil)
 
 	// Manually add metadata to cache
 	server.metadataCacheMu.Lock()
@@ -438,7 +414,7 @@ func TestFetchHibernatePlan(t *testing.T) {
 		WithObjects(plan).
 		Build()
 
-	server := NewExecutionServiceServer(fakeClient, nil, nil)
+	server := NewExecutionServiceServer(fakeClient, nil)
 
 	result, err := server.fetchHibernatePlan(context.Background(), "test-namespace", "test-plan")
 	require.NoError(t, err)
@@ -454,14 +430,14 @@ func TestFetchHibernatePlan_NotFound(t *testing.T) {
 		WithScheme(scheme).
 		Build()
 
-	server := NewExecutionServiceServer(fakeClient, nil, nil)
+	server := NewExecutionServiceServer(fakeClient, nil)
 
 	_, err := server.fetchHibernatePlan(context.Background(), "test-namespace", "nonexistent")
 	require.Error(t, err, "expected error for non-existent plan")
 }
 
 func TestConcurrentAccess(t *testing.T) {
-	server := NewExecutionServiceServer(nil, nil, nil)
+	server := NewExecutionServiceServer(nil, nil)
 
 	done := make(chan bool)
 
@@ -492,7 +468,7 @@ func TestConcurrentAccess(t *testing.T) {
 }
 
 func TestMultipleExecutions(t *testing.T) {
-	server := NewExecutionServiceServer(nil, nil, nil)
+	server := NewExecutionServiceServer(nil, nil)
 
 	execIDs := []string{"exec-1", "exec-2", "exec-3"}
 
@@ -516,4 +492,179 @@ func TestMultipleExecutions(t *testing.T) {
 		expectedProgress := int32((i + 1) * 25)
 		assert.Equal(t, expectedProgress, state.ProgressPercent, "execution %s progress mismatch", id)
 	}
+}
+
+func TestCleanupExecution(t *testing.T) {
+	server := &ExecutionServiceServer{
+		metadataCache:   make(map[string]*ExecutionMetadata),
+		executionStatus: make(map[string]*ExecutionState),
+	}
+
+	execID := "exec-to-cleanup"
+
+	// Pre-populate both caches
+	server.metadataCacheMu.Lock()
+	server.metadataCache[execID] = &ExecutionMetadata{
+		Namespace:   "test-ns",
+		PlanName:    "test-plan",
+		TargetName:  "test-target",
+		ExecutionID: execID,
+	}
+	server.metadataCacheMu.Unlock()
+
+	server.executionStatusMu.Lock()
+	server.executionStatus[execID] = &ExecutionState{
+		ExecutionID:     execID,
+		ProgressPercent: 50,
+		LastUpdate:      time.Now(),
+	}
+	server.executionStatusMu.Unlock()
+
+	// Verify both exist
+	server.metadataCacheMu.RLock()
+	_, metaExists := server.metadataCache[execID]
+	server.metadataCacheMu.RUnlock()
+	require.True(t, metaExists, "expected metadata in cache before cleanup")
+
+	server.executionStatusMu.RLock()
+	_, statusExists := server.executionStatus[execID]
+	server.executionStatusMu.RUnlock()
+	require.True(t, statusExists, "expected status in cache before cleanup")
+
+	// Cleanup
+	server.cleanupExecution(execID)
+
+	// Verify both are removed
+	server.metadataCacheMu.RLock()
+	_, metaExists = server.metadataCache[execID]
+	server.metadataCacheMu.RUnlock()
+	assert.False(t, metaExists, "expected metadata to be removed after cleanup")
+
+	server.executionStatusMu.RLock()
+	_, statusExists = server.executionStatus[execID]
+	server.executionStatusMu.RUnlock()
+	assert.False(t, statusExists, "expected status to be removed after cleanup")
+}
+
+func TestCleanupStaleExecutions(t *testing.T) {
+	server := &ExecutionServiceServer{
+		metadataCache:   make(map[string]*ExecutionMetadata),
+		executionStatus: make(map[string]*ExecutionState),
+	}
+
+	staleDuration := 10 * time.Minute
+	now := time.Now()
+
+	// Create a stale execution (older than staleDuration)
+	staleExecID := "stale-exec"
+	server.metadataCacheMu.Lock()
+	server.metadataCache[staleExecID] = &ExecutionMetadata{
+		Namespace:   "test-ns",
+		PlanName:    "test-plan",
+		TargetName:  "stale-target",
+		ExecutionID: staleExecID,
+	}
+	server.metadataCacheMu.Unlock()
+
+	server.executionStatusMu.Lock()
+	server.executionStatus[staleExecID] = &ExecutionState{
+		ExecutionID:     staleExecID,
+		ProgressPercent: 30,
+		LastUpdate:      now.Add(-15 * time.Minute), // 15 min ago - stale
+	}
+	server.executionStatusMu.Unlock()
+
+	// Create a fresh execution (within staleDuration)
+	freshExecID := "fresh-exec"
+	server.metadataCacheMu.Lock()
+	server.metadataCache[freshExecID] = &ExecutionMetadata{
+		Namespace:   "test-ns",
+		PlanName:    "test-plan",
+		TargetName:  "fresh-target",
+		ExecutionID: freshExecID,
+	}
+	server.metadataCacheMu.Unlock()
+
+	server.executionStatusMu.Lock()
+	server.executionStatus[freshExecID] = &ExecutionState{
+		ExecutionID:     freshExecID,
+		ProgressPercent: 50,
+		LastUpdate:      now.Add(-5 * time.Minute), // 5 min ago - fresh
+	}
+	server.executionStatusMu.Unlock()
+
+	// Run cleanup
+	server.cleanupStaleExecutions(staleDuration)
+
+	// Verify stale execution is removed
+	server.executionStatusMu.RLock()
+	_, staleExists := server.executionStatus[staleExecID]
+	server.executionStatusMu.RUnlock()
+	assert.False(t, staleExists, "expected stale execution to be removed")
+
+	server.metadataCacheMu.RLock()
+	_, staleMetaExists := server.metadataCache[staleExecID]
+	server.metadataCacheMu.RUnlock()
+	assert.False(t, staleMetaExists, "expected stale metadata to be removed")
+
+	// Verify fresh execution is still there
+	server.executionStatusMu.RLock()
+	_, freshExists := server.executionStatus[freshExecID]
+	server.executionStatusMu.RUnlock()
+	assert.True(t, freshExists, "expected fresh execution to remain")
+
+	server.metadataCacheMu.RLock()
+	_, freshMetaExists := server.metadataCache[freshExecID]
+	server.metadataCacheMu.RUnlock()
+	assert.True(t, freshMetaExists, "expected fresh metadata to remain")
+}
+
+func TestStartCleanupRoutine(t *testing.T) {
+	server := &ExecutionServiceServer{
+		metadataCache:   make(map[string]*ExecutionMetadata),
+		executionStatus: make(map[string]*ExecutionState),
+	}
+
+	// Use short durations for testing
+	staleDuration := 100 * time.Millisecond
+
+	// Create a stale execution
+	staleExecID := "cleanup-routine-stale"
+	server.metadataCacheMu.Lock()
+	server.metadataCache[staleExecID] = &ExecutionMetadata{
+		Namespace:   "test-ns",
+		PlanName:    "test-plan",
+		TargetName:  "stale-target",
+		ExecutionID: staleExecID,
+	}
+	server.metadataCacheMu.Unlock()
+
+	server.executionStatusMu.Lock()
+	server.executionStatus[staleExecID] = &ExecutionState{
+		ExecutionID:     staleExecID,
+		ProgressPercent: 30,
+		LastUpdate:      time.Now().Add(-200 * time.Millisecond), // Already stale
+	}
+	server.executionStatusMu.Unlock()
+
+	// Start cleanup routine with cancellable context
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	go server.StartCleanupRoutine(ctx, staleDuration)
+
+	// Wait for at least one cleanup cycle (staleDuration/2 = 50ms, wait a bit more)
+	// Use require.Eventually to avoid flaky tests
+	require.Eventually(t, func() bool {
+		server.executionStatusMu.RLock()
+		_, exists := server.executionStatus[staleExecID]
+		server.executionStatusMu.RUnlock()
+		return !exists
+	}, 500*time.Millisecond, 10*time.Millisecond, "expected cleanup routine to remove stale execution")
+
+	// Verify metadata is also cleaned up
+	server.metadataCacheMu.RLock()
+	_, metaExists := server.metadataCache[staleExecID]
+	server.metadataCacheMu.RUnlock()
+	assert.False(t, metaExists, "expected metadata to be cleaned up")
 }

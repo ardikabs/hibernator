@@ -363,8 +363,7 @@ func TestWebSocketClient_ReportCompletion(t *testing.T) {
 	client.Connect(context.Background())
 	defer client.Close()
 
-	restoreData := []byte(`{"state": "saved"}`)
-	err := client.ReportCompletion(context.Background(), true, "", 5000, restoreData)
+	err := client.ReportCompletion(context.Background(), true, "", 5000)
 	if err != nil {
 		t.Fatalf("ReportCompletion() error = %v", err)
 	}

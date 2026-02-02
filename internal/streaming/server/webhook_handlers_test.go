@@ -23,7 +23,7 @@ import (
 // testWebhookServer creates a webhook server with mocked dependencies for testing
 func testWebhookServer(t *testing.T) *WebhookServer {
 	log := logr.Discard()
-	execService := NewExecutionServiceServer(nil, nil, nil)
+	execService := NewExecutionServiceServer(nil, nil)
 
 	return &WebhookServer{
 		executionService: execService,

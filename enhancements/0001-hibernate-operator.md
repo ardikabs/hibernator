@@ -223,7 +223,7 @@ Last updated: 2026-02-02
 | Validation webhook | `api/v1alpha1/hibernateplan_webhook.go` | DAG cycle detection, cron validation, target uniqueness |
 | Webhook tests | `api/v1alpha1/hibernateplan_webhook_test.go` | Full validation coverage |
 | Runner SA configuration | `cmd/controller/main.go`, `internal/controller/hibernateplan_controller.go` | Fixed runner ServiceAccount configured via controller flag |
-| Integration tests | `internal/controller/hibernateplan_controller_test.go` | envtest-based, restore manager, schedule evaluation |
+| Integration tests | `internal/controller/hibernateplan_controller_test.go` | envtest-based, schedule evaluation |
 | Webhook manifests | `config/webhook/webhook.yaml` | ValidatingWebhookConfiguration, cert-manager integration |
 | Runner RBAC | `config/rbac/runner_role.yaml` | Minimal ClusterRole for runner pods (connectors, secrets, ConfigMaps) |
 

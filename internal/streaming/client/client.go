@@ -33,7 +33,8 @@ type StreamingClient interface {
 	ReportProgress(ctx context.Context, phase string, percent int32, message string) error
 
 	// ReportCompletion sends a completion report to the server.
-	ReportCompletion(ctx context.Context, success bool, errorMsg string, durationMs int64, restoreData []byte) error
+	// Note: Restore data is persisted directly by runner to ConfigMap, not sent via streaming.
+	ReportCompletion(ctx context.Context, success bool, errorMsg string, durationMs int64) error
 
 	// Close closes the connection.
 	Close() error
@@ -243,9 +244,10 @@ func (c *AutoClient) ReportProgress(ctx context.Context, phase string, percent i
 }
 
 // ReportCompletion reports execution completion.
-func (c *AutoClient) ReportCompletion(ctx context.Context, success bool, errorMsg string, durationMs int64, restoreData []byte) error {
+// Note: Restore data is persisted directly by runner to ConfigMap, not sent via streaming.
+func (c *AutoClient) ReportCompletion(ctx context.Context, success bool, errorMsg string, durationMs int64) error {
 	if c.active != nil {
-		return c.active.ReportCompletion(ctx, success, errorMsg, durationMs, restoreData)
+		return c.active.ReportCompletion(ctx, success, errorMsg, durationMs)
 	}
 	c.log.Info("completion (no active connection)", "success", success, "error", errorMsg)
 	return nil

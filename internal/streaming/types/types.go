@@ -75,12 +75,12 @@ type ProgressResponse struct {
 }
 
 // CompletionReport reports the final result of an execution (internal representation).
+// Note: RestoreData removed - runners persist directly to ConfigMap.
 type CompletionReport struct {
 	ExecutionID  string    `json:"executionId"`
 	Success      bool      `json:"success"`
 	ErrorMessage string    `json:"errorMessage,omitempty"`
 	DurationMs   int64     `json:"durationMs"`
-	RestoreData  []byte    `json:"restoreData,omitempty"`
 	Timestamp    time.Time `json:"timestamp"`
 }
 
@@ -91,15 +91,13 @@ func (c *CompletionReport) ToProto() *streamingv1alpha1.CompletionReport {
 		Success:      c.Success,
 		ErrorMessage: c.ErrorMessage,
 		DurationMs:   c.DurationMs,
-		RestoreData:  c.RestoreData,
 		Timestamp:    c.Timestamp.Format(time.RFC3339),
 	}
 }
 
 // CompletionResponse acknowledges a completion report.
 type CompletionResponse struct {
-	Acknowledged bool   `json:"acknowledged"`
-	RestoreRef   string `json:"restoreRef,omitempty"`
+	Acknowledged bool `json:"acknowledged"`
 }
 
 // HeartbeatRequest is a keep-alive message (internal representation).
@@ -134,6 +132,5 @@ type WebhookPayload struct {
 // WebhookResponse is the response from a webhook callback.
 type WebhookResponse struct {
 	Acknowledged bool   `json:"acknowledged"`
-	RestoreRef   string `json:"restoreRef,omitempty"`
 	Error        string `json:"error,omitempty"`
 }
