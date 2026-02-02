@@ -32,23 +32,23 @@ Hibernator is a Kubernetes operator that provides centralized, declarative manag
 ## Architecture
 
 ```
-┌─────────────────────────────────────────────────────────┐
-│                   Control Plane                          │
-│  ┌────────────────────────────────────────────────┐     │
-│  │  HibernatePlan Controller                       │     │
-│  │  - Schedule evaluation                          │     │
-│  │  - Dependency resolution (DAG/Staged/Parallel)  │     │
-│  │  - Job lifecycle management                     │     │
-│  │  - Status ledger updates                        │     │
-│  └────────────────────────────────────────────────┘     │
-│                         │                                │
-│  ┌────────────────────────────────────────────────┐     │
-│  │  Streaming Server (gRPC + Webhook)             │     │
-│  │  - TokenReview authentication                   │     │
-│  │  - Log aggregation                              │     │
-│  │  - Progress tracking                            │     │
-│  └────────────────────────────────────────────────┘     │
-└─────────────────────────────────────────────────────────┘
+┌──────────────────────────────────────────────────────┐
+│                   Control Plane                      │
+│  ┌────────────────────────────────────────────────┐  │
+│  │  HibernatePlan Controller                      │  │
+│  │  - Schedule evaluation                         │  │
+│  │  - Dependency resolution (DAG/Staged/Parallel) │  │
+│  │  - Job lifecycle management                    │  │
+│  │  - Status ledger updates                       │  │
+│  └────────────────────────────────────────────────┘  │
+│                         │                            │
+│  ┌────────────────────────────────────────────────┐  │
+│  │  Streaming Server (gRPC + Webhook)             │  │
+│  │  - TokenReview authentication                  │  │
+│  │  - Log aggregation                             │  │
+│  │  - Progress tracking                           │  │
+│  └────────────────────────────────────────────────┘  │
+└──────────────────────────────────────────────────────┘
                           │
         ┌─────────────────┼─────────────────┐
         ▼                 ▼                 ▼
