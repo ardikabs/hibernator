@@ -1,20 +1,21 @@
 <!--
 RFC: 0003
-Title: Temporary Schedule Exceptions and Overrides
+Title: Temporary Schedule Exceptions via Independent CRD
 Author: Hibernator Team
-Status: Proposed
+Status: Implemented (Phase 1-3)
 Date: 2026-01-29
+Updated: 2026-02-02
 -->
 
-# RFC 0003 — Temporary Schedule Exceptions and Overrides
+# RFC 0003 — Temporary Schedule Exceptions via Independent CRD
 
-**Keywords:** Schedule-Exceptions, Maintenance-Windows, Lead-Time, Time-Bound, Extend, Suspend, Replace, Emergency-Events, Validation, Status-Tracking
+**Keywords:** Schedule-Exceptions, Maintenance-Windows, Lead-Time, Time-Bound, Extend, Suspend, Replace, Emergency-Events, Validation, Status-Tracking, Independent-CRD, GitOps
 
-**Status:** Proposed (Not Yet Implemented)
+**Status:** Implemented ✅ (Phase 1-3 Complete, Phase 4 Pending)
 
 ## Summary
 
-Introduce time-bound schedule exceptions to handle temporary deviations from the planned hibernation schedule. Exceptions are part of the schedule configuration and allow teams to add hibernation windows, prevent hibernation (suspend), or completely replace the schedule without modifying the base HibernatePlan.
+Introduce `ScheduleException` as an independent CRD that references HibernatePlan to enable temporary schedule deviations. This design separates exception lifecycle from plan lifecycle, enabling GitOps-friendly temporary schedule modifications without modifying the base HibernatePlan. Single active exception per plan constraint simplifies merge semantics and ensures clear intent.
 
 ## Motivation
 
@@ -26,35 +27,110 @@ In real-world scenarios, infrastructure needs fluctuate:
 - **Regional team support**: Supporting offshore teams across different time zones
 
 **Example use case**:
+
 A team normally hibernates services 20:00-06:00 on weekdays. However, for the next month, they're supporting an on-site event:
+
 - Saturday 06:00-11:00: Services must remain active (normally hibernated)
 - Sunday 06:00-11:00: Services must remain active (normally hibernated)
 - Weekdays 01:00-06:00: Additional early-morning support window
 - After 1 month: Revert to normal schedule automatically
 
 **Current limitations**:
+
 - No way to override schedule without recreating HibernatePlan
 - Manual intervention required to pause/resume hibernation
 - No time-bound exception mechanism
+- Embedded exceptions in HibernatePlan complicate GitOps workflow (every temporary change modifies plan spec)
 
 ## Goals
 
-- Enable temporary schedule exceptions as part of schedule configuration
+- Enable temporary schedule exceptions via independent CRD (not embedded in HibernatePlan)
 - Support three exception types: "extend" (add windows), "suspend" (carve-out with lead time), "replace" (full override)
+- Enforce single active exception per plan for predictable behavior
 - Provide lead time configuration for suspensions to prevent mid-process hibernation interruption
 - Automatically expire exceptions to prevent stale overrides
-- Provide clear visibility into active exceptions in status
+- Provide clear visibility into exception history via status tracking
+- Enable GitOps-friendly workflow where exceptions are separate commits from plan changes
 
 ## Non-Goals
 
-- Support infinite exceptions (time-bound only)
-- Complex boolean logic (keep it simple: extend/suspend/replace)
+- Support multiple simultaneous active exceptions per plan (use single active exception for simplicity)
+- Support infinite exceptions (time-bound only, max 90 days)
+- Implement approval workflow in initial version (designed for future extension)
 
 ## Proposal
 
-### API Changes
+This RFC proposes introducing `ScheduleException` as a new independent CRD that references `HibernatePlan` via `planRef`. This design offers several advantages over embedding exceptions directly in the HibernatePlan spec:
 
-Add `exceptions` field under `schedule` to define temporary exceptions to the hibernation schedule:
+**Design Rationale:**
+
+1. **GitOps-Friendly**: Temporary exceptions don't modify the base plan. Teams can commit exceptions separately and they auto-expire without plan changes.
+2. **Clear Ownership**: Exceptions have independent lifecycle. Creation, expiration, and deletion don't trigger plan spec changes.
+3. **Audit Trail**: Old exceptions remain as CRs with `state: Expired` for compliance and cost tracking.
+4. **RBAC Flexibility**: Teams can grant exception-creation permissions without allowing plan modification.
+5. **Simple Semantics**: Single active exception per plan eliminates complex merge logic and ordering concerns.
+
+### CRD Design
+
+#### ScheduleException Spec
+
+```yaml
+apiVersion: hibernator.ardikabs.com/v1alpha1
+kind: ScheduleException
+metadata:
+  name: on-site-event-override
+  namespace: hibernator-system  # Must match HibernatePlan namespace
+  labels:
+    hibernator.ardikabs.com/plan: event-support  # Auto-set by controller
+spec:
+  # Reference to the HibernatePlan this exception applies to
+  planRef:
+    name: event-support
+    namespace: hibernator-system  # Optional, defaults to exception namespace
+
+  # Exception period
+  validFrom: "2026-01-29T00:00:00Z"
+  validUntil: "2026-02-28T23:59:59Z"
+
+  # Exception type: extend, suspend, or replace
+  type: extend
+
+  # Lead time (only for suspend type)
+  # Prevents NEW hibernation starts within this buffer before suspension window
+  leadTime: "1h"  # Format: duration string (e.g., "30m", "1h", "3600s")
+
+  # Schedule windows (meaning depends on type)
+  windows:
+    - start: "06:00"
+      end: "11:00"
+      daysOfWeek: ["Saturday", "Sunday"]
+    - start: "01:00"
+      end: "06:00"
+      daysOfWeek: ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday"]
+
+  # Future: Approval workflow fields (commented for MVP)
+  # approvalRequired: true
+  # approverEmails:
+  #   - "manager@company.com"
+  #   - "cto@company.com"
+
+status:
+  # Current exception state
+  state: Active  # Active | Expired
+
+  # Timestamps
+  appliedAt: "2026-01-29T00:05:23Z"
+  expiredAt: null  # Set when state transitions to Expired
+
+  # Diagnostic message
+  message: "Exception active, expires in 29 days"
+
+  # Future: Approval tracking
+  # approvalState: Pending | Approved | Rejected
+  # approvals: []
+```
+
+#### HibernatePlan Status Extension
 
 ```yaml
 apiVersion: hibernator.ardikabs.com/v1alpha1
@@ -68,218 +144,403 @@ spec:
       - start: "20:00"
         end: "06:00"
         daysOfWeek: ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday"]
-
-    # NEW: Temporary schedule exceptions (part of schedule configuration)
-    exceptions:
-      - name: "on-site-event"
-        description: "Team on-site event support - 1 month"
-        validFrom: "2026-01-29T00:00:00Z"
-        validUntil: "2026-02-28T23:59:59Z"
-
-        # Type of exception: "extend", "suspend", or "replace"
-        type: "extend"
-
-        # Windows (meaning depends on exception type)
-        windows:
-          - start: "06:00"
-            end: "11:00"
-            daysOfWeek: ["Saturday", "Sunday"]
-          - start: "01:00"
-            end: "06:00"
-            daysOfWeek: ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday"]
-
   targets: [...]
+
+status:
+  phase: "Active"
+
+  # NEW: Exception history (max 10 entries, expired pruned first)
+  activeExceptions:
+    - name: "on-site-event-override"
+      type: "extend"
+      validFrom: "2026-01-29T00:00:00Z"
+      validUntil: "2026-02-28T23:59:59Z"
+      state: "Active"
+      appliedAt: "2026-01-29T00:05:23Z"
+    - name: "holiday-week-2025"
+      type: "replace"
+      validFrom: "2025-12-24T00:00:00Z"
+      validUntil: "2025-12-31T23:59:59Z"
+      state: "Expired"
+      appliedAt: "2025-12-24T00:02:11Z"
+      expiredAt: "2025-12-31T23:59:59Z"
 ```
 
 ### Exception Types
 
-**1. Extend** (`type: extend`)
-- **Meaning**: Apply these windows IN ADDITION to the base `offHours`
-- **Use case**: "Hibernate during these additional times (e.g., weekend support, early morning)"
-- **Behavior**: Union of base `offHours` + exception windows
+#### 1. Extend (`type: extend`)
 
-**2. Suspend** (`type: suspend`)
-- **Meaning**: Prevent hibernation during this window (carve-out from hibernation)
-- **Use case**: "Keep services awake during this window (e.g., maintenance, incident response, deployment)"
-- **Behavior**: Subtract these windows from the combined hibernation schedule
-- **Lead time**: Specifies buffer period before suspension begins where hibernation should not start
-  - Default: "0s" (no buffer)
-  - Format: String duration (e.g., "3600s", "1h", "60m")
-  - Example: `leadTime: "1h"` → Don't start hibernation within 1 hour before suspension
+**Meaning**: Apply exception windows IN ADDITION to the base `offHours`
 
-**3. Replace** (`type: replace`)
-- **Meaning**: Completely replace base schedule during this period
-- **Use case**: "Temporary schedule change (e.g., holiday mode, different timezone support)"
-- **Behavior**: Use only extension windows during this period, ignore base `offHours`
+**Use case**: "Hibernate during these additional times (e.g., weekend support, early morning)"
 
-### Status Tracking
+**Behavior**: Union of base `offHours` + exception windows
 
-Add `activeExceptions` and `expiredExceptions` to `HibernatePlanStatus`:
+**Example**:
 
 ```yaml
-status:
-  phase: "Active"
-  activeExceptions:
-    - name: "on-site-event"
-      type: "extend"
-      validUntil: "2026-02-28T23:59:59Z"
-      reason: "Active: 15 days remaining"
-
-  expiredExceptions:
-    - name: "on-site-event"
-      expiredAt: "2026-02-28T23:59:59Z"
+type: extend
+windows:
+  - start: "06:00"
+    end: "11:00"
+    daysOfWeek: ["Saturday", "Sunday"]
 ```
 
-### Semantics
+**Effect**: If base hibernates Mon-Fri 20:00-06:00, exception adds Sat-Sun 06:00-11:00 hibernation.
 
-**Schedule Evaluation Logic**:
+#### 2. Suspend (`type: suspend`)
 
-1. Start with base `offHours` windows from schedule
-2. Check if current time has any active exceptions
-3. For `extend` type:
-   - Add these windows to the hibernation schedule
-   - Union of base + exception windows
-4. For `suspend` type:
-   - Check if current time falls within suspension window OR within lead time window
-   - If yes, do NOT start hibernation (hold/delay)
-   - Remove these windows from the combined hibernation schedule
-   - Behavior: Subtract from schedule + prevent hibernation start if lead time active
-5. For `replace` type:
-   - Use only exception windows during this period (ignore base offHours)
-6. Remove expired exceptions from `activeExceptions` during reconciliation
+**Meaning**: Prevent hibernation during this window (carve-out from hibernation)
 
-**Lead Time Semantics** (for `suspend` type):
+**Use case**: "Keep services awake during this window (e.g., maintenance, incident response, deployment)"
+
+**Behavior**: Subtract exception windows from the combined hibernation schedule
+
+**Lead Time**: Specifies buffer period before suspension begins where hibernation should NOT start
+
+- Default: "" (no buffer)
+- Format: Duration string (e.g., "30m", "1h", "3600s")
+- Example: `leadTime: "1h"` → Don't start hibernation within 1 hour before suspension window
+
+**Critical Edge Case**: Lead time only prevents **NEW hibernation starts**. If hibernation already began before the lead time window, it continues normally.
+
+**Example**:
+
+```yaml
+type: suspend
+leadTime: "1h"
+windows:
+  - start: "21:00"
+    end: "02:00"
+    daysOfWeek: ["Saturday"]
 ```
-Base schedule: 20:00-06:00 hibernation
-Suspend: 21:00-02:00 (keep awake)
-Lead time: 3600s (1 hour)
 
-Timeline:
-20:00: Check for hibernation → Lead time zone active (20:00-21:00) → DON'T start
-       Reschedule to 02:00 (after suspension ends)
-21:00-02:00: Suspension active → Stay awake
+**Timeline**:
+
+```
+19:00: Normal operations (not in hibernation window)
+20:00: Base schedule says hibernate, but lead time active (20:00-21:00)
+       → DON'T start hibernation (reschedule check for 02:00)
+21:00-02:00: Suspension window active → Stay awake
 02:00: Suspension ended, lead time passed → Hibernation can start
+
+Alternative scenario (hibernation already started):
+18:00: Hibernation started (before lead time window)
+20:00-21:00: Lead time window → No effect (hibernation already running)
+21:00: Suspension starts → Wake up resources
 ```
 
-**Precedence**:
-- Lead time is checked before hibernation starts
-- If in lead time or active suspension, hibernation is delayed
-- Base schedule is always evaluated when no exceptions active
-- Multiple non-overlapping exceptions allowed
-- For overlapping exceptions: explicit validation or controller rejects
+#### 3. Replace (`type: replace`)
+
+**Meaning**: Completely replace base schedule during exception period
+
+**Use case**: "Temporary schedule change (e.g., holiday mode, different timezone support)"
+
+**Behavior**: Use ONLY exception windows during valid period, ignore base `offHours`
+
+**Example**:
+
+```yaml
+type: replace
+validFrom: "2026-12-24T00:00:00Z"
+validUntil: "2026-12-31T23:59:59Z"
+windows:
+  - start: "00:00"
+    end: "23:59"
+    daysOfWeek: ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"]
+```
+
+**Effect**: During Dec 24-31, ignore normal weekday schedule and hibernate 24/7.
+
+### Reference-Based Association
+
+ScheduleException and HibernatePlan are linked via:
+
+1. **planRef** in exception spec (explicitly names the plan)
+2. **Label** `hibernator.ardikabs.com/plan: <plan-name>` (auto-set by controller for querying)
+3. **Same namespace constraint** (enforced by webhook)
+4. **Status tracking** in HibernatePlan (maintains history of active/expired exceptions)
+
+**No owner reference**: Exceptions are independent resources. Manual deletion removes CR immediately; automatic expiration keeps CR with `state: Expired` for audit.
+
+### Schedule Evaluation Semantics
+
+**Controller evaluates schedule with single active exception:**
+
+1. Load HibernatePlan base schedule (`offHours`)
+2. Query for active ScheduleException (label selector `hibernator.ardikabs.com/plan=<name>` + `state=Active`)
+3. If no active exception found → Use base schedule only
+4. If active exception found:
+   - **Extend**: Merge exception windows with base windows (union)
+   - **Suspend**: Check if current time is within lead time window OR suspension window
+     - If in lead time window (suspension start - leadTime) → Prevent NEW hibernation starts
+     - If in suspension window → Remove from hibernation schedule (keep awake)
+     - **Note**: Ongoing hibernation at lead time window start continues normally
+   - **Replace**: Use ONLY exception windows, ignore base schedule
+5. Evaluate effective schedule against current time
+6. Update `status.activeExceptions[]` history (max 10, prune expired first)
+
+### Single Active Exception Constraint
+
+**Rule**: Only ONE exception with `state=Active` allowed per HibernatePlan at any time.
+
+**Rationale**:
+
+- Simplifies merge semantics (no complex ordering or precedence rules)
+- Clear intent (explicit override, not layered modifications)
+- Predictable behavior (users know exactly what schedule is active)
+
+**Enforcement**:
+
+- Webhook validation rejects new exception creation if any existing exception has `state=Active`
+- Error message: "Plan <name> already has active exception <exception-name> (expires at <timestamp>)"
+- User must:
+  - Wait for current exception to expire (controller transitions to Expired)
+  - OR manually delete current exception (`kubectl delete scheduleexception <name>`)
+
+**Transition period**: New exception can be created immediately after old exception expires (controller-driven transition only)
 
 ### Validation Rules
 
-1. `validFrom <= validUntil`
-2. `validUntil - validFrom <= 90 days` (max exception window, configurable)
-3. For `suspend` type: `leadTime` must be valid duration string (e.g., "0s", "30m", "1h")
-4. No overlapping exceptions of same type (optional, can be strict or lenient)
-5. Exception names must be unique within plan
-6. Windows inside exception must follow same format as base `offHours`
+**Webhook validation enforces**:
 
-### Controller Changes
+1. `planRef.name` must reference existing HibernatePlan
+2. `planRef.namespace` must equal exception namespace (permanent same-namespace constraint)
+3. Only one active exception per plan (query existing exceptions via label)
+4. `validFrom <= validUntil`
+5. `validUntil - validFrom <= 90 days` (maximum exception duration)
+6. `type` must be one of: `extend`, `suspend`, `replace`
+7. For `suspend` type: `leadTime` must be valid duration format (or empty)
+8. `windows[]` must follow OffHourWindow format (HH:MM time, valid day names)
+9. Exception name must be unique within namespace
 
-**Schedule Evaluation with Exceptions**:
+**Runtime validation in controller**:
 
-1. Load HibernatePlan
-2. Extract base `offHours` from schedule
-3. Check for active/expired exceptions
-4. For each active `extend` exception: add windows to hibernation schedule
-5. For each active `suspend` exception:
-   - Check if current time is within lead time window (suspension start - leadTime)
-   - If yes, mark as "hibernation_held" (don't start hibernation)
-   - Otherwise, subtract windows from hibernation schedule
-6. For each active `replace` exception: use only exception windows (ignore base schedule)
-7. Evaluate combined schedule against current time
-8. If hibernation should start but is held (lead time active), reschedule for after suspension
-9. Proceed with normal hibernation/wakeup logic
-10. Move expired exceptions to `expiredExceptions` during reconciliation
+- Transition `state: Active` → `state: Expired` when `currentTime > validUntil`
+- Trigger HibernatePlan reconciliation when exception state changes
+- Update HibernatePlan status with current active exception
+
+### Controller Implementation
+
+**ScheduleException Controller**:
+
+1. **On Create/Update**:
+   - Set `state: Active` immediately (no approval workflow in MVP)
+   - Add label `hibernator.ardikabs.com/plan: <planRef.name>`
+   - Set `appliedAt` timestamp
+   - Trigger HibernatePlan reconciliation
+
+2. **On Reconcile** (periodic):
+   - Check if `currentTime > validUntil` → Transition to `state: Expired`
+   - Set `expiredAt` timestamp when transitioning
+   - Schedule requeue at `validUntil` time for automatic expiration
+   - Update `message` field with diagnostic info
+
+3. **On Delete** (finalizer):
+   - Update HibernatePlan status to remove exception from `activeExceptions[]`
+   - Clean up label references
+   - Allow deletion to proceed
+
+**HibernatePlan Controller**:
+
+1. **Watch ScheduleException resources** (secondary watch)
+   - Enqueue reconciliation when exception referencing this plan changes state
+
+2. **On Reconcile**:
+   - Query single active exception (0 or 1 expected)
+   - Pass exception to schedule evaluator
+   - Update `status.activeExceptions[]` history array:
+     - Max 10 entries
+     - Prune expired exceptions first, then oldest by `expiredAt`
+     - Include: name, type, validFrom, validUntil, state, appliedAt, expiredAt
+
+3. **Schedule Evaluation**:
+   - Call `EvaluateWithException(baseSchedule, exception, currentTime)`
+   - Return effective schedule for hibernation decision
 
 ### Example Scenarios
 
-**Scenario 1: Extend Hibernation During Weekend Event**
+#### Scenario 1: Extend Hibernation During Weekend Event
+
 ```yaml
-exceptions:
-  - name: "conference-weekend"
-    type: "extend"
-    validFrom: "2026-02-10T00:00:00Z"
-    validUntil: "2026-02-15T23:59:59Z"
-    windows:
-      - start: "00:00"
-        end: "23:59"  # Hibernate entire day
-        daysOfWeek: ["Saturday", "Sunday"]
+apiVersion: hibernator.ardikabs.com/v1alpha1
+kind: ScheduleException
+metadata:
+  name: conference-weekend
+  namespace: hibernator-system
+spec:
+  planRef:
+    name: dev-plan
+  type: extend
+  validFrom: "2026-02-10T00:00:00Z"
+  validUntil: "2026-02-15T23:59:59Z"
+  windows:
+    - start: "00:00"
+      end: "23:59"  # Hibernate entire day
+      daysOfWeek: ["Saturday", "Sunday"]
 ```
 
-**Scenario 2: Extend Hibernation for Additional Work Windows**
+#### Scenario 2: Extend Hibernation for Additional Work Windows
+
 ```yaml
-exceptions:
-  - name: "early-bird-support"
-    type: "extend"
-    validFrom: "2026-01-29T00:00:00Z"
-    validUntil: "2026-02-28T23:59:59Z"
-    windows:
-      - start: "01:00"
-        end: "06:00"
-        daysOfWeek: ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday"]
+apiVersion: hibernator.ardikabs.com/v1alpha1
+kind: ScheduleException
+metadata:
+  name: early-bird-support
+  namespace: hibernator-system
+spec:
+  planRef:
+    name: dev-plan
+  type: extend
+  validFrom: "2026-01-29T00:00:00Z"
+  validUntil: "2026-02-28T23:59:59Z"
+  windows:
+    - start: "01:00"
+      end: "06:00"
+      daysOfWeek: ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday"]
 ```
 
-**Scenario 3: Suspend with Lead Time (Maintenance Window)**
+#### Scenario 3: Suspend with Lead Time (Maintenance Window)
+
 ```yaml
-exceptions:
-  - name: "maintenance-window"
-    type: "suspend"
-    validFrom: "2026-02-01T22:00:00Z"
-    validUntil: "2026-02-02T02:00:00Z"
-    leadTime: "1h"  # 1 hour buffer before suspension
-    windows:
-      - start: "22:00"
-        end: "02:00"
-        daysOfWeek: ["Saturday"]
+apiVersion: hibernator.ardikabs.com/v1alpha1
+kind: ScheduleException
+metadata:
+  name: maintenance-window
+  namespace: hibernator-system
+spec:
+  planRef:
+    name: prod-plan
+  type: suspend
+  validFrom: "2026-02-01T20:00:00Z"  # Lead time starts here
+  validUntil: "2026-02-02T02:00:00Z"
+  leadTime: "1h"  # 1 hour buffer before suspension
+  windows:
+    - start: "21:00"
+      end: "02:00"
+      daysOfWeek: ["Saturday"]
 ```
 
 **Effect**:
-- 21:00-22:00: Lead time active → Don't start hibernation (reschedule to 02:00)
-- 22:00-02:00: Suspension active → Stay awake
+
+- 20:00-21:00: Lead time active → Don't start hibernation (reschedule to 02:00)
+- 21:00-02:00: Suspension active → Stay awake
 - After 02:00: Can resume normal hibernation schedule
 
 ## Implementation Plan
 
-### Phase 1: Core Exception Support
-1. Update HibernatePlan CRD with `exceptions` field under `schedule`
-2. Implement exception validation in webhook
-3. Add exception processing in schedule evaluator
-4. Update status ledger with `activeExceptions`/`expiredExceptions`
+### Phase 1: CRD and Validation ✅ COMPLETE
 
-### Phase 2: Cleanup and Monitoring
-1. Add metrics for active/expired exceptions
-2. Implement exception history tracking
-3. Add optional TTL-based cleanup for expired exceptions
+1. ✅ Design `ScheduleException` CRD types (spec, status, enums) — `api/v1alpha1/scheduleexception_types.go`
+2. ✅ Implement validation webhook (planRef existence, same-namespace, single active exception) — `api/v1alpha1/scheduleexception_webhook.go`
+3. ✅ Generate CRD manifests and RBAC — `config/crd/bases/`, `config/rbac/role.yaml`
+4. ✅ Create sample configurations — `config/samples/scheduleexception_samples.yaml`
 
-### Phase 3: CLI/UI
-1. Add kubectl plugin to manage exceptions
-2. Dashboard display of active exceptions
+### Phase 2: Controller Implementation ✅ COMPLETE
+
+1. ✅ Implement ScheduleException controller (state transitions, finalizer, reconciliation) — `internal/controller/scheduleexception_controller.go`
+2. ✅ Update HibernatePlan controller (watch exceptions, query active, status history) — `internal/controller/hibernateplan_controller.go`
+3. ✅ Add label-based association (`hibernator.ardikabs.com/plan`) — `LabelPlan` constant
+4. ✅ Implement cross-resource event triggering — Annotation-based trigger `AnnotationExceptionTrigger`
+
+### Phase 3: Schedule Evaluation ✅ COMPLETE
+
+1. ✅ Extend schedule evaluator with exception support — `internal/scheduler/schedule.go` (`EvaluateWithException()`)
+2. ✅ Implement extend/suspend/replace semantics — `evaluateExtend()`, `evaluateSuspend()`, replace via `evaluateWindows()`
+3. ✅ Add lead time prevention logic — `isInLeadTimeWindow()`, `findSuspensionEnd()`
+4. ✅ Write comprehensive tests — `internal/scheduler/schedule_test.go` (17 new tests)
+
+### Phase 4: Documentation and Samples 🔄 PENDING
+
+1. ✅ Update RFC-0003 with implementation details
+2. 🔄 Create user journey documentation — `docs/user-journey/create-emergency-exception.md` (needs update)
+3. ⏳ Add troubleshooting guide
+4. ⏳ Document upgrade path from embedded exceptions (future)
 
 ## Alternatives Considered
 
-1. **Top-level `exceptions` field**
-   - Simpler to add but semantically unclear
-   - Rejected: Exceptions are part of schedule configuration, not separate
+### 1. Embedded Exceptions in HibernatePlan
 
-2. **Separate ScheduleException CRD**
-   - More flexible but adds complexity
-   - Rejected: Overkill for MVP, harder to manage lifecycle
+**Approach**: Add `exceptions` field directly under `spec.schedule` in HibernatePlan
 
-3. **Manual pause/resume annotation**
-   - Simpler but no time-bound guarantee
-   - Rejected: Requires manual intervention; doesn't auto-expire
+**Pros:**
 
-4. **cron-based exception syntax**
-   - More powerful but steeper learning curve
-   - Rejected: Keep user-friendly format consistent with base schedule
+- Simpler to implement (one CRD)
+- Co-located with base schedule
+- Easier to query (single resource)
+
+**Cons:**
+
+- Every temporary change modifies plan spec (not GitOps-friendly)
+- Requires plan update permissions for exceptions
+- Complicates plan versioning and rollback
+- Difficult to maintain audit trail for expired exceptions
+- No independent lifecycle management
+
+**Decision**: Rejected - Independent CRD provides better GitOps workflow and clearer lifecycle management
+
+### 2. Manual Pause/Resume Annotation
+
+**Approach**: Use annotations like `hibernator.ardikabs.com/pause: "until-2026-02-28"`
+
+**Pros:**
+
+- Extremely simple
+- No new CRD
+- Fast to implement
+
+**Cons:**
+
+- No structured validation
+- No exception types (extend/suspend/replace)
+- No lead time support
+- Requires manual intervention to resume
+- No audit trail
+- Limited expressiveness (single pause, no complex windows)
+
+**Decision**: Rejected - Insufficient for real-world use cases requiring different exception semantics
+
+### 3. ConfigMap-Based Configuration
+
+**Approach**: Store exceptions in ConfigMap, controller watches and applies
+
+**Pros:**
+
+- Flexible data structure
+- Easy to update externally
+
+**Cons:**
+
+- No schema validation
+- Poor discoverability (kubectl get)
+- No admission webhooks
+- Difficult RBAC enforcement
+- Not idiomatic Kubernetes pattern
+
+**Decision**: Rejected - CRD provides proper validation, RBAC, and Kubernetes integration
+
+### 4. Multiple Simultaneous Exceptions
+
+**Approach**: Allow multiple active exceptions per plan with complex merge logic
+
+**Pros:**
+
+- Maximum flexibility
+- Could handle overlapping scenarios
+
+**Cons:**
+
+- Complex precedence rules (which exception wins?)
+- Difficult to reason about merged schedule
+- Unpredictable behavior with conflicts
+- Complicated implementation and testing
+- Poor user experience (hard to debug)
+
+**Decision**: Rejected - Single active exception simplifies semantics significantly. Future enhancement if strong use case emerges.
 
 ## Migration
 
-No breaking changes. Existing HibernatePlans without `exceptions` field work as before.
+ScheduleException is a new CRD. No breaking changes to existing HibernatePlans.
 
 ## Examples
 
@@ -290,6 +551,7 @@ apiVersion: hibernator.ardikabs.com/v1alpha1
 kind: HibernatePlan
 metadata:
   name: event-support
+  namespace: hibernator-system
 spec:
   schedule:
     timezone: "America/New_York"
@@ -297,74 +559,80 @@ spec:
       - start: "20:00"
         end: "06:00"
         daysOfWeek: ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday"]
-
-    # Extend hibernation during on-site event
-    exceptions:
-      - name: "on-site-event"
-        description: "Team on-site event support"
-        validFrom: "2026-01-29T00:00:00Z"
-        validUntil: "2026-02-28T23:59:59Z"
-        type: "extend"
-        windows:
-          - start: "06:00"
-            end: "11:00"
-            daysOfWeek: ["Saturday", "Sunday"]
-          - start: "01:00"
-            end: "06:00"
-            daysOfWeek: ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday"]
-
   targets: [...]
+---
+apiVersion: hibernator.ardikabs.com/v1alpha1
+kind: ScheduleException
+metadata:
+  name: on-site-event
+  namespace: hibernator-system
+spec:
+  planRef:
+    name: event-support
+  type: extend
+  validFrom: "2026-01-29T00:00:00Z"
+  validUntil: "2026-02-28T23:59:59Z"
+  windows:
+    - start: "06:00"
+      end: "11:00"
+      daysOfWeek: ["Saturday", "Sunday"]
+    - start: "01:00"
+      end: "06:00"
+      daysOfWeek: ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday"]
 ```
 
 **Effect**: During Jan 29 - Feb 28, services will hibernate during:
+
 - Mon-Fri 20:00-06:00 (base offHours) + 01:00-06:00 (extended)
 - Sat-Sun 06:00-11:00 (extended, normally awake)
 
-After Feb 28: Extension expires, plan reverts to base schedule automatically.
+After Feb 28: Exception expires, plan reverts to base schedule automatically.
 
 ### Use Case 2: Quarterly Sprint
 
 ```yaml
-exceptions:
-  - name: "q1-sprint-push"
-    validFrom: "2026-02-15T00:00:00Z"
-    validUntil: "2026-03-15T23:59:59Z"
-    type: "extend"
-    windows:
-      - start: "06:00"  # Extend hibernation throughout day
-        end: "18:00"
-        daysOfWeek: ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday"]
+apiVersion: hibernator.ardikabs.com/v1alpha1
+kind: ScheduleException
+metadata:
+  name: q1-sprint-push
+  namespace: hibernator-system
+spec:
+  planRef:
+    name: dev-plan
+  type: extend
+  validFrom: "2026-02-15T00:00:00Z"
+  validUntil: "2026-03-15T23:59:59Z"
+  windows:
+    - start: "06:00"  # Extend hibernation throughout day
+      end: "18:00"
+      daysOfWeek: ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday"]
 ```
 
 ### Use Case 3: Holiday Schedule (Replace)
 
 ```yaml
-exceptions:
-  - name: "holiday-week"
-    description: "Holiday week - different schedule"
-    validFrom: "2026-12-24T00:00:00Z"
-    validUntil: "2026-12-31T23:59:59Z"
-    type: "replace"
-    windows:
-      - start: "00:00"
-        end: "23:59"  # Always hibernated (skeleton crew)
-        daysOfWeek: ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"]
+apiVersion: hibernator.ardikabs.com/v1alpha1
+kind: ScheduleException
+metadata:
+  name: holiday-week
+  namespace: hibernator-system
+spec:
+  planRef:
+    name: prod-plan
+  type: replace
+  validFrom: "2026-12-24T00:00:00Z"
+  validUntil: "2026-12-31T23:59:59Z"
+  windows:
+    - start: "00:00"
+      end: "23:59"  # Always hibernated (skeleton crew)
+      daysOfWeek: ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"]
 ```
 
 **Effect**: During Dec 24-31, use only the replacement schedule (ignore base offHours). Services are fully hibernated 24/7.
 
-## Next Steps
-
-1. Implement Phase 1 API changes (exceptions under schedule)
-2. Update validation webhook with exception validation
-3. Update schedule evaluator to process exceptions
-4. Add status ledger tracking for active/expired exceptions
-5. Write comprehensive tests
 ---
 
 ## Future Work: Exception Approval Workflow
-
-### Motivation
 
 Temporary schedule exceptions can significantly impact infrastructure availability and cost. Adding an approval workflow ensures:
 - **Safety**: Prevents accidental or malicious schedule changes
@@ -385,31 +653,34 @@ Draft → Pending Approval → Approved → Active → Expired
 **On-Call Engineer Workflow (Real-world scenario):**
 
 ```yaml
-# Step 1: On-call engineer creates HibernatePlan with exception
+# Step 1: On-call engineer creates ScheduleException with approval requirement
 # Directly specifies approver emails (no role mapping needed)
 apiVersion: hibernator.ardikabs.com/v1alpha1
-kind: HibernatePlan
+kind: ScheduleException
 metadata:
-  name: event-support
+  name: on-site-event
+  namespace: hibernator-system
 spec:
-  schedule:
-    timezone: "America/New_York"
-    offHours: [...]
-    exceptions:
-      - name: "on-site-event"
-        approvalRequired: true
-        approverEmails:  # On-call specifies approvers by email
-          - "bob@company.com"      # Engineering Head email
-          - "carol@company.com"    # Manager email
-        type: "extend"
-        windows: [...]
-        validFrom: "2026-01-29T00:00:00Z"
-        validUntil: "2026-02-28T23:59:59Z"
+  planRef:
+    name: event-support  # References existing HibernatePlan
+  
+  approvalRequired: true
+  approverEmails:  # On-call specifies approvers by email
+    - "bob@company.com"      # Engineering Head email
+    - "carol@company.com"    # Manager email
+  
+  type: extend
+  validFrom: "2026-01-29T00:00:00Z"
+  validUntil: "2026-02-28T23:59:59Z"
+  windows:
+    - start: "06:00"
+      end: "11:00"
+      daysOfWeek: ["SAT", "SUN"]
 ```
 
 **Workflow:**
 
-1. **On-call engineer applies HibernatePlan**
+1. **On-call engineer applies ScheduleException**
    - Sets `approverEmails` with specific approver email addresses
    - No role lookup needed (direct email specification)
 
@@ -431,12 +702,12 @@ spec:
 5. **Approver clicks [APPROVE] or [REJECT]**
    - Slack bot calls controller endpoint
    - Controller verifies approver's Slack user matches email
-   - Updates HibernatePlan status with approval/rejection
+   - Updates ScheduleException status with approval/rejection
 
 6. **When all approvals received**
    - Exception state transitions to "Active"
    - Controller sends confirmation to all approvers
-   - Hibernation plan starts executing
+   - HibernatePlan controller detects active exception and applies it
 
 **Benefits of this approach:**
 - On-call engineer has full control (specifies exact approvers)
@@ -448,32 +719,43 @@ spec:
 
 **Approval Workflow (Core Orchestration):**
 
-1. **User creates/updates exception** via kubectl plugin or direct manifest edit
+1. **User creates ScheduleException** via kubectl or manifest file
    ```yaml
-   exceptions:
-     - name: "on-site-event"
-       approvalRequired: true
-       approverEmails:       # On-call specifies approver emails
-         - "bob@company.com"
-         - "carol@company.com"
-       # ... rest of exception config
+   apiVersion: hibernator.ardikabs.com/v1alpha1
+   kind: ScheduleException
+   metadata:
+     name: on-site-event
+     namespace: hibernator-system
+   spec:
+     planRef:
+       name: event-support
+     approvalRequired: true
+     approverEmails:  # On-call specifies approver emails
+       - "bob@company.com"
+       - "carol@company.com"
+     type: extend
+     validFrom: "2026-01-29T00:00:00Z"
+     validUntil: "2026-02-28T23:59:59Z"
+     windows:
+       - start: "06:00"
+         end: "11:00"
+         daysOfWeek: ["SAT", "SUN"]
    ```
 
 2. **Exception created in "Pending" state**
    ```yaml
+   # ScheduleException status field
    status:
-     activeExceptions: []
-     pendingApprovals:
-       - name: "on-site-event"
-         state: "Pending"
-         requestedBy: "alice"
-         requestedAt: "2026-01-29T10:00:00Z"
-         requiredApprovals:
-           - email: "bob@company.com"
-             status: "pending"
-           - email: "carol@company.com"
-             status: "pending"
-         approvals: []  # Empty until approved
+     state: Pending
+     approvalState: Pending
+     requestedBy: "alice"
+     requestedAt: "2026-01-29T10:00:00Z"
+     requiredApprovals:
+       - email: "bob@company.com"
+         status: "pending"
+       - email: "carol@company.com"
+         status: "pending"
+     approvals: []  # Empty until approved
    ```
 
 3. **Notification sent to approvers via Slack DM**

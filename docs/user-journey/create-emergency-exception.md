@@ -6,7 +6,7 @@
 
 **When:** Unexpected incidents occur during hibernation windows that require services to remain online
 
-**Why:** Emergency exceptions allow temporary overrides to hibernation schedules without recreating the entire plan.
+**Why:** Emergency exceptions allow temporary overrides to hibernation schedules without modifying the base HibernatePlan.
 
 ---
 
@@ -25,13 +25,14 @@
 - **Emergency response:** Incident detected → Need immediate wakeup
 - **Time-bound:** Exception automatically expires after incident resolved
 - **Minimal friction:** Create exception quickly without approvals (or with fast-track approval)
-- **Audit trail:** All exceptions logged for compliance
+- **Audit trail:** All exceptions logged as separate CRs for compliance
+- **GitOps-friendly:** Exceptions are independent resources; base plan unchanged
 
 ---
 
 ## Business Outcome
 
-Quickly create a temporary exception to keep services awake during an incident, then let it automatically expire when no longer needed.
+Quickly create a temporary exception to keep services awake during an incident, then let it automatically expire when no longer needed. The base HibernatePlan remains unchanged.
 
 ---
 
@@ -44,104 +45,130 @@ During hibernation window, incident occurs:
 ```
 22:00 (hibernation active) → Alert received
       → Incident commander: "Need to wake up services"
-      → Create exception to suspend hibernation 22:00-23:30
+      → Create ScheduleException to suspend hibernation 22:00-23:30
 ```
 
-### 2. **Create emergency exception**
+### 2. **Create emergency exception (Independent CRD)**
+
+Create a `ScheduleException` resource that references the HibernatePlan:
 
 ```yaml
-apiVersion: hibernator.ardikasaputro.io/v1alpha1
-kind: HibernationPlan
+apiVersion: hibernator.ardikabs.com/v1alpha1
+kind: ScheduleException
 metadata:
-  name: prod-offhours
+  name: incident-2026-02-01
   namespace: hibernator-system
 spec:
-  schedule:
-    timezone: "America/New_York"
-    offHours:
-      - start: "20:00"
-        end: "06:00"
-        daysOfWeek: ["MON", "TUE", "WED", "THU", "FRI"]
+  # Reference to the HibernatePlan
+  planRef:
+    name: prod-offhours
 
-    # NEW: Add exception for incident
-    exceptions:
-      - name: "incident-2026-02-01"
-        description: "Production incident - database corruption detected"
-        type: suspend                    # Keep services awake during this window
-        validFrom: "2026-02-01T22:00:00Z"
-        validUntil: "2026-02-01T23:30:00Z"
-        leadTime: "5m"                   # Don't start hibernation in last 5 min
-        windows:
-          - start: "22:00"
-            end: "23:30"
-            daysOfWeek: ["MON"]
+  # Exception period
+  validFrom: "2026-02-01T22:00:00Z"
+  validUntil: "2026-02-01T23:30:00Z"
+
+  # Exception type: suspend (keep services awake)
+  type: suspend
+
+  # Lead time: don't start hibernation 5 min before suspension
+  leadTime: "5m"
+
+  # Windows where hibernation is suspended
+  windows:
+    - start: "22:00"
+      end: "23:30"
+      daysOfWeek: ["Monday"]
 ```
+
+Apply the exception:
+
+```bash
+kubectl apply -f scheduleexception-incident.yaml
+```
+
+**Key Design:** Base HibernatePlan is NOT modified. Exception is a separate resource with its own lifecycle.
 
 ### 3. **Verify exception is active**
 
 ```bash
-kubectl describe hibernateplan prod-offhours | grep -A 10 "activeExceptions:"
+# Check ScheduleException status
+kubectl get scheduleexception incident-2026-02-01 -n hibernator-system
 
-# Output:
-# Active Exceptions:
-#   Name: incident-2026-02-01
-#   Type: suspend
-#   Reason: Active; 89 minutes remaining
+# Detailed view
+kubectl describe scheduleexception incident-2026-02-01 -n hibernator-system
+```
+
+Expected output:
+
+```yaml
+status:
+  state: Active
+  appliedAt: "2026-02-01T22:01:15Z"
+  message: "Exception active, expires in 89 minutes"
+```
+
+Check HibernatePlan status (exception history):
+
+```bash
+kubectl get hibernateplan prod-offhours -n hibernator-system -o jsonpath='{.status.activeExceptions}' | jq
+```
+
+```json
+[
+  {
+    "name": "incident-2026-02-01",
+    "type": "suspend",
+    "state": "Active",
+    "validFrom": "2026-02-01T22:00:00Z",
+    "validUntil": "2026-02-01T23:30:00Z",
+    "appliedAt": "2026-02-01T22:01:15Z"
+  }
+]
 ```
 
 ### 4. **Services remain awake during exception**
 
 With `type: suspend`:
-- Hibernation **will not** start if within 5 minutes of suspension
+- Hibernation **will not** start if within lead time window (5 min before suspension)
 - Currently hibernated services **remain** hibernated (exception only prevents new hibernation)
 - Any new hibernation requests **are delayed** until exception expires
 
-### 5. **Incident resolved → Exception expires**
+### 5. **Incident resolved → Exception expires automatically**
 
 When incident window ends:
 
 ```
-23:30 (exception expires) → Controller removes exception
-      → Schedule reverts to normal (hibernation continues)
-      → Services continue in their current state
+23:30 (exception expires) → Controller transitions state to Expired
+      → Schedule reverts to normal (base hibernation resumes)
+      → ScheduleException CR preserved for audit (state: Expired)
 ```
 
-Exception automatically removed; no manual cleanup.
+Exception expires automatically; no manual cleanup needed. The CR remains for compliance.
 
 ### 6. **If manual removal needed**
 
 For emergency early removal:
 
 ```bash
-# Edit plan
-kubectl edit hibernateplan prod-offhours
+# Delete the exception CR
+kubectl delete scheduleexception incident-2026-02-01 -n hibernator-system
 
-# Find exception and delete it from spec.schedule.exceptions[]
-# Save and exit
-
-# Verify removed:
-kubectl describe hibernateplan prod-offhours | grep activeExceptions
+# Verify removed from plan status
+kubectl get hibernateplan prod-offhours -n hibernator-system -o jsonpath='{.status.activeExceptions}'
 # Should be empty or no longer mention incident exception
 ```
 
 ---
 
-## Advanced: Fast-Track Approval
+## Advanced: Fast-Track Approval (Future)
 
-If using exception approvals (RFC-0003):
+Approval workflow is planned for future implementation (RFC-0003 Phase 4):
 
 ```bash
-# On-call creates exception with approval=required flag:
-kubectl edit hibernateplan prod-offhours
-# Set: exceptions[].approvalRequired: true
-
-# Exception enters "Pending" state
+# Future: On-call creates exception with approval required
 # Engineering Head receives Slack DM
-
-# Engineering Head approves:
-hibernator exception approve incident-2026-02-01
-
-# Exception transitions to "Active" → Services awake
+# Engineering Head approves via Slack button
+# Exception transitions to "Active"
 ```
 
 ---

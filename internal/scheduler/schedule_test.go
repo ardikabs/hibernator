@@ -364,3 +364,299 @@ func TestConvertOffHoursToCron(t *testing.T) {
 		})
 	}
 }
+
+func TestScheduleEvaluator_EvaluateWithException(t *testing.T) {
+	evaluator := NewScheduleEvaluator()
+
+	// Base schedule: hibernate 20:00-06:00 on weekdays
+	baseWindows := []OffHourWindow{
+		{Start: "20:00", End: "06:00", DaysOfWeek: []string{"MON", "TUE", "WED", "THU", "FRI"}},
+	}
+
+	tests := []struct {
+		name          string
+		baseWindows   []OffHourWindow
+		timezone      string
+		exception     *Exception
+		now           time.Time
+		wantHibernate bool
+		wantState     string
+		wantErr       bool
+	}{
+		{
+			name:        "no exception - active during work hours",
+			baseWindows: baseWindows,
+			timezone:    "UTC",
+			exception:   nil,
+			// Wednesday 2 PM UTC
+			now:           time.Date(2026, 1, 28, 14, 0, 0, 0, time.UTC),
+			wantHibernate: false,
+			wantState:     "active",
+		},
+		{
+			name:        "no exception - hibernated during night",
+			baseWindows: baseWindows,
+			timezone:    "UTC",
+			exception:   nil,
+			// Wednesday 11 PM UTC
+			now:           time.Date(2026, 1, 28, 23, 0, 0, 0, time.UTC),
+			wantHibernate: true,
+			wantState:     "hibernated",
+		},
+		{
+			name:        "extend exception - add weekend hibernation",
+			baseWindows: baseWindows,
+			timezone:    "UTC",
+			exception: &Exception{
+				Type:       ExceptionExtend,
+				ValidFrom:  time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC),
+				ValidUntil: time.Date(2026, 12, 31, 23, 59, 59, 0, time.UTC),
+				Windows: []OffHourWindow{
+					{Start: "06:00", End: "11:00", DaysOfWeek: []string{"SAT", "SUN"}},
+				},
+			},
+			// Saturday 8 AM UTC - should hibernate due to exception
+			now:           time.Date(2026, 1, 31, 8, 0, 0, 0, time.UTC),
+			wantHibernate: true,
+			wantState:     "hibernated",
+		},
+		{
+			name:        "extend exception - still active outside both windows",
+			baseWindows: baseWindows,
+			timezone:    "UTC",
+			exception: &Exception{
+				Type:       ExceptionExtend,
+				ValidFrom:  time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC),
+				ValidUntil: time.Date(2026, 12, 31, 23, 59, 59, 0, time.UTC),
+				Windows: []OffHourWindow{
+					{Start: "06:00", End: "11:00", DaysOfWeek: []string{"SAT", "SUN"}},
+				},
+			},
+			// Saturday 2 PM UTC - outside both base (weekday) and exception (6-11)
+			now:           time.Date(2026, 1, 31, 14, 0, 0, 0, time.UTC),
+			wantHibernate: false,
+			wantState:     "active",
+		},
+		{
+			name:        "suspend exception - keep awake during normally hibernated time",
+			baseWindows: baseWindows,
+			timezone:    "UTC",
+			exception: &Exception{
+				Type:       ExceptionSuspend,
+				ValidFrom:  time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC),
+				ValidUntil: time.Date(2026, 12, 31, 23, 59, 59, 0, time.UTC),
+				Windows: []OffHourWindow{
+					{Start: "21:00", End: "02:00", DaysOfWeek: []string{"WED"}},
+				},
+			},
+			// Wednesday 11 PM UTC - normally hibernated, but in suspension window
+			now:           time.Date(2026, 1, 28, 23, 0, 0, 0, time.UTC),
+			wantHibernate: false,
+			wantState:     "active",
+		},
+		{
+			name:        "suspend exception - hibernate outside suspension window",
+			baseWindows: baseWindows,
+			timezone:    "UTC",
+			exception: &Exception{
+				Type:       ExceptionSuspend,
+				ValidFrom:  time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC),
+				ValidUntil: time.Date(2026, 12, 31, 23, 59, 59, 0, time.UTC),
+				Windows: []OffHourWindow{
+					{Start: "21:00", End: "23:00", DaysOfWeek: []string{"WED"}},
+				},
+			},
+			// Wednesday 11:30 PM UTC - outside suspension window (ends at 23:00)
+			now:           time.Date(2026, 1, 28, 23, 30, 0, 0, time.UTC),
+			wantHibernate: true,
+			wantState:     "hibernated",
+		},
+		{
+			name:        "suspend with lead time - prevent hibernation in lead time window",
+			baseWindows: baseWindows,
+			timezone:    "UTC",
+			exception: &Exception{
+				Type:       ExceptionSuspend,
+				ValidFrom:  time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC),
+				ValidUntil: time.Date(2026, 12, 31, 23, 59, 59, 0, time.UTC),
+				LeadTime:   1 * time.Hour,
+				Windows: []OffHourWindow{
+					{Start: "21:00", End: "02:00", DaysOfWeek: []string{"WED"}},
+				},
+			},
+			// Wednesday 8:30 PM UTC - in lead time window (1h before 21:00 suspension)
+			now:           time.Date(2026, 1, 28, 20, 30, 0, 0, time.UTC),
+			wantHibernate: false, // Lead time prevents hibernation
+			wantState:     "active",
+		},
+		{
+			name:        "replace exception - use only exception windows",
+			baseWindows: baseWindows,
+			timezone:    "UTC",
+			exception: &Exception{
+				Type:       ExceptionReplace,
+				ValidFrom:  time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC),
+				ValidUntil: time.Date(2026, 12, 31, 23, 59, 59, 0, time.UTC),
+				Windows: []OffHourWindow{
+					// Replace with 24/7 hibernation (holiday mode)
+					{Start: "00:00", End: "23:59", DaysOfWeek: []string{"MON", "TUE", "WED", "THU", "FRI", "SAT", "SUN"}},
+				},
+			},
+			// Wednesday 2 PM UTC - normally active, but replaced with 24/7 hibernation
+			now:           time.Date(2026, 1, 28, 14, 0, 0, 0, time.UTC),
+			wantHibernate: true,
+			wantState:     "hibernated",
+		},
+		{
+			name:        "exception outside valid period - use base schedule",
+			baseWindows: baseWindows,
+			timezone:    "UTC",
+			exception: &Exception{
+				Type:       ExceptionSuspend,
+				ValidFrom:  time.Date(2025, 1, 1, 0, 0, 0, 0, time.UTC),
+				ValidUntil: time.Date(2025, 12, 31, 23, 59, 59, 0, time.UTC), // Expired
+				Windows: []OffHourWindow{
+					{Start: "21:00", End: "02:00", DaysOfWeek: []string{"WED"}},
+				},
+			},
+			// Wednesday 11 PM UTC - exception expired, use base schedule
+			now:           time.Date(2026, 1, 28, 23, 0, 0, 0, time.UTC),
+			wantHibernate: true,
+			wantState:     "hibernated",
+		},
+		{
+			name:        "empty base windows with no exception",
+			baseWindows: []OffHourWindow{},
+			timezone:    "UTC",
+			exception:   nil,
+			now:         time.Date(2026, 1, 28, 14, 0, 0, 0, time.UTC),
+			wantHibernate: false,
+			wantState:     "active",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			result, err := evaluator.EvaluateWithException(tt.baseWindows, tt.timezone, tt.exception, tt.now)
+
+			if (err != nil) != tt.wantErr {
+				t.Errorf("EvaluateWithException() error = %v, wantErr %v", err, tt.wantErr)
+				return
+			}
+
+			if tt.wantErr {
+				return
+			}
+
+			if result.ShouldHibernate != tt.wantHibernate {
+				t.Errorf("EvaluateWithException() ShouldHibernate = %v, want %v", result.ShouldHibernate, tt.wantHibernate)
+			}
+
+			if result.CurrentState != tt.wantState {
+				t.Errorf("EvaluateWithException() CurrentState = %v, want %v", result.CurrentState, tt.wantState)
+			}
+		})
+	}
+}
+
+func TestScheduleEvaluator_isInTimeWindows(t *testing.T) {
+	evaluator := NewScheduleEvaluator()
+
+	tests := []struct {
+		name    string
+		windows []OffHourWindow
+		now     time.Time
+		want    bool
+	}{
+		{
+			name: "in same-day window",
+			windows: []OffHourWindow{
+				{Start: "09:00", End: "17:00", DaysOfWeek: []string{"WED"}},
+			},
+			now:  time.Date(2026, 1, 28, 12, 0, 0, 0, time.UTC), // Wednesday noon
+			want: true,
+		},
+		{
+			name: "outside same-day window",
+			windows: []OffHourWindow{
+				{Start: "09:00", End: "17:00", DaysOfWeek: []string{"WED"}},
+			},
+			now:  time.Date(2026, 1, 28, 18, 0, 0, 0, time.UTC), // Wednesday 6 PM
+			want: false,
+		},
+		{
+			name: "in overnight window - evening",
+			windows: []OffHourWindow{
+				{Start: "20:00", End: "06:00", DaysOfWeek: []string{"WED"}},
+			},
+			now:  time.Date(2026, 1, 28, 22, 0, 0, 0, time.UTC), // Wednesday 10 PM
+			want: true,
+		},
+		{
+			name: "wrong day",
+			windows: []OffHourWindow{
+				{Start: "09:00", End: "17:00", DaysOfWeek: []string{"MON"}},
+			},
+			now:  time.Date(2026, 1, 28, 12, 0, 0, 0, time.UTC), // Wednesday (not Monday)
+			want: false,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := evaluator.isInTimeWindows(tt.windows, tt.now)
+			if got != tt.want {
+				t.Errorf("isInTimeWindows() = %v, want %v", got, tt.want)
+			}
+		})
+	}
+}
+
+func TestScheduleEvaluator_isInLeadTimeWindow(t *testing.T) {
+	evaluator := NewScheduleEvaluator()
+
+	tests := []struct {
+		name     string
+		windows  []OffHourWindow
+		now      time.Time
+		leadTime time.Duration
+		want     bool
+	}{
+		{
+			name: "in lead time window",
+			windows: []OffHourWindow{
+				{Start: "21:00", End: "02:00", DaysOfWeek: []string{"WED"}},
+			},
+			now:      time.Date(2026, 1, 28, 20, 30, 0, 0, time.UTC), // 30 min before 21:00
+			leadTime: 1 * time.Hour,
+			want:     true,
+		},
+		{
+			name: "before lead time window",
+			windows: []OffHourWindow{
+				{Start: "21:00", End: "02:00", DaysOfWeek: []string{"WED"}},
+			},
+			now:      time.Date(2026, 1, 28, 19, 0, 0, 0, time.UTC), // 2 hours before
+			leadTime: 1 * time.Hour,
+			want:     false,
+		},
+		{
+			name: "after suspension started - not in lead time",
+			windows: []OffHourWindow{
+				{Start: "21:00", End: "02:00", DaysOfWeek: []string{"WED"}},
+			},
+			now:      time.Date(2026, 1, 28, 22, 0, 0, 0, time.UTC), // After 21:00
+			leadTime: 1 * time.Hour,
+			want:     false,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := evaluator.isInLeadTimeWindow(tt.windows, tt.now, tt.leadTime)
+			if got != tt.want {
+				t.Errorf("isInLeadTimeWindow() = %v, want %v", got, tt.want)
+			}
+		})
+	}
+}

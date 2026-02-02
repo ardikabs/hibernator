@@ -236,6 +236,12 @@ This rule applies to all work on this repository and ensures user retains full c
 
 **IMPORTANT**: Only run tests on specific files/packages involved in the change, not the entire codebase. This improves efficiency and reduces noise from unrelated test failures.
 
+**⚠️ E2E TESTS REQUIRE EXPLICIT CONFIRMATION**: Never run E2E tests (`test/e2e/...`) automatically, regardless of what packages were changed (including `internal/controller/`). E2E tests:
+- Require envtest binaries and special setup
+- Have long timeouts (120s+) that can block development
+- Should only be run when explicitly requested by the user
+- Always ask: "Would you like me to run E2E tests?" before executing
+
 ```bash
 # Target specific package tests (PREFERRED)
 go test ./internal/executor/karpenter/... -v
@@ -250,7 +256,8 @@ go test ./...
 # Controller tests (requires envtest - skip unless changes affect controller)
 go test ./internal/controller/...
 
-# E2E tests (requires envtest binaries - skip unless testing full integration)
+# E2E tests (⚠️ REQUIRES EXPLICIT USER CONFIRMATION)
+# NEVER run automatically - always ask user first!
 go test ./test/e2e/... -v
 
 # With Ginkgo
@@ -459,10 +466,11 @@ User journeys are created **at RFC approval time**, not after implementation:
 
 | RFC | Status | Required Journeys | Documentation |
 |-----|--------|-------------------|---|
-| [RFC-0001](../enhancements/0001-hibernate-operator.md) | Implemented ✅ | `hibernation-plan-initial-design.md`, `deploy-operator-to-cluster.md`, `monitor-hibernation-execution.md` | Document control-plane architecture, Job execution, and status tracking |
+| [RFC-0001](../enhancements/0001-hibernate-operator.md) | In Progress 🚀 | `hibernation-plan-initial-design.md`, `deploy-operator-to-cluster.md`, `monitor-hibernation-execution.md` | Document control-plane architecture, Job execution, and status tracking |
 | [RFC-0002](../enhancements/0002-schedule-format-migration.md) | Implemented ✅ | `hibernation-plan-initial-design.md` | Document schedule format with start/end/daysOfWeek syntax |
-| [RFC-0003](../enhancements/0003-schedule-exceptions.md) | Proposed | `create-emergency-exception.md`, `extend-hibernation-for-event.md`, `suspend-hibernation-during-incident.md` | Document time-bound exception types (extend, suspend, replace) |
+| [RFC-0003](../enhancements/0003-schedule-exceptions.md) | Implemented ✅ (Core) | `create-emergency-exception.md`, `extend-hibernation-for-event.md`, `suspend-hibernation-during-incident.md` | Document time-bound exception types (extend, suspend, replace). Phases 1-3 complete; approval workflows (Phase 4+) are future enhancements. |
 | [RFC-0004](../enhancements/0004-scale-subresource-executor.md) | Implemented ✅ | `scale-workloads-in-cluster.md` | Document workload scale subresource executor |
+| [RFC-0005](../enhancements/0005-serviceaccount-semantic-enhancements.md) | Proposed 📋 | TBD (future work) | Advanced ServiceAccount configuration patterns (not yet implemented) |
 
 ### User Journey as High-Level Interpretation
 
@@ -534,10 +542,11 @@ When creating a new user journey:
 
 | RFC | Status | Keywords | Use When |
 |-----|--------|----------|----------|
-| [RFC-0001](../enhancements/0001-hibernate-operator.md) | In Progress 🚀 | Architecture, Control-Plane, Executors, Streaming, Security, Scheduling, Dependency-Resolution, Job-Lifecycle, RBAC, Restore-Metadata | User asks about operator architecture, execution model, streaming auth, security, or job lifecycle |
+| [RFC-0001](../enhancements/0001-hibernate-operator.md) | In Progress 🚀 (See RFC for completion criteria: hibernation schedule works, executors shutdown/wakeup services, monitoring/logs/metrics, E2E tests pass) | Architecture, Control-Plane, Executors, Streaming, Security, Scheduling, Dependency-Resolution, Job-Lifecycle, RBAC, Restore-Metadata | User asks about operator architecture, execution model, streaming auth, security, or job lifecycle |
 | [RFC-0002](../enhancements/0002-schedule-format-migration.md) | Implemented ✅ | Schedule-Format, Time-Windows, Cron-Conversion, API-Design, Timezone-Aware, Validation, User-Experience, Migration, OffHourWindow, Conversion | User asks about schedule validation, time windows, cron conversion, timezone handling, or API changes |
-| [RFC-0003](../enhancements/0003-schedule-exceptions.md) | Proposed (Not Yet) | Schedule-Exceptions, Maintenance-Windows, Lead-Time, Time-Bound, Extend, Suspend, Replace, Emergency-Events, Validation, Status-Tracking | User asks about schedule exceptions, emergency overrides, maintenance windows, or time-bound deviations |
-| [RFC-0004](../enhancements/0004-scale-subresource-executor.md) | Draft | Executors, Kubernetes, Scale-Subresource, Downscale, Restore-Metadata, RBAC | User asks about workload downscaling, scale subresource usage, workloadscaler executor, or RBAC for scaling |
+| [RFC-0003](../enhancements/0003-schedule-exceptions.md) | Implemented ✅ (Core Implementation) | Schedule-Exceptions, Maintenance-Windows, Lead-Time, Time-Bound, Extend, Suspend, Replace, Emergency-Events, Validation, Status-Tracking, Independent-CRD, GitOps | User asks about schedule exceptions, emergency overrides, maintenance windows, time-bound deviations, or temporary schedule changes |
+| [RFC-0004](../enhancements/0004-scale-subresource-executor.md) | Implemented ✅ | Executors, Kubernetes, Scale-Subresource, Downscale, Restore-Metadata, RBAC, WorkloadScaler | User asks about workload downscaling, scale subresource usage, workloadscaler executor, or RBAC for scaling |
+| [RFC-0005](../enhancements/0005-serviceaccount-semantic-enhancements.md) | Proposed 📋 | ServiceAccount, IRSA, Workload-Identity, Multi-Cloud, Validation, Credential-Management, Federated-Identity, Audit | User asks about advanced ServiceAccount configurations, multi-cloud identity federation, or explicit pod identity management |
 
 **Keyword Matching Strategy:**
 1. Extract keywords from user request
@@ -549,7 +558,7 @@ When creating a new user journey:
 
 - **RFCs Directory**: [All RFCs](../enhancements/) — Complete list of design documents
 - **User Journey Hub**: [User Journeys](./user-journey/README.md) — Index of all user journey documents
-- **WORKPLAN.md**: [Detailed technical workplan](../enhancements/archived/WORKPLAN.md) (historical reference)
+- **WORKPLAN.md**: [Historical workplan](../enhancements/archived/WORKPLAN.md) — Archived document from early design phase. Contains outdated API examples but preserved for historical context. Refer to current RFCs for accurate specifications.
 
 ---
 

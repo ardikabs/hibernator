@@ -54,7 +54,7 @@ var _ = Describe("Schedule Evaluation E2E", func() {
 					Region:        "us-east-1",
 					AssumeRoleArn: "arn:aws:iam::123456789012:role/hibernator",
 					Auth: hibernatorv1alpha1.AWSAuth{
-							ServiceAccount: &hibernatorv1alpha1.ServiceAccountAuth{},
+						ServiceAccount: &hibernatorv1alpha1.ServiceAccountAuth{},
 					},
 				},
 			},

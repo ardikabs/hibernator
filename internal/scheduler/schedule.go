@@ -13,6 +13,36 @@ import (
 	"github.com/robfig/cron/v3"
 )
 
+// ExceptionType defines the type of schedule exception.
+type ExceptionType string
+
+const (
+	// ExceptionExtend adds hibernation windows to the base schedule.
+	ExceptionExtend ExceptionType = "extend"
+	// ExceptionSuspend prevents hibernation during specified windows (carve-out).
+	ExceptionSuspend ExceptionType = "suspend"
+	// ExceptionReplace completely replaces the base schedule during the exception period.
+	ExceptionReplace ExceptionType = "replace"
+)
+
+// Exception represents a schedule exception for evaluation.
+type Exception struct {
+	// Type is the exception type: extend, suspend, or replace.
+	Type ExceptionType
+
+	// ValidFrom is when the exception period starts.
+	ValidFrom time.Time
+
+	// ValidUntil is when the exception period ends.
+	ValidUntil time.Time
+
+	// LeadTime is the buffer before suspension (only for suspend type).
+	LeadTime time.Duration
+
+	// Windows are the exception time windows.
+	Windows []OffHourWindow
+}
+
 // ScheduleEvaluator evaluates cron-based schedules to determine hibernation state.
 type ScheduleEvaluator struct {
 	parser cron.Parser
@@ -146,6 +176,345 @@ func (e *ScheduleEvaluator) NextRequeueTime(result *EvaluationResult, now time.T
 
 	// Add a small buffer to ensure we're past the scheduled time
 	return duration + 10*time.Second
+}
+
+// EvaluateWithException evaluates the schedule with an optional exception applied.
+// If exception is nil, this behaves identically to Evaluate().
+// Exception semantics:
+// - extend: Union of base schedule + exception windows (more hibernation time)
+// - suspend: Carve-out from base schedule (keep awake during exception windows)
+// - replace: Use only exception windows, ignore base schedule entirely
+func (e *ScheduleEvaluator) EvaluateWithException(baseWindows []OffHourWindow, timezone string, exception *Exception, now time.Time) (*EvaluationResult, error) {
+	// If no exception or exception is not active, evaluate base schedule only
+	if exception == nil || !e.isExceptionActive(exception, now) {
+		return e.evaluateWindows(baseWindows, timezone, now)
+	}
+
+	switch exception.Type {
+	case ExceptionExtend:
+		return e.evaluateExtend(baseWindows, exception.Windows, timezone, now)
+	case ExceptionSuspend:
+		return e.evaluateSuspend(baseWindows, exception, timezone, now)
+	case ExceptionReplace:
+		return e.evaluateWindows(exception.Windows, timezone, now)
+	default:
+		// Unknown exception type, fall back to base schedule
+		return e.evaluateWindows(baseWindows, timezone, now)
+	}
+}
+
+// isExceptionActive checks if the exception is currently within its valid period.
+func (e *ScheduleEvaluator) isExceptionActive(exception *Exception, now time.Time) bool {
+	return !now.Before(exception.ValidFrom) && !now.After(exception.ValidUntil)
+}
+
+// evaluateWindows evaluates a set of OffHourWindows and returns the result.
+func (e *ScheduleEvaluator) evaluateWindows(windows []OffHourWindow, timezone string, now time.Time) (*EvaluationResult, error) {
+	if len(windows) == 0 {
+		// No windows means no hibernation
+		return &EvaluationResult{
+			ShouldHibernate: false,
+			CurrentState:    "active",
+		}, nil
+	}
+
+	hibernateCron, wakeUpCron, err := ConvertOffHoursToCron(windows)
+	if err != nil {
+		return nil, fmt.Errorf("convert windows to cron: %w", err)
+	}
+
+	window := ScheduleWindow{
+		HibernateCron: hibernateCron,
+		WakeUpCron:    wakeUpCron,
+		Timezone:      timezone,
+	}
+
+	return e.Evaluate(window, now)
+}
+
+// evaluateExtend combines base windows with exception windows (union).
+// This means hibernation occurs during BOTH base and exception windows.
+func (e *ScheduleEvaluator) evaluateExtend(baseWindows, exceptionWindows []OffHourWindow, timezone string, now time.Time) (*EvaluationResult, error) {
+	// Evaluate base schedule
+	baseResult, err := e.evaluateWindows(baseWindows, timezone, now)
+	if err != nil {
+		return nil, fmt.Errorf("evaluate base windows: %w", err)
+	}
+
+	// Evaluate exception windows
+	exceptionResult, err := e.evaluateWindows(exceptionWindows, timezone, now)
+	if err != nil {
+		return nil, fmt.Errorf("evaluate exception windows: %w", err)
+	}
+
+	// Union: hibernate if EITHER schedule says hibernate
+	shouldHibernate := baseResult.ShouldHibernate || exceptionResult.ShouldHibernate
+
+	// Calculate next events (take the earlier of the two for each)
+	nextHibernate := earlierTime(baseResult.NextHibernateTime, exceptionResult.NextHibernateTime)
+	nextWakeUp := earlierTime(baseResult.NextWakeUpTime, exceptionResult.NextWakeUpTime)
+
+	state := "active"
+	if shouldHibernate {
+		state = "hibernated"
+	}
+
+	return &EvaluationResult{
+		ShouldHibernate:   shouldHibernate,
+		NextHibernateTime: nextHibernate,
+		NextWakeUpTime:    nextWakeUp,
+		CurrentState:      state,
+	}, nil
+}
+
+// evaluateSuspend evaluates schedule with suspension windows.
+// Suspension PREVENTS hibernation during exception windows, even if base schedule says hibernate.
+// Lead time prevents NEW hibernation starts within the buffer before suspension.
+func (e *ScheduleEvaluator) evaluateSuspend(baseWindows []OffHourWindow, exception *Exception, timezone string, now time.Time) (*EvaluationResult, error) {
+	loc, err := time.LoadLocation(timezone)
+	if err != nil {
+		return nil, fmt.Errorf("invalid timezone %s: %w", timezone, err)
+	}
+
+	localNow := now.In(loc)
+
+	// First evaluate base schedule
+	baseResult, err := e.evaluateWindows(baseWindows, timezone, now)
+	if err != nil {
+		return nil, fmt.Errorf("evaluate base windows: %w", err)
+	}
+
+	// Check if we're currently in a suspension window
+	inSuspensionWindow := e.isInTimeWindows(exception.Windows, localNow)
+
+	// Check if we're in lead time window (before suspension starts)
+	inLeadTimeWindow := false
+	if exception.LeadTime > 0 {
+		inLeadTimeWindow = e.isInLeadTimeWindow(exception.Windows, localNow, exception.LeadTime)
+	}
+
+	// Determine final hibernation state
+	// - If in suspension window: DON'T hibernate (override base)
+	// - If in lead time window AND base says start hibernating: DON'T start (but ongoing hibernation continues)
+	// - Otherwise: follow base schedule
+	shouldHibernate := baseResult.ShouldHibernate
+
+	if inSuspensionWindow {
+		// Suspension active - keep awake regardless of base schedule
+		shouldHibernate = false
+	} else if inLeadTimeWindow && !baseResult.ShouldHibernate {
+		// In lead time window but not currently hibernated
+		// Don't start hibernation (will wait until after suspension)
+		// Note: If already hibernated, continue hibernating until suspension window starts
+	} else if inLeadTimeWindow && baseResult.ShouldHibernate {
+		// In lead time window and base says hibernate
+		// This is ambiguous - we need to check if hibernation just started or was already ongoing
+		// For simplicity, we'll prevent hibernation during lead time
+		// (In a more sophisticated implementation, we'd track hibernation start time)
+		shouldHibernate = false
+	}
+
+	state := "active"
+	if shouldHibernate {
+		state = "hibernated"
+	}
+
+	// Calculate next events considering suspension
+	nextHibernate := baseResult.NextHibernateTime
+	nextWakeUp := baseResult.NextWakeUpTime
+
+	// If in suspension or lead time, we may need to adjust next hibernate time
+	if inSuspensionWindow || inLeadTimeWindow {
+		// Find when suspension ends to recalculate
+		suspensionEnd := e.findSuspensionEnd(exception.Windows, localNow)
+		if !suspensionEnd.IsZero() && suspensionEnd.After(localNow) {
+			// Schedule check after suspension ends
+			if suspensionEnd.Before(nextHibernate) || nextHibernate.IsZero() {
+				nextHibernate = suspensionEnd
+			}
+		}
+	}
+
+	return &EvaluationResult{
+		ShouldHibernate:   shouldHibernate,
+		NextHibernateTime: nextHibernate,
+		NextWakeUpTime:    nextWakeUp,
+		CurrentState:      state,
+	}, nil
+}
+
+// isInTimeWindows checks if the current time falls within any of the time windows.
+func (e *ScheduleEvaluator) isInTimeWindows(windows []OffHourWindow, now time.Time) bool {
+	currentDay := strings.ToUpper(now.Weekday().String()[:3])
+	currentHour := now.Hour()
+	currentMin := now.Minute()
+	currentTimeMinutes := currentHour*60 + currentMin
+
+	for _, w := range windows {
+		// Check if today is in the window's days
+		dayMatch := false
+		for _, day := range w.DaysOfWeek {
+			if strings.EqualFold(day, currentDay) {
+				dayMatch = true
+				break
+			}
+		}
+		if !dayMatch {
+			continue
+		}
+
+		// Parse window times
+		startHour, startMin, err := parseTime(w.Start)
+		if err != nil {
+			continue
+		}
+		endHour, endMin, err := parseTime(w.End)
+		if err != nil {
+			continue
+		}
+
+		startMinutes := startHour*60 + startMin
+		endMinutes := endHour*60 + endMin
+
+		// Check if current time is within the window
+		if endMinutes > startMinutes {
+			// Same-day window (e.g., 09:00 to 17:00)
+			if currentTimeMinutes >= startMinutes && currentTimeMinutes < endMinutes {
+				return true
+			}
+		} else {
+			// Overnight window (e.g., 20:00 to 06:00)
+			// Current time is in window if: after start OR before end
+			if currentTimeMinutes >= startMinutes || currentTimeMinutes < endMinutes {
+				return true
+			}
+		}
+	}
+
+	return false
+}
+
+// isInLeadTimeWindow checks if we're within lead time before any suspension window.
+func (e *ScheduleEvaluator) isInLeadTimeWindow(windows []OffHourWindow, now time.Time, leadTime time.Duration) bool {
+	currentDay := strings.ToUpper(now.Weekday().String()[:3])
+	currentHour := now.Hour()
+	currentMin := now.Minute()
+	currentTimeMinutes := currentHour*60 + currentMin
+	leadTimeMinutes := int(leadTime.Minutes())
+
+	for _, w := range windows {
+		// Check if today is in the window's days
+		dayMatch := false
+		for _, day := range w.DaysOfWeek {
+			if strings.EqualFold(day, currentDay) {
+				dayMatch = true
+				break
+			}
+		}
+		if !dayMatch {
+			continue
+		}
+
+		// Parse window start time
+		startHour, startMin, err := parseTime(w.Start)
+		if err != nil {
+			continue
+		}
+
+		startMinutes := startHour*60 + startMin
+		leadStartMinutes := startMinutes - leadTimeMinutes
+
+		// Handle wrap-around for lead time crossing midnight
+		if leadStartMinutes < 0 {
+			leadStartMinutes += 24 * 60
+		}
+
+		// Check if current time is in lead time window (before start, within lead time)
+		if leadStartMinutes < startMinutes {
+			// Normal case: lead time window doesn't cross midnight
+			if currentTimeMinutes >= leadStartMinutes && currentTimeMinutes < startMinutes {
+				return true
+			}
+		} else {
+			// Lead time crosses midnight
+			if currentTimeMinutes >= leadStartMinutes || currentTimeMinutes < startMinutes {
+				return true
+			}
+		}
+	}
+
+	return false
+}
+
+// findSuspensionEnd finds when the current or upcoming suspension window ends.
+func (e *ScheduleEvaluator) findSuspensionEnd(windows []OffHourWindow, now time.Time) time.Time {
+	currentDay := strings.ToUpper(now.Weekday().String()[:3])
+	currentHour := now.Hour()
+	currentMin := now.Minute()
+	currentTimeMinutes := currentHour*60 + currentMin
+
+	for _, w := range windows {
+		// Check if today is in the window's days
+		dayMatch := false
+		for _, day := range w.DaysOfWeek {
+			if strings.EqualFold(day, currentDay) {
+				dayMatch = true
+				break
+			}
+		}
+		if !dayMatch {
+			continue
+		}
+
+		// Parse window times
+		startHour, startMin, err := parseTime(w.Start)
+		if err != nil {
+			continue
+		}
+		endHour, endMin, err := parseTime(w.End)
+		if err != nil {
+			continue
+		}
+
+		startMinutes := startHour*60 + startMin
+		endMinutes := endHour*60 + endMin
+
+		// Check if we're currently in this window
+		inWindow := false
+		if endMinutes > startMinutes {
+			// Same-day window
+			inWindow = currentTimeMinutes >= startMinutes && currentTimeMinutes < endMinutes
+		} else {
+			// Overnight window
+			inWindow = currentTimeMinutes >= startMinutes || currentTimeMinutes < endMinutes
+		}
+
+		if inWindow {
+			// Calculate when this window ends
+			endTime := time.Date(now.Year(), now.Month(), now.Day(), endHour, endMin, 0, 0, now.Location())
+			if endMinutes <= startMinutes && currentTimeMinutes >= startMinutes {
+				// Overnight window, end is tomorrow
+				endTime = endTime.Add(24 * time.Hour)
+			}
+			return endTime
+		}
+	}
+
+	return time.Time{}
+}
+
+// earlierTime returns the earlier of two times, ignoring zero times.
+func earlierTime(a, b time.Time) time.Time {
+	if a.IsZero() {
+		return b
+	}
+	if b.IsZero() {
+		return a
+	}
+	if a.Before(b) {
+		return a
+	}
+	return b
 }
 
 // ValidateCron validates a cron expression.

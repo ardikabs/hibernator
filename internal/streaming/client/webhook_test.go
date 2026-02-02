@@ -221,7 +221,7 @@ func TestWebhookClient_ReportProgress_WithServer(t *testing.T) {
 
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path == "/v1alpha1/progress" && r.Method == http.MethodPost {
-			resp := streamingv1alpha1.ProgressResponse{Acknowledged: true}
+			resp := &streamingv1alpha1.ProgressResponse{Acknowledged: true}
 			json.NewEncoder(w).Encode(resp)
 			return
 		}
@@ -250,7 +250,7 @@ func TestWebhookClient_ReportProgress_NotAcknowledged(t *testing.T) {
 
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path == "/v1alpha1/progress" {
-			resp := streamingv1alpha1.ProgressResponse{Acknowledged: false}
+			resp := &streamingv1alpha1.ProgressResponse{Acknowledged: false}
 			json.NewEncoder(w).Encode(resp)
 			return
 		}
@@ -283,7 +283,7 @@ func TestWebhookClient_ReportCompletion_WithServer(t *testing.T) {
 			return
 		}
 		if r.URL.Path == "/v1alpha1/completion" && r.Method == http.MethodPost {
-			resp := streamingv1alpha1.CompletionResponse{
+			resp := &streamingv1alpha1.CompletionResponse{
 				Acknowledged: true,
 				RestoreRef:   "restore-123",
 			}

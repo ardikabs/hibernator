@@ -1,0 +1,124 @@
+# ScheduleException Sample Configurations
+# These examples demonstrate the three exception types: extend, suspend, and replace
+
+---
+# Example 1: Extend hibernation for weekend event
+# Adds Saturday/Sunday hibernation windows to the base schedule
+apiVersion: hibernator.ardikabs.com/v1alpha1
+kind: ScheduleException
+metadata:
+  name: conference-weekend
+  namespace: hibernator-system
+spec:
+  planRef:
+    name: dev-plan
+    # namespace defaults to exception's namespace if omitted
+  type: extend
+  validFrom: "2026-02-10T00:00:00Z"
+  validUntil: "2026-02-15T23:59:59Z"
+  windows:
+    - start: "00:00"
+      end: "23:59"  # Hibernate entire day
+      daysOfWeek: ["SAT", "SUN"]
+
+---
+# Example 2: Extend hibernation for additional work windows
+# Adds early morning hibernation windows on weekdays
+apiVersion: hibernator.ardikabs.com/v1alpha1
+kind: ScheduleException
+metadata:
+  name: early-bird-support
+  namespace: hibernator-system
+spec:
+  planRef:
+    name: dev-plan
+  type: extend
+  validFrom: "2026-01-29T00:00:00Z"
+  validUntil: "2026-02-28T23:59:59Z"
+  windows:
+    - start: "01:00"
+      end: "06:00"
+      daysOfWeek: ["MON", "TUE", "WED", "THU", "FRI"]
+
+---
+# Example 3: Suspend hibernation with lead time (maintenance window)
+# Prevents hibernation during specified window with 1-hour buffer
+apiVersion: hibernator.ardikabs.com/v1alpha1
+kind: ScheduleException
+metadata:
+  name: maintenance-window
+  namespace: hibernator-system
+spec:
+  planRef:
+    name: prod-plan
+  type: suspend
+  validFrom: "2026-02-01T20:00:00Z"
+  validUntil: "2026-02-02T02:00:00Z"
+  leadTime: "1h"  # Don't start hibernation within 1 hour before suspension
+  windows:
+    - start: "21:00"
+      end: "02:00"
+      daysOfWeek: ["SAT"]
+
+---
+# Example 4: Suspend hibernation for incident response
+# Keep services awake during incident without lead time
+apiVersion: hibernator.ardikabs.com/v1alpha1
+kind: ScheduleException
+metadata:
+  name: incident-override
+  namespace: hibernator-system
+spec:
+  planRef:
+    name: prod-plan
+  type: suspend
+  validFrom: "2026-02-03T00:00:00Z"
+  validUntil: "2026-02-04T23:59:59Z"
+  # No leadTime - immediate suspension of hibernation
+  windows:
+    - start: "00:00"
+      end: "23:59"
+      daysOfWeek: ["MON", "TUE", "WED", "THU", "FRI", "SAT", "SUN"]
+
+---
+# Example 5: Replace schedule for holiday week
+# Completely replaces base schedule during holiday period
+apiVersion: hibernator.ardikabs.com/v1alpha1
+kind: ScheduleException
+metadata:
+  name: holiday-week
+  namespace: hibernator-system
+spec:
+  planRef:
+    name: prod-plan
+  type: replace
+  validFrom: "2026-12-24T00:00:00Z"
+  validUntil: "2026-12-31T23:59:59Z"
+  windows:
+    - start: "00:00"
+      end: "23:59"  # Always hibernated (skeleton crew)
+      daysOfWeek: ["MON", "TUE", "WED", "THU", "FRI", "SAT", "SUN"]
+
+---
+# Example 6: On-site event (complex multi-window extension)
+# Demonstrates multiple time windows for different days
+apiVersion: hibernator.ardikabs.com/v1alpha1
+kind: ScheduleException
+metadata:
+  name: on-site-event
+  namespace: hibernator-system
+spec:
+  planRef:
+    name: event-support
+  type: extend
+  validFrom: "2026-01-29T00:00:00Z"
+  validUntil: "2026-02-28T23:59:59Z"
+  windows:
+    # Weekend support windows
+    - start: "06:00"
+      end: "11:00"
+      daysOfWeek: ["SAT", "SUN"]
+    # Early morning support on weekdays
+    - start: "01:00"
+      end: "06:00"
+      daysOfWeek: ["MON", "TUE", "WED", "THU", "FRI"]

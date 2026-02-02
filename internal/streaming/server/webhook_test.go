@@ -36,7 +36,7 @@ func TestProgressReportPayload(t *testing.T) {
 		Phase:           "Executing",
 		ProgressPercent: 50,
 		Message:         "Half done",
-		Timestamp:   time.Now().Format(time.RFC3339),
+		Timestamp:       time.Now().Format(time.RFC3339),
 	}
 	data, err := json.Marshal(report)
 	if err != nil {

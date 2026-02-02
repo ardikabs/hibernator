@@ -94,4 +94,3 @@ func resolveRestConfig(cfg *K8SConnectorConfig) (*rest.Config, error) {
 
 	return restConfig, nil
 }
-
