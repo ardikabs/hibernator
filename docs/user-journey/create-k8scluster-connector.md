@@ -48,7 +48,7 @@ Generic (on-prem, local) → Use spec.k8s
 Hibernator generates EKS tokens automatically from CloudProvider credentials.
 
 ```yaml
-apiVersion: connector.hibernator.ardikasaputro.io/v1alpha1
+apiVersion: hibernator.ardikabs.com/v1alpha1
 kind: K8SCluster
 metadata:
   name: prod-eks-1
@@ -86,7 +86,7 @@ kubectl create secret generic kubeconfig-prod-gke \
 Then create K8SCluster reference:
 
 ```yaml
-apiVersion: connector.hibernator.ardikasaputro.io/v1alpha1
+apiVersion: hibernator.ardikabs.com/v1alpha1
 kind: K8SCluster
 metadata:
   name: prod-gke-1
@@ -103,7 +103,7 @@ spec:
 If runner runs in the same cluster as target, use in-cluster service account:
 
 ```yaml
-apiVersion: connector.hibernator.ardikasaputro.io/v1alpha1
+apiVersion: hibernator.ardikabs.com/v1alpha1
 kind: K8SCluster
 metadata:
   name: self-cluster
@@ -132,7 +132,7 @@ Create a test plan to verify cluster access:
 
 ```bash
 kubectl apply -f - <<EOF
-apiVersion: hibernator.ardikasaputro.io/v1alpha1
+apiVersion: hibernator.ardikabs.com/v1alpha1
 kind: HibernationPlan
 metadata:
   name: k8s-connectivity-test

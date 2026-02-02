@@ -236,7 +236,7 @@ grep '"verb":"create".*"resource":"hibernateplans"' \
 #   "auditID": "91583...",
 #   "stage": "ResponseComplete",
 #   "requestObject": {
-#     "apiVersion": "hibernator.ardikasaputro.io/v1alpha1",
+#     "apiVersion": "hibernator.ardikabs.com/v1alpha1",
 #     "kind": "HibernationPlan",
 #     "metadata": {
 #       "name": "prod-offhours",

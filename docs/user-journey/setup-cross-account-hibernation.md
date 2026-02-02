@@ -130,7 +130,7 @@ aws iam put-role-policy \
 ### 5. **In PROD: Create CloudProvider for cross-account access**
 
 ```yaml
-apiVersion: connector.hibernator.ardikasaputro.io/v1alpha1
+apiVersion: hibernator.ardikabs.com/v1alpha1
 kind: CloudProvider
 metadata:
   name: aws-dev-crossaccount
@@ -149,7 +149,7 @@ spec:
 ### 6. **In PROD: Create HibernationPlan targeting dev resources**
 
 ```yaml
-apiVersion: hibernator.ardikasaputro.io/v1alpha1
+apiVersion: hibernator.ardikabs.com/v1alpha1
 kind: HibernationPlan
 metadata:
   name: cross-account-hibernation

@@ -96,7 +96,9 @@ Advanced workflows for exception handling, governance, and multi-environment man
 | **Suspend Hibernation During Incident** | Create a carve-out from hibernation to keep services awake during incidents | On-Call Engineer, SRE | ✅ Implemented | RFC-0003 | [Details](./suspend-hibernation-during-incident.md) |
 | **Setup IRSA Authentication** | Use IAM Roles for Service Accounts (IRSA) for secure AWS credential access | Cloud Administrator, DevOps | ✅ Implemented | RFC-0001 | [Details](./setup-irsa-authentication.md) |
 | **Configure RBAC for Hibernation** | Set up Kubernetes RBAC to control who can create/manage hibernation plans | DevOps Engineer, Cluster Operator | ✅ Implemented | RFC-0001 | [Details](./configure-rbac-for-hibernation.md) |
-| **Integrate with GitOps** | Add HibernatePlans to version-controlled infrastructure-as-code pipelines | DevOps Engineer, Platform Engineer | 📋 Planned | RFC-0001, RFC-0002 | [Details](./integrate-with-gitops.md) |
+| **Approve Hibernation Exceptions** | Review and approve temporary schedule exceptions for compliance and governance | Engineering Manager, Engineering Head | 📋 Planned (Future) | RFC-0003 Phase 4 | [Details](./approve-hibernation-exceptions.md) |
+| **Scale Workloads in Cluster** | Downscale Kubernetes workloads (Deployments, StatefulSets) during hibernation | Platform Engineer, SRE | ✅ Implemented | RFC-0004 | [Details](./scale-workloads-in-cluster.md) |
+| **Integrate with GitOps** | Add HibernatePlans to version-controlled infrastructure-as-code pipelines | DevOps Engineer, Platform Engineer | ✅ Implemented | RFC-0001, RFC-0002 | [Details](./integrate-with-gitops.md) |
 | **Manage Multi-Environment Schedules** | Create different hibernation policies for DEV, STG, and PROD environments | Platform Engineer, Team Lead | 🔧 Under Maintenance | RFC-0001, RFC-0002 | [Details](./manage-multi-environment-schedules.md) |
 
 ### Advanced Tier — Multi-Cloud, Admin, Cross-Organization (5 journeys)
@@ -105,11 +107,11 @@ Enterprise-scale deployments with compliance, audit, and multi-tenant support.
 
 | Journey | Business Outcome | Personas | Status | RFCs | Link |
 |---------|------------------|----------|--------|------|------|
-| **Setup Cross-Account Hibernation** | Allow prod account to manage hibernation of resources in dev/staging accounts | Cloud Administrator, Platform Engineer | 📋 Planned | RFC-0001 | [Details](./setup-cross-account-hibernation.md) |
+| **Setup Cross-Account Hibernation** | Allow prod account to manage hibernation of resources in dev/staging accounts | Cloud Administrator, Platform Engineer | ✅ Implemented | RFC-0001 | [Details](./setup-cross-account-hibernation.md) |
 | **Audit Hibernation Operations** | Create compliance trails for all hibernation operations via CloudTrail and K8S audit logs | Security Officer, Compliance Officer | ⏳ Proposed | RFC-0001 | [Details](./audit-hibernation-operations.md) |
-| **Manage Runner Streaming Configuration** | Configure gRPC or webhook streaming for real-time execution logs and progress | DevOps Engineer, SRE | 🚀 In Progress | RFC-0001 | [Details](./manage-runner-streaming-config.md) |
+| **Manage Runner Streaming Configuration** | Configure gRPC or webhook streaming for real-time execution logs and progress | DevOps Engineer, SRE | ✅ Implemented | RFC-0001 Phase 3 | [Details](./manage-runner-streaming-config.md) |
 | **Scale Hibernation Across Organizations** | Extend hibernation operator to support multiple organizations/teams safely | Enterprise Administrator, Platform Engineer | ⏳ Proposed | RFC-0001, RFC-0003 | [Details](./scale-hibernation-across-organizations.md) |
-| **Migrate from CronJob to Schedules** | Transition from ad-hoc scripts/CronJobs to declarative HibernatePlans | Platform Engineer, DevOps | 📋 Planned | RFC-0001, RFC-0002 | [Details](./migrate-from-cronjob-to-schedules.md) |
+| **Migrate from CronJob to Schedules** | Transition from ad-hoc scripts/CronJobs to declarative HibernatePlans | Platform Engineer, DevOps | ✅ Implemented | RFC-0001, RFC-0002 | [Details](./migrate-from-cronjob-to-schedules.md) |
 
 ---
 
@@ -177,4 +179,4 @@ Found an issue or have suggestions? [Open an issue](https://github.com/ardikasap
 ---
 
 **Last Updated**: February 2026
-**Total Journeys**: 26 (11 MVP + 10 Enhanced + 5 Advanced)
+**Total Journeys**: 25 (11 MVP + 9 Enhanced + 5 Advanced)

@@ -110,7 +110,7 @@ CronJob: ec2-stop + ec2-start
 ### 4. **Create CloudProvider connector**
 
 ```yaml
-apiVersion: connector.hibernator.ardikasaputro.io/v1alpha1
+apiVersion: hibernator.ardikabs.com/v1alpha1
 kind: CloudProvider
 metadata:
   name: aws-prod
@@ -127,7 +127,7 @@ spec:
 ### 5. **Create initial HibernationPlan from CronJobs**
 
 ```yaml
-apiVersion: hibernator.ardikasaputro.io/v1alpha1
+apiVersion: hibernator.ardikabs.com/v1alpha1
 kind: HibernationPlan
 metadata:
   name: prod-offhours-migration
@@ -331,7 +331,7 @@ To immediately stop/start resources:
 ```bash
 # Create suspend exception for incidents
 kubectl apply -f - <<EOF
-apiVersion: hibernator.ardikasaputro.io/v1alpha1
+apiVersion: hibernator.ardikabs.com/v1alpha1
 kind: HibernationPlan
 metadata:
   name: prod-offhours-migration

@@ -52,7 +52,7 @@ PROD         │ 22:00-06:00 weekday nights │ Conservative    │ 20-30%
 ### 2. **Create DEV hibernation plan**
 
 ```yaml
-apiVersion: hibernator.ardikasaputro.io/v1alpha1
+apiVersion: hibernator.ardikabs.com/v1alpha1
 kind: HibernationPlan
 metadata:
   name: dev-aggressive-hibernation
@@ -98,7 +98,7 @@ spec:
 ### 3. **Create STG hibernation plan**
 
 ```yaml
-apiVersion: hibernator.ardikasaputro.io/v1alpha1
+apiVersion: hibernator.ardikabs.com/v1alpha1
 kind: HibernationPlan
 metadata:
   name: stg-moderate-hibernation
@@ -151,7 +151,7 @@ spec:
 ### 4. **Create PROD hibernation plan**
 
 ```yaml
-apiVersion: hibernator.ardikasaputro.io/v1alpha1
+apiVersion: hibernator.ardikabs.com/v1alpha1
 kind: HibernationPlan
 metadata:
   name: prod-conservative-hibernation
@@ -241,7 +241,7 @@ hibernator_hibernation_cost_saved{environment="prod"}  # ~20% savings
 If STG needs extended hibernation for specific event:
 
 ```yaml
-apiVersion: hibernator.ardikasaputro.io/v1alpha1
+apiVersion: hibernator.ardikabs.com/v1alpha1
 kind: HibernationPlan
 metadata:
   name: stg-moderate-hibernation

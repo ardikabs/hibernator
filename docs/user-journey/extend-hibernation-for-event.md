@@ -10,6 +10,16 @@
 
 ---
 
+> **👉 RFC-0003 Implementation Status**
+> This journey covers features from **RFC-0003 Phase 1-3** (✅ Implemented):
+> - Independent ScheduleException CRD
+> - Extend exception type (add additional hibernation windows)
+> - Time-bound exceptions with auto-expiration
+>
+> **NOT covered:** Approval workflow (Phase 4, future work)
+
+---
+
 ## User Stories
 
 **Story 1:** As a **Team Lead**, I want to **extend hibernation for on-site events or sprint push**, so that **cost savings continue during the event period**.

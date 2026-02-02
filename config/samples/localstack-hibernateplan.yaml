@@ -1,4 +1,4 @@
-apiVersion: connector.hibernator.ardikabs.com/v1alpha1
+apiVersion: hibernator.ardikabs.com/v1alpha1
 kind: CloudProvider
 metadata:
   name: localstack

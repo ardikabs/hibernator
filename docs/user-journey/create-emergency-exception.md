@@ -10,6 +10,17 @@
 
 ---
 
+> **👉 RFC-0003 Implementation Status**
+> This journey covers features from **RFC-0003 Phase 1-3** (✅ Implemented):
+> - Independent ScheduleException CRD
+> - Exception types: extend, suspend, replace
+> - Lead time for suspend type
+> - Automatic expiration
+>
+> **NOT covered:** Approval workflow (Phase 4, future work)
+
+---
+
 ## User Stories
 
 **Story 1:** As an **On-Call Engineer**, I want to **quickly create an emergency exception during an incident**, so that **services remain available without delay**.

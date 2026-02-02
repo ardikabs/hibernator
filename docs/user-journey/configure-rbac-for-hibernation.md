@@ -40,9 +40,9 @@ Enforce RBAC policies so different teams can safely manage hibernation without i
 ### 1. **Understand Hibernator RBAC resources**
 
 Hibernator exposes these CRDs:
-- `hibernateplans.hibernator.ardikasaputro.io` — Main hibernation intent
-- `cloudproviders.connector.hibernator.ardikasaputro.io` — Cloud credentials
-- `k8sclusters.connector.hibernator.ardikasaputro.io` — Cluster access
+- `hibernateplans.hibernator.ardikabs.com` — Main hibernation intent
+- `cloudproviders.hibernator.ardikabs.com` — Cloud credentials
+- `k8sclusters.hibernator.ardikabs.com` — Cluster access
 
 RBAC can control:
 - `get`, `list`, `watch` — Read-only
@@ -73,17 +73,17 @@ metadata:
   namespace: hibernator-team-a
 rules:
   # HibernationPlans: full access
-  - apiGroups: ["hibernator.ardikasaputro.io"]
+  - apiGroups: ["hibernator.ardikabs.com"]
     resources: ["hibernateplans"]
     verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
 
   # CloudProviders: view only (managed by platform team)
-  - apiGroups: ["connector.hibernator.ardikasaputro.io"]
+  - apiGroups: ["hibernator.ardikabs.com"]
     resources: ["cloudproviders"]
     verbs: ["get", "list", "watch"]
 
   # K8SClusters: view only (managed by platform team)
-  - apiGroups: ["connector.hibernator.ardikasaputro.io"]
+  - apiGroups: ["hibernator.ardikabs.com"]
     resources: ["k8sclusters"]
     verbs: ["get", "list", "watch"]
 
@@ -105,11 +105,11 @@ metadata:
   name: hibernator-platform-admin
 rules:
   # All access to all Hibernator resources
-  - apiGroups: ["hibernator.ardikasaputro.io"]
+  - apiGroups: ["hibernator.ardikabs.com"]
     resources: ["hibernateplans", "hibernateplans/status"]
     verbs: ["*"]
 
-  - apiGroups: ["connector.hibernator.ardikasaputro.io"]
+  - apiGroups: ["hibernator.ardikabs.com"]
     resources: ["cloudproviders", "k8sclusters"]
     verbs: ["*"]
 
@@ -172,7 +172,7 @@ kubectl create -f hibernateplan-team-a.yaml -n hibernator-team-a
 
 # Try to access team-b's plan (should fail)
 kubectl get hibernateplans -n hibernator-team-b
-# Error: hibernateplans.hibernator.ardikasaputro.io is forbidden: User "alice" cannot list resource "hibernateplans" in API group "hibernator.ardikasaputro.io" in the namespace "hibernator-team-b"
+# Error: hibernateplans.hibernator.ardikabs.com is forbidden: User "alice" cannot list resource "hibernateplans" in API group "hibernator.ardikabs.com" in the namespace "hibernator-team-b"
 
 # As platform team, manage connectors
 kubectl get cloudproviders
@@ -205,12 +205,12 @@ metadata:
   namespace: hibernator-team-a
 rules:
   # Approve exceptions (custom subresource action)
-  - apiGroups: ["hibernator.ardikasaputro.io"]
+  - apiGroups: ["hibernator.ardikabs.com"]
     resources: ["hibernateplans/exceptions/approve"]
     verbs: ["create"]
 
   # View exceptions (not edit base plan)
-  - apiGroups: ["hibernator.ardikasaputro.io"]
+  - apiGroups: ["hibernator.ardikabs.com"]
     resources: ["hibernateplans"]
     verbs: ["get", "list", "watch"]
 ```

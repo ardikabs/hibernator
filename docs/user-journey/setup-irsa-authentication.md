@@ -202,7 +202,7 @@ $ aws ec2 describe-instances --max-results 1
 ### 8. **Create CloudProvider CR using IRSA**
 
 ```yaml
-apiVersion: connector.hibernator.ardikasaputro.io/v1alpha1
+apiVersion: hibernator.ardikabs.com/v1alpha1
 kind: CloudProvider
 metadata:
   name: aws-prod
@@ -252,7 +252,7 @@ aws iam create-role \
 aws iam put-role-policy --role-name hibernator-target ...
 
 # In SOURCE account: Update CloudProvider to assume role
-apiVersion: connector.hibernator.ardikasaputro.io/v1alpha1
+apiVersion: hibernator.ardikabs.com/v1alpha1
 kind: CloudProvider
 metadata:
   name: aws-prod

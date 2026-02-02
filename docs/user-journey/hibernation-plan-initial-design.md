@@ -186,7 +186,7 @@ behavior:
 Combine all decisions into a Kubernetes manifest:
 
 ```yaml
-apiVersion: hibernator.ardikasaputro.io/v1alpha1
+apiVersion: hibernator.ardikabs.com/v1alpha1
 kind: HibernatePlan
 metadata:
   name: prod-offhours

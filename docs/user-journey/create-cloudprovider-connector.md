@@ -128,7 +128,7 @@ kubectl create secret generic aws-credentials \
 **With IRSA:**
 
 ```yaml
-apiVersion: connector.hibernator.ardikasaputro.io/v1alpha1
+apiVersion: hibernator.ardikabs.com/v1alpha1
 kind: CloudProvider
 metadata:
   name: aws-prod
@@ -145,7 +145,7 @@ spec:
 **With static credentials:**
 
 ```yaml
-apiVersion: connector.hibernator.ardikasaputro.io/v1alpha1
+apiVersion: hibernator.ardikabs.com/v1alpha1
 kind: CloudProvider
 metadata:
   name: aws-prod
@@ -165,7 +165,7 @@ spec:
 **With AssumeRole (cross-account):**
 
 ```yaml
-apiVersion: connector.hibernator.ardikasaputro.io/v1alpha1
+apiVersion: hibernator.ardikabs.com/v1alpha1
 kind: CloudProvider
 metadata:
   name: aws-prod
@@ -201,7 +201,7 @@ Create a simple test to verify credentials work:
 ```bash
 # Create a test HibernationPlan that uses this connector
 kubectl apply -f - <<EOF
-apiVersion: hibernator.ardikasaputro.io/v1alpha1
+apiVersion: hibernator.ardikabs.com/v1alpha1
 kind: HibernationPlan
 metadata:
   name: connectivity-test

@@ -62,7 +62,7 @@ my-infrastructure-repo/
 
 ```yaml
 # hibernator/cloudproviders/aws-prod.yaml
-apiVersion: connector.hibernator.ardikasaputro.io/v1alpha1
+apiVersion: hibernator.ardikabs.com/v1alpha1
 kind: CloudProvider
 metadata:
   name: aws-prod
@@ -84,7 +84,7 @@ spec:
 
 ```yaml
 # hibernator/k8sclusters/eks-prod.yaml
-apiVersion: connector.hibernator.ardikasaputro.io/v1alpha1
+apiVersion: hibernator.ardikabs.com/v1alpha1
 kind: K8SCluster
 metadata:
   name: eks-prod
@@ -105,7 +105,7 @@ spec:
 
 ```yaml
 # hibernator/hibernateplans/prod-offhours.yaml
-apiVersion: hibernator.ardikasaputro.io/v1alpha1
+apiVersion: hibernator.ardikabs.com/v1alpha1
 kind: HibernationPlan
 metadata:
   name: prod-offhours

@@ -39,7 +39,7 @@ Install and configure Hibernator Operator so it can begin managing hibernation o
 ### 1. **Add Hibernator Helm repository**
 
 ```bash
-helm repo add hibernator https://charts.hibernator.ardikasaputro.io
+helm repo add hibernator https://charts.hibernator.ardikabs.com
 helm repo update
 ```
 
@@ -115,9 +115,9 @@ kubectl get pods -n hibernator-system
 # Check CRDs installed
 kubectl get crds | grep hibernator
 # Output:
-# hibernateplans.hibernator.ardikasaputro.io
-# cloudproviders.hibernator.ardikasaputro.io
-# k8sclusters.hibernator.ardikasaputro.io
+# hibernateplans.hibernator.ardikabs.com
+# cloudproviders.hibernator.ardikabs.com
+# k8sclusters.hibernator.ardikabs.com
 
 # Check webhook is ready
 kubectl get validatingwebhookconfigurations | grep hibernator
@@ -141,7 +141,7 @@ kubectl logs -n hibernator-system deployment/hibernator-controller -f
 Create a simple test plan:
 
 ```yaml
-apiVersion: hibernator.ardikasaputro.io/v1alpha1
+apiVersion: hibernator.ardikabs.com/v1alpha1
 kind: HibernationPlan
 metadata:
   name: test-hibernation

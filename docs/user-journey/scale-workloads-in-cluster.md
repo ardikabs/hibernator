@@ -65,7 +65,7 @@ workloadSelector:       # Label selector for workloads within namespaces
 ### 2. **Create HibernationPlan with workloadscaler target**
 
 ```yaml
-apiVersion: hibernator.ardikasaputro.io/v1alpha1
+apiVersion: hibernator.ardikabs.com/v1alpha1
 kind: HibernationPlan
 metadata:
   name: app-hibernation

@@ -10,6 +10,13 @@
 
 ---
 
+> **⚠️ FUTURE WORK NOTICE**
+> This journey describes the approval workflow feature documented in **RFC-0003 Phase 4**, which is **NOT YET IMPLEMENTED**.
+> Current implementation (Phase 1-3) supports creating ScheduleExceptions without approval workflow.
+> See [RFC-0003 "Future Work: Exception Approval Workflow"](../../enhancements/0003-schedule-exceptions.md#future-work-exception-approval-workflow) for the planned design.
+
+---
+
 ## User Stories
 
 **Story 1:** As an **Engineering Manager**, I want to **approve exceptions via Slack**, so that **I can review and approve without leaving my chat app**.
@@ -42,7 +49,7 @@ Enable organizations to approve temporary hibernation exceptions through their p
 All approaches start with an exception that requires approval:
 
 ```yaml
-apiVersion: hibernator.ardikasaputro.io/v1alpha1
+apiVersion: hibernator.ardikabs.com/v1alpha1
 kind: HibernationPlan
 metadata:
   name: prod-offhours

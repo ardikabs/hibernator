@@ -118,7 +118,7 @@ Executors can be:
 **`CloudProvider` Connector** (Access)
 
 ```yaml
-apiVersion: connector.hibernator.ardikabs.com/v1alpha1
+apiVersion: hibernator.ardikabs.com/v1alpha1
 kind: CloudProvider
 metadata:
   name: aws-stg
@@ -142,7 +142,7 @@ spec:
       #     name: stg-aws-access-key
       #     namespace: hibernator-system
 ---
-apiVersion: connector.hibernator.ardikabs.com/v1alpha1
+apiVersion: hibernator.ardikabs.com/v1alpha1
 kind: K8SCluster
 metadata:
   name: stg-eks-1

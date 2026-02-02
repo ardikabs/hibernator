@@ -95,7 +95,7 @@ metadata:
   namespace: team-a-hibernator
 rules:
   # Can manage HibernationPlans in their namespace only
-  - apiGroups: ["hibernator.ardikasaputro.io"]
+  - apiGroups: ["hibernator.ardikabs.com"]
     resources: ["hibernateplans", "cloudproviders", "k8sclusters"]
     verbs: ["create", "get", "list", "watch", "update", "patch", "delete"]
   # Can view status and events
@@ -148,7 +148,7 @@ hibernator:
 
 ```yaml
 # team-a connectors in team-a-hibernator namespace
-apiVersion: connector.hibernator.ardikasaputro.io/v1alpha1
+apiVersion: hibernator.ardikabs.com/v1alpha1
 kind: CloudProvider
 metadata:
   name: aws-team-a
@@ -162,7 +162,7 @@ spec:
       serviceAccount: {}
 
 ---
-apiVersion: connector.hibernator.ardikasaputro.io/v1alpha1
+apiVersion: hibernator.ardikabs.com/v1alpha1
 kind: CloudProvider
 metadata:
   name: gcp-team-a
@@ -259,7 +259,7 @@ hibernator_cost_after_hibernation_total{team="team-a"}
 ```yaml
 # Separate HibernationPlans per environment per team
 ---
-apiVersion: hibernator.ardikasaputro.io/v1alpha1
+apiVersion: hibernator.ardikabs.com/v1alpha1
 kind: HibernationPlan
 metadata:
   name: team-a-dev-offhours
@@ -280,7 +280,7 @@ spec:
       parameters:
         clusterName: team-a-dev-eks
 ---
-apiVersion: hibernator.ardikasaputro.io/v1alpha1
+apiVersion: hibernator.ardikabs.com/v1alpha1
 kind: HibernationPlan
 metadata:
   name: team-a-prod-offhours

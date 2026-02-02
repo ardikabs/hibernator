@@ -74,7 +74,7 @@ aws rds create-db-instance \
 Create a CloudProvider that points to LocalStack:
 
 ```yaml
-apiVersion: connector.hibernator.ardikabs.com/v1alpha1
+apiVersion: hibernator.ardikabs.com/v1alpha1
 kind: CloudProvider
 metadata:
   name: localstack

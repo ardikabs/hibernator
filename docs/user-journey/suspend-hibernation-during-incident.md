@@ -10,6 +10,17 @@
 
 ---
 
+> **👉 RFC-0003 Implementation Status**
+> This journey covers features from **RFC-0003 Phase 1-3** (✅ Implemented):
+> - Independent ScheduleException CRD
+> - Suspend exception type (carve-out from hibernation)
+> - Lead time configuration (prevents NEW hibernation starts)
+> - Automatic expiration
+>
+> **NOT covered:** Approval workflow (Phase 4, future work)
+
+---
+
 ## User Stories
 
 **Story 1:** As an **SRE**, I want to **create a carve-out from hibernation to keep services awake during incidents**, so that **critical fixes aren't interrupted**.
