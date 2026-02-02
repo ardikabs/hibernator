@@ -245,7 +245,8 @@ func (c *GRPCClient) ReportProgress(ctx context.Context, phase string, percent i
 }
 
 // ReportCompletion sends a completion report to the server via ReportCompletion RPC.
-func (c *GRPCClient) ReportCompletion(ctx context.Context, success bool, errorMsg string, durationMs int64, restoreData []byte) error {
+// Note: Restore data is persisted directly by runner to ConfigMap, not sent via streaming.
+func (c *GRPCClient) ReportCompletion(ctx context.Context, success bool, errorMsg string, durationMs int64) error {
 	c.mu.Lock()
 	if c.conn == nil {
 		c.mu.Unlock()
@@ -259,7 +260,6 @@ func (c *GRPCClient) ReportCompletion(ctx context.Context, success bool, errorMs
 		Success:      success,
 		ErrorMessage: errorMsg,
 		DurationMs:   durationMs,
-		RestoreData:  restoreData,
 		Timestamp:    time.Now().Format(time.RFC3339),
 	}
 

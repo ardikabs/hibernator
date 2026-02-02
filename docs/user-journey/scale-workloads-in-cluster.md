@@ -192,7 +192,7 @@ kubectl get cm restore-data-app-hibernation -o yaml
 When hibernation ends (06:00):
 
 ```bash
-# Controller loads restore data
+# Runner loads restore data from ConfigMap
 # Executor scales workloads back to original replica counts
 
 # After 2 minutes:

@@ -191,13 +191,13 @@ func (c *WebhookClient) ReportProgress(ctx context.Context, phase string, percen
 }
 
 // ReportCompletion sends a completion report to the server.
-func (c *WebhookClient) ReportCompletion(ctx context.Context, success bool, errorMsg string, durationMs int64, restoreData []byte) error {
+// Note: Restore data is persisted directly by runner to ConfigMap, not sent via streaming.
+func (c *WebhookClient) ReportCompletion(ctx context.Context, success bool, errorMsg string, durationMs int64) error {
 	report := &streamingv1alpha1.CompletionReport{
 		ExecutionId:  c.executionID,
 		Success:      success,
 		ErrorMessage: errorMsg,
 		DurationMs:   durationMs,
-		RestoreData:  restoreData,
 		Timestamp:    time.Now().Format(time.RFC3339),
 	}
 
@@ -221,10 +221,7 @@ func (c *WebhookClient) ReportCompletion(ctx context.Context, success bool, erro
 		return fmt.Errorf("completion not acknowledged")
 	}
 
-	c.log.Info("completion reported",
-		"success", success,
-		"restoreRef", response.RestoreRef,
-	)
+	c.log.Info("completion reported", "success", success)
 
 	return nil
 }

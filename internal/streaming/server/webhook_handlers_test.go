@@ -6,6 +6,7 @@ Licensed under the Apache License, Version 2.0.
 package server
 
 import (
+	"context"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
@@ -22,7 +23,7 @@ import (
 // testWebhookServer creates a webhook server with mocked dependencies for testing
 func testWebhookServer(t *testing.T) *WebhookServer {
 	log := logr.Discard()
-	execService := NewExecutionServiceServer(nil, nil, nil)
+	execService := NewExecutionServiceServer(nil, nil)
 
 	return &WebhookServer{
 		executionService: execService,
@@ -160,19 +161,8 @@ func TestProcessLog(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			ws.processLog(tt.entry)
-
-			// Verify log was stored
-			logs := ws.executionService.GetExecutionLogs(tt.entry.ExecutionId)
-			if len(logs) != 1 {
-				t.Errorf("expected 1 log, got %d", len(logs))
-			}
-			if logs[0].Message != tt.entry.Message {
-				t.Errorf("message = %s, want %s", logs[0].Message, tt.entry.Message)
-			}
-			if logs[0].Level != tt.entry.Level {
-				t.Errorf("level = %s, want %s", logs[0].Level, tt.entry.Level)
-			}
+			// processLog should not panic; logs are emitted to server log, not stored in-memory
+			ws.processLog(context.Background(), tt.entry)
 		})
 	}
 }
@@ -181,18 +171,14 @@ func TestProcessLog_MultipleEntries(t *testing.T) {
 	ws := testWebhookServer(t)
 	execID := "exec-multi-log"
 
+	// processLog should not panic when called multiple times; logs are emitted to server log
 	for i := 0; i < 5; i++ {
-		ws.processLog(&streamingv1alpha1.LogEntry{
+		ws.processLog(context.Background(), &streamingv1alpha1.LogEntry{
 			ExecutionId: execID,
 			Level:       "INFO",
 			Message:     "Log entry",
 			Timestamp:   time.Now().Format(time.RFC3339),
 		})
-	}
-
-	logs := ws.executionService.GetExecutionLogs(execID)
-	if len(logs) != 5 {
-		t.Errorf("expected 5 logs, got %d", len(logs))
 	}
 }
 
@@ -397,53 +383,5 @@ func TestInvalidPayloadBytes(t *testing.T) {
 		if len(payload) > 0 && string(payload) != "" && err == nil {
 			t.Errorf("expected error for invalid payload: %s", string(payload))
 		}
-	}
-}
-
-func TestExecutionState_Lifecycle(t *testing.T) {
-	server := NewExecutionServiceServer(nil, nil, nil)
-
-	execID := "exec-lifecycle"
-
-	// Start execution
-	_, _ = server.ReportProgress(nil, &streamingv1alpha1.ProgressReport{
-		ExecutionId:     execID,
-		Phase:           "Starting",
-		ProgressPercent: 0,
-		Timestamp:       time.Now().Format(time.RFC3339),
-	})
-
-	state := server.GetExecutionState(execID)
-	if state.Completed {
-		t.Error("should not be completed yet")
-	}
-
-	// Update progress
-	_, _ = server.ReportProgress(nil, &streamingv1alpha1.ProgressReport{
-		ExecutionId:     execID,
-		Phase:           "Running",
-		ProgressPercent: 50,
-		Timestamp:       time.Now().Format(time.RFC3339),
-	})
-
-	state = server.GetExecutionState(execID)
-	if state.ProgressPercent != 50 {
-		t.Errorf("progress = %d, want 50", state.ProgressPercent)
-	}
-
-	// Complete execution
-	_, _ = server.ReportCompletion(nil, &streamingv1alpha1.CompletionReport{
-		ExecutionId: execID,
-		Success:     true,
-		DurationMs:  10000,
-		Timestamp:   time.Now().Format(time.RFC3339),
-	})
-
-	state = server.GetExecutionState(execID)
-	if !state.Completed {
-		t.Error("should be completed")
-	}
-	if !state.Success {
-		t.Error("should be successful")
 	}
 }

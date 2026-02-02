@@ -163,26 +163,32 @@ func (r *runner) run(ctx context.Context) error {
 	// Execute the operation
 	restoreData, durationMs, err := r.executeOperation(ctx, exec, spec)
 	if err != nil {
-		r.reportCompletion(ctx, false, err.Error(), durationMs, nil)
+		r.reportCompletion(ctx, false, err.Error(), durationMs)
 		return err
 	}
 
 	// Report progress: saving restore data
 	r.reportProgress(ctx, "finalizing", 90, "Saving restore data")
 
-	// Serialize and save restore data
-	var restoreDataBytes []byte
+	// Persist restore data to ConfigMap (REQUIRED for wake-up)
+	// This is done directly by the runner to ensure data survives even if
+	// network connection to controller fails.
 	if restoreData != nil {
-		restoreDataBytes, _ = json.Marshal(restoreData)
-
 		if err := r.saveRestoreData(ctx, restoreData); err != nil {
-			log.Error(err, "failed to save restore data to ConfigMap")
-			// Non-fatal: operation succeeded, restore data save failed
+			// FATAL: Without restore data, wake-up is impossible
+			r.log.Error(err, "CRITICAL: failed to save restore data to ConfigMap")
+			r.reportCompletion(ctx, false, fmt.Sprintf("restore data save failed: %v", err), durationMs)
+			return fmt.Errorf("save restore data: %w", err)
 		}
+		r.log.Info("Restore data saved to ConfigMap",
+			"plan", r.cfg.Plan,
+			"target", r.cfg.Target,
+		)
 	}
 
-	// Report completion
-	r.reportCompletion(ctx, true, "", durationMs, restoreDataBytes)
+	// Report completion to controller (status only, no restore data payload)
+	// The controller reads restore data from ConfigMap during wake-up
+	r.reportCompletion(ctx, true, "", durationMs)
 
 	return nil
 }
@@ -580,7 +586,8 @@ func (r *runner) reportProgress(ctx context.Context, phase string, percent int32
 }
 
 // reportCompletion reports execution completion via streaming client.
-func (r *runner) reportCompletion(ctx context.Context, success bool, errorMsg string, durationMs int64, restoreData []byte) {
+// Note: Restore data is persisted directly to ConfigMap, not sent via streaming.
+func (r *runner) reportCompletion(ctx context.Context, success bool, errorMsg string, durationMs int64) {
 	// Always log to stdout
 	r.log.Info("completion",
 		"success", success,
@@ -590,7 +597,7 @@ func (r *runner) reportCompletion(ctx context.Context, success bool, errorMsg st
 
 	// Stream to control plane if available
 	if r.streamClient != nil {
-		if err := r.streamClient.ReportCompletion(ctx, success, errorMsg, durationMs, restoreData); err != nil {
+		if err := r.streamClient.ReportCompletion(ctx, success, errorMsg, durationMs); err != nil {
 			r.log.Error(err, "failed to report completion")
 		}
 	}

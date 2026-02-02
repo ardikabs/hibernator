@@ -114,11 +114,10 @@ func TestGRPCClient_ReportCompletion(t *testing.T) {
 	client := NewGRPCClient(opts)
 
 	tests := []struct {
-		name        string
-		success     bool
-		errorMsg    string
-		durationMs  int64
-		restoreData []byte
+		name       string
+		success    bool
+		errorMsg   string
+		durationMs int64
 	}{
 		{
 			name:       "successful completion",
@@ -131,17 +130,11 @@ func TestGRPCClient_ReportCompletion(t *testing.T) {
 			errorMsg:   "connection timeout",
 			durationMs: 3000,
 		},
-		{
-			name:        "completion with restore data",
-			success:     true,
-			durationMs:  10000,
-			restoreData: []byte(`{"key": "value"}`),
-		},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			err := client.ReportCompletion(context.Background(), tt.success, tt.errorMsg, tt.durationMs, tt.restoreData)
+			err := client.ReportCompletion(context.Background(), tt.success, tt.errorMsg, tt.durationMs)
 			if err == nil {
 				t.Fatal("expected error when reporting completion without connection")
 			}

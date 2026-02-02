@@ -296,13 +296,13 @@ func (c *WebSocketClient) ReportProgress(ctx context.Context, phase string, perc
 }
 
 // ReportCompletion sends a completion report to the server.
-func (c *WebSocketClient) ReportCompletion(ctx context.Context, success bool, errorMsg string, durationMs int64, restoreData []byte) error {
+// Note: Restore data is persisted directly by runner to ConfigMap, not sent via streaming.
+func (c *WebSocketClient) ReportCompletion(ctx context.Context, success bool, errorMsg string, durationMs int64) error {
 	completion := &streamingv1alpha1.CompletionReport{
 		ExecutionId:  c.executionID,
 		Success:      success,
 		ErrorMessage: errorMsg,
 		DurationMs:   durationMs,
-		RestoreData:  restoreData,
 		Timestamp:    time.Now().Format(time.RFC3339),
 	}
 

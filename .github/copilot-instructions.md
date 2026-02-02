@@ -84,9 +84,9 @@ Each executor:
 
 - **Core Infrastructure**: CRDs, controller, scheduler/planner with DAG support
 - **AWS Executors**: EKS (node groups + Karpenter), RDS, EC2
-- **Streaming Infrastructure**: gRPC + webhook fallback for runner logs/progress
+- **Streaming Infrastructure**: gRPC + webhook fallback for runner logs/progress (status only, no restore data)
 - **Authentication**: Projected ServiceAccount tokens with TokenReview validation
-- **Restore System**: ConfigMap-based persistence with RestoreManager
+- **Restore System**: ConfigMap-based persistence (runner saves/loads directly via RestoreManager)
 - **Error Recovery**: Automatic retry with exponential backoff
 - **Validation Webhook**: Schedule format, DAG cycle detection
 - **Schedule Migration**: Start/End/DaysOfWeek format with cron conversion
@@ -152,9 +152,9 @@ Each executor:
 │   ├── controller/            # HibernatePlan reconciler
 │   ├── executor/              # Executor implementations (eks, rds, ec2, karpenter)
 │   ├── scheduler/             # Schedule evaluation and DAG planner
-│   ├── restore/               # RestoreManager (ConfigMap ops)
+│   ├── restore/               # RestoreManager (used by runner for ConfigMap ops)
 │   ├── recovery/              # Error classification and retry logic
-│   ├── streaming/             # gRPC/webhook server + client
+│   ├── streaming/             # gRPC/webhook server + client (logs/progress only)
 │   └── metrics/               # Prometheus metrics
 ├── config/                    # Kubernetes manifests (CRDs, RBAC, samples)
 ├── test/e2e/                  # End-to-end tests
@@ -348,9 +348,9 @@ targets:
 ### Restore Data Missing
 
 - Verify ConfigMap exists: `kubectl get cm restore-data-{plan}`
-- Check RestoreManager logs
+- Check runner pod logs for save/load errors
 - Ensure ConfigMap not garbage-collected
-- Review `status.executions[].restoreConfigMapRef`
+- Runner saves restore data during shutdown, loads during wakeup
 
 ### Authentication Errors
 

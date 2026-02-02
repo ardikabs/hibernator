@@ -138,14 +138,13 @@ func (ws *WebhookServer) handleCallback(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 
-	// Validate execution access
-	// TODO: Implement proper execution access validation based on plan name/namespace
-	// For now, just check if the service account is valid
-	if !result.Valid {
+	// Validate execution access - verify the runner is authorized for this execution
+	if err := ws.validateExecutionAccess(r.Context(), result, executionID); err != nil {
 		ws.log.Info("execution access denied",
 			"executionId", executionID,
 			"namespace", result.Namespace,
 			"serviceAccount", result.ServiceAccount,
+			"error", err.Error(),
 		)
 		http.Error(w, "Forbidden", http.StatusForbidden)
 		return
@@ -156,7 +155,7 @@ func (ws *WebhookServer) handleCallback(w http.ResponseWriter, r *http.Request) 
 	switch payload.Type {
 	case "log":
 		if payload.Log != nil {
-			ws.processLog(payload.Log.ToProto())
+			ws.processLog(r.Context(), payload.Log.ToProto())
 			response.Acknowledged = true
 		}
 	case "progress":
@@ -178,7 +177,6 @@ func (ws *WebhookServer) handleCallback(w http.ResponseWriter, r *http.Request) 
 				return
 			}
 			response.Acknowledged = resp.Acknowledged
-			response.RestoreRef = resp.RestoreRef
 		}
 	case "heartbeat":
 		if payload.Heartbeat != nil {
@@ -221,7 +219,7 @@ func (ws *WebhookServer) handleLogs(w http.ResponseWriter, r *http.Request) {
 
 	for _, entry := range entries {
 		// Process each log entry
-		ws.processLog(entry)
+		ws.processLog(r.Context(), entry)
 	}
 
 	w.Header().Set("Content-Type", "application/json")
@@ -323,6 +321,55 @@ func (ws *WebhookServer) handleHealthz(w http.ResponseWriter, r *http.Request) {
 	w.Write([]byte("ok"))
 }
 
+// validateExecutionAccess verifies the runner is authorized for the specified execution.
+// It checks that:
+// 1. The token is valid (already done in validateRequest)
+// 2. The runner's ServiceAccount namespace matches the execution's namespace
+//
+// This ensures runners can only report for executions in their own namespace,
+// preventing cross-namespace impersonation attacks.
+func (ws *WebhookServer) validateExecutionAccess(ctx context.Context, result *auth.ValidationResult, executionID string) error {
+	// Token must be valid first
+	if !result.Valid {
+		return fmt.Errorf("invalid token")
+	}
+
+	// Get execution metadata to determine the expected namespace
+	meta, err := ws.executionService.getOrCacheExecutionMetadata(ctx, executionID)
+	if err != nil {
+		// If we can't determine the execution metadata, allow the request but log a warning.
+		// This handles the case where the execution hasn't been registered yet (first heartbeat).
+		ws.log.V(1).Info("could not verify execution namespace, allowing request",
+			"executionId", executionID,
+			"error", err.Error(),
+		)
+		return nil
+	}
+
+	// If metadata namespace is "unknown" (k8sClient not configured), allow access
+	// This is a fallback for environments where Job lookup isn't possible
+	if meta.Namespace == "unknown" {
+		ws.log.V(1).Info("execution metadata unavailable, allowing request",
+			"executionId", executionID,
+		)
+		return nil
+	}
+
+	// Verify namespace matches - the runner SA must be in the same namespace as the execution
+	if result.Namespace != meta.Namespace {
+		return fmt.Errorf("namespace mismatch: SA namespace %q does not match execution namespace %q",
+			result.Namespace, meta.Namespace)
+	}
+
+	ws.log.V(2).Info("execution access validated",
+		"executionId", executionID,
+		"namespace", result.Namespace,
+		"serviceAccount", result.ServiceAccount,
+	)
+
+	return nil
+}
+
 // validateRequest validates the bearer token in the Authorization header.
 func (ws *WebhookServer) validateRequest(r *http.Request) (*auth.ValidationResult, error) {
 	authHeader := r.Header.Get("Authorization")
@@ -343,26 +390,10 @@ func (ws *WebhookServer) validateRequest(r *http.Request) (*auth.ValidationResul
 }
 
 // processLog processes a single log entry.
-func (ws *WebhookServer) processLog(log *streamingv1alpha1.LogEntry) {
-	// Store or forward log entry
-	ws.log.V(2).Info("received log",
-		"executionId", log.ExecutionId,
-		"level", log.Level,
-		"message", log.Message,
-	)
-
-	// Delegate to business logic layer
-	if err := ws.executionService.StoreLog(log); err != nil {
-		ws.log.Error(err, "failed to store log entry")
+func (ws *WebhookServer) processLog(ctx context.Context, log *streamingv1alpha1.LogEntry) {
+	// Delegate to business logic layer (EmitLog pipes logs with full context)
+	if err := ws.executionService.EmitLog(ctx, log); err != nil {
+		ws.log.Error(err, "failed to process log entry")
 		return
-	}
-
-	switch log.Level {
-	case "ERROR":
-		ws.log.Error(nil, log.Message, "executionId", log.ExecutionId, "fields", log.Fields)
-	case "WARN":
-		ws.log.Info(log.Message, "executionId", log.ExecutionId, "level", "warn", "fields", log.Fields)
-	default:
-		ws.log.V(1).Info(log.Message, "executionId", log.ExecutionId, "level", log.Level, "fields", log.Fields)
 	}
 }

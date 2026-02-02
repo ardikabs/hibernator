@@ -89,20 +89,15 @@ message CompletionReport {
   // duration_ms is the execution duration in milliseconds.
   int64 duration_ms = 4;
 
-  // restore_data contains serialized restore metadata (JSON).
-  bytes restore_data = 5;
-
   // timestamp is when execution completed (RFC3339).
-  string timestamp = 6;
+  // Note: restore_data removed - runners persist directly to ConfigMap.
+  string timestamp = 5;
 }
 
 // CompletionResponse acknowledges a completion report.
 message CompletionResponse {
   // acknowledged indicates the completion was received.
   bool acknowledged = 1;
-
-  // restore_ref is the reference where restore data was stored.
-  string restore_ref = 2;
 }
 
 // HeartbeatRequest is a keep-alive message.

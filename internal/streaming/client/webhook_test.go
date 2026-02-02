@@ -285,7 +285,6 @@ func TestWebhookClient_ReportCompletion_WithServer(t *testing.T) {
 		if r.URL.Path == "/v1alpha1/completion" && r.Method == http.MethodPost {
 			resp := &streamingv1alpha1.CompletionResponse{
 				Acknowledged: true,
-				RestoreRef:   "restore-123",
 			}
 			json.NewEncoder(w).Encode(resp)
 			return
@@ -302,7 +301,7 @@ func TestWebhookClient_ReportCompletion_WithServer(t *testing.T) {
 	}
 	client := NewWebhookClient(opts)
 
-	err := client.ReportCompletion(context.Background(), true, "", 5000, []byte(`{"key":"value"}`))
+	err := client.ReportCompletion(context.Background(), true, "", 5000)
 	if err != nil {
 		t.Fatalf("ReportCompletion() error = %v", err)
 	}
