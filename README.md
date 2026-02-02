@@ -245,7 +245,7 @@ kubectl logs -n hibernator-system -l hibernator/plan=dev-offhours
 ### CloudProvider Connector (AWS)
 
 ```yaml
-apiVersion: connector.hibernator.ardikabs.com/v1alpha1
+apiVersion: hibernator.ardikabs.com/v1alpha1
 kind: CloudProvider
 metadata:
   name: aws-dev
@@ -255,15 +255,15 @@ spec:
   aws:
     accountId: "123456789012"
     region: ap-southeast-3
+    assumeRoleArn: arn:aws:iam::123456789012:role/hibernator-runner
     auth:
-      serviceAccount:
-        assumeRoleArn: arn:aws:iam::123456789012:role/hibernator-runner
+      serviceAccount: {}
 ```
 
 ### K8SCluster Connector
 
 ```yaml
-apiVersion: connector.hibernator.ardikabs.com/v1alpha1
+apiVersion: hibernator.ardikabs.com/v1alpha1
 kind: K8SCluster
 metadata:
   name: dev-eks
@@ -271,9 +271,9 @@ metadata:
 spec:
   providerRef:
     name: aws-dev
-  type: eks
-  clusterName: dev-cluster
+    namespace: hibernator-system
   eks:
+    name: dev-cluster
     region: ap-southeast-3
 ```
 
@@ -294,29 +294,23 @@ spec:
 - [x] Prometheus metrics for observability
 - [x] E2E test suite (hibernation, wakeup, schedule, recovery cycles)
 - [x] Production-ready Helm charts with RBAC, webhook, monitoring
-- [x] Schedule Exceptions (RFC-0003 Phases 1-3)
+- [x] Schedule Exceptions (RFC-0003 Core Implementation)
   - [x] Independent ScheduleException CRD with planRef
   - [x] Three exception types: extend, suspend (with lead time), replace
   - [x] Automatic expiration and state management
   - [x] Exception history tracking in plan status
 
-### 🚧 In Progress (P3)
+### 📋 Planned (P3-P4)
 
-- [ ] **Schedule Exception Approval Workflows** (RFC-0003 Phase 4)
+- [ ] **Schedule Exception Approval Workflows** (RFC-0003 Future Enhancement)
   - [ ] Slack DM approval integration with email-based approver notification
   - [ ] kubectl plugin for CLI-based approvals
   - [ ] SSO/URL-based approval workflow for enterprise
   - [ ] Dashboard UI for exception management
-
-### 📋 Planned (P3-P4)
-
 - [ ] GCP executors (GKE, Cloud SQL, Compute Engine)
 - [ ] Azure executors (AKS, Azure SQL, VMs)
 - [ ] Advanced scheduling (holidays, blackout windows, timezone exceptions)
 - [ ] Multi-cluster federation
-- [ ] Slack DM approval integration (Phase 2)
-- [ ] SSO/URL-based approval workflow (Phase 3)
-- [ ] Dashboard UI for exception management (Phase 4)
 - [ ] Object-store artifact persistence (S3/GCS)
 - [ ] kubectl hibernator plugin for CLI management
 

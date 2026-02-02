@@ -138,9 +138,61 @@ If both `spec.k8s` and `spec.eks` are set, the runner rejects the configuration 
 5. Tests: unit tests for DAG validation; envtest/integration tests for Job lifecycle, status ledger, and wake-up path.
 6. Optional: streaming gRPC auth and server, TokenReview or CSR-based client cert issuance.
 
+## Completion Criteria
+
+**RFC-0001 will move from "In Progress 🚀" to "Implemented ✅" when the following are demonstrated in a real-world scenario:**
+
+### Core Functionality (Must Have)
+
+1. **Hibernation Schedule Works**
+   - Schedule evaluation triggers hibernation at configured off-hours
+   - Timezone-aware cron conversion produces correct hibernation windows
+   - Controller transitions HibernatePlan phase: Active → Hibernating → Hibernated
+   - Wake-up triggers automatically at end of off-hours window
+   - Controller transitions HibernatePlan phase: Hibernated → WakingUp → Active
+
+2. **Executors Shutdown and Wake Up Services**
+   - At least 2 AWS executors demonstrate full cycle:
+     - **EKS**: Scale managed node groups to zero, restore to original desired count
+     - **RDS**: Stop database instance/cluster, start and verify connectivity
+   - Restore metadata captured during shutdown and consumed during wake-up
+   - Wake-up restores resources to pre-hibernation state (no data loss)
+
+3. **Monitoring and Observability**
+   - **Logs**: Runner job logs appear in Kubernetes (kubectl logs)
+   - **Metrics**: Prometheus metrics exported for execution duration, success/failure counts
+   - **Status**: HibernatePlan status.executions[] updated with per-target state, timestamps, errors
+   - **Streaming**: gRPC or webhook streaming delivers progress updates to control plane
+
+4. **Execution Orchestration**
+   - DAG dependency resolution prevents out-of-order execution
+   - Bounded concurrency (maxConcurrency) limits parallel job execution
+   - Error recovery with exponential backoff retries transient failures
+   - Status ledger provides auditable execution history
+
+5. **Security and Isolation**
+   - Runner jobs execute with isolated ServiceAccount (RBAC-scoped)
+   - IRSA/workload identity authentication works for AWS API calls
+   - TokenReview authentication validates streaming connections
+   - No credential leakage or privilege escalation
+
+### Validation (Should Have)
+
+6. **End-to-End Test Coverage**
+   - E2E test suite passes for full hibernation → wake-up cycle
+   - Tests cover: schedule evaluation, DAG ordering, error recovery, restore data
+   - Integration tests validate controller reconciliation and job lifecycle
+
+7. **Production Readiness**
+   - Helm chart deploys operator with RBAC, webhooks, and monitoring
+   - Validation webhook rejects invalid HibernatePlans (DAG cycles, invalid schedules)
+   - Documentation includes installation, configuration, and troubleshooting guides
+
+**Acceptance Test**: Deploy operator to staging cluster, create HibernatePlan targeting real EKS cluster + RDS instance, verify full hibernation/wake-up cycle completes successfully with monitoring data visible.
+
 ## Implementation Status
 
-Last updated: 2026-01-29
+Last updated: 2026-02-02
 
 ### Completed (MVP Phase 1)
 
