@@ -27,6 +27,7 @@ import (
 // StreamLogs receives a stream of log entries from a runner via gRPC.
 // This is a transport-layer method that delegates to ExecutionServiceServer.
 func (s *ExecutionServiceServer) StreamLogs(stream grpc.ClientStreamingServer[streamingv1alpha1.LogEntry, streamingv1alpha1.StreamLogsResponse]) error {
+	ctx := stream.Context()
 	var count int64
 	var executionID string
 
@@ -46,20 +47,10 @@ func (s *ExecutionServiceServer) StreamLogs(stream grpc.ClientStreamingServer[st
 		executionID = entry.ExecutionId
 		count++
 
-		// Delegate to business logic layer
-		if err := s.StoreLog(entry); err != nil {
-			s.log.Error(err, "failed to store log entry")
-			return status.Errorf(codes.Internal, "store error: %v", err)
-		}
-
-		// Log at appropriate level
-		switch entry.Level {
-		case "ERROR":
-			s.log.Error(nil, entry.Message, "executionId", executionID, "fields", entry.Fields)
-		case "WARN":
-			s.log.Info(entry.Message, "executionId", executionID, "level", "warn", "fields", entry.Fields)
-		default:
-			s.log.V(1).Info(entry.Message, "executionId", executionID, "level", entry.Level, "fields", entry.Fields)
+		// Delegate to business logic layer (StoreLog emits logs with full context)
+		if err := s.StoreLog(ctx, entry); err != nil {
+			s.log.Error(err, "failed to process log entry")
+			return status.Errorf(codes.Internal, "process error: %v", err)
 		}
 	}
 }

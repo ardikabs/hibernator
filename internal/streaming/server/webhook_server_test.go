@@ -226,20 +226,8 @@ func TestWebhookServer_ProcessLog(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			ws.processLog(tt.entry)
-
-			// Verify log was stored
-			logs := execService.GetExecutionLogs(tt.entry.ExecutionId)
-			found := false
-			for _, l := range logs {
-				if l.Message == tt.entry.Message {
-					found = true
-					break
-				}
-			}
-			if !found {
-				t.Errorf("log not stored: %s", tt.entry.Message)
-			}
+			// processLog should not panic; logs are emitted to server log, not stored in-memory
+			ws.processLog(context.Background(), tt.entry)
 		})
 	}
 }
@@ -361,15 +349,8 @@ func TestProcessLog_WithFields(t *testing.T) {
 		},
 	}
 
-	ws.processLog(entry)
-
-	logs := execService.GetExecutionLogs("exec-fields")
-	if len(logs) != 1 {
-		t.Fatalf("expected 1 log, got %d", len(logs))
-	}
-	if logs[0].Fields["key1"] != "value1" {
-		t.Error("field key1 not preserved")
-	}
+	// processLog should not panic; logs with fields are emitted to server log
+	ws.processLog(context.Background(), entry)
 }
 
 func TestWebhookPayload_Types(t *testing.T) {

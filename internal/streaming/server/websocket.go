@@ -263,7 +263,7 @@ func (s *WebSocketServer) processMessage(executionID string, msg *WebSocketMessa
 		if err := json.Unmarshal(msg.Data, &logEntry); err != nil {
 			return fmt.Errorf("failed to unmarshal log entry: %w", err)
 		}
-		return s.handleLog(&logEntry)
+		return s.handleLog(ctx, &logEntry)
 
 	case "progress":
 		var progress streamingv1alpha1.ProgressReport
@@ -295,21 +295,11 @@ func (s *WebSocketServer) processMessage(executionID string, msg *WebSocketMessa
 }
 
 // handleLog processes a log entry.
-func (s *WebSocketServer) handleLog(entry *streamingv1alpha1.LogEntry) error {
-	// Delegate to business logic layer
-	if err := s.execService.StoreLog(entry); err != nil {
-		s.log.Error(err, "failed to store log entry")
+func (s *WebSocketServer) handleLog(ctx context.Context, entry *streamingv1alpha1.LogEntry) error {
+	// Delegate to business logic layer (StoreLog emits logs with full context)
+	if err := s.execService.StoreLog(ctx, entry); err != nil {
+		s.log.Error(err, "failed to process log entry")
 		return err
-	}
-
-	// Log at appropriate level
-	switch entry.Level {
-	case "ERROR":
-		s.log.Error(nil, entry.Message, "executionId", entry.ExecutionId, "fields", entry.Fields)
-	case "WARN":
-		s.log.Info(entry.Message, "executionId", entry.ExecutionId, "level", "warn", "fields", entry.Fields)
-	default:
-		s.log.V(1).Info(entry.Message, "executionId", entry.ExecutionId, "level", entry.Level, "fields", entry.Fields)
 	}
 
 	return nil

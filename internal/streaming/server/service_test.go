@@ -11,21 +11,22 @@ import (
 	"testing"
 	"time"
 
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
+	batchv1 "k8s.io/api/batch/v1"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/runtime"
+	"sigs.k8s.io/controller-runtime/pkg/client/fake"
+
 	streamingv1alpha1 "github.com/ardikabs/hibernator/api/streaming/v1alpha1"
+	hibernatorv1alpha1 "github.com/ardikabs/hibernator/api/v1alpha1"
 )
 
 func TestNewExecutionServiceServer(t *testing.T) {
 	server := NewExecutionServiceServer(nil, nil, nil)
 
-	if server == nil {
-		t.Fatal("expected non-nil server")
-	}
-	if server.executionLogs == nil {
-		t.Error("expected executionLogs to be initialized")
-	}
-	if server.executionStatus == nil {
-		t.Error("expected executionStatus to be initialized")
-	}
+	require.NotNil(t, server, "expected non-nil server")
+	assert.NotNil(t, server.executionStatus, "expected executionStatus to be initialized")
 }
 
 func TestReportProgress(t *testing.T) {
@@ -67,27 +68,18 @@ func TestReportProgress(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			resp, err := server.ReportProgress(context.Background(), tt.report)
-			if err != nil {
-				t.Fatalf("ReportProgress() error = %v", err)
-			}
-			if !resp.Acknowledged {
-				t.Error("expected acknowledged response")
-			}
+			require.NoError(t, err)
+			assert.True(t, resp.Acknowledged, "expected acknowledged response")
 
-			// Verify state was stored
-			state := server.GetExecutionState(tt.report.ExecutionId)
-			if state == nil {
-				t.Fatal("expected state to be stored")
-			}
-			if state.Phase != tt.report.Phase {
-				t.Errorf("phase = %s, want %s", state.Phase, tt.report.Phase)
-			}
-			if state.ProgressPercent != tt.report.ProgressPercent {
-				t.Errorf("progress = %d, want %d", state.ProgressPercent, tt.report.ProgressPercent)
-			}
-			if state.Message != tt.report.Message {
-				t.Errorf("message = %s, want %s", state.Message, tt.report.Message)
-			}
+			// Verify state was stored internally
+			server.executionStatusMu.RLock()
+			state, exists := server.executionStatus[tt.report.ExecutionId]
+			server.executionStatusMu.RUnlock()
+
+			require.True(t, exists, "expected state to be stored")
+			assert.Equal(t, tt.report.Phase, state.Phase)
+			assert.Equal(t, tt.report.ProgressPercent, state.ProgressPercent)
+			assert.Equal(t, tt.report.Message, state.Message)
 		})
 	}
 }
@@ -145,28 +137,24 @@ func TestReportCompletion(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			resp, err := server.ReportCompletion(context.Background(), tt.report)
-			if (err != nil) != tt.wantErr {
-				t.Fatalf("ReportCompletion() error = %v, wantErr %v", err, tt.wantErr)
-			}
-			if !tt.wantErr {
-				if !resp.Acknowledged {
-					t.Error("expected acknowledged response")
-				}
 
-				state := server.GetExecutionState(tt.report.ExecutionId)
-				if state == nil {
-					t.Fatal("expected state to be stored")
-				}
-				if !state.Completed {
-					t.Error("expected completed to be true")
-				}
-				if state.Success != tt.report.Success {
-					t.Errorf("success = %v, want %v", state.Success, tt.report.Success)
-				}
-				if state.Error != tt.report.ErrorMessage {
-					t.Errorf("error = %s, want %s", state.Error, tt.report.ErrorMessage)
-				}
+			if tt.wantErr {
+				require.Error(t, err)
+				return
 			}
+
+			require.NoError(t, err)
+			assert.True(t, resp.Acknowledged, "expected acknowledged response")
+
+			// Verify state was stored internally
+			server.executionStatusMu.RLock()
+			state, exists := server.executionStatus[tt.report.ExecutionId]
+			server.executionStatusMu.RUnlock()
+
+			require.True(t, exists, "expected state to be stored")
+			assert.True(t, state.Completed, "expected completed to be true")
+			assert.Equal(t, tt.report.Success, state.Success)
+			assert.Equal(t, tt.report.ErrorMessage, state.Error)
 		})
 	}
 }
@@ -182,8 +170,9 @@ func TestHeartbeat(t *testing.T) {
 	})
 
 	// Record initial heartbeat time
-	state := server.GetExecutionState("exec-hb")
-	initialHeartbeat := state.LastUpdate
+	server.executionStatusMu.RLock()
+	initialHeartbeat := server.executionStatus["exec-hb"].LastUpdate
+	server.executionStatusMu.RUnlock()
 
 	// Wait a bit and send heartbeat
 	time.Sleep(10 * time.Millisecond)
@@ -193,21 +182,16 @@ func TestHeartbeat(t *testing.T) {
 	}
 
 	resp, err := server.Heartbeat(context.Background(), req)
-	if err != nil {
-		t.Fatalf("Heartbeat() error = %v", err)
-	}
-	if !resp.Acknowledged {
-		t.Error("expected acknowledged response")
-	}
-	if resp.ServerTime == "" {
-		t.Error("expected non-empty server time")
-	}
+	require.NoError(t, err)
+	assert.True(t, resp.Acknowledged, "expected acknowledged response")
+	assert.NotEmpty(t, resp.ServerTime, "expected non-empty server time")
 
 	// Verify heartbeat was updated
-	state = server.GetExecutionState("exec-hb")
-	if !state.LastUpdate.After(initialHeartbeat) {
-		t.Error("expected heartbeat time to be updated")
-	}
+	server.executionStatusMu.RLock()
+	state := server.executionStatus["exec-hb"]
+	server.executionStatusMu.RUnlock()
+
+	assert.True(t, state.LastUpdate.After(initialHeartbeat), "expected heartbeat time to be updated")
 }
 
 func TestHeartbeat_NonExistentExecution(t *testing.T) {
@@ -218,92 +202,262 @@ func TestHeartbeat_NonExistentExecution(t *testing.T) {
 	}
 
 	resp, err := server.Heartbeat(context.Background(), req)
-	if err != nil {
-		t.Fatalf("Heartbeat() error = %v", err)
-	}
-	if !resp.Acknowledged {
-		t.Error("expected acknowledged response even for non-existent execution")
-	}
+	require.NoError(t, err)
+	assert.True(t, resp.Acknowledged, "expected acknowledged response even for non-existent execution")
 }
 
-func TestGetExecutionLogs(t *testing.T) {
-	server := NewExecutionServiceServer(nil, nil, nil)
+func TestStoreLog(t *testing.T) {
+	// Create a fake client with a runner Job
+	scheme := runtime.NewScheme()
+	require.NoError(t, batchv1.AddToScheme(scheme))
+	require.NoError(t, hibernatorv1alpha1.AddToScheme(scheme))
 
-	// Add some logs directly
-	server.executionLogsMu.Lock()
-	server.executionLogs["exec-logs"] = []*streamingv1alpha1.LogEntry{
-		{ExecutionId: "exec-logs", Level: "INFO", Message: "Starting operation"},
-		{ExecutionId: "exec-logs", Level: "DEBUG", Message: "Processing item 1"},
-		{ExecutionId: "exec-logs", Level: "INFO", Message: "Operation complete"},
+	job := &batchv1.Job{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "hibernate-runner-test-plan-test-target-abcd",
+			Namespace: "default",
+			Labels: map[string]string{
+				LabelExecutionID: "test-plan-test-target-1234567890",
+				LabelPlan:        "test-plan",
+				LabelTarget:      "test-target",
+			},
+		},
 	}
-	server.executionLogsMu.Unlock()
 
-	logs := server.GetExecutionLogs("exec-logs")
-	if len(logs) != 3 {
-		t.Errorf("expected 3 logs, got %d", len(logs))
+	fakeClient := fake.NewClientBuilder().
+		WithScheme(scheme).
+		WithObjects(job).
+		Build()
+
+	server := NewExecutionServiceServer(fakeClient, nil, nil)
+
+	// Test storing a log entry
+	entry := &streamingv1alpha1.LogEntry{
+		ExecutionId: "test-plan-test-target-1234567890",
+		Timestamp:   time.Now().Format(time.RFC3339),
+		Level:       "INFO",
+		Message:     "Test log message",
+		Fields: map[string]string{
+			"key1": "value1",
+		},
 	}
-	if logs[0].Message != "Starting operation" {
-		t.Errorf("unexpected first log message: %s", logs[0].Message)
-	}
+
+	err := server.StoreLog(context.Background(), entry)
+	require.NoError(t, err)
 }
 
-func TestGetExecutionLogs_NonExistent(t *testing.T) {
+func TestStoreLog_NilEntry(t *testing.T) {
 	server := NewExecutionServiceServer(nil, nil, nil)
 
-	logs := server.GetExecutionLogs("non-existent")
-	if logs != nil {
-		t.Errorf("expected nil for non-existent execution, got %v", logs)
-	}
+	err := server.StoreLog(context.Background(), nil)
+	require.Error(t, err, "expected error for nil entry")
 }
 
-func TestGetExecutionState_NonExistent(t *testing.T) {
-	server := NewExecutionServiceServer(nil, nil, nil)
+func TestStoreLog_JobNotFound(t *testing.T) {
+	// Create a fake client without any Jobs
+	scheme := runtime.NewScheme()
+	require.NoError(t, batchv1.AddToScheme(scheme))
 
-	state := server.GetExecutionState("non-existent")
-	if state != nil {
-		t.Errorf("expected nil for non-existent execution, got %v", state)
+	fakeClient := fake.NewClientBuilder().
+		WithScheme(scheme).
+		Build()
+
+	server := NewExecutionServiceServer(fakeClient, nil, nil)
+
+	// Test storing a log entry when Job doesn't exist
+	entry := &streamingv1alpha1.LogEntry{
+		ExecutionId: "nonexistent-execution",
+		Timestamp:   time.Now().Format(time.RFC3339),
+		Level:       "INFO",
+		Message:     "Test log message",
 	}
+
+	// Should not error - just logs with "unknown" metadata
+	err := server.StoreLog(context.Background(), entry)
+	require.NoError(t, err, "StoreLog() should not error when Job not found")
 }
 
-func TestGetExecutionLogs_ReturnsCopy(t *testing.T) {
-	server := NewExecutionServiceServer(nil, nil, nil)
+func TestGetExecutionMetadata(t *testing.T) {
+	// Create a fake client with a runner Job
+	scheme := runtime.NewScheme()
+	require.NoError(t, batchv1.AddToScheme(scheme))
 
-	// Add logs
-	server.executionLogsMu.Lock()
-	server.executionLogs["exec-copy"] = []*streamingv1alpha1.LogEntry{
-		{ExecutionId: "exec-copy", Message: "Original"},
+	job := &batchv1.Job{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "hibernate-runner-my-plan-my-target-xyz",
+			Namespace: "test-namespace",
+			Labels: map[string]string{
+				LabelExecutionID: "my-plan-my-target-1234567890",
+				LabelPlan:        "my-plan",
+				LabelTarget:      "my-target",
+			},
+		},
 	}
-	server.executionLogsMu.Unlock()
 
-	// Get logs and modify
-	logs := server.GetExecutionLogs("exec-copy")
-	logs[0].Message = "Modified"
+	fakeClient := fake.NewClientBuilder().
+		WithScheme(scheme).
+		WithObjects(job).
+		Build()
 
-	// Verify original is unchanged
-	original := server.GetExecutionLogs("exec-copy")
-	if original[0].Message != "Original" {
-		t.Error("modifying returned slice should not affect original")
-	}
+	server := NewExecutionServiceServer(fakeClient, nil, nil)
+
+	meta, err := server.getExecutionMetadata(context.Background(), "my-plan-my-target-1234567890")
+	require.NoError(t, err)
+
+	assert.Equal(t, "test-namespace", meta.Namespace)
+	assert.Equal(t, "my-plan", meta.PlanName)
+	assert.Equal(t, "my-target", meta.TargetName)
+	assert.Equal(t, "my-plan-my-target-1234567890", meta.ExecutionID)
 }
 
-func TestGetExecutionState_ReturnsCopy(t *testing.T) {
+func TestGetExecutionMetadata_NotFound(t *testing.T) {
+	scheme := runtime.NewScheme()
+	require.NoError(t, batchv1.AddToScheme(scheme))
+
+	fakeClient := fake.NewClientBuilder().
+		WithScheme(scheme).
+		Build()
+
+	server := NewExecutionServiceServer(fakeClient, nil, nil)
+
+	_, err := server.getExecutionMetadata(context.Background(), "nonexistent-execution")
+	require.Error(t, err, "expected error for non-existent execution")
+}
+
+func TestGetExecutionMetadata_MissingPlanLabel(t *testing.T) {
+	scheme := runtime.NewScheme()
+	require.NoError(t, batchv1.AddToScheme(scheme))
+
+	job := &batchv1.Job{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "hibernate-runner-broken",
+			Namespace: "default",
+			Labels: map[string]string{
+				LabelExecutionID: "broken-execution",
+				// Missing LabelPlan
+				LabelTarget: "my-target",
+			},
+		},
+	}
+
+	fakeClient := fake.NewClientBuilder().
+		WithScheme(scheme).
+		WithObjects(job).
+		Build()
+
+	server := NewExecutionServiceServer(fakeClient, nil, nil)
+
+	_, err := server.getExecutionMetadata(context.Background(), "broken-execution")
+	require.Error(t, err, "expected error for missing plan label")
+}
+
+func TestGetOrCacheExecutionMetadata(t *testing.T) {
+	// Create a fake client with a runner Job
+	scheme := runtime.NewScheme()
+	require.NoError(t, batchv1.AddToScheme(scheme))
+
+	job := &batchv1.Job{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "hibernate-runner-cached",
+			Namespace: "test-namespace",
+			Labels: map[string]string{
+				LabelExecutionID: "cached-exec-123",
+				LabelPlan:        "my-plan",
+				LabelTarget:      "my-target",
+			},
+		},
+	}
+
+	fakeClient := fake.NewClientBuilder().
+		WithScheme(scheme).
+		WithObjects(job).
+		Build()
+
+	server := NewExecutionServiceServer(fakeClient, nil, nil)
+
+	// First call should query K8s API and cache the result
+	meta1, err := server.getOrCacheExecutionMetadata(context.Background(), "cached-exec-123")
+	require.NoError(t, err)
+	assert.Equal(t, "my-plan", meta1.PlanName)
+
+	// Verify metadata is cached
+	server.metadataCacheMu.RLock()
+	cachedMeta, exists := server.metadataCache["cached-exec-123"]
+	server.metadataCacheMu.RUnlock()
+	require.True(t, exists, "expected metadata to be cached")
+	assert.Equal(t, "my-plan", cachedMeta.PlanName)
+
+	// Second call should return cached result (same pointer)
+	meta2, err := server.getOrCacheExecutionMetadata(context.Background(), "cached-exec-123")
+	require.NoError(t, err)
+	assert.Same(t, meta1, meta2, "expected same cached object")
+}
+
+func TestEvictMetadataCache(t *testing.T) {
 	server := NewExecutionServiceServer(nil, nil, nil)
 
-	// Create state
-	_, _ = server.ReportProgress(context.Background(), &streamingv1alpha1.ProgressReport{
-		ExecutionId: "exec-state-copy",
-		Phase:       "Running",
-	})
-
-	// Get state and modify
-	state := server.GetExecutionState("exec-state-copy")
-	state.Phase = "Modified"
-
-	// Verify original is unchanged
-	original := server.GetExecutionState("exec-state-copy")
-	if original.Phase == "Modified" {
-		t.Error("modifying returned state should not affect original")
+	// Manually add metadata to cache
+	server.metadataCacheMu.Lock()
+	server.metadataCache["exec-to-evict"] = &ExecutionMetadata{
+		Namespace:   "test-ns",
+		PlanName:    "test-plan",
+		TargetName:  "test-target",
+		ExecutionID: "exec-to-evict",
 	}
+	server.metadataCacheMu.Unlock()
+
+	// Verify it's in cache
+	server.metadataCacheMu.RLock()
+	_, exists := server.metadataCache["exec-to-evict"]
+	server.metadataCacheMu.RUnlock()
+	require.True(t, exists, "expected metadata to be in cache before eviction")
+
+	// Evict
+	server.evictMetadataCache("exec-to-evict")
+
+	// Verify it's gone
+	server.metadataCacheMu.RLock()
+	_, exists = server.metadataCache["exec-to-evict"]
+	server.metadataCacheMu.RUnlock()
+	assert.False(t, exists, "expected metadata to be evicted from cache")
+}
+
+func TestFetchHibernatePlan(t *testing.T) {
+	scheme := runtime.NewScheme()
+	require.NoError(t, hibernatorv1alpha1.AddToScheme(scheme))
+
+	plan := &hibernatorv1alpha1.HibernatePlan{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "test-plan",
+			Namespace: "test-namespace",
+		},
+	}
+
+	fakeClient := fake.NewClientBuilder().
+		WithScheme(scheme).
+		WithObjects(plan).
+		Build()
+
+	server := NewExecutionServiceServer(fakeClient, nil, nil)
+
+	result, err := server.fetchHibernatePlan(context.Background(), "test-namespace", "test-plan")
+	require.NoError(t, err)
+	require.NotNil(t, result, "expected non-nil plan")
+	assert.Equal(t, "test-plan", result.Name)
+}
+
+func TestFetchHibernatePlan_NotFound(t *testing.T) {
+	scheme := runtime.NewScheme()
+	require.NoError(t, hibernatorv1alpha1.AddToScheme(scheme))
+
+	fakeClient := fake.NewClientBuilder().
+		WithScheme(scheme).
+		Build()
+
+	server := NewExecutionServiceServer(fakeClient, nil, nil)
+
+	_, err := server.fetchHibernatePlan(context.Background(), "test-namespace", "nonexistent")
+	require.Error(t, err, "expected error for non-existent plan")
 }
 
 func TestConcurrentAccess(t *testing.T) {
@@ -326,10 +480,6 @@ func TestConcurrentAccess(t *testing.T) {
 				_, _ = server.Heartbeat(context.Background(), &streamingv1alpha1.HeartbeatRequest{
 					ExecutionId: execID,
 				})
-
-				// Read state
-				_ = server.GetExecutionState(execID)
-				_ = server.GetExecutionLogs(execID)
 			}
 			done <- true
 		}(i)
@@ -353,20 +503,17 @@ func TestMultipleExecutions(t *testing.T) {
 			Phase:           "Running",
 			ProgressPercent: int32((i + 1) * 25),
 		})
-		if err != nil {
-			t.Fatalf("ReportProgress() error = %v", err)
-		}
+		require.NoError(t, err)
 	}
 
 	// Verify each execution has its own state
 	for i, id := range execIDs {
-		state := server.GetExecutionState(id)
-		if state == nil {
-			t.Fatalf("expected state for %s", id)
-		}
+		server.executionStatusMu.RLock()
+		state, exists := server.executionStatus[id]
+		server.executionStatusMu.RUnlock()
+
+		require.True(t, exists, "expected state for %s", id)
 		expectedProgress := int32((i + 1) * 25)
-		if state.ProgressPercent != expectedProgress {
-			t.Errorf("execution %s: progress = %d, want %d", id, state.ProgressPercent, expectedProgress)
-		}
+		assert.Equal(t, expectedProgress, state.ProgressPercent, "execution %s progress mismatch", id)
 	}
 }
