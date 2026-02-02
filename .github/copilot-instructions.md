@@ -236,6 +236,12 @@ This rule applies to all work on this repository and ensures user retains full c
 
 **IMPORTANT**: Only run tests on specific files/packages involved in the change, not the entire codebase. This improves efficiency and reduces noise from unrelated test failures.
 
+**⚠️ E2E TESTS REQUIRE EXPLICIT CONFIRMATION**: Never run E2E tests (`test/e2e/...`) automatically, regardless of what packages were changed (including `internal/controller/`). E2E tests:
+- Require envtest binaries and special setup
+- Have long timeouts (120s+) that can block development
+- Should only be run when explicitly requested by the user
+- Always ask: "Would you like me to run E2E tests?" before executing
+
 ```bash
 # Target specific package tests (PREFERRED)
 go test ./internal/executor/karpenter/... -v
@@ -250,7 +256,8 @@ go test ./...
 # Controller tests (requires envtest - skip unless changes affect controller)
 go test ./internal/controller/...
 
-# E2E tests (requires envtest binaries - skip unless testing full integration)
+# E2E tests (⚠️ REQUIRES EXPLICIT USER CONFIRMATION)
+# NEVER run automatically - always ask user first!
 go test ./test/e2e/... -v
 
 # With Ginkgo

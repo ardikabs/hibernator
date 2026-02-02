@@ -243,6 +243,55 @@ spec:
           status:
             description: HibernatePlanStatus defines the observed state of HibernatePlan.
             properties:
+              activeExceptions:
+                description: |-
+                  ActiveExceptions is the history of schedule exceptions for this plan.
+                  Maximum 10 entries, with expired exceptions pruned first.
+                items:
+                  description: ExceptionReference tracks an exception in the plan's
+                    history.
+                  properties:
+                    appliedAt:
+                      description: AppliedAt is when the exception was first applied.
+                      format: date-time
+                      type: string
+                    expiredAt:
+                      description: ExpiredAt is when the exception transitioned to
+                        Expired.
+                      format: date-time
+                      type: string
+                    name:
+                      description: Name of the ScheduleException.
+                      type: string
+                    state:
+                      description: State is the current state of the exception.
+                      enum:
+                      - Active
+                      - Expired
+                      type: string
+                    type:
+                      description: Type of the exception (extend, suspend, replace).
+                      enum:
+                      - extend
+                      - suspend
+                      - replace
+                      type: string
+                    validFrom:
+                      description: ValidFrom is when the exception period starts.
+                      format: date-time
+                      type: string
+                    validUntil:
+                      description: ValidUntil is when the exception period ends.
+                      format: date-time
+                      type: string
+                  required:
+                  - name
+                  - state
+                  - type
+                  - validFrom
+                  - validUntil
+                  type: object
+                type: array
               errorMessage:
                 description: ErrorMessage provides details about the error that caused
                   PhaseError.

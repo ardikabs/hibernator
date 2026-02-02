@@ -27,6 +27,26 @@ webhooks:
           - UPDATE
         resources:
           - hibernateplans
+  - name: vscheduleexception.kb.io
+    admissionReviewVersions:
+      - v1
+    clientConfig:
+      service:
+        name: hibernator-webhook-service
+        namespace: hibernator-system
+        path: /validate-hibernator-ardikabs-com-v1alpha1-scheduleexception
+    failurePolicy: Fail
+    sideEffects: None
+    rules:
+      - apiGroups:
+          - hibernator.ardikabs.com
+        apiVersions:
+          - v1alpha1
+        operations:
+          - CREATE
+          - UPDATE
+        resources:
+          - scheduleexceptions
 ---
 apiVersion: v1
 kind: Service

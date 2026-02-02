@@ -290,6 +290,37 @@ type HibernatePlanStatus struct {
 	// ErrorMessage provides details about the error that caused PhaseError.
 	// +optional
 	ErrorMessage string `json:"errorMessage,omitempty"`
+
+	// ActiveExceptions is the history of schedule exceptions for this plan.
+	// Maximum 10 entries, with expired exceptions pruned first.
+	// +optional
+	ActiveExceptions []ExceptionReference `json:"activeExceptions,omitempty"`
+}
+
+// ExceptionReference tracks an exception in the plan's history.
+type ExceptionReference struct {
+	// Name of the ScheduleException.
+	Name string `json:"name"`
+
+	// Type of the exception (extend, suspend, replace).
+	Type ExceptionType `json:"type"`
+
+	// ValidFrom is when the exception period starts.
+	ValidFrom metav1.Time `json:"validFrom"`
+
+	// ValidUntil is when the exception period ends.
+	ValidUntil metav1.Time `json:"validUntil"`
+
+	// State is the current state of the exception.
+	State ExceptionState `json:"state"`
+
+	// AppliedAt is when the exception was first applied.
+	// +optional
+	AppliedAt *metav1.Time `json:"appliedAt,omitempty"`
+
+	// ExpiredAt is when the exception transitioned to Expired.
+	// +optional
+	ExpiredAt *metav1.Time `json:"expiredAt,omitempty"`
 }
 
 // +kubebuilder:object:root=true

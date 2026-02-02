@@ -91,11 +91,9 @@ Advanced workflows for exception handling, governance, and multi-environment man
 
 | Journey | Business Outcome | Personas | Status | RFCs | Link |
 |---------|------------------|----------|--------|------|------|
-| **Create Emergency Exception** | Temporarily override hibernation schedule for incidents or urgent changes | On-Call Engineer, Platform Engineer | 🚀 In Progress | RFC-0003 | [Details](./create-emergency-exception.md) |
-| **Approve Hibernation Exceptions** | Review and approve exceptions via Slack (interactive) or CLI (programmatic) | Engineering Manager, Engineering Head, Security Officer | 📋 Planned | RFC-0003 | [Details](./approve-hibernation-exceptions.md) |
-| **Scale Workloads in Cluster** | Downscale in-cluster workloads (Deployments, StatefulSets) during hibernation | Platform Engineer, SRE | ✅ Implemented | RFC-0004 | [Details](./scale-workloads-in-cluster.md) |
-| **Extend Hibernation for Event** | Temporarily extend hibernation schedule for on-site events or special projects | Team Lead, Product Manager | 📋 Planned | RFC-0003 | [Details](./extend-hibernation-for-event.md) |
-| **Suspend Hibernation During Incident** | Create a carve-out from hibernation to keep services awake during incidents | On-Call Engineer, SRE | 📋 Planned | RFC-0003 | [Details](./suspend-hibernation-during-incident.md) |
+| **Create Emergency Exception** | Temporarily override hibernation schedule for incidents or urgent changes | On-Call Engineer, Platform Engineer | ✅ Implemented | RFC-0003 | [Details](./create-emergency-exception.md) |
+| **Extend Hibernation for Event** | Temporarily extend hibernation schedule for on-site events or special projects | Team Lead, Product Manager | ✅ Implemented | RFC-0003 | [Details](./extend-hibernation-for-event.md) |
+| **Suspend Hibernation During Incident** | Create a carve-out from hibernation to keep services awake during incidents | On-Call Engineer, SRE | ✅ Implemented | RFC-0003 | [Details](./suspend-hibernation-during-incident.md) |
 | **Setup IRSA Authentication** | Use IAM Roles for Service Accounts (IRSA) for secure AWS credential access | Cloud Administrator, DevOps | ✅ Implemented | RFC-0001 | [Details](./setup-irsa-authentication.md) |
 | **Configure RBAC for Hibernation** | Set up Kubernetes RBAC to control who can create/manage hibernation plans | DevOps Engineer, Cluster Operator | ✅ Implemented | RFC-0001 | [Details](./configure-rbac-for-hibernation.md) |
 | **Integrate with GitOps** | Add HibernatePlans to version-controlled infrastructure-as-code pipelines | DevOps Engineer, Platform Engineer | 📋 Planned | RFC-0001, RFC-0002 | [Details](./integrate-with-gitops.md) |

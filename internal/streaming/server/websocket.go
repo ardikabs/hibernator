@@ -45,31 +45,31 @@ type WebSocketMessage struct {
 
 // WebSocketServer provides WebSocket streaming endpoints for runner communication.
 type WebSocketServer struct {
-	addr              string
-	execService       *ExecutionServiceServer
-	validator         *auth.TokenValidator
-	k8sClientset      kubernetes.Interface
-	log               logr.Logger
-	upgrader          websocket.Upgrader
-	connections       map[string]*websocket.Conn
-	connectionsMu     sync.RWMutex
-	pingInterval      time.Duration
-	writeTimeout      time.Duration
-	readTimeout       time.Duration
-	maxMessageSize    int64
+	addr           string
+	execService    *ExecutionServiceServer
+	validator      *auth.TokenValidator
+	k8sClientset   kubernetes.Interface
+	log            logr.Logger
+	upgrader       websocket.Upgrader
+	connections    map[string]*websocket.Conn
+	connectionsMu  sync.RWMutex
+	pingInterval   time.Duration
+	writeTimeout   time.Duration
+	readTimeout    time.Duration
+	maxMessageSize int64
 }
 
 // WebSocketServerOptions configures the WebSocket server.
 type WebSocketServerOptions struct {
-	Addr              string
-	ExecService       *ExecutionServiceServer
-	Validator         *auth.TokenValidator
-	K8sClientset      kubernetes.Interface
-	Log               logr.Logger
-	PingInterval      time.Duration
-	WriteTimeout      time.Duration
-	ReadTimeout       time.Duration
-	MaxMessageSize    int64
+	Addr           string
+	ExecService    *ExecutionServiceServer
+	Validator      *auth.TokenValidator
+	K8sClientset   kubernetes.Interface
+	Log            logr.Logger
+	PingInterval   time.Duration
+	WriteTimeout   time.Duration
+	ReadTimeout    time.Duration
+	MaxMessageSize int64
 }
 
 // NewWebSocketServer creates a new WebSocket streaming server.
@@ -88,11 +88,11 @@ func NewWebSocketServer(opts WebSocketServerOptions) *WebSocketServer {
 	}
 
 	return &WebSocketServer{
-		addr:           opts.Addr,
-		execService:    opts.ExecService,
-		validator:      opts.Validator,
-		k8sClientset:   opts.K8sClientset,
-		log:            opts.Log.WithName("websocket-server"),
+		addr:         opts.Addr,
+		execService:  opts.ExecService,
+		validator:    opts.Validator,
+		k8sClientset: opts.K8sClientset,
+		log:          opts.Log.WithName("websocket-server"),
 		upgrader: websocket.Upgrader{
 			ReadBufferSize:  4096,
 			WriteBufferSize: 4096,

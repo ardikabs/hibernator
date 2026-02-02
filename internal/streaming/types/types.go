@@ -124,11 +124,11 @@ type HeartbeatResponse struct {
 
 // WebhookPayload is the unified payload for webhook/HTTP callback.
 type WebhookPayload struct {
-	Type       string             `json:"type"`
-	Log        *LogEntry          `json:"log,omitempty"`
-	Progress   *ProgressReport    `json:"progress,omitempty"`
-	Completion *CompletionReport  `json:"completion,omitempty"`
-	Heartbeat  *HeartbeatRequest  `json:"heartbeat,omitempty"`
+	Type       string            `json:"type"`
+	Log        *LogEntry         `json:"log,omitempty"`
+	Progress   *ProgressReport   `json:"progress,omitempty"`
+	Completion *CompletionReport `json:"completion,omitempty"`
+	Heartbeat  *HeartbeatRequest `json:"heartbeat,omitempty"`
 }
 
 // WebhookResponse is the response from a webhook callback.

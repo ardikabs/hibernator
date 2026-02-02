@@ -104,9 +104,25 @@ func main() {
 		os.Exit(1)
 	}
 
+	// Set up ScheduleException controller
+	if err = (&controller.ScheduleExceptionReconciler{
+		Client: mgr.GetClient(),
+		Log:    ctrl.Log.WithName("controllers").WithName("ScheduleException"),
+		Scheme: mgr.GetScheme(),
+	}).SetupWithManager(mgr); err != nil {
+		setupLog.Error(err, "unable to create controller", "controller", "ScheduleException")
+		os.Exit(1)
+	}
+
 	// Set up validation webhook
 	if err = (&hibernatorv1alpha1.HibernatePlan{}).SetupWebhookWithManager(mgr); err != nil {
 		setupLog.Error(err, "unable to create webhook", "webhook", "HibernatePlan")
+		os.Exit(1)
+	}
+
+	// Set up ScheduleException validation webhook
+	if err = (&hibernatorv1alpha1.ScheduleException{}).SetupWebhookWithManager(mgr); err != nil {
+		setupLog.Error(err, "unable to create webhook", "webhook", "ScheduleException")
 		os.Exit(1)
 	}
 

@@ -49,74 +49,174 @@ Scenario: On-site event (Jan 29 - Feb 28)
 - Duration: 1 month (auto-expires Feb 28)
 ```
 
-### 2. **Create extension exception**
+### 2. **Create ScheduleException resource**
+
+Create independent `ScheduleException` that references the HibernatePlan:
 
 ```yaml
-apiVersion: hibernator.ardikasaputro.io/v1alpha1
-kind: HibernationPlan
+apiVersion: hibernator.ardikabs.com/v1alpha1
+kind: ScheduleException
 metadata:
-  name: event-support
+  name: on-site-event-q1
   namespace: hibernator-system
 spec:
-  schedule:
-    timezone: "America/New_York"
-    offHours:
-      - start: "20:00"
-        end: "06:00"
-        daysOfWeek: ["MON", "TUE", "WED", "THU", "FRI"]
+  # Reference to the HibernatePlan
+  planRef:
+    name: event-support
+    namespace: hibernator-system  # Must be same namespace
 
-    # Extend hibernation during on-site event
-    exceptions:
-      - name: "on-site-event-q1"
-        description: "Q1 On-site event support (Jan 29 - Feb 28, 2026)"
-        type: extend                    # ADD hibernation windows (union with base)
-        validFrom: "2026-01-29T00:00:00Z"
-        validUntil: "2026-02-28T23:59:59Z"
-        windows:
-          - start: "06:00"
-            end: "11:00"
-            daysOfWeek: ["SAT", "SUN"]  # Weekend extended hibernation
-          - start: "01:00"
-            end: "06:00"
-            daysOfWeek: ["MON", "TUE", "WED", "THU", "FRI"]  # Early morning extension
+  # Exception period
+  validFrom: "2026-01-29T00:00:00Z"
+  validUntil: "2026-02-28T23:59:59Z"
 
-  targets: [...]
+  # Exception type: extend (add hibernation windows)
+  type: extend
+
+  # Windows to add to base schedule
+  windows:
+    # Weekend support (normally awake, now hibernated)
+    - start: "06:00"
+      end: "11:00"
+      daysOfWeek: ["Saturday", "Sunday"]
+
+    # Early-morning support (additional hibernation)
+    - start: "01:00"
+      end: "06:00"
+      daysOfWeek: ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday"]
 ```
 
-### 3. **Verify exception is active**
+**GitOps-Friendly Workflow:**
+
+- Base HibernatePlan remains unchanged
+- Exception is separate commit/resource
+- Auto-expires without modifying plan
+- Audit trail preserved as CR with `state: Expired`
+
+### 3. **Apply the exception**
+
+Commit ScheduleException as separate resource (GitOps-friendly):
 
 ```bash
-kubectl describe hibernateplan event-support | grep -A 10 "activeExceptions:"
+# Apply ScheduleException (separate from plan)
+kubectl apply -f scheduleexception-on-site-event-q1.yaml
 
-# Output:
-# Active Exceptions:
-#   Name: on-site-event-q1
-#   Type: extend
-#   Reason: Active; 28 days remaining
+# Verify exception is Active
+kubectl get scheduleexception on-site-event-q1 -n hibernator-system
+
+# Check exception status
+kubectl get scheduleexception on-site-event-q1 -n hibernator-system -o jsonpath='{.status.state}'
+# Expected: Active
 ```
 
-### 4. **Schedule during extension**
+### 4. **Verify exception activation**
+
+Controller processes exception and updates both resources:
+
+```bash
+# Check ScheduleException status
+kubectl describe scheduleexception on-site-event-q1 -n hibernator-system
+```
+
+Expected ScheduleException status:
+
+```yaml
+status:
+  state: Active
+  appliedAt: "2026-01-29T00:05:23Z"
+  message: "Exception active, expires in 29 days"
+```
+
+Check HibernatePlan status (history tracking):
+
+```bash
+kubectl get hibernateplan event-support -n hibernator-system -o jsonpath='{.status.activeExceptions}' | jq
+```
+
+Expected plan status:
+
+```json
+[
+  {
+    "name": "on-site-event-q1",
+    "type": "extend",
+    "validFrom": "2026-01-29T00:00:00Z",
+    "validUntil": "2026-02-28T23:59:59Z",
+    "state": "Active",
+    "appliedAt": "2026-01-29T00:05:23Z"
+  }
+]
+```
+
+### 5. **Schedule during extension**
 
 During the extension period (Jan 29 - Feb 28):
 
 **Before extension (baseline):**
-```
+
+```text
 MON-FRI 20:00-06:00 → Services hibernated
 SAT-SUN 06:00-11:00 → Services running
 ```
 
 **During extension:**
-```
+
+```text
 MON-FRI 01:00-06:00  → ADDITIONALLY hibernated (extended window)
 MON-FRI 20:00-06:00  → Services hibernated (base schedule)
 SAT-SUN 06:00-11:00  → ADDITIONALLY hibernated (extended window)
 ```
 
 **Effective hibernation:**
-```
+
+```text
 MON-FRI: 20:00 → 06:00 (base) + 01:00 → 06:00 (extended) = 20:00 → 06:00 (union)
 SAT-SUN: 06:00 → 11:00 (extended only)
 ```
+
+### 6. **Automatic expiration**
+
+On Feb 28, 23:59:59 UTC, the exception automatically expires:
+
+```bash
+# After expiration, check state
+kubectl get scheduleexception on-site-event-q1 -n hibernator-system -o jsonpath='{.status.state}'
+# Expected: Expired
+
+# ScheduleException CR remains for audit
+kubectl get scheduleexception on-site-event-q1 -n hibernator-system -o yaml
+```
+
+Expected status after expiration:
+
+```yaml
+status:
+  state: Expired
+  appliedAt: "2026-01-29T00:05:23Z"
+  expiredAt: "2026-02-28T23:59:59Z"
+  message: "Exception expired"
+```
+
+HibernatePlan status updates (moves to history):
+
+```bash
+kubectl get hibernateplan event-support -n hibernator-system -o jsonpath='{.status.activeExceptions}' | jq
+```
+
+```json
+[
+  {
+    "name": "on-site-event-q1",
+    "type": "extend",
+    "validFrom": "2026-01-29T00:00:00Z",
+    "validUntil": "2026-02-28T23:59:59Z",
+    "state": "Expired",
+    "appliedAt": "2026-01-29T00:05:23Z",
+    "expiredAt": "2026-02-28T23:59:59Z"
+  }
+]
+```
+
+**Audit Trail**: Exception CR preserved with `state: Expired` for cost tracking and compliance.
 
 ### 5. **Verify extended hibernation is working**
 

@@ -1,0 +1,83 @@
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: hibernator-controller
+rules:
+- apiGroups:
+  - ""
+  resources:
+  - configmaps
+  verbs:
+  - create
+  - delete
+  - get
+  - list
+  - patch
+  - update
+  - watch
+- apiGroups:
+  - ""
+  resources:
+  - events
+  verbs:
+  - create
+  - patch
+- apiGroups:
+  - ""
+  resources:
+  - secrets
+  verbs:
+  - get
+  - list
+  - watch
+- apiGroups:
+  - batch
+  resources:
+  - jobs
+  verbs:
+  - create
+  - delete
+  - get
+  - list
+  - patch
+  - update
+  - watch
+- apiGroups:
+  - hibernator.ardikabs.com
+  resources:
+  - cloudproviders
+  - k8sclusters
+  verbs:
+  - get
+  - list
+  - watch
+- apiGroups:
+  - hibernator.ardikabs.com
+  resources:
+  - hibernateplans
+  - scheduleexceptions
+  verbs:
+  - create
+  - delete
+  - get
+  - list
+  - patch
+  - update
+  - watch
+- apiGroups:
+  - hibernator.ardikabs.com
+  resources:
+  - hibernateplans/finalizers
+  - scheduleexceptions/finalizers
+  verbs:
+  - update
+- apiGroups:
+  - hibernator.ardikabs.com
+  resources:
+  - hibernateplans/status
+  - scheduleexceptions/status
+  verbs:
+  - get
+  - patch
+  - update

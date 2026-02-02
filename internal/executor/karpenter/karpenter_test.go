@@ -280,12 +280,12 @@ func TestNodePoolState_Empty(t *testing.T) {
 func TestRestoreData_NodePoolStates(t *testing.T) {
 	states := map[string]NodePoolState{
 		"default": {
-			Name: "default",
+			Name:              "default",
 			DisruptionBudgets: map[string]interface{}{"consolidateAfter": "30s"},
-			Limits: map[string]interface{}{"cpu": "1000"},
+			Limits:            map[string]interface{}{"cpu": "1000"},
 		},
 		"spot": {
-			Name: "spot",
+			Name:   "spot",
 			Limits: map[string]interface{}{"cpu": "500"},
 		},
 	}

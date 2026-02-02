@@ -20,6 +20,8 @@ import (
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
+	"sigs.k8s.io/controller-runtime/pkg/handler"
+	"sigs.k8s.io/controller-runtime/pkg/reconcile"
 
 	hibernatorv1alpha1 "github.com/ardikabs/hibernator/api/v1alpha1"
 	"github.com/ardikabs/hibernator/internal/recovery"
@@ -137,8 +139,14 @@ func (r *HibernatePlanReconciler) Reconcile(ctx context.Context, req ctrl.Reques
 		return ctrl.Result{Requeue: true}, nil
 	}
 
-	// Evaluate schedule
-	shouldHibernate, requeueAfter, err := r.evaluateSchedule(&plan)
+	// Query active exception and update status
+	if err := r.updateActiveExceptions(ctx, log, &plan); err != nil {
+		log.Error(err, "failed to update active exceptions")
+		// Don't fail reconciliation, continue with base schedule
+	}
+
+	// Evaluate schedule (with exceptions if present)
+	shouldHibernate, requeueAfter, err := r.evaluateSchedule(ctx, &plan)
 	if err != nil {
 		log.Error(err, "failed to evaluate schedule")
 		return ctrl.Result{RequeueAfter: ScheduleErrorRequeueInterval}, nil
@@ -197,41 +205,181 @@ func (r *HibernatePlanReconciler) Reconcile(ctx context.Context, req ctrl.Reques
 	return ctrl.Result{RequeueAfter: requeueAfter}, nil
 }
 
-// evaluateSchedule checks if we should be in hibernation based on schedule.
-func (r *HibernatePlanReconciler) evaluateSchedule(plan *hibernatorv1alpha1.HibernatePlan) (bool, time.Duration, error) {
+// updateActiveExceptions queries for active exceptions and updates plan status.
+func (r *HibernatePlanReconciler) updateActiveExceptions(ctx context.Context, log logr.Logger, plan *hibernatorv1alpha1.HibernatePlan) error {
+	// Query for exceptions referencing this plan
+	var exceptions hibernatorv1alpha1.ScheduleExceptionList
+	if err := r.List(ctx, &exceptions,
+		client.InNamespace(plan.Namespace),
+		client.MatchingLabels{LabelPlan: plan.Name},
+	); err != nil {
+		return fmt.Errorf("list exceptions: %w", err)
+	}
+
+	// Build exception references from current exceptions
+	var activeExceptions []hibernatorv1alpha1.ExceptionReference
+	for _, exc := range exceptions.Items {
+		ref := hibernatorv1alpha1.ExceptionReference{
+			Name:       exc.Name,
+			Type:       exc.Spec.Type,
+			ValidFrom:  exc.Spec.ValidFrom,
+			ValidUntil: exc.Spec.ValidUntil,
+			State:      exc.Status.State,
+			AppliedAt:  exc.Status.AppliedAt,
+			ExpiredAt:  exc.Status.ExpiredAt,
+		}
+		activeExceptions = append(activeExceptions, ref)
+	}
+
+	// Prune old exceptions (max 10, prune expired first, then oldest by expiredAt)
+	if len(activeExceptions) > 10 {
+		// Separate active and expired
+		var active, expired []hibernatorv1alpha1.ExceptionReference
+		for _, ref := range activeExceptions {
+			if ref.State == hibernatorv1alpha1.ExceptionStateActive {
+				active = append(active, ref)
+			} else {
+				expired = append(expired, ref)
+			}
+		}
+
+		// Sort expired by expiredAt (newest first)
+		for i := 0; i < len(expired)-1; i++ {
+			for j := i + 1; j < len(expired); j++ {
+				if expired[i].ExpiredAt != nil && expired[j].ExpiredAt != nil {
+					if expired[i].ExpiredAt.Before(expired[j].ExpiredAt) {
+						expired[i], expired[j] = expired[j], expired[i]
+					}
+				}
+			}
+		}
+
+		// Keep all active + newest expired (up to 10 total)
+		activeExceptions = active
+		if len(activeExceptions) < 10 {
+			remaining := 10 - len(activeExceptions)
+			if remaining > len(expired) {
+				remaining = len(expired)
+			}
+			activeExceptions = append(activeExceptions, expired[:remaining]...)
+		}
+	}
+
+	// Update status if changed
+	if !exceptionReferencesEqual(plan.Status.ActiveExceptions, activeExceptions) {
+		plan.Status.ActiveExceptions = activeExceptions
+		if err := r.Status().Update(ctx, plan); err != nil {
+			return fmt.Errorf("update plan status: %w", err)
+		}
+		log.Info("updated active exceptions", "count", len(activeExceptions))
+	}
+
+	return nil
+}
+
+// exceptionReferencesEqual checks if two exception reference slices are equal.
+func exceptionReferencesEqual(a, b []hibernatorv1alpha1.ExceptionReference) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	for i := range a {
+		if a[i].Name != b[i].Name || a[i].State != b[i].State {
+			return false
+		}
+	}
+	return true
+}
+
+// evaluateSchedule checks if we should be in hibernation based on schedule and active exceptions.
+func (r *HibernatePlanReconciler) evaluateSchedule(ctx context.Context, plan *hibernatorv1alpha1.HibernatePlan) (bool, time.Duration, error) {
 	if r.ScheduleEvaluator == nil {
 		// Fallback: always active if no evaluator
 		return false, time.Minute, nil
 	}
 
-	// Convert OffHourWindows to cron expressions
-	offHourWindows := make([]scheduler.OffHourWindow, len(plan.Spec.Schedule.OffHours))
+	// Convert OffHourWindows to scheduler format
+	baseWindows := make([]scheduler.OffHourWindow, len(plan.Spec.Schedule.OffHours))
 	for i, w := range plan.Spec.Schedule.OffHours {
-		offHourWindows[i] = scheduler.OffHourWindow{
+		baseWindows[i] = scheduler.OffHourWindow{
 			Start:      w.Start,
 			End:        w.End,
 			DaysOfWeek: w.DaysOfWeek,
 		}
 	}
 
-	hibernateCron, wakeUpCron, err := scheduler.ConvertOffHoursToCron(offHourWindows)
+	// Query for active exception
+	exception, err := r.getActiveException(ctx, plan)
 	if err != nil {
-		return false, time.Minute, fmt.Errorf("failed to convert off-hours to cron: %w", err)
+		r.Log.Error(err, "failed to get active exception, evaluating base schedule only")
+		// Fall through to evaluate base schedule
+		exception = nil
 	}
 
-	window := scheduler.ScheduleWindow{
-		HibernateCron: hibernateCron,
-		WakeUpCron:    wakeUpCron,
-		Timezone:      plan.Spec.Schedule.Timezone,
-	}
-
-	result, err := r.ScheduleEvaluator.Evaluate(window, time.Now())
+	// Evaluate schedule with exception (if any)
+	now := time.Now()
+	result, err := r.ScheduleEvaluator.EvaluateWithException(baseWindows, plan.Spec.Schedule.Timezone, exception, now)
 	if err != nil {
 		return false, time.Minute, err
 	}
 
-	requeueAfter := r.ScheduleEvaluator.NextRequeueTime(result, time.Now())
+	requeueAfter := r.ScheduleEvaluator.NextRequeueTime(result, now)
 	return result.ShouldHibernate, requeueAfter, nil
+}
+
+// getActiveException queries for an active ScheduleException for this plan.
+// Returns nil if no active exception exists.
+func (r *HibernatePlanReconciler) getActiveException(ctx context.Context, plan *hibernatorv1alpha1.HibernatePlan) (*scheduler.Exception, error) {
+	// List exceptions with matching plan label
+	var exceptions hibernatorv1alpha1.ScheduleExceptionList
+	if err := r.List(ctx, &exceptions,
+		client.InNamespace(plan.Namespace),
+		client.MatchingLabels{LabelPlan: plan.Name},
+	); err != nil {
+		return nil, fmt.Errorf("list schedule exceptions: %w", err)
+	}
+
+	// Find the first active exception
+	for _, exc := range exceptions.Items {
+		if exc.Status.State != hibernatorv1alpha1.ExceptionStateActive {
+			continue
+		}
+
+		// Verify it's within valid period
+		now := time.Now()
+		if now.Before(exc.Spec.ValidFrom.Time) || now.After(exc.Spec.ValidUntil.Time) {
+			continue
+		}
+
+		// Convert to scheduler.Exception
+		windows := make([]scheduler.OffHourWindow, len(exc.Spec.Windows))
+		for i, w := range exc.Spec.Windows {
+			windows[i] = scheduler.OffHourWindow{
+				Start:      w.Start,
+				End:        w.End,
+				DaysOfWeek: w.DaysOfWeek,
+			}
+		}
+
+		// Parse lead time
+		var leadTime time.Duration
+		if exc.Spec.LeadTime != "" {
+			var err error
+			leadTime, err = time.ParseDuration(exc.Spec.LeadTime)
+			if err != nil {
+				r.Log.Error(err, "failed to parse lead time, ignoring", "leadTime", exc.Spec.LeadTime)
+			}
+		}
+
+		return &scheduler.Exception{
+			Type:       scheduler.ExceptionType(exc.Spec.Type),
+			ValidFrom:  exc.Spec.ValidFrom.Time,
+			ValidUntil: exc.Spec.ValidUntil.Time,
+			LeadTime:   leadTime,
+			Windows:    windows,
+		}, nil
+	}
+
+	return nil, nil
 }
 
 // startHibernation initiates the hibernation process.
@@ -762,7 +910,7 @@ func (r *HibernatePlanReconciler) handleErrorRecovery(ctx context.Context, log l
 	recovery.RecordRetryAttempt(plan, lastErr)
 
 	// Evaluate current schedule to determine target phase
-	shouldHibernate, _, err := r.evaluateSchedule(plan)
+	shouldHibernate, _, err := r.evaluateSchedule(ctx, plan)
 	if err != nil {
 		log.Error(err, "failed to evaluate schedule during recovery")
 		return ctrl.Result{RequeueAfter: time.Minute}, nil
@@ -790,5 +938,27 @@ func (r *HibernatePlanReconciler) SetupWithManager(mgr ctrl.Manager) error {
 		For(&hibernatorv1alpha1.HibernatePlan{}).
 		Owns(&batchv1.Job{}).
 		Owns(&corev1.ConfigMap{}).
+		Watches(
+			&hibernatorv1alpha1.ScheduleException{},
+			handler.EnqueueRequestsFromMapFunc(r.findPlansForException),
+		).
 		Complete(r)
+}
+
+// findPlansForException returns reconcile requests for HibernatePlans when a ScheduleException changes.
+func (r *HibernatePlanReconciler) findPlansForException(ctx context.Context, obj client.Object) []reconcile.Request {
+	exception, ok := obj.(*hibernatorv1alpha1.ScheduleException)
+	if !ok {
+		return nil
+	}
+
+	// Enqueue the referenced plan
+	return []reconcile.Request{
+		{
+			NamespacedName: types.NamespacedName{
+				Name:      exception.Spec.PlanRef.Name,
+				Namespace: exception.Namespace,
+			},
+		},
+	}
 }
