@@ -9,6 +9,8 @@ import (
 	"context"
 	"encoding/json"
 	"testing"
+
+	"github.com/go-logr/logr"
 )
 
 // MockExecutor is a mock implementation for testing.
@@ -24,11 +26,13 @@ func (m *MockExecutor) Type() string { return m.TypeValue }
 
 func (m *MockExecutor) Validate(spec Spec) error { return m.ValidateErr }
 
-func (m *MockExecutor) Shutdown(ctx context.Context, spec Spec) (RestoreData, error) {
+func (m *MockExecutor) Shutdown(ctx context.Context, log logr.Logger, spec Spec) (RestoreData, error) {
+	_ = log
 	return m.ShutdownData, m.ShutdownErr
 }
 
-func (m *MockExecutor) WakeUp(ctx context.Context, spec Spec, restore RestoreData) error {
+func (m *MockExecutor) WakeUp(ctx context.Context, log logr.Logger, spec Spec, restore RestoreData) error {
+	_ = log
 	return m.WakeUpErr
 }
 

@@ -10,6 +10,8 @@ import (
 	"encoding/json"
 	"fmt"
 
+	"github.com/go-logr/logr"
+
 	"github.com/ardikabs/hibernator/internal/executor"
 	"github.com/ardikabs/hibernator/pkg/executorparams"
 	"github.com/ardikabs/hibernator/pkg/k8sutil"
@@ -76,17 +78,29 @@ func (e *Executor) Validate(spec executor.Spec) error {
 }
 
 // Shutdown scales Karpenter NodePools to zero by setting disruption budgets and resource limits.
-func (e *Executor) Shutdown(ctx context.Context, spec executor.Spec) (executor.RestoreData, error) {
+func (e *Executor) Shutdown(ctx context.Context, log logr.Logger, spec executor.Spec) (executor.RestoreData, error) {
+	log.Info("Karpenter executor starting shutdown",
+		"target", spec.TargetName,
+		"targetType", spec.TargetType,
+	)
+
 	var params executorparams.KarpenterParameters
 	if len(spec.Parameters) > 0 {
 		if err := json.Unmarshal(spec.Parameters, &params); err != nil {
+			log.Error(err, "failed to parse parameters")
 			return executor.RestoreData{}, fmt.Errorf("parse parameters: %w", err)
 		}
 	}
 
+	log.Info("parameters parsed",
+		"nodePoolCount", len(params.NodePools),
+		"isAllNodePools", len(params.NodePools) == 0,
+	)
+
 	// Build clients using injected factory
 	dynamicClient, err := e.k8sFactory(ctx, &spec)
 	if err != nil {
+		log.Error(err, "failed to build kubernetes client")
 		return executor.RestoreData{}, fmt.Errorf("build kubernetes client: %w", err)
 	}
 
@@ -94,14 +108,19 @@ func (e *Executor) Shutdown(ctx context.Context, spec executor.Spec) (executor.R
 	targetNodePools := params.NodePools
 	if len(targetNodePools) == 0 {
 		// Empty nodePools means all NodePools in the cluster
+		log.Info("discovering all NodePools in cluster")
 		discovered, err := e.listAllNodePools(ctx, dynamicClient)
 		if err != nil {
+			log.Error(err, "failed to list all NodePools")
 			return executor.RestoreData{}, fmt.Errorf("list all NodePools: %w", err)
 		}
 		targetNodePools = discovered
 	}
 
+	log.Info("target NodePools determined", "count", len(targetNodePools))
+
 	if len(targetNodePools) == 0 {
+		log.Error(nil, "no NodePools found in cluster")
 		return executor.RestoreData{}, fmt.Errorf("no NodePools found in cluster")
 	}
 
@@ -110,18 +129,30 @@ func (e *Executor) Shutdown(ctx context.Context, spec executor.Spec) (executor.R
 
 	// Process each NodePool
 	for _, nodePoolName := range targetNodePools {
+		log.Info("scaling down NodePool", "nodePool", nodePoolName)
 		state, err := e.scaleDownNodePool(ctx, dynamicClient, nodePoolName)
 		if err != nil {
+			log.Error(err, "failed to scale down NodePool", "nodePool", nodePoolName)
 			return executor.RestoreData{}, fmt.Errorf("scale down NodePool %s: %w", nodePoolName, err)
 		}
 		nodePoolStates[nodePoolName] = state
+		log.Info("NodePool scaled down successfully",
+			"nodePool", nodePoolName,
+			"hasLimits", state.Limits != nil,
+			"hasDisruptionBudgets", state.DisruptionBudgets != nil,
+		)
 	}
 
 	// Build restore data
 	stateBytes, err := json.Marshal(nodePoolStates)
 	if err != nil {
+		log.Error(err, "failed to marshal restore data")
 		return executor.RestoreData{}, fmt.Errorf("marshal restore data: %w", err)
 	}
+
+	log.Info("Karpenter shutdown completed successfully",
+		"nodePoolCount", len(nodePoolStates),
+	)
 
 	return executor.RestoreData{
 		Type: e.Type(),
@@ -130,29 +161,49 @@ func (e *Executor) Shutdown(ctx context.Context, spec executor.Spec) (executor.R
 }
 
 // WakeUp restores Karpenter NodePools from hibernation.
-func (e *Executor) WakeUp(ctx context.Context, spec executor.Spec, restore executor.RestoreData) error {
+func (e *Executor) WakeUp(ctx context.Context, log logr.Logger, spec executor.Spec, restore executor.RestoreData) error {
+	log.Info("Karpenter executor starting wakeup",
+		"target", spec.TargetName,
+		"targetType", spec.TargetType,
+	)
+
 	if len(restore.Data) == 0 {
+		log.Error(nil, "restore data is empty")
 		return fmt.Errorf("restore data is required for wake-up")
 	}
 
 	var nodePoolStates map[string]NodePoolState
 	if err := json.Unmarshal(restore.Data, &nodePoolStates); err != nil {
+		log.Error(err, "failed to unmarshal restore data")
 		return fmt.Errorf("unmarshal restore data: %w", err)
 	}
+
+	log.Info("restore state loaded", "nodePoolCount", len(nodePoolStates))
 
 	// Build clients using injected factory
 	dynamicClient, err := e.k8sFactory(ctx, &spec)
 	if err != nil {
+		log.Error(err, "failed to build kubernetes client")
 		return fmt.Errorf("build kubernetes client: %w", err)
 	}
 
 	// Restore each NodePool
 	for nodePoolName, state := range nodePoolStates {
+		log.Info("restoring NodePool",
+			"nodePool", nodePoolName,
+			"hasLimits", state.Limits != nil,
+			"hasDisruptionBudgets", state.DisruptionBudgets != nil,
+		)
 		if err := e.restoreNodePool(ctx, dynamicClient, nodePoolName, state); err != nil {
+			log.Error(err, "failed to restore NodePool", "nodePool", nodePoolName)
 			return fmt.Errorf("restore NodePool %s: %w", nodePoolName, err)
 		}
+		log.Info("NodePool restored successfully", "nodePool", nodePoolName)
 	}
 
+	log.Info("Karpenter wakeup completed successfully",
+		"nodePoolCount", len(nodePoolStates),
+	)
 	return nil
 }
 

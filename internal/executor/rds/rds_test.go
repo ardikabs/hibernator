@@ -13,6 +13,7 @@ import (
 	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/service/rds"
 	"github.com/aws/aws-sdk-go-v2/service/rds/types"
+	"github.com/go-logr/logr"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/mock"
 
@@ -87,7 +88,7 @@ func TestShutdown_MissingTarget(t *testing.T) {
 		},
 	}
 
-	_, err := e.Shutdown(ctx, spec)
+	_, err := e.Shutdown(ctx, logr.Discard(), spec)
 	assert.Error(t, err)
 	assert.Contains(t, err.Error(), "either instanceId or clusterId")
 }
@@ -105,7 +106,7 @@ func TestShutdown_InvalidParameters(t *testing.T) {
 		},
 	}
 
-	_, err := e.Shutdown(ctx, spec)
+	_, err := e.Shutdown(ctx, logr.Discard(), spec)
 	assert.Error(t, err)
 	assert.Contains(t, err.Error(), "parse parameters")
 }
@@ -140,7 +141,7 @@ func TestShutdown_StopInstance(t *testing.T) {
 		},
 	}
 
-	restore, err := e.Shutdown(ctx, spec)
+	restore, err := e.Shutdown(ctx, logr.Discard(), spec)
 	assert.NoError(t, err)
 
 	var state RestoreState
@@ -179,7 +180,7 @@ func TestShutdown_StopInstanceAlreadyStopped(t *testing.T) {
 		},
 	}
 
-	restore, err := e.Shutdown(ctx, spec)
+	restore, err := e.Shutdown(ctx, logr.Discard(), spec)
 	assert.NoError(t, err)
 
 	var state RestoreState
@@ -216,7 +217,7 @@ func TestShutdown_StopCluster(t *testing.T) {
 		},
 	}
 
-	restore, err := e.Shutdown(ctx, spec)
+	restore, err := e.Shutdown(ctx, logr.Discard(), spec)
 	assert.NoError(t, err)
 
 	var state RestoreState
@@ -253,7 +254,7 @@ func TestShutdown_StopClusterAlreadyStopped(t *testing.T) {
 		},
 	}
 
-	restore, err := e.Shutdown(ctx, spec)
+	restore, err := e.Shutdown(ctx, logr.Discard(), spec)
 	assert.NoError(t, err)
 
 	var state RestoreState
@@ -292,7 +293,7 @@ func TestWakeUp_StartInstance(t *testing.T) {
 		},
 	}
 
-	err := e.WakeUp(ctx, spec, restore)
+	err := e.WakeUp(ctx, logr.Discard(), spec, restore)
 	assert.NoError(t, err)
 	mockRDS.AssertExpectations(t)
 }
@@ -325,7 +326,7 @@ func TestWakeUp_InstanceAlreadyRunning(t *testing.T) {
 		},
 	}
 
-	err := e.WakeUp(ctx, spec, restore)
+	err := e.WakeUp(ctx, logr.Discard(), spec, restore)
 	assert.NoError(t, err)
 	mockRDS.AssertNotCalled(t, "StartDBInstance", mock.Anything, mock.Anything)
 }
@@ -359,7 +360,7 @@ func TestWakeUp_StartCluster(t *testing.T) {
 		},
 	}
 
-	err := e.WakeUp(ctx, spec, restore)
+	err := e.WakeUp(ctx, logr.Discard(), spec, restore)
 	assert.NoError(t, err)
 	mockRDS.AssertExpectations(t)
 }
@@ -392,7 +393,7 @@ func TestWakeUp_ClusterAlreadyRunning(t *testing.T) {
 		},
 	}
 
-	err := e.WakeUp(ctx, spec, restore)
+	err := e.WakeUp(ctx, logr.Discard(), spec, restore)
 	assert.NoError(t, err)
 	mockRDS.AssertNotCalled(t, "StartDBCluster", mock.Anything, mock.Anything)
 }
@@ -411,7 +412,7 @@ func TestWakeUp_InvalidRestoreData(t *testing.T) {
 
 	restore := executor.RestoreData{Type: "rds", Data: json.RawMessage(`{invalid json}`)}
 
-	err := e.WakeUp(ctx, spec, restore)
+	err := e.WakeUp(ctx, logr.Discard(), spec, restore)
 	assert.Error(t, err)
 }
 

@@ -14,6 +14,7 @@ import (
 	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/service/ec2"
 	"github.com/aws/aws-sdk-go-v2/service/ec2/types"
+	"github.com/go-logr/logr"
 
 	"github.com/ardikabs/hibernator/internal/executor"
 	"github.com/ardikabs/hibernator/pkg/awsutil"
@@ -93,24 +94,42 @@ func (e *Executor) Validate(spec executor.Spec) error {
 }
 
 // Shutdown stops EC2 instances matching the selector.
-func (e *Executor) Shutdown(ctx context.Context, spec executor.Spec) (executor.RestoreData, error) {
+func (e *Executor) Shutdown(ctx context.Context, log logr.Logger, spec executor.Spec) (executor.RestoreData, error) {
+	log.Info("EC2 executor starting shutdown",
+		"target", spec.TargetName,
+		"targetType", spec.TargetType,
+	)
+
 	params, err := e.parseParams(spec.Parameters)
 	if err != nil {
+		log.Error(err, "failed to parse parameters")
 		return executor.RestoreData{}, fmt.Errorf("parse parameters: %w", err)
 	}
 
+	log.Info("parameters parsed",
+		"hasTagSelector", len(params.Selector.Tags) > 0,
+		"hasInstanceIDs", len(params.Selector.InstanceIDs) > 0,
+		"tagCount", len(params.Selector.Tags),
+		"instanceIDCount", len(params.Selector.InstanceIDs),
+	)
+
 	cfg, err := e.loadAWSConfig(ctx, spec)
 	if err != nil {
+		log.Error(err, "failed to load AWS config")
 		return executor.RestoreData{}, fmt.Errorf("load AWS config: %w", err)
 	}
 
 	client := e.ec2Factory(cfg)
 
 	// Find instances
+	log.Info("discovering EC2 instances matching selector")
 	instances, err := e.findInstances(ctx, client, params.Selector)
 	if err != nil {
+		log.Error(err, "failed to find instances")
 		return executor.RestoreData{}, fmt.Errorf("find instances: %w", err)
 	}
+
+	log.Info("instances discovered", "totalInstances", len(instances))
 
 	restoreState := RestoreState{
 		Instances: make([]InstanceState, 0, len(instances)),
@@ -129,22 +148,39 @@ func (e *Executor) Shutdown(ctx context.Context, spec executor.Spec) (executor.R
 		if wasRunning {
 			instancesToStop = append(instancesToStop, instanceID)
 		}
+
+		log.Info("instance state captured",
+			"instanceId", instanceID,
+			"state", inst.State.Name,
+			"willStop", wasRunning,
+		)
 	}
 
 	// Stop running instances
 	if len(instancesToStop) > 0 {
+		log.Info("stopping running instances", "count", len(instancesToStop))
 		_, err = client.StopInstances(ctx, &ec2.StopInstancesInput{
 			InstanceIds: instancesToStop,
 		})
 		if err != nil {
+			log.Error(err, "failed to stop instances")
 			return executor.RestoreData{}, fmt.Errorf("stop instances: %w", err)
 		}
+		log.Info("instances stopped successfully", "count", len(instancesToStop))
+	} else {
+		log.Info("no running instances to stop")
 	}
 
 	restoreData, err := json.Marshal(restoreState)
 	if err != nil {
+		log.Error(err, "failed to marshal restore state")
 		return executor.RestoreData{}, fmt.Errorf("marshal restore state: %w", err)
 	}
+
+	log.Info("EC2 shutdown completed successfully",
+		"totalInstances", len(restoreState.Instances),
+		"stoppedInstances", len(instancesToStop),
+	)
 
 	return executor.RestoreData{
 		Type: ExecutorType,
@@ -153,14 +189,23 @@ func (e *Executor) Shutdown(ctx context.Context, spec executor.Spec) (executor.R
 }
 
 // WakeUp starts previously running EC2 instances.
-func (e *Executor) WakeUp(ctx context.Context, spec executor.Spec, restore executor.RestoreData) error {
+func (e *Executor) WakeUp(ctx context.Context, log logr.Logger, spec executor.Spec, restore executor.RestoreData) error {
+	log.Info("EC2 executor starting wakeup",
+		"target", spec.TargetName,
+		"targetType", spec.TargetType,
+	)
+
 	var restoreState RestoreState
 	if err := json.Unmarshal(restore.Data, &restoreState); err != nil {
+		log.Error(err, "failed to unmarshal restore state")
 		return fmt.Errorf("unmarshal restore state: %w", err)
 	}
 
+	log.Info("restore state loaded", "totalInstances", len(restoreState.Instances))
+
 	cfg, err := e.loadAWSConfig(ctx, spec)
 	if err != nil {
+		log.Error(err, "failed to load AWS config")
 		return fmt.Errorf("load AWS config: %w", err)
 	}
 
@@ -171,18 +216,28 @@ func (e *Executor) WakeUp(ctx context.Context, spec executor.Spec, restore execu
 	for _, inst := range restoreState.Instances {
 		if inst.WasRunning {
 			instancesToStart = append(instancesToStart, inst.InstanceID)
+			log.Info("instance marked for start",
+				"instanceId", inst.InstanceID,
+				"wasRunning", inst.WasRunning,
+			)
 		}
 	}
 
 	if len(instancesToStart) > 0 {
+		log.Info("starting instances", "count", len(instancesToStart))
 		_, err = client.StartInstances(ctx, &ec2.StartInstancesInput{
 			InstanceIds: instancesToStart,
 		})
 		if err != nil {
+			log.Error(err, "failed to start instances")
 			return fmt.Errorf("start instances: %w", err)
 		}
+		log.Info("instances started successfully", "count", len(instancesToStart))
+	} else {
+		log.Info("no instances to start")
 	}
 
+	log.Info("EC2 wakeup completed successfully")
 	return nil
 }
 

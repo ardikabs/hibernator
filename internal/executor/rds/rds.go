@@ -16,6 +16,7 @@ import (
 	"github.com/aws/aws-sdk-go-v2/service/rds"
 	"github.com/aws/aws-sdk-go-v2/service/rds/types"
 	"github.com/aws/aws-sdk-go-v2/service/sts"
+	"github.com/go-logr/logr"
 
 	"github.com/ardikabs/hibernator/internal/executor"
 	"github.com/ardikabs/hibernator/pkg/awsutil"
@@ -88,14 +89,27 @@ func (e *Executor) Validate(spec executor.Spec) error {
 }
 
 // Shutdown stops RDS instances/clusters with optional snapshot.
-func (e *Executor) Shutdown(ctx context.Context, spec executor.Spec) (executor.RestoreData, error) {
+func (e *Executor) Shutdown(ctx context.Context, log logr.Logger, spec executor.Spec) (executor.RestoreData, error) {
+	log.Info("RDS executor starting shutdown",
+		"target", spec.TargetName,
+		"targetType", spec.TargetType,
+	)
+
 	params, err := e.parseParams(spec.Parameters)
 	if err != nil {
+		log.Error(err, "failed to parse parameters")
 		return executor.RestoreData{}, fmt.Errorf("parse parameters: %w", err)
 	}
 
+	log.Info("parameters parsed",
+		"hasInstanceID", params.InstanceID != "",
+		"hasClusterID", params.ClusterID != "",
+		"snapshotBeforeStop", params.SnapshotBeforeStop,
+	)
+
 	cfg, err := e.loadAWSConfig(ctx, spec)
 	if err != nil {
+		log.Error(err, "failed to load AWS config")
 		return executor.RestoreData{}, fmt.Errorf("load AWS config: %w", err)
 	}
 
@@ -103,25 +117,46 @@ func (e *Executor) Shutdown(ctx context.Context, spec executor.Spec) (executor.R
 	var restoreState RestoreState
 
 	if params.InstanceID != "" {
+		log.Info("stopping RDS instance", "instanceId", params.InstanceID)
 		state, err := e.stopInstance(ctx, client, params)
 		if err != nil {
+			log.Error(err, "failed to stop instance", "instanceId", params.InstanceID)
 			return executor.RestoreData{}, fmt.Errorf("stop instance: %w", err)
 		}
 		restoreState = state
+		log.Info("instance stopped successfully",
+			"instanceId", params.InstanceID,
+			"wasStopped", state.WasStopped,
+			"snapshotCreated", state.SnapshotID != "",
+		)
 	} else if params.ClusterID != "" {
+		log.Info("stopping RDS cluster", "clusterId", params.ClusterID)
 		state, err := e.stopCluster(ctx, client, params)
 		if err != nil {
+			log.Error(err, "failed to stop cluster", "clusterId", params.ClusterID)
 			return executor.RestoreData{}, fmt.Errorf("stop cluster: %w", err)
 		}
 		restoreState = state
+		log.Info("cluster stopped successfully",
+			"clusterId", params.ClusterID,
+			"wasStopped", state.WasStopped,
+		)
 	} else {
+		log.Error(nil, "neither instanceId nor clusterId specified")
 		return executor.RestoreData{}, fmt.Errorf("either instanceId or clusterId must be specified")
 	}
 
 	restoreData, err := json.Marshal(restoreState)
 	if err != nil {
+		log.Error(err, "failed to marshal restore state")
 		return executor.RestoreData{}, fmt.Errorf("marshal restore state: %w", err)
 	}
+
+	log.Info("RDS shutdown completed successfully",
+		"instanceId", restoreState.InstanceID,
+		"clusterId", restoreState.ClusterID,
+		"snapshotId", restoreState.SnapshotID,
+	)
 
 	return executor.RestoreData{
 		Type: ExecutorType,
@@ -130,29 +165,49 @@ func (e *Executor) Shutdown(ctx context.Context, spec executor.Spec) (executor.R
 }
 
 // WakeUp starts RDS instances/clusters.
-func (e *Executor) WakeUp(ctx context.Context, spec executor.Spec, restore executor.RestoreData) error {
+func (e *Executor) WakeUp(ctx context.Context, log logr.Logger, spec executor.Spec, restore executor.RestoreData) error {
+	log.Info("RDS executor starting wakeup",
+		"target", spec.TargetName,
+		"targetType", spec.TargetType,
+	)
+
 	var restoreState RestoreState
 	if err := json.Unmarshal(restore.Data, &restoreState); err != nil {
+		log.Error(err, "failed to unmarshal restore state")
 		return fmt.Errorf("unmarshal restore state: %w", err)
 	}
 
+	log.Info("restore state loaded",
+		"instanceId", restoreState.InstanceID,
+		"clusterId", restoreState.ClusterID,
+		"wasStopped", restoreState.WasStopped,
+	)
+
 	cfg, err := e.loadAWSConfig(ctx, spec)
 	if err != nil {
+		log.Error(err, "failed to load AWS config")
 		return fmt.Errorf("load AWS config: %w", err)
 	}
 
 	client := e.rdsFactory(cfg)
 
 	if restoreState.InstanceID != "" {
+		log.Info("starting RDS instance", "instanceId", restoreState.InstanceID)
 		if err := e.startInstance(ctx, client, restoreState.InstanceID); err != nil {
+			log.Error(err, "failed to start instance", "instanceId", restoreState.InstanceID)
 			return fmt.Errorf("start instance: %w", err)
 		}
+		log.Info("instance started successfully", "instanceId", restoreState.InstanceID)
 	} else if restoreState.ClusterID != "" {
+		log.Info("starting RDS cluster", "clusterId", restoreState.ClusterID)
 		if err := e.startCluster(ctx, client, restoreState.ClusterID); err != nil {
+			log.Error(err, "failed to start cluster", "clusterId", restoreState.ClusterID)
 			return fmt.Errorf("start cluster: %w", err)
 		}
+		log.Info("cluster started successfully", "clusterId", restoreState.ClusterID)
 	}
 
+	log.Info("RDS wakeup completed successfully")
 	return nil
 }
 

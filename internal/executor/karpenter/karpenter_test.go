@@ -13,6 +13,7 @@ import (
 
 	"github.com/ardikabs/hibernator/internal/executor"
 	"github.com/ardikabs/hibernator/pkg/executorparams"
+	"github.com/go-logr/logr"
 	"github.com/stretchr/testify/assert"
 )
 
@@ -143,7 +144,7 @@ func TestShutdown_InvalidParameters(t *testing.T) {
 		},
 	}
 
-	_, err := e.Shutdown(ctx, spec)
+	_, err := e.Shutdown(ctx, logr.Discard(), spec)
 	assert.Error(t, err)
 }
 
@@ -167,7 +168,7 @@ func TestShutdown_K8sFactoryError(t *testing.T) {
 		},
 	}
 
-	_, err := e.Shutdown(ctx, spec)
+	_, err := e.Shutdown(ctx, logr.Discard(), spec)
 	assert.Error(t, err)
 	assert.Contains(t, err.Error(), "create k8s client")
 }
@@ -192,7 +193,7 @@ func TestWakeUp_InvalidRestoreData(t *testing.T) {
 		Data: json.RawMessage(`{invalid json}`),
 	}
 
-	err := e.WakeUp(ctx, spec, restore)
+	err := e.WakeUp(ctx, logr.Discard(), spec, restore)
 	assert.Error(t, err)
 }
 
@@ -221,7 +222,7 @@ func TestWakeUp_K8sFactoryError(t *testing.T) {
 		Data: restoreData,
 	}
 
-	err := e.WakeUp(ctx, spec, restore)
+	err := e.WakeUp(ctx, logr.Discard(), spec, restore)
 	assert.Error(t, err)
 	assert.Contains(t, err.Error(), "create k8s client")
 }

@@ -202,7 +202,7 @@ func (r *runner) executeOperation(ctx context.Context, exec executor.Executor, s
 
 	switch r.cfg.Operation {
 	case "shutdown":
-		rd, err := exec.Shutdown(ctx, *spec)
+		rd, err := exec.Shutdown(ctx, r.log, *spec)
 		if err != nil {
 			operationErr = err
 		} else {
@@ -213,7 +213,7 @@ func (r *runner) executeOperation(ctx context.Context, exec executor.Executor, s
 		if err != nil {
 			operationErr = fmt.Errorf("load restore data: %w", err)
 		} else {
-			operationErr = exec.WakeUp(ctx, *spec, *rd)
+			operationErr = exec.WakeUp(ctx, r.log, *spec, *rd)
 		}
 	default:
 		operationErr = fmt.Errorf("unknown operation: %s", r.cfg.Operation)

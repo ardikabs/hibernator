@@ -14,6 +14,7 @@ import (
 	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/service/eks"
 	"github.com/aws/aws-sdk-go-v2/service/eks/types"
+	"github.com/go-logr/logr"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/mock"
 
@@ -156,7 +157,7 @@ func TestShutdown_WithSpecificNodeGroups(t *testing.T) {
 		},
 	}
 
-	restore, err := e.Shutdown(ctx, spec)
+	restore, err := e.Shutdown(ctx, logr.Discard(), spec)
 	assert.NoError(t, err)
 	assert.Equal(t, "eks", restore.Type)
 
@@ -216,7 +217,7 @@ func TestShutdown_WithListAllNodeGroups(t *testing.T) {
 		},
 	}
 
-	restore, err := e.Shutdown(ctx, spec)
+	restore, err := e.Shutdown(ctx, logr.Discard(), spec)
 	assert.NoError(t, err)
 
 	var state RestoreState
@@ -250,7 +251,7 @@ func TestShutdown_DescribeNodegroupError(t *testing.T) {
 		},
 	}
 
-	_, err := e.Shutdown(ctx, spec)
+	_, err := e.Shutdown(ctx, logr.Discard(), spec)
 	assert.Error(t, err)
 	assert.Contains(t, err.Error(), "access denied")
 }
@@ -294,7 +295,7 @@ func TestWakeUp_RestoreNodeGroups(t *testing.T) {
 		Data: restoreData,
 	}
 
-	err := e.WakeUp(ctx, spec, restore)
+	err := e.WakeUp(ctx, logr.Discard(), spec, restore)
 	assert.NoError(t, err)
 
 	mockEKS.AssertExpectations(t)
@@ -317,7 +318,7 @@ func TestWakeUp_InvalidRestoreData(t *testing.T) {
 		Data: json.RawMessage(`{invalid json}`),
 	}
 
-	err := e.WakeUp(ctx, spec, restore)
+	err := e.WakeUp(ctx, logr.Discard(), spec, restore)
 	assert.Error(t, err)
 }
 
@@ -334,7 +335,7 @@ func TestShutdown_InvalidParameters(t *testing.T) {
 		},
 	}
 
-	_, err := e.Shutdown(ctx, spec)
+	_, err := e.Shutdown(ctx, logr.Discard(), spec)
 	assert.Error(t, err)
 }
 
