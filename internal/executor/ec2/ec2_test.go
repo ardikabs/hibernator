@@ -14,6 +14,7 @@ import (
 	"github.com/aws/aws-sdk-go-v2/aws"
 	awsec2 "github.com/aws/aws-sdk-go-v2/service/ec2"
 	"github.com/aws/aws-sdk-go-v2/service/ec2/types"
+	"github.com/go-logr/logr"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/mock"
 
@@ -145,7 +146,7 @@ func TestShutdown_StopRunningInstances(t *testing.T) {
 		},
 	}
 
-	restore, err := e.Shutdown(ctx, spec)
+	restore, err := e.Shutdown(ctx, logr.Discard(), spec)
 	assert.NoError(t, err)
 	assert.Equal(t, "ec2", restore.Type)
 
@@ -182,7 +183,7 @@ func TestShutdown_NoInstancesToStop(t *testing.T) {
 		},
 	}
 
-	restore, err := e.Shutdown(ctx, spec)
+	restore, err := e.Shutdown(ctx, logr.Discard(), spec)
 	assert.NoError(t, err)
 
 	var state RestoreState
@@ -213,7 +214,7 @@ func TestShutdown_DescribeInstancesError(t *testing.T) {
 		},
 	}
 
-	_, err := e.Shutdown(ctx, spec)
+	_, err := e.Shutdown(ctx, logr.Discard(), spec)
 	assert.Error(t, err)
 	assert.Contains(t, err.Error(), "access denied")
 }
@@ -254,7 +255,7 @@ func TestWakeUp_StartPreviouslyRunningInstances(t *testing.T) {
 		Data: restoreData,
 	}
 
-	err := e.WakeUp(ctx, spec, restore)
+	err := e.WakeUp(ctx, logr.Discard(), spec, restore)
 	assert.NoError(t, err)
 
 	mockEC2.AssertExpectations(t)
@@ -277,7 +278,7 @@ func TestWakeUp_InvalidRestoreData(t *testing.T) {
 		Data: json.RawMessage(`{invalid json}`),
 	}
 
-	err := e.WakeUp(ctx, spec, restore)
+	err := e.WakeUp(ctx, logr.Discard(), spec, restore)
 	assert.Error(t, err)
 }
 
@@ -294,7 +295,7 @@ func TestShutdown_InvalidParameters(t *testing.T) {
 		},
 	}
 
-	_, err := e.Shutdown(ctx, spec)
+	_, err := e.Shutdown(ctx, logr.Discard(), spec)
 	assert.Error(t, err)
 }
 

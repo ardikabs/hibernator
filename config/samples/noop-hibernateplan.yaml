@@ -1,0 +1,214 @@
+# NoOp HibernatePlan Example
+# This example demonstrates using the NoOp executor for local testing
+# without requiring external AWS/GCP services or credentials.
+#
+# Use cases:
+# - Test hibernation scheduler logic locally
+# - Validate DAG dependency resolution
+# - Test execution strategies (Sequential, Parallel, DAG, Staged)
+# - Develop and test HibernatePlan features without cloud dependencies
+#
+# Note: The randomDelaySeconds parameter specifies the MAXIMUM delay in seconds (0-30).
+# Actual sleep duration will be randomly chosen between 0 and the specified value.
+---
+apiVersion: hibernator.ardikabs.com/v1alpha1
+kind: CloudProvider
+metadata:
+  name: noop-aws
+  namespace: hibernator-system
+spec:
+  type: aws
+  aws:
+    accountId: "000000000000"  # Dummy account ID (not used by NoOp)
+    region: us-east-1          # Dummy region (not used by NoOp)
+    auth:
+      serviceAccount: {}       # NoOp validates connector exists but doesn't use it
+---
+apiVersion: hibernator.ardikabs.com/v1alpha1
+kind: K8SCluster
+metadata:
+  name: noop-cluster
+  namespace: hibernator-system
+spec:
+  providerRef:
+    name: noop-aws
+    namespace: hibernator-system
+  k8s:
+    inCluster: true  # Dummy config (not used by NoOp)
+---
+apiVersion: hibernator.ardikabs.com/v1alpha1
+kind: HibernatePlan
+metadata:
+  name: noop-test-plan
+  namespace: hibernator-system
+spec:
+  # Schedule for testing (every weeknight 8 PM to 6 AM)
+  schedule:
+    timezone: America/New_York
+    offHours:
+      - start: "20:00"
+        end: "06:00"
+        daysOfWeek: ["MON", "TUE", "WED", "THU", "FRI"]
+
+  # Sequential execution with different delays to observe order
+  execution:
+    strategy:
+      type: Sequential
+
+  behavior:
+    mode: Strict
+    failFast: false
+
+  # Multiple NoOp targets with different configurations
+  targets:
+    # Fast simulation (random delay between 0-1 second)
+    - name: noop-fast
+      type: noop
+      connectorRef:
+        kind: CloudProvider
+        name: noop-aws
+      parameters:
+        randomDelaySeconds: 1
+        failureMode: "none"
+
+    # Medium simulation (random delay between 0-2 seconds)
+    - name: noop-medium
+      type: noop
+      connectorRef:
+        kind: K8SCluster
+        name: noop-cluster
+      parameters:
+        randomDelaySeconds: 2
+        failureMode: "none"
+
+    # Slow simulation (random delay between 0-5 seconds)
+    - name: noop-slow
+      type: noop
+      connectorRef:
+        kind: CloudProvider
+        name: noop-aws
+      parameters:
+        randomDelaySeconds: 5
+        failureMode: "none"
+---
+# Example: DAG execution with dependencies
+apiVersion: hibernator.ardikabs.com/v1alpha1
+kind: HibernatePlan
+metadata:
+  name: noop-dag-test
+  namespace: hibernator-system
+spec:
+  schedule:
+    timezone: UTC
+    offHours:
+      - start: "22:00"
+        end: "07:00"
+        daysOfWeek: ["MON", "TUE", "WED", "THU", "FRI"]
+
+  # DAG execution to test dependency ordering
+  execution:
+    strategy:
+      type: DAG
+      maxConcurrency: 2
+      dependencies:
+        # database must shutdown before app
+        - from: noop-database
+          to: noop-app
+        # app must shutdown before cluster
+        - from: noop-app
+          to: noop-cluster
+
+  behavior:
+    mode: Strict
+    failFast: true
+
+  targets:
+    - name: noop-database
+      type: noop
+      connectorRef:
+        kind: CloudProvider
+        name: noop-aws
+      parameters:
+        randomDelaySeconds: 1
+        failureMode: "none"
+
+    - name: noop-app
+      type: noop
+      connectorRef:
+        kind: K8SCluster
+        name: noop-cluster
+      parameters:
+        randomDelaySeconds: 1
+        failureMode: "none"
+
+    - name: noop-cluster
+      type: noop
+      connectorRef:
+        kind: CloudProvider
+        name: noop-aws
+      parameters:
+        randomDelaySeconds: 1
+        failureMode: "none"
+---
+# Example: Failure simulation for testing error recovery
+apiVersion: hibernator.ardikabs.com/v1alpha1
+kind: HibernatePlan
+metadata:
+  name: noop-failure-test
+  namespace: hibernator-system
+spec:
+  schedule:
+    timezone: UTC
+    offHours:
+      - start: "23:00"
+        end: "08:00"
+        daysOfWeek: ["SAT", "SUN"]
+
+  execution:
+    strategy:
+      type: Sequential
+
+  behavior:
+    mode: BestEffort  # Continue on failure
+    failFast: false
+
+  targets:
+    # This target will succeed
+    - name: noop-success
+      type: noop
+      connectorRef:
+        kind: CloudProvider
+        name: noop-aws
+      parameters:
+        randomDelaySeconds: 1
+        failureMode: "none"
+
+    # This target will fail on shutdown
+    - name: noop-fail-shutdown
+      type: noop
+      connectorRef:
+        kind: CloudProvider
+        name: noop-aws
+      parameters:
+        randomDelaySeconds: 1
+        failureMode: "shutdown"
+
+    # This target will fail on wakeup
+    - name: noop-fail-wakeup
+      type: noop
+      connectorRef:
+        kind: CloudProvider
+        name: noop-aws
+      parameters:
+        randomDelaySeconds: 1
+        failureMode: "wakeup"
+
+    # This target will fail on both operations
+    - name: noop-fail-both
+      type: noop
+      connectorRef:
+        kind: CloudProvider
+        name: noop-aws
+      parameters:
+        randomDelaySeconds: 1
+        failureMode: "both"

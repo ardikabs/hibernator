@@ -110,3 +110,15 @@ type LabelSelectorRequirement struct {
 	// the values array must be empty.
 	Values []string `json:"values,omitempty"`
 }
+
+// NoOpParameters defines the expected parameters for the noop executor.
+type NoOpParameters struct {
+	// RandomDelaySeconds specifies the maximum duration in seconds for random sleep during operations.
+	// The actual delay will be randomly chosen between 0 and this value.
+	// Maximum allowed is 30 seconds. Defaults to 1 if not specified.
+	RandomDelaySeconds int `json:"randomDelaySeconds,omitempty"`
+
+	// FailureMode specifies when to simulate failures. Valid values: "none", "shutdown", "wakeup", "both".
+	// Defaults to "none".
+	FailureMode string `json:"failureMode,omitempty"`
+}

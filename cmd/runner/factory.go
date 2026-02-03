@@ -17,6 +17,7 @@ import (
 	"github.com/ardikabs/hibernator/internal/executor/eks"
 	"github.com/ardikabs/hibernator/internal/executor/gke"
 	"github.com/ardikabs/hibernator/internal/executor/karpenter"
+	"github.com/ardikabs/hibernator/internal/executor/noop"
 	"github.com/ardikabs/hibernator/internal/executor/rds"
 	"github.com/ardikabs/hibernator/internal/executor/workloadscaler"
 )
@@ -74,6 +75,11 @@ func newExecutorFactoryRegistry() *executorFactoryRegistry {
 				factory:        func() executor.Executor { return workloadscaler.New() },
 				defaultEnabled: true,
 				description:    "Kubernetes workload scaling via scale subresource",
+			},
+			"noop": {
+				factory:        func() executor.Executor { return noop.New() },
+				defaultEnabled: true,
+				description:    "No-operation executor for testing without external dependencies",
 			},
 		},
 	}

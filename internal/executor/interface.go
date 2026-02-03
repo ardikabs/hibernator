@@ -11,6 +11,8 @@ import (
 	"encoding/json"
 	"sync"
 
+	"github.com/go-logr/logr"
+
 	"github.com/ardikabs/hibernator/pkg/awsutil"
 	"github.com/ardikabs/hibernator/pkg/k8sutil"
 )
@@ -58,10 +60,10 @@ type Executor interface {
 	Validate(spec Spec) error
 
 	// Shutdown performs the hibernation operation and returns restore data.
-	Shutdown(ctx context.Context, spec Spec) (RestoreData, error)
+	Shutdown(ctx context.Context, log logr.Logger, spec Spec) (RestoreData, error)
 
 	// WakeUp performs the restore operation using saved restore data.
-	WakeUp(ctx context.Context, spec Spec, restore RestoreData) error
+	WakeUp(ctx context.Context, log logr.Logger, spec Spec, restore RestoreData) error
 }
 
 // Registry holds registered executors.
