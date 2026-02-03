@@ -290,6 +290,7 @@ Last updated: 2026-02-02
 
 ### Known Gaps
 
+- **Multiple OffHours Windows**: Only first `offHours` window is evaluated; additional windows silently ignored (MVP constraint). Workarounds: multiple HibernationPlans or ScheduleException with `type: extend`. Phase 4+ enhancement (see RFC-0002).
 - **GCP API integration**: GKE and Cloud SQL executors are placeholders pending google.golang.org/api implementation
 - **Azure support**: No Azure executor implementations yet
 - **Artifact storage**: Only ConfigMap supported; object-store integration pending

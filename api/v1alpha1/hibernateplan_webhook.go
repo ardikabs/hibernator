@@ -207,7 +207,16 @@ func (r *HibernatePlan) validateTargets(plan *HibernatePlan) (field.ErrorList, a
 		}
 
 		// Validate target type
-		validTypes := []string{"eks", "rds", "ec2", "asg", "karpenter", "gke", "cloudsql", "workloadscaler"}
+		validTypes := []string{
+			"ec2",
+			"eks",
+			"rds",
+			"karpenter",
+			"workloadscaler",
+			"gke",
+			"cloudsql",
+			"noop",
+		}
 		isValidType := false
 		for _, vt := range validTypes {
 			if target.Type == vt {

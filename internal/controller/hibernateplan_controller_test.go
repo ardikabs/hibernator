@@ -333,7 +333,7 @@ func setupControllerWithManager(mgr ctrl.Manager) error {
 		Scheme:            mgr.GetScheme(),
 		Planner:           scheduler.NewPlanner(),
 		ScheduleEvaluator: scheduler.NewScheduleEvaluator(),
-	}).SetupWithManager(mgr)
+	}).SetupWithManager(mgr, 1)
 }
 
 // Placeholder for additional test utilities

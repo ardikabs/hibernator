@@ -663,12 +663,12 @@ metadata:
 spec:
   planRef:
     name: event-support  # References existing HibernatePlan
-  
+
   approvalRequired: true
   approverEmails:  # On-call specifies approvers by email
     - "bob@company.com"      # Engineering Head email
     - "carol@company.com"    # Manager email
-  
+
   type: extend
   validFrom: "2026-01-29T00:00:00Z"
   validUntil: "2026-02-28T23:59:59Z"
@@ -1225,6 +1225,40 @@ status:
 | **Mid-size (50-500)** | Option A (Slack with email lookup) → Option B | 4-5 weeks |
 | **Enterprise (500+)** | Option D (SSO/URL) | 4-6 weeks |
 | **Enterprise + formal audits** | Option D + C (SSO + Dashboard) | 10-14 weeks |
+
+---
+
+## Known Limitations
+
+### Multiple OffHours Windows (MVP Constraint)
+
+**Issue:** When the base HibernationPlan has multiple `offHours` windows, only the **first** window is evaluated by the scheduler. Additional windows are silently ignored.
+
+**Example:**
+```yaml
+spec:
+  schedule:
+    offHours:
+      - start: "20:00"        # ✅ Processed
+        end: "06:00"
+        daysOfWeek: ["MON", "TUE", "WED", "THU", "FRI"]
+      - start: "00:00"        # ⚠️ Silently ignored (MVP constraint)
+        end: "23:59"
+        daysOfWeek: ["SAT", "SUN"]
+```
+
+**Impact on ScheduleException:**
+- `type: extend` exceptions work correctly (add windows to first base window)
+- `type: suspend` exceptions work correctly (carve-out from first base window)
+- `type: replace` exceptions work correctly (override with exception windows)
+- Multi-window base schedules require workarounds
+
+**Workarounds:**
+1. **Create separate HibernationPlans** per schedule pattern (Recommended)
+2. **Use `type: extend` exception** to permanently add supplementary windows
+3. **Reference RFC-0002** for full discussion and Phase 4 enhancement plan
+
+**Timeline:** Phase 4+ enhancement (see RFC-0002 Future Enhancements)
 
 ---
 

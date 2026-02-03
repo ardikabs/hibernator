@@ -113,7 +113,7 @@ var _ = BeforeSuite(func() {
 		RunnerImage:          "ghcr.io/ardikabs/hibernator-runner:test",
 	}
 
-	err = reconciler.SetupWithManager(mgr)
+	err = reconciler.SetupWithManager(mgr, 1)
 	Expect(err).NotTo(HaveOccurred())
 
 	// Start the manager in a goroutine

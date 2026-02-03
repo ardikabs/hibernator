@@ -1,0 +1,183 @@
+---
+apiVersion: apiextensions.k8s.io/v1
+kind: CustomResourceDefinition
+metadata:
+  annotations:
+    controller-gen.kubebuilder.io/version: v0.20.0
+  name: scheduleexceptions.hibernator.ardikabs.com
+spec:
+  group: hibernator.ardikabs.com
+  names:
+    kind: ScheduleException
+    listKind: ScheduleExceptionList
+    plural: scheduleexceptions
+    shortNames:
+    - schedex
+    singular: scheduleexception
+  scope: Namespaced
+  versions:
+  - additionalPrinterColumns:
+    - jsonPath: .spec.planRef.name
+      name: Plan
+      type: string
+    - jsonPath: .spec.type
+      name: Type
+      type: string
+    - jsonPath: .status.state
+      name: State
+      type: string
+    - jsonPath: .spec.validFrom
+      name: ValidFrom
+      type: date
+    - jsonPath: .spec.validUntil
+      name: ValidUntil
+      type: date
+    - jsonPath: .metadata.creationTimestamp
+      name: Age
+      type: date
+    name: v1alpha1
+    schema:
+      openAPIV3Schema:
+        description: ScheduleException is the Schema for the scheduleexceptions API.
+        properties:
+          apiVersion:
+            description: |-
+              APIVersion defines the versioned schema of this representation of an object.
+              Servers should convert recognized schemas to the latest internal value, and
+              may reject unrecognized values.
+              More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#resources
+            type: string
+          kind:
+            description: |-
+              Kind is a string value representing the REST resource this object represents.
+              Servers may infer this from the endpoint the client submits requests to.
+              Cannot be updated.
+              In CamelCase.
+              More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#types-kinds
+            type: string
+          metadata:
+            type: object
+          spec:
+            description: ScheduleExceptionSpec defines the desired state of ScheduleException.
+            properties:
+              leadTime:
+                description: |-
+                  LeadTime specifies buffer period before suspension window.
+                  Only valid when Type is "suspend".
+                  Format: duration string (e.g., "30m", "1h", "3600s").
+                  Prevents NEW hibernation starts within this buffer before suspension.
+                pattern: ^([0-9]+(\.[0-9]+)?(ns|us|µs|ms|s|m|h))+$
+                type: string
+              planRef:
+                description: PlanRef references the HibernatePlan this exception applies
+                  to.
+                properties:
+                  name:
+                    description: Name of the HibernatePlan.
+                    type: string
+                  namespace:
+                    description: |-
+                      Namespace of the HibernatePlan.
+                      If empty, defaults to the exception's namespace.
+                    type: string
+                required:
+                - name
+                type: object
+              type:
+                description: 'Type specifies the exception type: extend, suspend,
+                  or replace.'
+                enum:
+                - extend
+                - suspend
+                - replace
+                type: string
+              validFrom:
+                description: ValidFrom is the start time of the exception period (RFC3339
+                  format).
+                format: date-time
+                type: string
+              validUntil:
+                description: ValidUntil is the end time of the exception period (RFC3339
+                  format).
+                format: date-time
+                type: string
+              windows:
+                description: |-
+                  Windows defines the time windows for this exception.
+                  Meaning depends on Type:
+                  - extend: Additional hibernation windows (union with base schedule)
+                  - suspend: Windows to prevent hibernation (carve-out from schedule)
+                  - replace: Complete replacement schedule (ignore base schedule)
+                items:
+                  description: OffHourWindow defines a time window for hibernation.
+                  properties:
+                    daysOfWeek:
+                      description: |-
+                        DaysOfWeek specifies which days this window applies to.
+                        Valid values: MON, TUE, WED, THU, FRI, SAT, SUN
+                      items:
+                        enum:
+                        - MON
+                        - TUE
+                        - WED
+                        - THU
+                        - FRI
+                        - SAT
+                        - SUN
+                        type: string
+                      minItems: 1
+                      type: array
+                    end:
+                      description: End time in HH:MM format (e.g., "06:00").
+                      pattern: ^([0-1]?[0-9]|2[0-3]):[0-5][0-9]$
+                      type: string
+                    start:
+                      description: Start time in HH:MM format (e.g., "20:00").
+                      pattern: ^([0-1]?[0-9]|2[0-3]):[0-5][0-9]$
+                      type: string
+                  required:
+                  - daysOfWeek
+                  - end
+                  - start
+                  type: object
+                minItems: 1
+                type: array
+            required:
+            - planRef
+            - type
+            - validFrom
+            - validUntil
+            - windows
+            type: object
+          status:
+            description: ScheduleExceptionStatus defines the observed state of ScheduleException.
+            properties:
+              appliedAt:
+                description: AppliedAt is when the exception was first applied.
+                format: date-time
+                type: string
+              expiredAt:
+                description: ExpiredAt is when the exception transitioned to Expired
+                  state.
+                format: date-time
+                type: string
+              message:
+                description: Message provides diagnostic information about the exception
+                  state.
+                type: string
+              state:
+                allOf:
+                - enum:
+                  - Active
+                  - Expired
+                - enum:
+                  - Active
+                  - Expired
+                description: State is the current lifecycle state of the exception.
+                type: string
+            type: object
+        type: object
+    served: true
+    storage: true
+    subresources:
+      status: {}

@@ -263,8 +263,62 @@ type ExecutionStatus struct {
 	RestoreConfigMapRef string `json:"restoreConfigMapRef,omitempty"`
 }
 
+// ExecutionOperationSummary summarizes the results of a shutdown or wakeup operation.
+type ExecutionOperationSummary struct {
+	// Operation is the operation type (shutdown or wakeup).
+	Operation string `json:"operation"`
+
+	// StartTime is when the operation started.
+	StartTime metav1.Time `json:"startTime"`
+
+	// EndTime is when the operation completed.
+	// +optional
+	EndTime *metav1.Time `json:"endTime,omitempty"`
+
+	// TargetResults summarizes the result for each target.
+	// +optional
+	TargetResults []TargetExecutionResult `json:"targetResults,omitempty"`
+
+	// Success indicates if all targets completed successfully.
+	Success bool `json:"success"`
+
+	// ErrorMessage contains error details if the operation failed.
+	// +optional
+	ErrorMessage string `json:"errorMessage,omitempty"`
+}
+
+// TargetExecutionResult is the result of a single target execution.
+type TargetExecutionResult struct {
+	// Target is the target identifier (type/name).
+	Target string `json:"target"`
+	// State is the final execution state (Completed or Failed).
+	State ExecutionState `json:"state"`
+	// Attempts is the number of attempts made.
+	Attempts int32 `json:"attempts"`
+	// ExecutionID is the unique identifier for this target execution.
+	// +optional
+	ExecutionID string `json:"executionId,omitempty"`
+}
+
+// ExecutionCycle groups a shutdown and corresponding wakeup operation.
+type ExecutionCycle struct {
+	// CycleID is a unique identifier for this cycle.
+	CycleID string `json:"cycleId"`
+
+	// ShutdownExecution summarizes the shutdown operation.
+	// +optional
+	ShutdownExecution *ExecutionOperationSummary `json:"shutdownExecution,omitempty"`
+
+	// WakeupExecution summarizes the wakeup operation.
+	// +optional
+	WakeupExecution *ExecutionOperationSummary `json:"wakeupExecution,omitempty"`
+}
+
 // HibernatePlanStatus defines the observed state of HibernatePlan.
 type HibernatePlanStatus struct {
+	// CurrentCycleID is the current hibernation cycle identifier.
+	CurrentCycleID string `json:"currentCycleID,omitempty"`
+
 	// Phase is the overall plan phase.
 	Phase PlanPhase `json:"phase,omitempty"`
 
@@ -295,6 +349,22 @@ type HibernatePlanStatus struct {
 	// Maximum 10 entries, with expired exceptions pruned first.
 	// +optional
 	ActiveExceptions []ExceptionReference `json:"activeExceptions,omitempty"`
+
+	// CurrentStageIndex tracks which stage is currently executing (0-based).
+	// Reset to 0 when starting new hibernation/wakeup cycle.
+	// +optional
+	CurrentStageIndex int `json:"currentStageIndex,omitempty"`
+
+	// CurrentOperation tracks the current operation type (shutdown or wakeup).
+	// Used to determine which phase to transition to when stages complete.
+	// +optional
+	CurrentOperation string `json:"currentOperation,omitempty"`
+
+	// ExecutionHistory records historical execution cycles (max 5).
+	// Each cycle contains shutdown and wakeup operation summaries.
+	// Oldest cycles are pruned when limit is exceeded.
+	// +optional
+	ExecutionHistory []ExecutionCycle `json:"executionHistory,omitempty"`
 }
 
 // ExceptionReference tracks an exception in the plan's history.
@@ -344,6 +414,19 @@ type HibernatePlanList struct {
 	metav1.TypeMeta `json:",inline"`
 	metav1.ListMeta `json:"metadata,omitempty"`
 	Items           []HibernatePlan `json:"items"`
+}
+
+// ExceptionReferencesEqual checks if two exception reference slices are equal.
+func ExceptionReferencesEqual(a, b []ExceptionReference) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	for i := range a {
+		if a[i].Name != b[i].Name || a[i].State != b[i].State {
+			return false
+		}
+	}
+	return true
 }
 
 func init() {

@@ -56,9 +56,12 @@ help: ## Display this help.
 # ============================================================================
 
 .PHONY: generate
-generate: controller-gen ## Generate code (DeepCopy, CRDs).
+generate: controller-gen ## Generate code (DeepCopy, CRDs) and sync to Helm chart.
 	$(CONTROLLER_GEN) object:headerFile="hack/boilerplate.go.txt" paths="./api/..."
 	$(CONTROLLER_GEN) crd paths="./api/..." output:crd:artifacts:config=config/crd/bases
+	@echo "$(CYAN)Syncing CRDs to Helm chart...$(RESET)"
+	@cp -f config/crd/bases/*.yaml charts/hibernator/crds/
+	@echo "$(GREEN)CRDs synced to charts/hibernator/crds/$(RESET)"
 
 .PHONY: generate-proto
 generate-proto: protoc-gen-go protoc-gen-go-grpc ## Generate protobuf code from .proto files.

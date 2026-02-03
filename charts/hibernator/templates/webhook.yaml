@@ -40,13 +40,38 @@ webhooks:
         namespace: {{ .Release.Namespace }}
         path: "/validate-hibernator-ardikabs-com-v1alpha1-hibernateplan"
       {{- if not .Values.webhook.certManager.enabled }}
-      caBundle: {{ .Values.webhook.certs.caBundle | b64enc }}
+      {{- $caBundle := include "hibernator.webhook.caBundle" . }}
+      {{- if $caBundle }}
+      caBundle: {{ $caBundle }}
+      {{- end }}
       {{- end }}
     rules:
       - operations: ["CREATE", "UPDATE"]
         apiGroups: ["hibernator.ardikabs.com"]
         apiVersions: ["v1alpha1"]
         resources: ["hibernateplans"]
+    admissionReviewVersions: ["v1"]
+    sideEffects: None
+    timeoutSeconds: 5
+    failurePolicy: Fail
+
+  - name: validate.scheduleexception.hibernator.ardikabs.com
+    clientConfig:
+      service:
+        name: {{ include "hibernator.fullname" . }}-webhook
+        namespace: {{ .Release.Namespace }}
+        path: "/validate-hibernator-ardikabs-com-v1alpha1-scheduleexception"
+      {{- if not .Values.webhook.certManager.enabled }}
+      {{- $caBundle := include "hibernator.webhook.caBundle" . }}
+      {{- if $caBundle }}
+      caBundle: {{ $caBundle }}
+      {{- end }}
+      {{- end }}
+    rules:
+      - operations: ["CREATE", "UPDATE"]
+        apiGroups: ["hibernator.ardikabs.com"]
+        apiVersions: ["v1alpha1"]
+        resources: ["scheduleexceptions"]
     admissionReviewVersions: ["v1"]
     sideEffects: None
     timeoutSeconds: 5

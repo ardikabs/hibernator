@@ -161,22 +161,29 @@ func (r *HibernatePlanReconciler) evaluateSchedule(plan *HibernatePlan) (bool, t
 
 ### 1. Multiple Window Support
 
-Current limitation: Only the first `OffHourWindow` is used.
+**Current Status (MVP Constraint):** Only the first `OffHourWindow` is processed. Additional windows are silently ignored.
 
-**Proposed approach:**
-- Generate multiple cron expressions
-- Use OR logic in scheduler evaluation
-- Example: Weekend schedule differs from weekday schedule
-
+**Example:**
 ```yaml
 offHours:
-  - start: "20:00"
+  - start: "20:00"        # ✅ Processed
     end: "06:00"
     daysOfWeek: ["MON", "TUE", "WED", "THU", "FRI"]
-  - start: "00:00"  # All day weekend
+  - start: "00:00"        # ⚠️ Silently ignored (MVP constraint)
     end: "23:59"
     daysOfWeek: ["SAT", "SUN"]
 ```
+
+**Workarounds (Current):**
+1. **Separate HibernationPlans**: Create multiple plans, one per schedule pattern
+2. **ScheduleException with extend**: Use `type: extend` exception to add supplementary windows
+
+**Proposed Enhancement:**
+- Generate multiple cron expressions (one per window)
+- Use OR logic in scheduler evaluation
+- Example: Hibernate during (Mon-Fri 20:00-06:00) OR (Sat-Sun 00:00-23:59)
+
+**Implementation Path:** No breaking changes—existing single-window configs continue working unchanged. Phase 4+ enhancement.
 
 ### 2. Overnight Window Handling
 
