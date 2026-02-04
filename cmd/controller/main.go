@@ -6,8 +6,8 @@ Licensed under the Apache License, Version 2.0.
 package main
 
 import (
-	"context"
 	"flag"
+	"fmt"
 	"os"
 	"time"
 
@@ -177,7 +177,6 @@ func main() {
 
 // startStreamingServers initializes and starts gRPC and WebSocket streaming servers.
 func startStreamingServers(mgr ctrl.Manager, grpcAddr, wsAddr string) error {
-	ctx := context.Background()
 	log := ctrl.Log.WithName("streaming")
 
 	// Create Kubernetes clientset for TokenReview
@@ -195,12 +194,9 @@ func startStreamingServers(mgr ctrl.Manager, grpcAddr, wsAddr string) error {
 
 	// Start gRPC server
 	grpcServer := server.NewServer(grpcAddr, clientset, mgr.GetClient(), eventRecorder, log)
-	go func() {
-		if err := grpcServer.Start(ctx); err != nil {
-			log.Error(err, "gRPC server failed")
-		}
-	}()
-	log.Info("started gRPC streaming server", "address", grpcAddr)
+	if err := mgr.Add(grpcServer); err != nil {
+		return fmt.Errorf("failed to add grpc server to manager: %w", err)
+	}
 
 	// Start WebSocket server
 	validator := auth.NewTokenValidator(clientset, log)
@@ -211,12 +207,10 @@ func startStreamingServers(mgr ctrl.Manager, grpcAddr, wsAddr string) error {
 		K8sClientset: clientset,
 		Log:          log,
 	})
-	go func() {
-		if err := wsServer.Start(ctx); err != nil {
-			log.Error(err, "WebSocket server failed")
-		}
-	}()
-	log.Info("started WebSocket streaming server", "address", wsAddr)
+
+	if err := mgr.Add(wsServer); err != nil {
+		return fmt.Errorf("failed to add websocket server to manager: %w", err)
+	}
 
 	return nil
 }

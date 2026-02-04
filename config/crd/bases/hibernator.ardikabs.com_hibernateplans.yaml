@@ -191,6 +191,13 @@ spec:
                 - offHours
                 - timezone
                 type: object
+              suspend:
+                description: |-
+                  Suspend temporarily disables hibernation operations without deleting the plan.
+                  When set to true, the plan transitions to Suspended phase and stops all execution.
+                  When set to false, the plan transitions back to Active phase and resumes schedule evaluation.
+                  Running jobs complete naturally but no new jobs are created while suspended.
+                type: boolean
               targets:
                 description: Targets are the resources to hibernate.
                 items:
@@ -266,6 +273,7 @@ spec:
                     state:
                       description: State is the current state of the exception.
                       enum:
+                      - Pending
                       - Active
                       - Expired
                       type: string
@@ -529,6 +537,7 @@ spec:
                 - Hibernating
                 - Hibernated
                 - WakingUp
+                - Suspended
                 - Error
                 type: string
               retryCount:

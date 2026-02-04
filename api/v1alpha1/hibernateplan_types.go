@@ -30,7 +30,7 @@ const (
 )
 
 // PlanPhase represents the overall phase of the HibernatePlan.
-// +kubebuilder:validation:Enum=Pending;Active;Hibernating;Hibernated;WakingUp;Error
+// +kubebuilder:validation:Enum=Pending;Active;Hibernating;Hibernated;WakingUp;Suspended;Error
 type PlanPhase string
 
 const (
@@ -39,6 +39,7 @@ const (
 	PhaseHibernating PlanPhase = "Hibernating"
 	PhaseHibernated  PlanPhase = "Hibernated"
 	PhaseWakingUp    PlanPhase = "WakingUp"
+	PhaseSuspended   PlanPhase = "Suspended"
 	PhaseError       PlanPhase = "Error"
 )
 
@@ -206,6 +207,13 @@ type HibernatePlanSpec struct {
 	// Behavior defines how failures are handled.
 	// +optional
 	Behavior Behavior `json:"behavior,omitempty"`
+
+	// Suspend temporarily disables hibernation operations without deleting the plan.
+	// When set to true, the plan transitions to Suspended phase and stops all execution.
+	// When set to false, the plan transitions back to Active phase and resumes schedule evaluation.
+	// Running jobs complete naturally but no new jobs are created while suspended.
+	// +optional
+	Suspend bool `json:"suspend,omitempty"`
 
 	// Targets are the resources to hibernate.
 	// +kubebuilder:validation:MinItems=1

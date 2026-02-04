@@ -337,7 +337,3 @@ func (e *Executor) restoreNodeGroup(ctx context.Context, client EKSClient, clust
 	})
 	return err
 }
-
-func init() {
-	executor.Register(New())
-}

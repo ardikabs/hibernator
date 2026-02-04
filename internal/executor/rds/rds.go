@@ -14,7 +14,6 @@ import (
 
 	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/service/rds"
-	"github.com/aws/aws-sdk-go-v2/service/rds/types"
 	"github.com/aws/aws-sdk-go-v2/service/sts"
 	"github.com/go-logr/logr"
 
@@ -393,11 +392,4 @@ func (e *Executor) startCluster(ctx context.Context, client RDSClient, clusterID
 		DBClusterIdentifier: aws.String(clusterID),
 	})
 	return err
-}
-
-// Ensure we use the types package to avoid import errors
-var _ types.DBInstance
-
-func init() {
-	executor.Register(New())
 }

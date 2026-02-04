@@ -68,6 +68,11 @@ func (r *ScheduleException) ValidateDelete(ctx context.Context, obj runtime.Obje
 
 // validate performs validation on the ScheduleException.
 func (r *ScheduleException) validate(ctx context.Context, exception *ScheduleException) (admission.Warnings, error) {
+	// Skip validation if object is being deleted
+	if !exception.DeletionTimestamp.IsZero() {
+		return nil, nil
+	}
+
 	var allErrs field.ErrorList
 
 	// Validate planRef

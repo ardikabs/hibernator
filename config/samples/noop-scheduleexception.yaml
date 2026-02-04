@@ -1,0 +1,15 @@
+apiVersion: hibernator.ardikabs.com/v1alpha1
+kind: ScheduleException
+metadata:
+  name: noop-wakeup-earlier
+  namespace: hibernator-system
+spec:
+  planRef:
+    name: noop-dag-test
+  type: replace
+  validFrom: "2026-03-01T00:00:00Z"
+  validUntil: "2026-03-14T23:59:59Z"
+  windows:
+    - start: "22:00"  # 05:00 AM UTC
+      end: "01:00"    # 08:00 AM UTC
+      daysOfWeek: ["MON", "TUE", "WED", "THU", "FRI"]

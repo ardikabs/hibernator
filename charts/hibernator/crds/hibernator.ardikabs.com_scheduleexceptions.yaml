@@ -28,10 +28,10 @@ spec:
       type: string
     - jsonPath: .spec.validFrom
       name: ValidFrom
-      type: date
+      type: string
     - jsonPath: .spec.validUntil
       name: ValidUntil
-      type: date
+      type: string
     - jsonPath: .metadata.creationTimestamp
       name: Age
       type: date
@@ -168,9 +168,11 @@ spec:
               state:
                 allOf:
                 - enum:
+                  - Pending
                   - Active
                   - Expired
                 - enum:
+                  - Pending
                   - Active
                   - Expired
                 description: State is the current lifecycle state of the exception.

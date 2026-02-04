@@ -7,6 +7,7 @@ package controller
 
 import (
 	"context"
+	"fmt"
 	"strings"
 	"testing"
 	"time"
@@ -21,6 +22,7 @@ import (
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
+	"sigs.k8s.io/controller-runtime/pkg/client/interceptor"
 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
 )
 
@@ -31,12 +33,40 @@ func newTestScheme() *runtime.Scheme {
 	return scheme
 }
 
+var interceptorFunc = interceptor.Funcs{Patch: func(
+	ctx context.Context,
+	clnt client.WithWatch,
+	obj client.Object,
+	patch client.Patch,
+	opts ...client.PatchOption,
+) error {
+	// Apply patches are supposed to upsert, but fake client fails if the object doesn't exist,
+	// if an apply patch occurs for an object that doesn't yet exist, create it.
+	if patch.Type() != types.ApplyPatchType {
+		return clnt.Patch(ctx, obj, patch, opts...)
+	}
+	check, ok := obj.DeepCopyObject().(client.Object)
+	if !ok {
+		return fmt.Errorf("could not check for object in fake client")
+	}
+	if err := clnt.Get(ctx, client.ObjectKeyFromObject(obj), check); errors.IsNotFound(err) {
+		if err := clnt.Create(ctx, check); err != nil {
+			return fmt.Errorf("could not inject object creation for fake: %w", err)
+		}
+	} else if err != nil {
+		return err
+	}
+	obj.SetResourceVersion(check.GetResourceVersion())
+	return clnt.Update(ctx, obj)
+}}
+
 func newScheduleExceptionReconciler(objs ...client.Object) (*ScheduleExceptionReconciler, client.Client) {
 	scheme := newTestScheme()
 	fakeClient := fake.NewClientBuilder().
 		WithScheme(scheme).
 		WithObjects(objs...).
 		WithStatusSubresource(&hibernatorv1alpha1.ScheduleException{}, &hibernatorv1alpha1.HibernatePlan{}).
+		WithInterceptorFuncs(interceptorFunc).
 		Build()
 
 	reconciler := &ScheduleExceptionReconciler{

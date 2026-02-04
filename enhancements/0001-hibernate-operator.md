@@ -294,6 +294,7 @@ Last updated: 2026-02-02
 - **GCP API integration**: GKE and Cloud SQL executors are placeholders pending google.golang.org/api implementation
 - **Azure support**: No Azure executor implementations yet
 - **Artifact storage**: Only ConfigMap supported; object-store integration pending
+- **Per-target job existence query in executeStage**: The `executeStage` function queries for existing jobs once per target in the stage loop (`r.List()` with `LabelTarget` filter). For stages with many targets (e.g., 100+), this results in N API calls per reconcile. Optimization: batch-list all jobs for the stage upfront (single query with `LabelCycleID` + `LabelOperation`) and filter in-memory. Current design is correct but may be inefficient at scale.
 
 ## Alternatives considered
 

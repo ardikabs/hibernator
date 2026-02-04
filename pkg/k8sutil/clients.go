@@ -97,7 +97,7 @@ func resolveRestConfig(cfg *K8SConnectorConfig) (*rest.Config, error) {
 	return restConfig, nil
 }
 
-func ParseNamespacedName(s string) (types.NamespacedName, error) {
+func ObjectKeyFromString(s string) (types.NamespacedName, error) {
 	parts := strings.SplitN(s, "/", 2)
 	if len(parts) != 2 {
 		return types.NamespacedName{}, fmt.Errorf("invalid format: %s (expected namespace/name)", s)

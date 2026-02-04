@@ -61,6 +61,17 @@ During hibernation window, incident occurs:
 
 ### 2. **Create emergency exception (Independent CRD)**
 
+#### 📋 **Semantic Alert: Suspend Type Uses INVERTED Semantics**
+
+**Critical difference from base schedule:**
+
+| Context | `start` Semantic | `end` Semantic | Mindset |
+|---------|-----------------|----------------|----------|
+| **Base schedule** | ⬇️ Begin hibernation | ⬆️ Begin wakeup | Off hours (when to sleep) |
+| **`suspend` exception** | ✋ Begin stay-awake | ✅ End stay-awake | **On hours (when to stay awake)** ⚠️ |
+
+**In suspend exceptions, you define WHEN to STAY AWAKE (not when to sleep).**
+
 Create a `ScheduleException` resource that references the HibernatePlan:
 
 ```yaml
