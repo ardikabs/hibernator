@@ -5,12 +5,12 @@ replicaCount: 2
 image:
   controller:
     repository: ghcr.io/ardikabs/hibernator
-    pullPolicy: IfNotPresent
+    pullPolicy: Always
     tag: "latest"
 
   runner:
     repository: ghcr.io/ardikabs/hibernator-runner
-    pullPolicy: IfNotPresent
+    pullPolicy: Always
     tag: "latest"
 
 imagePullSecrets: []
@@ -86,16 +86,34 @@ webhook:
   enabled: true
   port: 9443
   certManager:
-    enabled: true
+    enabled: false
     issuer: selfsigned-issuer
   certs:
-    # If certManager is disabled, provide custom certs
+    # If certManager is disabled, provide custom certs or let auto-generation create them
     secretName: webhook-server-cert
     certDir: /tmp/k8s-webhook-server/serving-certs
+    caBundle: ""  # Optional: Manually provided CA bundle (base64 encoded)
+  certGen:
+    duration: 87600  # Certificate duration in hours (10 years for Helm-generated certs)
+
+    # Set useJob: true to use Job-based generation (doesn't work with helm template/Kustomize)
+    useJob: false
+    # Image used for automatic certificate generation via Job (when certManager.enabled=false, certGen.useJob=true)
+    image:
+      repository: registry.k8s.io/ingress-nginx/kube-webhook-certgen
+      tag: v1.4.0
+      pullPolicy: IfNotPresent
+    resources:
+      limits:
+        cpu: 100m
+        memory: 128Mi
+      requests:
+        cpu: 50m
+        memory: 64Mi
 
 # Control plane configuration
 controlPlane:
-  endpoint: "https://hibernator-webhook.hibernator-system.svc:9443"
+  endpoint: "hibernator.hibernator-system.svc"
 
 # Operator configuration
 operator:
@@ -103,10 +121,7 @@ operator:
   workers: 1
 
   # Sync period for reconciliation
-  syncPeriod: 10m
-
-  # Cleanup finalizer name
-  finalizerName: hibernator.ardikabs.com/finalizer
+  syncPeriod: 10h
 
 # CRD configuration
 crds:

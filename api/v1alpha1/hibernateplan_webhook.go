@@ -8,6 +8,7 @@ package v1alpha1
 import (
 	"context"
 	"fmt"
+	"reflect"
 	"regexp"
 	"strings"
 
@@ -47,12 +48,28 @@ func (r *HibernatePlan) ValidateCreate(ctx context.Context, obj runtime.Object) 
 
 // ValidateUpdate implements webhook.CustomValidator.
 func (r *HibernatePlan) ValidateUpdate(ctx context.Context, oldObj, newObj runtime.Object) (admission.Warnings, error) {
-	plan, ok := newObj.(*HibernatePlan)
+	oldPlan, ok := oldObj.(*HibernatePlan)
 	if !ok {
 		return nil, fmt.Errorf("expected HibernatePlan but got %T", newObj)
 	}
-	hibernateplanlog.Info("validate update", "name", plan.Name)
-	return r.validate(plan)
+
+	newPlan, ok := newObj.(*HibernatePlan)
+	if !ok {
+		return nil, fmt.Errorf("expected HibernatePlan but got %T", newObj)
+	}
+
+	// Allow target edits only in Active, Suspended, or Error phases
+	if oldPlan.Status.Phase != PhaseActive && oldPlan.Status.Phase != PhaseSuspended && oldPlan.Status.Phase != PhaseError {
+		if !reflect.DeepEqual(oldPlan.Spec.Targets, newPlan.Spec.Targets) {
+			return nil, field.Forbidden(
+				field.NewPath("spec", "targets"),
+				fmt.Sprintf("targets cannot be modified while plan is in %s phase; wait for Active, Suspended, or Error phase", oldPlan.Status.Phase),
+			)
+		}
+	}
+
+	hibernateplanlog.Info("validate update", "name", newPlan.Name)
+	return r.validate(newPlan)
 }
 
 // ValidateDelete implements webhook.CustomValidator.
@@ -207,7 +224,16 @@ func (r *HibernatePlan) validateTargets(plan *HibernatePlan) (field.ErrorList, a
 		}
 
 		// Validate target type
-		validTypes := []string{"eks", "rds", "ec2", "asg", "karpenter", "gke", "cloudsql", "workloadscaler"}
+		validTypes := []string{
+			"ec2",
+			"eks",
+			"rds",
+			"karpenter",
+			"workloadscaler",
+			"gke",
+			"cloudsql",
+			"noop",
+		}
 		isValidType := false
 		for _, vt := range validTypes {
 			if target.Type == vt {

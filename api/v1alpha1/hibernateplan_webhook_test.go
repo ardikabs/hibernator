@@ -305,26 +305,15 @@ func TestHibernatePlan_ValidateCreate(t *testing.T) {
 }
 
 func TestHibernatePlan_ValidateUpdate(t *testing.T) {
-	oldPlan := &HibernatePlan{
-		ObjectMeta: metav1.ObjectMeta{Name: "test"},
-		Spec: HibernatePlanSpec{
-			Schedule: validSchedule(),
-			Execution: Execution{
-				Strategy: ExecutionStrategy{Type: StrategySequential},
-			},
-			Targets: []Target{
-				{Name: "target1", Type: "ec2", ConnectorRef: ConnectorRef{Kind: "CloudProvider", Name: "aws"}, Parameters: ec2Params()},
-			},
-		},
-	}
-
 	tests := []struct {
-		name    string
-		newPlan *HibernatePlan
-		wantErr bool
+		name     string
+		oldPhase PlanPhase
+		newPlan  *HibernatePlan
+		wantErr  bool
 	}{
 		{
-			name: "valid update",
+			name:     "valid update in Active phase",
+			oldPhase: PhaseActive,
 			newPlan: &HibernatePlan{
 				ObjectMeta: metav1.ObjectMeta{Name: "test"},
 				Spec: HibernatePlanSpec{
@@ -341,7 +330,98 @@ func TestHibernatePlan_ValidateUpdate(t *testing.T) {
 			wantErr: false,
 		},
 		{
-			name: "invalid update - duplicate targets",
+			name:     "valid update in Suspended phase",
+			oldPhase: PhaseSuspended,
+			newPlan: &HibernatePlan{
+				ObjectMeta: metav1.ObjectMeta{Name: "test"},
+				Spec: HibernatePlanSpec{
+					Schedule: validSchedule(),
+					Execution: Execution{
+						Strategy: ExecutionStrategy{Type: StrategyParallel},
+					},
+					Targets: []Target{
+						{Name: "target1", Type: "ec2", ConnectorRef: ConnectorRef{Kind: "CloudProvider", Name: "aws"}, Parameters: ec2Params()},
+						{Name: "target2", Type: "rds", ConnectorRef: ConnectorRef{Kind: "CloudProvider", Name: "aws"}, Parameters: rdsParams()},
+					},
+				},
+			},
+			wantErr: false,
+		},
+		{
+			name:     "valid update in Error phase",
+			oldPhase: PhaseError,
+			newPlan: &HibernatePlan{
+				ObjectMeta: metav1.ObjectMeta{Name: "test"},
+				Spec: HibernatePlanSpec{
+					Schedule: validSchedule(),
+					Execution: Execution{
+						Strategy: ExecutionStrategy{Type: StrategyParallel},
+					},
+					Targets: []Target{
+						{Name: "target1", Type: "ec2", ConnectorRef: ConnectorRef{Kind: "CloudProvider", Name: "aws"}, Parameters: ec2Params()},
+						{Name: "target2", Type: "rds", ConnectorRef: ConnectorRef{Kind: "CloudProvider", Name: "aws"}, Parameters: rdsParams()},
+					},
+				},
+			},
+			wantErr: false,
+		},
+		{
+			name:     "invalid update - targets modified during Hibernating phase",
+			oldPhase: PhaseHibernating,
+			newPlan: &HibernatePlan{
+				ObjectMeta: metav1.ObjectMeta{Name: "test"},
+				Spec: HibernatePlanSpec{
+					Schedule: validSchedule(),
+					Execution: Execution{
+						Strategy: ExecutionStrategy{Type: StrategySequential},
+					},
+					Targets: []Target{
+						{Name: "target1", Type: "ec2", ConnectorRef: ConnectorRef{Kind: "CloudProvider", Name: "aws"}, Parameters: ec2Params()},
+						{Name: "target2", Type: "rds", ConnectorRef: ConnectorRef{Kind: "CloudProvider", Name: "aws"}, Parameters: rdsParams()},
+					},
+				},
+			},
+			wantErr: true,
+		},
+		{
+			name:     "invalid update - targets modified during Hibernated phase",
+			oldPhase: PhaseHibernated,
+			newPlan: &HibernatePlan{
+				ObjectMeta: metav1.ObjectMeta{Name: "test"},
+				Spec: HibernatePlanSpec{
+					Schedule: validSchedule(),
+					Execution: Execution{
+						Strategy: ExecutionStrategy{Type: StrategySequential},
+					},
+					Targets: []Target{
+						{Name: "target1", Type: "ec2", ConnectorRef: ConnectorRef{Kind: "CloudProvider", Name: "aws"}, Parameters: ec2Params()},
+						{Name: "target2", Type: "rds", ConnectorRef: ConnectorRef{Kind: "CloudProvider", Name: "aws"}, Parameters: rdsParams()},
+					},
+				},
+			},
+			wantErr: true,
+		},
+		{
+			name:     "invalid update - targets modified during WakingUp phase",
+			oldPhase: PhaseWakingUp,
+			newPlan: &HibernatePlan{
+				ObjectMeta: metav1.ObjectMeta{Name: "test"},
+				Spec: HibernatePlanSpec{
+					Schedule: validSchedule(),
+					Execution: Execution{
+						Strategy: ExecutionStrategy{Type: StrategySequential},
+					},
+					Targets: []Target{
+						{Name: "target1", Type: "ec2", ConnectorRef: ConnectorRef{Kind: "CloudProvider", Name: "aws"}, Parameters: ec2Params()},
+						{Name: "target2", Type: "rds", ConnectorRef: ConnectorRef{Kind: "CloudProvider", Name: "aws"}, Parameters: rdsParams()},
+					},
+				},
+			},
+			wantErr: true,
+		},
+		{
+			name:     "invalid update - duplicate targets",
+			oldPhase: PhaseActive,
 			newPlan: &HibernatePlan{
 				ObjectMeta: metav1.ObjectMeta{Name: "test"},
 				Spec: HibernatePlanSpec{
@@ -358,7 +438,8 @@ func TestHibernatePlan_ValidateUpdate(t *testing.T) {
 			wantErr: true,
 		},
 		{
-			name: "invalid update - bad time format",
+			name:     "invalid update - bad time format",
+			oldPhase: PhaseActive,
 			newPlan: &HibernatePlan{
 				ObjectMeta: metav1.ObjectMeta{Name: "test"},
 				Spec: HibernatePlanSpec{
@@ -386,6 +467,23 @@ func TestHibernatePlan_ValidateUpdate(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
+			// Create oldPlan with the specified phase
+			oldPlan := &HibernatePlan{
+				ObjectMeta: metav1.ObjectMeta{Name: "test"},
+				Spec: HibernatePlanSpec{
+					Schedule: validSchedule(),
+					Execution: Execution{
+						Strategy: ExecutionStrategy{Type: StrategySequential},
+					},
+					Targets: []Target{
+						{Name: "target1", Type: "ec2", ConnectorRef: ConnectorRef{Kind: "CloudProvider", Name: "aws"}, Parameters: ec2Params()},
+					},
+				},
+				Status: HibernatePlanStatus{
+					Phase: tt.oldPhase,
+				},
+			}
+
 			_, err := tt.newPlan.ValidateUpdate(context.Background(), runtime.Object(oldPlan), runtime.Object(tt.newPlan))
 			if (err != nil) != tt.wantErr {
 				t.Errorf("ValidateUpdate() error = %v, wantErr %v", err, tt.wantErr)

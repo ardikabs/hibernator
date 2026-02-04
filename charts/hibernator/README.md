@@ -146,11 +146,43 @@ Check controller logs:
 kubectl logs -n hibernator-system -l app.kubernetes.io/component=controller -f
 ```
 
+## CRDs
+
+This chart includes the following Custom Resource Definitions:
+
+- `HibernatePlan` - Defines hibernation schedules and target resources
+- `CloudProvider` - Configures cloud provider credentials (AWS, GCP, Azure)
+- `K8SCluster` - Defines Kubernetes cluster connectivity (EKS, GKE, generic)
+- `ScheduleException` - Defines temporary schedule exceptions
+
+CRDs are installed automatically from the `crds/` directory when running `helm install`.
+
+**Note on CRD upgrades:** Helm 3 does not upgrade CRDs automatically on `helm upgrade`. To update CRDs, apply them manually:
+
+```bash
+kubectl apply -f https://raw.githubusercontent.com/ardikabs/hibernator/main/config/crd/bases/
+```
+
+Or from local chart:
+
+```bash
+kubectl apply -f ./charts/hibernator/crds/
+```
+
 ## Uninstallation
 
 ```bash
 helm uninstall hibernator \
   --namespace hibernator-system
+```
+
+**Note:** CRDs are not deleted on uninstall to protect custom resources. Remove CRDs manually if needed:
+
+```bash
+kubectl delete crd hibernateplans.hibernator.ardikabs.com
+kubectl delete crd cloudproviders.hibernator.ardikabs.com
+kubectl delete crd k8sclusters.hibernator.ardikabs.com
+kubectl delete crd scheduleexceptions.hibernator.ardikabs.com
 ```
 
 ## Development

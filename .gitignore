@@ -68,10 +68,6 @@ azure-credentials
 .envrc
 *.local
 
-# Generated files
-*.pb.go
-zz_generated.*
-
 # Test artifacts
 junit-report.xml
 e2e-test-results/

@@ -44,7 +44,7 @@ metadata:
 spec:
   # Schedule for testing (every weeknight 8 PM to 6 AM)
   schedule:
-    timezone: America/New_York
+    timezone: UTC
     offHours:
       - start: "20:00"
         end: "06:00"
@@ -212,3 +212,86 @@ spec:
       parameters:
         randomDelaySeconds: 1
         failureMode: "both"
+---
+apiVersion: hibernator.ardikabs.com/v1alpha1
+kind: HibernatePlan
+metadata:
+  name: noop-parallel-plan
+  namespace: hibernator-system
+spec:
+  # Schedule for testing (every weeknight 8 PM to 6 AM)
+  schedule:
+    timezone: UTC
+    offHours:
+      - start: "20:00"
+        end: "06:00"
+        daysOfWeek: ["MON", "TUE", "WED", "THU", "FRI"]
+
+  # Parallel execution
+  execution:
+    strategy:
+      type: Parallel
+      maxConcurrency: 2
+
+  behavior:
+    mode: BestEffort
+    failFast: false
+
+  # Multiple NoOp targets with different configurations
+  targets:
+    # Fast simulation (random delay between 0-1 second)
+    - name: noop-fast
+      type: noop
+      connectorRef:
+        kind: CloudProvider
+        name: noop-aws
+      parameters:
+        randomDelaySeconds: 1
+        failureMode: "none"
+
+    - name: noop-fast-1
+      type: noop
+      connectorRef:
+        kind: CloudProvider
+        name: noop-aws
+      parameters:
+        randomDelaySeconds: 1
+        failureMode: "none"
+
+    # Medium simulation (random delay between 0-2 seconds)
+    - name: noop-medium
+      type: noop
+      connectorRef:
+        kind: K8SCluster
+        name: noop-cluster
+      parameters:
+        randomDelaySeconds: 2
+        failureMode: "none"
+
+    - name: noop-medium-1
+      type: noop
+      connectorRef:
+        kind: K8SCluster
+        name: noop-cluster
+      parameters:
+        randomDelaySeconds: 2
+        failureMode: "none"
+
+    # Slow simulation (random delay between 0-5 seconds)
+    - name: noop-slow
+      type: noop
+      connectorRef:
+        kind: CloudProvider
+        name: noop-aws
+      parameters:
+        randomDelaySeconds: 5
+        failureMode: "none"
+
+    - name: noop-slow-1
+      type: noop
+      connectorRef:
+        kind: CloudProvider
+        name: noop-aws
+      parameters:
+        randomDelaySeconds: 5
+        failureMode: "none"

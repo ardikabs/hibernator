@@ -1,0 +1,136 @@
+---
+apiVersion: apiextensions.k8s.io/v1
+kind: CustomResourceDefinition
+metadata:
+  annotations:
+    controller-gen.kubebuilder.io/version: v0.20.0
+  name: k8sclusters.hibernator.ardikabs.com
+spec:
+  group: hibernator.ardikabs.com
+  names:
+    kind: K8SCluster
+    listKind: K8SClusterList
+    plural: k8sclusters
+    singular: k8scluster
+  scope: Namespaced
+  versions:
+  - additionalPrinterColumns:
+    - jsonPath: .status.clusterType
+      name: Type
+      type: string
+    - jsonPath: .status.ready
+      name: Ready
+      type: boolean
+    - jsonPath: .metadata.creationTimestamp
+      name: Age
+      type: date
+    name: v1alpha1
+    schema:
+      openAPIV3Schema:
+        description: K8SCluster is the Schema for the k8sclusters API.
+        properties:
+          apiVersion:
+            description: |-
+              APIVersion defines the versioned schema of this representation of an object.
+              Servers should convert recognized schemas to the latest internal value, and
+              may reject unrecognized values.
+              More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#resources
+            type: string
+          kind:
+            description: |-
+              Kind is a string value representing the REST resource this object represents.
+              Servers may infer this from the endpoint the client submits requests to.
+              Cannot be updated.
+              In CamelCase.
+              More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#types-kinds
+            type: string
+          metadata:
+            type: object
+          spec:
+            description: K8SClusterSpec defines the desired state of K8SCluster.
+            properties:
+              eks:
+                description: EKS holds EKS-specific configuration.
+                properties:
+                  name:
+                    description: Name is the EKS cluster name.
+                    type: string
+                  region:
+                    description: Region is the AWS region.
+                    type: string
+                required:
+                - name
+                - region
+                type: object
+              gke:
+                description: GKE holds GKE-specific configuration.
+                properties:
+                  location:
+                    description: Zone or region of the cluster.
+                    type: string
+                  name:
+                    description: Name is the GKE cluster name.
+                    type: string
+                  project:
+                    description: Project is the GCP project.
+                    type: string
+                required:
+                - location
+                - name
+                - project
+                type: object
+              k8s:
+                description: K8S holds generic Kubernetes access configuration.
+                properties:
+                  inCluster:
+                    description: InCluster uses in-cluster config (for self-management).
+                    type: boolean
+                  kubeconfigRef:
+                    description: KubeconfigRef references a Secret containing kubeconfig.
+                    properties:
+                      name:
+                        type: string
+                      namespace:
+                        type: string
+                    required:
+                    - name
+                    type: object
+                type: object
+              providerRef:
+                description: ProviderRef references the CloudProvider (optional for
+                  generic k8s).
+                properties:
+                  name:
+                    type: string
+                  namespace:
+                    type: string
+                required:
+                - name
+                type: object
+            type: object
+          status:
+            description: K8SClusterStatus defines the observed state of K8SCluster.
+            properties:
+              clusterType:
+                description: ClusterType is the detected cluster type.
+                enum:
+                - eks
+                - gke
+                - k8s
+                type: string
+              lastValidated:
+                description: LastValidated is when connectivity was last validated.
+                format: date-time
+                type: string
+              message:
+                description: Message provides status details.
+                type: string
+              ready:
+                description: Ready indicates if the cluster is reachable.
+                type: boolean
+            type: object
+        type: object
+    served: true
+    storage: true
+    subresources:
+      status: {}

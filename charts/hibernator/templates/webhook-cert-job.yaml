@@ -1,0 +1,45 @@
+{{- if and .Values.webhook.enabled (not .Values.webhook.certManager.enabled) .Values.webhook.certGen.useJob }}
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: {{ include "hibernator.fullname" . }}-webhook-cert-create
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "hibernator.labels" . | nindent 4 }}
+  annotations:
+    "helm.sh/hook": pre-install,pre-upgrade
+    "helm.sh/hook-delete-policy": before-hook-creation,hook-succeeded
+spec:
+  backoffLimit: 3
+  template:
+    metadata:
+      labels:
+        {{- include "hibernator.selectorLabels" . | nindent 8 }}
+        app.kubernetes.io/component: webhook-cert-gen
+    spec:
+      serviceAccountName: {{ include "hibernator.fullname" . }}-webhook-cert
+      restartPolicy: OnFailure
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 2000
+        fsGroup: 2000
+      containers:
+      - name: create
+        image: {{ .Values.webhook.certGen.image.repository }}:{{ .Values.webhook.certGen.image.tag }}
+        imagePullPolicy: {{ .Values.webhook.certGen.image.pullPolicy }}
+        args:
+        - create
+        - --host={{ include "hibernator.fullname" . }}-webhook,{{ include "hibernator.fullname" . }}-webhook.{{ .Release.Namespace }}.svc
+        - --namespace={{ .Release.Namespace }}
+        - --secret-name={{ .Values.webhook.certs.secretName }}
+        - --cert-name=tls.crt
+        - --key-name=tls.key
+        securityContext:
+          allowPrivilegeEscalation: false
+          capabilities:
+            drop:
+            - ALL
+          readOnlyRootFilesystem: true
+        resources:
+          {{- toYaml .Values.webhook.certGen.resources | nindent 10 }}
+{{- end }}

@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/go-logr/logr"
+	"github.com/google/uuid"
 	batchv1 "k8s.io/api/batch/v1"
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/errors"
@@ -19,6 +20,7 @@ import (
 	"k8s.io/apimachinery/pkg/types"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
+	"sigs.k8s.io/controller-runtime/pkg/controller"
 	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
 	"sigs.k8s.io/controller-runtime/pkg/handler"
 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
@@ -26,6 +28,7 @@ import (
 	hibernatorv1alpha1 "github.com/ardikabs/hibernator/api/v1alpha1"
 	"github.com/ardikabs/hibernator/internal/recovery"
 	"github.com/ardikabs/hibernator/internal/scheduler"
+	"github.com/ardikabs/hibernator/pkg/k8sutil"
 )
 
 const (
@@ -40,6 +43,12 @@ const (
 
 	// LabelExecutionID is the label key for the execution ID.
 	LabelExecutionID = "hibernator.ardikabs.com/execution-id"
+
+	// LabelOperation is the label key for the operation type (shutdown or wakeup).
+	LabelOperation = "hibernator.ardikabs.com/operation"
+
+	// LabelCycleID is the label key for the cycle ID (isolates jobs by cycle).
+	LabelCycleID = "hibernator.ardikabs.com/cycle-id"
 
 	// AnnotationPlan is the annotation for plan name.
 	AnnotationPlan = "hibernator/plan"
@@ -75,6 +84,8 @@ const (
 // HibernatePlanReconciler reconciles a HibernatePlan object.
 type HibernatePlanReconciler struct {
 	client.Client
+	APIReader client.Reader
+
 	Log               logr.Logger
 	Scheme            *runtime.Scheme
 	Planner           *scheduler.Planner
@@ -88,6 +99,9 @@ type HibernatePlanReconciler struct {
 
 	// RunnerServiceAccount is the ServiceAccount used by runner pods.
 	RunnerServiceAccount string
+
+	// statusUpdater is responsible for updating the status of HibernatePlan resources.
+	statusUpdater *SyncStatusUpdater
 }
 
 // +kubebuilder:rbac:groups=hibernator.ardikabs.com,resources=hibernateplans,verbs=get;list;watch;create;update;patch;delete
@@ -102,11 +116,11 @@ type HibernatePlanReconciler struct {
 
 // Reconcile handles HibernatePlan reconciliation.
 func (r *HibernatePlanReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
-	log := r.Log.WithValues("hibernateplan", req.NamespacedName)
+	log := r.Log.WithValues("hibernateplan", req.NamespacedName.String())
 
 	// Fetch the HibernatePlan
-	var plan hibernatorv1alpha1.HibernatePlan
-	if err := r.Get(ctx, req.NamespacedName, &plan); err != nil {
+	plan := &hibernatorv1alpha1.HibernatePlan{}
+	if err := r.Get(ctx, req.NamespacedName, plan); err != nil {
 		if errors.IsNotFound(err) {
 			return ctrl.Result{}, nil
 		}
@@ -115,36 +129,75 @@ func (r *HibernatePlanReconciler) Reconcile(ctx context.Context, req ctrl.Reques
 
 	// Handle deletion
 	if !plan.DeletionTimestamp.IsZero() {
-		return r.reconcileDelete(ctx, log, &plan)
+		return r.reconcileDelete(ctx, log, plan)
 	}
 
 	// Ensure finalizer
-	if !controllerutil.ContainsFinalizer(&plan, FinalizerName) {
-		controllerutil.AddFinalizer(&plan, FinalizerName)
-		if err := r.Update(ctx, &plan); err != nil {
-			return ctrl.Result{}, err
+	if !controllerutil.ContainsFinalizer(plan, FinalizerName) {
+		orig := plan.DeepCopy()
+		controllerutil.AddFinalizer(plan, FinalizerName)
+		if err := r.Patch(ctx, plan, client.MergeFrom(orig)); err != nil {
+			return ctrl.Result{}, fmt.Errorf("add finalizer to plan: %w", err)
 		}
 		return ctrl.Result{Requeue: true}, nil
 	}
 
 	// Initialize status if needed
 	if plan.Status.Phase == "" {
-		plan.Status.Phase = hibernatorv1alpha1.PhaseActive
-		plan.Status.ObservedGeneration = plan.Generation
-		if err := r.Status().Update(ctx, &plan); err != nil {
+		if err := r.statusUpdater.Update(ctx, plan, MutatorFunc(func(obj client.Object) client.Object {
+			p := obj.(*hibernatorv1alpha1.HibernatePlan)
+			p.Status.Phase = hibernatorv1alpha1.PhaseActive
+			p.Status.ObservedGeneration = plan.Generation
+
+			return p
+		})); err != nil {
+			return ctrl.Result{}, err
+		}
+
+		return ctrl.Result{Requeue: true}, nil
+	}
+
+	// Handle suspend/resume toggle
+	if plan.Spec.Suspend && plan.Status.Phase != hibernatorv1alpha1.PhaseSuspended {
+		// Transition to Suspended phase
+		log.Info("suspending plan", "currentPhase", plan.Status.Phase)
+		if err := r.statusUpdater.Update(ctx, plan, MutatorFunc(func(obj client.Object) client.Object {
+			p := obj.(*hibernatorv1alpha1.HibernatePlan)
+			p.Status.Phase = hibernatorv1alpha1.PhaseSuspended
+			// Clear error message when suspending (clean slate for resume)
+			p.Status.ErrorMessage = ""
+			now := metav1.Now()
+			p.Status.LastTransitionTime = &now
+			return p
+		})); err != nil {
+			return ctrl.Result{}, err
+		}
+		return ctrl.Result{Requeue: true}, nil
+	}
+
+	if !plan.Spec.Suspend && plan.Status.Phase == hibernatorv1alpha1.PhaseSuspended {
+		// Resume: always transition to Active regardless of previous operation
+		log.Info("resuming plan from suspended state")
+		if err := r.statusUpdater.Update(ctx, plan, MutatorFunc(func(obj client.Object) client.Object {
+			p := obj.(*hibernatorv1alpha1.HibernatePlan)
+			p.Status.Phase = hibernatorv1alpha1.PhaseActive
+			now := metav1.Now()
+			p.Status.LastTransitionTime = &now
+			return p
+		})); err != nil {
 			return ctrl.Result{}, err
 		}
 		return ctrl.Result{Requeue: true}, nil
 	}
 
 	// Query active exception and update status
-	if err := r.updateActiveExceptions(ctx, log, &plan); err != nil {
+	if err := r.updateActiveExceptions(ctx, log, plan); err != nil {
 		log.Error(err, "failed to update active exceptions")
 		// Don't fail reconciliation, continue with base schedule
 	}
 
 	// Evaluate schedule (with exceptions if present)
-	shouldHibernate, requeueAfter, err := r.evaluateSchedule(ctx, &plan)
+	shouldHibernate, requeueAfter, err := r.evaluateSchedule(ctx, log, plan)
 	if err != nil {
 		log.Error(err, "failed to evaluate schedule")
 		return ctrl.Result{RequeueAfter: ScheduleErrorRequeueInterval}, nil
@@ -180,23 +233,29 @@ func (r *HibernatePlanReconciler) Reconcile(ctx context.Context, req ctrl.Reques
 	switch plan.Status.Phase {
 	case hibernatorv1alpha1.PhaseActive:
 		if desiredPhase == hibernatorv1alpha1.PhaseHibernating {
-			return r.startHibernation(ctx, log, &plan)
+			return r.startHibernation(ctx, log, plan)
 		}
 
 	case hibernatorv1alpha1.PhaseHibernating:
-		return r.reconcileHibernation(ctx, log, &plan)
+		return r.reconcileHibernation(ctx, log, plan)
 
 	case hibernatorv1alpha1.PhaseHibernated:
 		if desiredPhase == hibernatorv1alpha1.PhaseWakingUp {
-			return r.startWakeUp(ctx, log, &plan)
+			return r.startWakeUp(ctx, log, plan)
 		}
 
 	case hibernatorv1alpha1.PhaseWakingUp:
-		return r.reconcileWakeUp(ctx, log, &plan)
+		return r.reconcileWakeUp(ctx, log, plan)
+
+	case hibernatorv1alpha1.PhaseSuspended:
+		// While suspended, skip all operations and wait
+		// Running jobs will complete naturally, but no new jobs are created
+		log.V(1).Info("plan is suspended, skipping operations")
+		return ctrl.Result{RequeueAfter: 5 * time.Minute}, nil
 
 	case hibernatorv1alpha1.PhaseError:
 		// Handle error recovery with retry logic
-		return r.handleErrorRecovery(ctx, log, &plan)
+		return r.handleErrorRecovery(ctx, log, plan)
 	}
 
 	// Requeue based on schedule (next hibernate or wake-up time)
@@ -205,6 +264,8 @@ func (r *HibernatePlanReconciler) Reconcile(ctx context.Context, req ctrl.Reques
 
 // updateActiveExceptions queries for active exceptions and updates plan status.
 func (r *HibernatePlanReconciler) updateActiveExceptions(ctx context.Context, log logr.Logger, plan *hibernatorv1alpha1.HibernatePlan) error {
+	orig := plan.DeepCopy()
+
 	// Query for exceptions referencing this plan
 	var exceptions hibernatorv1alpha1.ScheduleExceptionList
 	if err := r.List(ctx, &exceptions,
@@ -264,9 +325,9 @@ func (r *HibernatePlanReconciler) updateActiveExceptions(ctx context.Context, lo
 	}
 
 	// Update status if changed
-	if !exceptionReferencesEqual(plan.Status.ActiveExceptions, activeExceptions) {
+	if !hibernatorv1alpha1.ExceptionReferencesEqual(plan.Status.ActiveExceptions, activeExceptions) {
 		plan.Status.ActiveExceptions = activeExceptions
-		if err := r.Status().Update(ctx, plan); err != nil {
+		if err := r.Status().Patch(ctx, plan, client.MergeFrom(orig)); err != nil {
 			return fmt.Errorf("update plan status: %w", err)
 		}
 		log.Info("updated active exceptions", "count", len(activeExceptions))
@@ -275,21 +336,8 @@ func (r *HibernatePlanReconciler) updateActiveExceptions(ctx context.Context, lo
 	return nil
 }
 
-// exceptionReferencesEqual checks if two exception reference slices are equal.
-func exceptionReferencesEqual(a, b []hibernatorv1alpha1.ExceptionReference) bool {
-	if len(a) != len(b) {
-		return false
-	}
-	for i := range a {
-		if a[i].Name != b[i].Name || a[i].State != b[i].State {
-			return false
-		}
-	}
-	return true
-}
-
 // evaluateSchedule checks if we should be in hibernation based on schedule and active exceptions.
-func (r *HibernatePlanReconciler) evaluateSchedule(ctx context.Context, plan *hibernatorv1alpha1.HibernatePlan) (bool, time.Duration, error) {
+func (r *HibernatePlanReconciler) evaluateSchedule(ctx context.Context, log logr.Logger, plan *hibernatorv1alpha1.HibernatePlan) (bool, time.Duration, error) {
 	if r.ScheduleEvaluator == nil {
 		// Fallback: always active if no evaluator
 		return false, time.Minute, nil
@@ -319,6 +367,13 @@ func (r *HibernatePlanReconciler) evaluateSchedule(ctx context.Context, plan *hi
 	if err != nil {
 		return false, time.Minute, err
 	}
+
+	log.V(1).Info(
+		"schedule evaluation result",
+		"nextHibernateTime", result.NextHibernateTime,
+		"nextWakeUpTime", result.NextWakeUpTime,
+		"shouldHibernate", result.ShouldHibernate,
+	)
 
 	requeueAfter := r.ScheduleEvaluator.NextRequeueTime(result, now)
 	return result.ShouldHibernate, requeueAfter, nil
@@ -378,79 +433,6 @@ func (r *HibernatePlanReconciler) getActiveException(ctx context.Context, plan *
 	}
 
 	return nil, nil
-}
-
-// startHibernation initiates the hibernation process.
-func (r *HibernatePlanReconciler) startHibernation(ctx context.Context, log logr.Logger, plan *hibernatorv1alpha1.HibernatePlan) (ctrl.Result, error) {
-	log.Info("starting hibernation")
-
-	// Build execution plan
-	execPlan, err := r.buildExecutionPlan(plan, false)
-	if err != nil {
-		return r.setError(ctx, plan, fmt.Errorf("build execution plan: %w", err))
-	}
-
-	// Initialize execution status
-	plan.Status.Executions = make([]hibernatorv1alpha1.ExecutionStatus, len(plan.Spec.Targets))
-	for i, target := range plan.Spec.Targets {
-		plan.Status.Executions[i] = hibernatorv1alpha1.ExecutionStatus{
-			Target:   fmt.Sprintf("%s/%s", target.Type, target.Name),
-			Executor: target.Type,
-			State:    hibernatorv1alpha1.StatePending,
-		}
-	}
-
-	plan.Status.Phase = hibernatorv1alpha1.PhaseHibernating
-	now := metav1.Now()
-	plan.Status.LastTransitionTime = &now
-
-	if err := r.Status().Update(ctx, plan); err != nil {
-		return ctrl.Result{}, err
-	}
-
-	// Start first stage
-	return r.executeStage(ctx, log, plan, execPlan, 0, "shutdown")
-}
-
-// reconcileHibernation continues the hibernation process.
-func (r *HibernatePlanReconciler) reconcileHibernation(ctx context.Context, log logr.Logger, plan *hibernatorv1alpha1.HibernatePlan) (ctrl.Result, error) {
-	// Check job statuses and progress through stages
-	return r.reconcileExecution(ctx, log, plan, "shutdown")
-}
-
-// startWakeUp initiates the wake-up process.
-func (r *HibernatePlanReconciler) startWakeUp(ctx context.Context, log logr.Logger, plan *hibernatorv1alpha1.HibernatePlan) (ctrl.Result, error) {
-	log.Info("starting wake-up")
-
-	// Build execution plan (reversed for wake-up)
-	execPlan, err := r.buildExecutionPlan(plan, true)
-	if err != nil {
-		return r.setError(ctx, plan, fmt.Errorf("build execution plan: %w", err))
-	}
-
-	// Reset execution states to pending
-	for i := range plan.Status.Executions {
-		plan.Status.Executions[i].State = hibernatorv1alpha1.StatePending
-		plan.Status.Executions[i].StartedAt = nil
-		plan.Status.Executions[i].FinishedAt = nil
-		plan.Status.Executions[i].JobRef = ""
-	}
-
-	plan.Status.Phase = hibernatorv1alpha1.PhaseWakingUp
-	now := metav1.Now()
-	plan.Status.LastTransitionTime = &now
-
-	if err := r.Status().Update(ctx, plan); err != nil {
-		return ctrl.Result{}, err
-	}
-
-	// Start first stage
-	return r.executeStage(ctx, log, plan, execPlan, 0, "wakeup")
-}
-
-// reconcileWakeUp continues the wake-up process.
-func (r *HibernatePlanReconciler) reconcileWakeUp(ctx context.Context, log logr.Logger, plan *hibernatorv1alpha1.HibernatePlan) (ctrl.Result, error) {
-	return r.reconcileExecution(ctx, log, plan, "wakeup")
 }
 
 // buildExecutionPlan creates an execution plan based on the strategy.
@@ -518,47 +500,114 @@ func (r *HibernatePlanReconciler) buildExecutionPlan(plan *hibernatorv1alpha1.Hi
 	return execPlan, nil
 }
 
-// executeStage creates jobs for targets in the current stage.
+// executeStage creates jobs for targets in the current stage, respecting maxConcurrency.
 func (r *HibernatePlanReconciler) executeStage(ctx context.Context, log logr.Logger, plan *hibernatorv1alpha1.HibernatePlan, execPlan scheduler.ExecutionPlan, stageIndex int, operation string) (ctrl.Result, error) {
-	if stageIndex >= len(execPlan.Stages) {
-		// All stages complete
-		if operation == "shutdown" {
-			plan.Status.Phase = hibernatorv1alpha1.PhaseHibernated
-		} else {
-			plan.Status.Phase = hibernatorv1alpha1.PhaseActive
+	if err := r.APIReader.Get(ctx, types.NamespacedName{Name: plan.Name, Namespace: plan.Namespace}, plan); err != nil {
+		if errors.IsNotFound(err) {
+			return ctrl.Result{}, nil
 		}
-		now := metav1.Now()
-		plan.Status.LastTransitionTime = &now
-		if err := r.Status().Update(ctx, plan); err != nil {
+
+		return ctrl.Result{}, err
+	}
+
+	if stageIndex >= len(execPlan.Stages) {
+		if err := r.statusUpdater.Update(ctx, plan, MutatorFunc(func(obj client.Object) client.Object {
+			p := obj.(*hibernatorv1alpha1.HibernatePlan)
+
+			// All stages complete
+			if operation == "shutdown" {
+				p.Status.Phase = hibernatorv1alpha1.PhaseHibernated
+			} else {
+				p.Status.Phase = hibernatorv1alpha1.PhaseActive
+			}
+			now := metav1.Now()
+			p.Status.LastTransitionTime = &now
+
+			return p
+		})); err != nil {
 			return ctrl.Result{}, err
 		}
+
 		log.Info("execution complete", "operation", operation)
 		return ctrl.Result{}, nil
 	}
 
 	stage := execPlan.Stages[stageIndex]
-	log.Info("executing stage", "index", stageIndex, "targets", stage.Targets)
+	log.V(1).Info("executing stage",
+		"cycleID", plan.Status.CurrentCycleID,
+		"stageIndex", stageIndex,
+		"operation", operation,
+		"stageTargets", stage.Targets,
+		"totalTargets", len(plan.Spec.Targets))
 
+	// List jobs to count running ones for this stage - filter by operation and cycle to avoid seeing old cycle jobs
+	var jobList batchv1.JobList
+	if err := r.List(ctx, &jobList, client.InNamespace(plan.Namespace), client.MatchingLabels{
+		LabelPlan:      plan.Name,
+		LabelOperation: operation,
+		LabelCycleID:   plan.Status.CurrentCycleID,
+	}); err != nil {
+		return ctrl.Result{}, err
+	}
+	log.V(1).Info("job list for stage", "operation", operation, "jobCount", len(jobList.Items))
+
+	// For DAG strategy, check if any target in current stage depends on a failed target
+	if plan.Spec.Execution.Strategy.Type == hibernatorv1alpha1.StrategyDAG {
+		if failedTargets := r.findFailedDependencies(plan, plan.Spec.Execution.Strategy.Dependencies, stage); len(failedTargets) > 0 {
+			return r.setError(ctx, plan, fmt.Errorf("cannot execute stage %d: targets depend on failed targets %v", stageIndex, failedTargets))
+		}
+	}
+
+	// Count running jobs for targets in this stage
+	runningCount := r.countRunningJobsInStage(plan, &jobList, stage)
+	maxConcurrency := stage.MaxConcurrency
+	if maxConcurrency <= 0 {
+		maxConcurrency = int32(len(stage.Targets)) // Default to all targets
+	}
+
+	jobsCreated := 0
 	for _, targetName := range stage.Targets {
 		target := r.findTarget(plan, targetName)
 		if target == nil {
+			log.V(1).Info("target not found in spec", "targetName", targetName)
 			continue
 		}
 
-		// Check if job already exists
-		jobName := fmt.Sprintf("%s-%s-%s", plan.Name, targetName, operation[:4])
-		var existingJob batchv1.Job
-		err := r.Get(ctx, types.NamespacedName{
-			Namespace: plan.Namespace,
-			Name:      jobName,
-		}, &existingJob)
+		log.V(1).Info("processing target for job creation", "targetName", targetName)
 
-		if err == nil {
-			// Job exists, skip creation
-			continue
-		} else if !errors.IsNotFound(err) {
+		// Check concurrency limit before creating new job
+		if int32(runningCount+jobsCreated) >= maxConcurrency {
+			log.Info("reached maxConcurrency limit, will retry later", "maxConcurrency", maxConcurrency, "running", runningCount, "queued", jobsCreated)
+			break
+		}
+
+		// Check if job already exists for this target in current cycle
+		// This is the source of truth - use jobList instead of stale execution status
+		var existingJobs batchv1.JobList
+		if err := r.List(ctx, &existingJobs,
+			client.InNamespace(plan.Namespace),
+			client.MatchingLabels{
+				LabelPlan:      plan.Name,
+				LabelTarget:    targetName,
+				LabelOperation: operation,
+				LabelCycleID:   plan.Status.CurrentCycleID,
+			}); err != nil {
 			return ctrl.Result{}, err
 		}
+
+		if len(existingJobs.Items) > 0 {
+			// Job already exists - skip creation regardless of state
+			job := existingJobs.Items[0]
+			log.V(1).Info("skipping target, job already exists",
+				"targetName", targetName,
+				"jobName", job.Name,
+				"active", job.Status.Active,
+				"succeeded", job.Status.Succeeded,
+				"failed", job.Status.Failed)
+			continue
+		}
+
+		log.Info("dispatching job for target", "target", targetName, "operation", operation)
 
 		// Create job
 		if err := r.createRunnerJob(ctx, log, plan, target, operation); err != nil {
@@ -568,6 +617,8 @@ func (r *HibernatePlanReconciler) executeStage(ctx context.Context, log logr.Log
 				return r.setError(ctx, plan, err)
 			}
 		}
+
+		jobsCreated++
 	}
 
 	return ctrl.Result{RequeueAfter: StageRequeueInterval}, nil
@@ -575,47 +626,67 @@ func (r *HibernatePlanReconciler) executeStage(ctx context.Context, log logr.Log
 
 // reconcileExecution checks job statuses and progresses through stages.
 func (r *HibernatePlanReconciler) reconcileExecution(ctx context.Context, log logr.Logger, plan *hibernatorv1alpha1.HibernatePlan, operation string) (ctrl.Result, error) {
-	// List all jobs for this plan
+	orig := plan.DeepCopy()
+	log.Info("reconciling execution", "operation", operation, "currentPhase", plan.Status.Phase, "currentStageIndex", plan.Status.CurrentStageIndex)
+
+	// List all jobs for this plan, operation, and cycle
 	var jobList batchv1.JobList
 	if err := r.List(ctx, &jobList, client.InNamespace(plan.Namespace), client.MatchingLabels{
-		LabelPlan: plan.Name,
+		LabelPlan:      plan.Name,
+		LabelOperation: operation,
+		LabelCycleID:   plan.Status.CurrentCycleID,
 	}); err != nil {
 		return ctrl.Result{}, err
 	}
+	log.V(1).Info("job list fetched", "operation", operation, "jobCount", len(jobList.Items))
+
+	// Rebuild execution plan to access stage structure
+	execPlan, err := r.buildExecutionPlan(plan, operation == "wakeup")
+	if err != nil {
+		log.Error(err, "failed to rebuild execution plan")
+		return r.setError(ctx, plan, err)
+	}
 
 	// Update execution statuses
-	allComplete := true
-	anyFailed := false
+	log.V(1).Info("updating execution statuses", "totalExecutions", len(plan.Status.Executions))
 
 	for i := range plan.Status.Executions {
 		exec := &plan.Status.Executions[i]
+		log.V(1).Info("processing execution status", "target", exec.Target, "currentState", exec.State, "index", i)
 
 		// Find matching job
+		found := false
 		for _, job := range jobList.Items {
 			targetLabel := job.Labels[LabelTarget]
-			if exec.Target != fmt.Sprintf("%s/%s", r.findTargetType(plan, targetLabel), targetLabel) {
+			expectedTarget := fmt.Sprintf("%s/%s", r.findTargetType(plan, targetLabel), targetLabel)
+			if exec.Target != expectedTarget {
 				continue
 			}
 
+			isJobComplete := false
+			isJobFailed := false
+			for _, cond := range job.Status.Conditions {
+				if cond.Type == batchv1.JobComplete && cond.Status == corev1.ConditionTrue {
+					isJobComplete = true
+					exec.FinishedAt = cond.LastTransitionTime.DeepCopy()
+				}
+				if cond.Type == batchv1.JobFailed && cond.Status == corev1.ConditionTrue {
+					isJobFailed = true
+					exec.FinishedAt = cond.LastTransitionTime.DeepCopy()
+				}
+			}
+
+			found = true
+			log.V(1).Info("found matching job for target", "target", exec.Target, "jobName", job.Name, "succeeded", job.Status.Succeeded, "failed", job.Status.Failed, "active", job.Status.Active)
+
 			// Update status based on job
-			if job.Status.Succeeded > 0 {
+			if isJobComplete {
 				exec.State = hibernatorv1alpha1.StateCompleted
-				now := metav1.Now()
-				exec.FinishedAt = &now
-			} else if job.Status.Failed > 0 {
+			} else if isJobFailed {
 				exec.State = hibernatorv1alpha1.StateFailed
-				anyFailed = true
-				now := metav1.Now()
-				exec.FinishedAt = &now
 			} else if job.Status.Active > 0 {
 				exec.State = hibernatorv1alpha1.StateRunning
-				if exec.StartedAt == nil {
-					now := metav1.Now()
-					exec.StartedAt = &now
-				}
-				allComplete = false
-			} else {
-				allComplete = false
+				exec.StartedAt = job.Status.StartTime
 			}
 
 			exec.JobRef = fmt.Sprintf("%s/%s", job.Namespace, job.Name)
@@ -623,37 +694,82 @@ func (r *HibernatePlanReconciler) reconcileExecution(ctx context.Context, log lo
 			break
 		}
 
-		if exec.State == hibernatorv1alpha1.StatePending || exec.State == hibernatorv1alpha1.StateRunning {
-			allComplete = false
+		// If no job found but finishedAt is set, infer final state
+		// This handles the case where job was completed and then garbage collected
+		if !found && exec.FinishedAt != nil && exec.State == hibernatorv1alpha1.StateRunning {
+			// Job has finished (finishedAt set) but state wasn't updated
+			// Infer as Completed (assume successful completion)
+			// If there was an error message, it would have been set during execution
+			exec.State = hibernatorv1alpha1.StateCompleted
+			log.V(1).Info("inferred completed state for execution (job not found)", "target", exec.Target)
+		} else if !found {
+			log.V(1).Info("no job found for execution", "target", exec.Target, "currentState", exec.State)
 		}
 	}
 
-	if err := r.Status().Update(ctx, plan); err != nil {
+	if err := r.Status().Patch(ctx, plan, client.MergeFrom(orig)); err != nil {
 		return ctrl.Result{}, err
 	}
 
-	// Handle completion
-	if allComplete {
-		if anyFailed && plan.Spec.Behavior.Mode == hibernatorv1alpha1.BehaviorStrict {
-			return r.setError(ctx, plan, fmt.Errorf("one or more targets failed"))
+	// Get detailed stage status
+	log.V(1).Info("checking stage status", "stageIndex", plan.Status.CurrentStageIndex, "totalStages", len(execPlan.Stages))
+	currentStage := execPlan.Stages[plan.Status.CurrentStageIndex]
+	stageStatus := r.getStageStatus(log, plan, currentStage)
+
+	// Handle stage completion
+	if stageStatus.AllTerminal {
+		log.Info("current stage is complete", "stageIndex", plan.Status.CurrentStageIndex,
+			"completedCount", stageStatus.CompletedCount, "failedCount", stageStatus.FailedCount)
+
+		// Check for failures in strict mode
+		if stageStatus.FailedCount > 0 && plan.Spec.Behavior.Mode == hibernatorv1alpha1.BehaviorStrict {
+			return r.setError(ctx, plan, fmt.Errorf("one or more targets in stage %d failed", plan.Status.CurrentStageIndex))
 		}
 
-		if operation == "shutdown" {
-			plan.Status.Phase = hibernatorv1alpha1.PhaseHibernated
-		} else {
-			plan.Status.Phase = hibernatorv1alpha1.PhaseActive
-		}
-		now := metav1.Now()
-		plan.Status.LastTransitionTime = &now
+		// Check if there are more stages
+		nextStageIndex := plan.Status.CurrentStageIndex + 1
+		if nextStageIndex < len(execPlan.Stages) {
+			// Progress to next stage
+			log.V(1).Info("stage complete, progressing to next stage", "currentStage", plan.Status.CurrentStageIndex, "nextStage", nextStageIndex)
+			if err := r.statusUpdater.Update(ctx, plan, MutatorFunc(func(obj client.Object) client.Object {
+				p := obj.(*hibernatorv1alpha1.HibernatePlan)
+				p.Status.CurrentStageIndex = nextStageIndex
+				return p
+			})); err != nil {
+				log.Error(err, "failed to update plan status for next stage")
+				return ctrl.Result{}, err
+			}
 
-		if err := r.Status().Update(ctx, plan); err != nil {
+			// Execute next stage
+			return r.executeStage(ctx, log, plan, execPlan, nextStageIndex, operation)
+		}
+
+		// All stages complete - verify all targets are in terminal state
+		if !r.isOperationComplete(plan) {
+			// Some targets still in progress, requeue to wait
+			log.V(1).Info("targets still in progress, not completing operation yet", "operation", operation)
+			return ctrl.Result{RequeueAfter: ExecutionRequeueInterval}, nil
+		}
+
+		// All stages and all targets complete - finalize the operation
+		log.V(1).Info("all stages complete", "operation", operation)
+
+		if err := r.finalizeOperation(ctx, log, plan, operation); err != nil {
 			return ctrl.Result{}, err
 		}
 
-		log.Info("execution complete", "operation", operation)
 		return ctrl.Result{}, nil
 	}
 
+	// Stage not complete - check if we need to fill pending slots
+	if stageStatus.HasPending {
+		// There are pending targets that need jobs created - execute current stage to fill slots
+		log.V(1).Info("filling pending slots in current stage", "stageIndex", plan.Status.CurrentStageIndex)
+		return r.executeStage(ctx, log, plan, execPlan, plan.Status.CurrentStageIndex, operation)
+	}
+
+	// Only running jobs remain - wait for them to complete
+	log.V(1).Info("waiting for running jobs to complete", "stageIndex", plan.Status.CurrentStageIndex)
 	return ctrl.Result{RequeueAfter: ExecutionRequeueInterval}, nil
 }
 
@@ -678,12 +794,14 @@ func (r *HibernatePlanReconciler) createRunnerJob(ctx context.Context, log logr.
 
 	job := &batchv1.Job{
 		ObjectMeta: metav1.ObjectMeta{
-			GenerateName: fmt.Sprintf("hibernate-runner-%s-%s-", plan.Name, target.Name),
+			GenerateName: fmt.Sprintf("runner-%s-%s-", plan.Name, target.Name),
 			Namespace:    plan.Namespace,
 			Labels: map[string]string{
 				LabelPlan:        plan.Name,
 				LabelTarget:      target.Name,
 				LabelExecutionID: executionID,
+				LabelOperation:   operation,
+				LabelCycleID:     plan.Status.CurrentCycleID,
 			},
 			Annotations: map[string]string{
 				AnnotationPlan:   plan.Name,
@@ -699,6 +817,8 @@ func (r *HibernatePlanReconciler) createRunnerJob(ctx context.Context, log logr.
 						LabelPlan:        plan.Name,
 						LabelTarget:      target.Name,
 						LabelExecutionID: executionID,
+						LabelOperation:   operation,
+						LabelCycleID:     plan.Status.CurrentCycleID,
 					},
 					Annotations: map[string]string{
 						AnnotationPlan:   plan.Name,
@@ -720,6 +840,10 @@ func (r *HibernatePlanReconciler) createRunnerJob(ctx context.Context, log logr.
 							},
 							Env: []corev1.EnvVar{
 								{
+									Name:  "POD_NAMESPACE",
+									Value: plan.Namespace,
+								},
+								{
 									Name:  "HIBERNATOR_EXECUTION_ID",
 									Value: executionID,
 								},
@@ -728,12 +852,20 @@ func (r *HibernatePlanReconciler) createRunnerJob(ctx context.Context, log logr.
 									Value: r.ControlPlaneEndpoint,
 								},
 								{
+									Name:  "HIBERNATOR_USE_TLS",
+									Value: "false",
+								},
+								{
+									Name:  "HIBERNATOR_GRPC_ENDPOINT",
+									Value: fmt.Sprintf("%s:9444", r.ControlPlaneEndpoint),
+								},
+								{
 									Name:  "HIBERNATOR_WEBSOCKET_ENDPOINT",
-									Value: "ws://hibernator-streaming.hibernator-system.svc.cluster.local:8082",
+									Value: fmt.Sprintf("ws://%s:8082", r.ControlPlaneEndpoint),
 								},
 								{
 									Name:  "HIBERNATOR_HTTP_CALLBACK_ENDPOINT",
-									Value: "http://hibernator-streaming.hibernator-system.svc.cluster.local:8082",
+									Value: fmt.Sprintf("http://%s:8082", r.ControlPlaneEndpoint),
 								},
 								{
 									Name:  "HIBERNATOR_TARGET_PARAMS",
@@ -789,13 +921,14 @@ func (r *HibernatePlanReconciler) createRunnerJob(ctx context.Context, log logr.
 		return err
 	}
 
-	log.Info("creating runner job", "target", target.Name, "operation", operation)
+	log.V(1).Info("creating runner job", "target", target.Name, "operation", operation)
 	return r.Create(ctx, job)
 }
 
 // reconcileDelete handles plan deletion.
 func (r *HibernatePlanReconciler) reconcileDelete(ctx context.Context, log logr.Logger, plan *hibernatorv1alpha1.HibernatePlan) (ctrl.Result, error) {
-	log.Info("handling deletion")
+	log.V(1).Info("handling deletion")
+	orig := plan.DeepCopy()
 
 	// Clean up jobs
 	var jobList batchv1.JobList
@@ -816,8 +949,8 @@ func (r *HibernatePlanReconciler) reconcileDelete(ctx context.Context, log logr.
 
 	// Remove finalizer
 	controllerutil.RemoveFinalizer(plan, FinalizerName)
-	if err := r.Update(ctx, plan); err != nil {
-		return ctrl.Result{}, err
+	if err := r.Patch(ctx, plan, client.MergeFrom(orig)); err != nil {
+		return ctrl.Result{}, fmt.Errorf("remove finalizer from plan: %w", err)
 	}
 
 	return ctrl.Result{}, nil
@@ -825,12 +958,16 @@ func (r *HibernatePlanReconciler) reconcileDelete(ctx context.Context, log logr.
 
 // setError transitions the plan to error state.
 func (r *HibernatePlanReconciler) setError(ctx context.Context, plan *hibernatorv1alpha1.HibernatePlan, err error) (ctrl.Result, error) {
-	plan.Status.Phase = hibernatorv1alpha1.PhaseError
-	now := metav1.Now()
-	plan.Status.LastTransitionTime = &now
-	if updateErr := r.Status().Update(ctx, plan); updateErr != nil {
-		return ctrl.Result{}, updateErr
+	if err := r.statusUpdater.Update(ctx, plan, MutatorFunc(func(obj client.Object) client.Object {
+		p := obj.(*hibernatorv1alpha1.HibernatePlan)
+		p.Status.Phase = hibernatorv1alpha1.PhaseError
+		now := metav1.Now()
+		p.Status.LastTransitionTime = &now
+		return p
+	})); err != nil {
+		return ctrl.Result{}, err
 	}
+
 	return ctrl.Result{}, err
 }
 
@@ -908,22 +1045,25 @@ func (r *HibernatePlanReconciler) handleErrorRecovery(ctx context.Context, log l
 	recovery.RecordRetryAttempt(plan, lastErr)
 
 	// Evaluate current schedule to determine target phase
-	shouldHibernate, _, err := r.evaluateSchedule(ctx, plan)
+	shouldHibernate, _, err := r.evaluateSchedule(ctx, log, plan)
 	if err != nil {
 		log.Error(err, "failed to evaluate schedule during recovery")
 		return ctrl.Result{RequeueAfter: time.Minute}, nil
 	}
 
-	// Transition to appropriate phase
-	if shouldHibernate {
-		plan.Status.Phase = hibernatorv1alpha1.PhaseHibernating
-		log.Info("transitioning to hibernating phase for recovery", "attempt", plan.Status.RetryCount)
-	} else {
-		plan.Status.Phase = hibernatorv1alpha1.PhaseWakingUp
-		log.Info("transitioning to waking up phase for recovery", "attempt", plan.Status.RetryCount)
-	}
+	if err := r.statusUpdater.Update(ctx, plan, MutatorFunc(func(obj client.Object) client.Object {
+		p := obj.(*hibernatorv1alpha1.HibernatePlan)
+		// Transition to appropriate phase
+		if shouldHibernate {
+			p.Status.Phase = hibernatorv1alpha1.PhaseHibernating
+			log.Info("transitioning to hibernating phase for recovery", "attempt", plan.Status.RetryCount)
+		} else {
+			p.Status.Phase = hibernatorv1alpha1.PhaseWakingUp
+			log.Info("transitioning to waking up phase for recovery", "attempt", plan.Status.RetryCount)
+		}
 
-	if err := r.Status().Update(ctx, plan); err != nil {
+		return p
+	})); err != nil {
 		return ctrl.Result{}, err
 	}
 
@@ -931,7 +1071,9 @@ func (r *HibernatePlanReconciler) handleErrorRecovery(ctx context.Context, log l
 }
 
 // SetupWithManager sets up the controller with the Manager.
-func (r *HibernatePlanReconciler) SetupWithManager(mgr ctrl.Manager) error {
+func (r *HibernatePlanReconciler) SetupWithManager(mgr ctrl.Manager, workers int) error {
+	r.statusUpdater = NewSyncStatusUpdater(r.Client)
+
 	return ctrl.NewControllerManagedBy(mgr).
 		For(&hibernatorv1alpha1.HibernatePlan{}).
 		Owns(&batchv1.Job{}).
@@ -940,7 +1082,73 @@ func (r *HibernatePlanReconciler) SetupWithManager(mgr ctrl.Manager) error {
 			&hibernatorv1alpha1.ScheduleException{},
 			handler.EnqueueRequestsFromMapFunc(r.findPlansForException),
 		).
+		WithOptions(controller.Options{
+			MaxConcurrentReconciles: workers,
+		}).
 		Complete(r)
+}
+
+// countRunningJobsInStage counts how many jobs in the provided list are running for targets in the stage.
+func (r *HibernatePlanReconciler) countRunningJobsInStage(plan *hibernatorv1alpha1.HibernatePlan, jobList *batchv1.JobList, stage scheduler.ExecutionStage) int {
+	count := 0
+	for _, job := range jobList.Items {
+		// Only count active jobs
+		if job.Status.Active == 0 {
+			continue
+		}
+
+		// Note: jobList is already filtered by LabelPlan and LabelOperation in executeStage,
+		// so we don't need to check LabelPlan again. This ensures we only see jobs from
+		// the current operation in the current cycle.
+
+		// Check if this job belongs to a target in this stage
+		targetLabel := job.Labels[LabelTarget]
+		for _, stageName := range stage.Targets {
+			if targetLabel == stageName {
+				count++
+				break
+			}
+		}
+	}
+	return count
+}
+
+// findExecutionStatus finds the execution status for a given target type and name.
+func (r *HibernatePlanReconciler) findExecutionStatus(plan *hibernatorv1alpha1.HibernatePlan, targetType, targetName string) *hibernatorv1alpha1.ExecutionStatus {
+	targetID := fmt.Sprintf("%s/%s", targetType, targetName)
+	for i := range plan.Status.Executions {
+		if plan.Status.Executions[i].Target == targetID {
+			return &plan.Status.Executions[i]
+		}
+	}
+	return nil
+}
+
+// findFailedDependencies checks if any target in the stage depends on a failed target.
+// Returns list of failed target names that are dependencies of targets in the stage.
+func (r *HibernatePlanReconciler) findFailedDependencies(plan *hibernatorv1alpha1.HibernatePlan, dependencies []hibernatorv1alpha1.Dependency, stage scheduler.ExecutionStage) []string {
+	if len(dependencies) == 0 {
+		return nil
+	}
+
+	var failedDeps []string
+
+	// For each target in the current stage
+	for _, targetName := range stage.Targets {
+		// Check if this target depends on any failed target
+		for _, dep := range dependencies {
+			if dep.To == targetName {
+				// This target depends on dep.From
+				// Check if dep.From has failed
+				execStatus := r.findExecutionStatus(plan, r.findTargetType(plan, dep.From), dep.From)
+				if execStatus != nil && execStatus.State == hibernatorv1alpha1.StateFailed {
+					failedDeps = append(failedDeps, dep.From)
+				}
+			}
+		}
+	}
+
+	return failedDeps
 }
 
 // findPlansForException returns reconcile requests for HibernatePlans when a ScheduleException changes.
@@ -959,4 +1167,160 @@ func (r *HibernatePlanReconciler) findPlansForException(ctx context.Context, obj
 			},
 		},
 	}
+}
+
+// buildOperationSummary creates a summary of the current operation from execution statuses.
+func (r *HibernatePlanReconciler) buildOperationSummary(ctx context.Context, plan *hibernatorv1alpha1.HibernatePlan, operation string) *hibernatorv1alpha1.ExecutionOperationSummary {
+	summary := &hibernatorv1alpha1.ExecutionOperationSummary{
+		Operation: operation,
+		StartTime: metav1.Now(),
+		Success:   true,
+	}
+
+	// Build target results from execution statuses
+	for _, exec := range plan.Status.Executions {
+		if exec.State == hibernatorv1alpha1.StateFailed {
+			summary.Success = false
+		}
+
+		executionID := exec.JobRef
+		job := &batchv1.Job{}
+		if jobName, err := k8sutil.ObjectKeyFromString(exec.JobRef); err == nil {
+			if err := r.Get(ctx, jobName, job); err == nil {
+				if id, ok := job.Labels[LabelExecutionID]; ok {
+					executionID = id
+				}
+			}
+		}
+
+		summary.TargetResults = append(summary.TargetResults, hibernatorv1alpha1.TargetExecutionResult{
+			Target:      exec.Target,
+			State:       exec.State,
+			Attempts:    exec.Attempts,
+			ExecutionID: executionID,
+		})
+	}
+
+	now := metav1.Now()
+	summary.EndTime = &now
+
+	return summary
+}
+
+// initializeOperation prepares a plan for a new operation (shutdown or wakeup).
+func (r *HibernatePlanReconciler) initializeOperation(ctx context.Context, log logr.Logger, plan *hibernatorv1alpha1.HibernatePlan, operation string) (scheduler.ExecutionPlan, error) {
+	log.Info("initializing operation", "operation", operation, "planName", plan.Name, "numTargets", len(plan.Spec.Targets))
+
+	// Build execution plan
+	isWakeup := operation == "wakeup"
+
+	log.V(1).Info("building execution plan", "operation", operation, "isWakeup", isWakeup, "strategy", plan.Spec.Execution.Strategy.Type)
+	execPlan, err := r.buildExecutionPlan(plan, isWakeup)
+	if err != nil {
+		log.Error(err, "failed to build execution plan", "operation", operation)
+		return scheduler.ExecutionPlan{}, err
+	}
+
+	log.V(1).Info("execution plan built", "operation", operation, "numStages", len(execPlan.Stages))
+	for i, stage := range execPlan.Stages {
+		log.V(1).Info("stage details", "stageIndex", i, "numTargets", len(stage.Targets), "targets", stage.Targets)
+	}
+
+	// Initialize execution status - fresh start for each operation
+	log.V(1).Info("resetting execution statuses", "operation", operation, "numTargets", len(plan.Spec.Targets))
+
+	if err := r.statusUpdater.Update(ctx, plan, MutatorFunc(func(obj client.Object) client.Object {
+		p := obj.(*hibernatorv1alpha1.HibernatePlan)
+
+		p.Status.Executions = make([]hibernatorv1alpha1.ExecutionStatus, len(p.Spec.Targets))
+		for i, target := range plan.Spec.Targets {
+			p.Status.Executions[i] = hibernatorv1alpha1.ExecutionStatus{
+				Target:   fmt.Sprintf("%s/%s", target.Type, target.Name),
+				Executor: target.Type,
+				State:    hibernatorv1alpha1.StatePending,
+			}
+		}
+
+		// Set phase based on operation
+		if operation == "shutdown" {
+			p.Status.CurrentCycleID = uuid.New().String()[:8]
+			p.Status.Phase = hibernatorv1alpha1.PhaseHibernating
+		} else {
+			p.Status.Phase = hibernatorv1alpha1.PhaseWakingUp
+		}
+
+		p.Status.CurrentStageIndex = 0
+		p.Status.CurrentOperation = operation
+		now := metav1.Now()
+		p.Status.LastTransitionTime = &now
+		return p
+	})); err != nil {
+		return scheduler.ExecutionPlan{}, err
+	}
+
+	log.V(1).Info("plan status updated", "operation", operation, "newPhase", plan.Status.Phase)
+	return execPlan, nil
+}
+
+// finalizeOperation completes an operation and transitions the plan phase.
+func (r *HibernatePlanReconciler) finalizeOperation(ctx context.Context, log logr.Logger, plan *hibernatorv1alpha1.HibernatePlan, operation string) error {
+	// Build summary once (uses current execution statuses)
+	summary := r.buildOperationSummary(ctx, plan, operation)
+	currentCycleID := plan.Status.CurrentCycleID
+
+	if err := r.statusUpdater.Update(ctx, plan, MutatorFunc(func(obj client.Object) client.Object {
+		p := obj.(*hibernatorv1alpha1.HibernatePlan)
+
+		// Append operation to execution history (idempotent)
+		cycleIndex := -1
+		for i, cycle := range p.Status.ExecutionHistory {
+			if cycle.CycleID == currentCycleID {
+				cycleIndex = i
+				break
+			}
+		}
+
+		if cycleIndex == -1 {
+			p.Status.ExecutionHistory = append(p.Status.ExecutionHistory, hibernatorv1alpha1.ExecutionCycle{
+				CycleID: currentCycleID,
+			})
+			cycleIndex = len(p.Status.ExecutionHistory) - 1
+		}
+
+		if operation == "shutdown" {
+			p.Status.Phase = hibernatorv1alpha1.PhaseHibernated
+			if p.Status.ExecutionHistory[cycleIndex].ShutdownExecution == nil {
+				p.Status.ExecutionHistory[cycleIndex].ShutdownExecution = summary
+			}
+		} else if operation == "wakeup" {
+			p.Status.Phase = hibernatorv1alpha1.PhaseActive
+			if p.Status.ExecutionHistory[cycleIndex].WakeupExecution == nil {
+				p.Status.ExecutionHistory[cycleIndex].WakeupExecution = summary
+			}
+		}
+
+		// Prune old cycles if exceeding max 5
+		if len(p.Status.ExecutionHistory) > 5 {
+			p.Status.ExecutionHistory = p.Status.ExecutionHistory[len(p.Status.ExecutionHistory)-5:]
+		}
+
+		now := metav1.Now()
+		p.Status.LastTransitionTime = &now
+		return p
+	})); err != nil {
+		return err
+	}
+
+	log.Info("operation completed", "operation", operation, "cycleID", currentCycleID)
+	return nil
+}
+
+// isOperationComplete checks if all targets in an operation have reached terminal state.
+func (r *HibernatePlanReconciler) isOperationComplete(plan *hibernatorv1alpha1.HibernatePlan) bool {
+	for _, exec := range plan.Status.Executions {
+		if exec.State != hibernatorv1alpha1.StateCompleted && exec.State != hibernatorv1alpha1.StateFailed {
+			return false
+		}
+	}
+	return true
 }

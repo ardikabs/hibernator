@@ -1,6 +1,28 @@
 apiVersion: v1
 kind: Service
 metadata:
+  name: {{ include "hibernator.fullname" . }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "hibernator.labels" . | nindent 4 }}
+spec:
+  type: ClusterIP
+  ports:
+    - port: 9444
+      targetPort: grpc
+      protocol: TCP
+      name: grpc
+    - port: 8082
+      targetPort: websocket
+      protocol: TCP
+      name: websocket
+  selector:
+    {{- include "hibernator.selectorLabels" . | nindent 4 }}
+    app.kubernetes.io/component: controller
+---
+apiVersion: v1
+kind: Service
+metadata:
   name: {{ include "hibernator.fullname" . }}-webhook
   namespace: {{ .Release.Namespace }}
   labels:

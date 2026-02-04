@@ -113,7 +113,7 @@ var _ = BeforeSuite(func() {
 		RunnerImage:          "ghcr.io/ardikabs/hibernator-runner:test",
 	}
 
-	err = reconciler.SetupWithManager(mgr)
+	err = reconciler.SetupWithManager(mgr, 1)
 	Expect(err).NotTo(HaveOccurred())
 
 	// Start the manager in a goroutine
@@ -129,7 +129,11 @@ var _ = BeforeSuite(func() {
 
 var _ = AfterSuite(func() {
 	By("tearing down the test environment")
-	cancel()
-	err := testEnv.Stop()
-	Expect(err).NotTo(HaveOccurred())
+	if cancel != nil {
+		cancel()
+	}
+	if testEnv != nil {
+		err := testEnv.Stop()
+		Expect(err).NotTo(HaveOccurred())
+	}
 })

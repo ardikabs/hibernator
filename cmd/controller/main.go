@@ -6,24 +6,28 @@ Licensed under the Apache License, Version 2.0.
 package main
 
 import (
-	"context"
 	"flag"
+	"fmt"
 	"os"
+	"time"
 
 	"k8s.io/apimachinery/pkg/runtime"
 	utilruntime "k8s.io/apimachinery/pkg/util/runtime"
 	"k8s.io/client-go/kubernetes"
 	clientgoscheme "k8s.io/client-go/kubernetes/scheme"
 	ctrl "sigs.k8s.io/controller-runtime"
+	"sigs.k8s.io/controller-runtime/pkg/cache"
 	"sigs.k8s.io/controller-runtime/pkg/healthz"
 	"sigs.k8s.io/controller-runtime/pkg/log/zap"
 	metricsserver "sigs.k8s.io/controller-runtime/pkg/metrics/server"
+	"sigs.k8s.io/controller-runtime/pkg/webhook"
 
 	hibernatorv1alpha1 "github.com/ardikabs/hibernator/api/v1alpha1"
 	"github.com/ardikabs/hibernator/internal/controller"
 	"github.com/ardikabs/hibernator/internal/scheduler"
 	"github.com/ardikabs/hibernator/internal/streaming/auth"
 	"github.com/ardikabs/hibernator/internal/streaming/server"
+	"github.com/ardikabs/hibernator/pkg/envutil"
 )
 
 var (
@@ -46,24 +50,36 @@ func main() {
 	var grpcServerAddr string
 	var websocketServerAddr string
 	var enableStreaming bool
+	var webhookCertDir string
+	var workers int
+	var syncPeriod time.Duration
+	var leaderElectionNamespace string
 
 	flag.StringVar(&metricsAddr, "metrics-bind-address", ":8080", "The address the metric endpoint binds to.")
 	flag.StringVar(&probeAddr, "health-probe-bind-address", ":8081", "The address the probe endpoint binds to.")
-	flag.BoolVar(&enableLeaderElection, "leader-elect", false,
+	flag.BoolVar(&enableLeaderElection, "leader-elect", envutil.GetBool("LEADER_ELECTION_ENABLED", false),
 		"Enable leader election for controller manager. "+
 			"Enabling this will ensure there is only one active controller manager.")
-	flag.StringVar(&runnerImage, "runner-image", "ghcr.io/ardikabs/hibernator-runner:latest",
+	flag.StringVar(&runnerImage, "runner-image", envutil.GetString("RUNNER_IMAGE", "ghcr.io/ardikabs/hibernator-runner:latest"),
 		"The runner container image to use for execution jobs.")
-	flag.StringVar(&controlPlaneEndpoint, "control-plane-endpoint", "",
+	flag.StringVar(&controlPlaneEndpoint, "control-plane-endpoint", envutil.GetString("CONTROL_PLANE_ENDPOINT", ""),
 		"The endpoint for runner streaming callbacks.")
 	flag.StringVar(&runnerServiceAccount, "runner-service-account", "hibernator-runner",
 		"The ServiceAccount name used by runner pods.")
-	flag.StringVar(&grpcServerAddr, "grpc-server-address", ":9443",
+	flag.StringVar(&grpcServerAddr, "grpc-server-address", ":9444",
 		"The address for the gRPC streaming server.")
 	flag.StringVar(&websocketServerAddr, "websocket-server-address", ":8082",
 		"The address for the WebSocket streaming server.")
 	flag.BoolVar(&enableStreaming, "enable-streaming", true,
 		"Enable gRPC and WebSocket streaming servers for runner communication.")
+	flag.StringVar(&webhookCertDir, "webhook-cert-dir", "/tmp/k8s-webhook-server/serving-certs",
+		"The directory where webhook certificates are stored.")
+	flag.IntVar(&workers, "workers", envutil.GetInt("WORKERS", 1),
+		"The number of concurrent reconcile workers. Controls MaxConcurrentReconciles for controllers.")
+	flag.DurationVar(&syncPeriod, "sync-period", envutil.GetDuration("SYNC_PERIOD", 10*time.Hour),
+		"The minimum interval at which watched resources are reconciled. Default is 10 hours.")
+	flag.StringVar(&leaderElectionNamespace, "leader-election-namespace", envutil.GetString("LEADER_ELECTION_NAMESPACE", "hibernator-system"),
+		"The namespace in which the leader election resource will be created.")
 
 	opts := zap.Options{
 		Development: true,
@@ -75,12 +91,20 @@ func main() {
 
 	mgr, err := ctrl.NewManager(ctrl.GetConfigOrDie(), ctrl.Options{
 		Scheme: scheme,
+		Cache: cache.Options{
+			SyncPeriod: &syncPeriod,
+		},
 		Metrics: metricsserver.Options{
 			BindAddress: metricsAddr,
 		},
-		HealthProbeBindAddress: probeAddr,
-		LeaderElection:         enableLeaderElection,
-		LeaderElectionID:       "hibernator.ardikabs.com",
+		WebhookServer: webhook.NewServer(webhook.Options{
+			Port:    9443,
+			CertDir: webhookCertDir,
+		}),
+		HealthProbeBindAddress:  probeAddr,
+		LeaderElection:          enableLeaderElection,
+		LeaderElectionID:        "hibernator.ardikabs.com",
+		LeaderElectionNamespace: leaderElectionNamespace,
 	})
 	if err != nil {
 		setupLog.Error(err, "unable to start manager")
@@ -90,6 +114,7 @@ func main() {
 	// Set up HibernatePlan controller
 	if err = (&controller.HibernatePlanReconciler{
 		Client:               mgr.GetClient(),
+		APIReader:            mgr.GetAPIReader(),
 		Log:                  ctrl.Log.WithName("controllers").WithName("HibernatePlan"),
 		Scheme:               mgr.GetScheme(),
 		Planner:              scheduler.NewPlanner(),
@@ -97,17 +122,18 @@ func main() {
 		ControlPlaneEndpoint: controlPlaneEndpoint,
 		RunnerImage:          runnerImage,
 		RunnerServiceAccount: runnerServiceAccount,
-	}).SetupWithManager(mgr); err != nil {
+	}).SetupWithManager(mgr, workers); err != nil {
 		setupLog.Error(err, "unable to create controller", "controller", "HibernatePlan")
 		os.Exit(1)
 	}
 
 	// Set up ScheduleException controller
 	if err = (&controller.ScheduleExceptionReconciler{
-		Client: mgr.GetClient(),
-		Log:    ctrl.Log.WithName("controllers").WithName("ScheduleException"),
-		Scheme: mgr.GetScheme(),
-	}).SetupWithManager(mgr); err != nil {
+		Client:    mgr.GetClient(),
+		APIReader: mgr.GetAPIReader(),
+		Log:       ctrl.Log.WithName("controllers").WithName("ScheduleException"),
+		Scheme:    mgr.GetScheme(),
+	}).SetupWithManager(mgr, workers); err != nil {
 		setupLog.Error(err, "unable to create controller", "controller", "ScheduleException")
 		os.Exit(1)
 	}
@@ -151,7 +177,6 @@ func main() {
 
 // startStreamingServers initializes and starts gRPC and WebSocket streaming servers.
 func startStreamingServers(mgr ctrl.Manager, grpcAddr, wsAddr string) error {
-	ctx := context.Background()
 	log := ctrl.Log.WithName("streaming")
 
 	// Create Kubernetes clientset for TokenReview
@@ -169,12 +194,9 @@ func startStreamingServers(mgr ctrl.Manager, grpcAddr, wsAddr string) error {
 
 	// Start gRPC server
 	grpcServer := server.NewServer(grpcAddr, clientset, mgr.GetClient(), eventRecorder, log)
-	go func() {
-		if err := grpcServer.Start(ctx); err != nil {
-			log.Error(err, "gRPC server failed")
-		}
-	}()
-	log.Info("started gRPC streaming server", "address", grpcAddr)
+	if err := mgr.Add(grpcServer); err != nil {
+		return fmt.Errorf("failed to add grpc server to manager: %w", err)
+	}
 
 	// Start WebSocket server
 	validator := auth.NewTokenValidator(clientset, log)
@@ -185,12 +207,10 @@ func startStreamingServers(mgr ctrl.Manager, grpcAddr, wsAddr string) error {
 		K8sClientset: clientset,
 		Log:          log,
 	})
-	go func() {
-		if err := wsServer.Start(ctx); err != nil {
-			log.Error(err, "WebSocket server failed")
-		}
-	}()
-	log.Info("started WebSocket streaming server", "address", wsAddr)
+
+	if err := mgr.Add(wsServer); err != nil {
+		return fmt.Errorf("failed to add websocket server to manager: %w", err)
+	}
 
 	return nil
 }

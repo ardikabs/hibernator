@@ -42,6 +42,10 @@ type GRPCClient struct {
 	useTLS      bool
 	log         logr.Logger
 
+	// log streaming - keep stream open for reuse
+	logStream  grpc.ClientStreamingClient[streamingv1alpha1.LogEntry, streamingv1alpha1.StreamLogsResponse]
+	logChannel chan *streamingv1alpha1.LogEntry
+
 	// heartbeat management
 	heartbeatCtx    context.Context
 	heartbeatCancel context.CancelFunc
@@ -130,6 +134,64 @@ func (c *GRPCClient) Connect(ctx context.Context) error {
 	c.client = streamingv1alpha1.NewExecutionServiceClient(conn)
 	c.log.Info("connected to streaming server", "address", c.address)
 
+	// Open log stream asynchronously in background to avoid blocking Connect()
+	// This allows runner to proceed immediately even if stream setup is slow
+	if err := c.openLogStream(context.Background()); err != nil {
+		c.log.Info("streaming logs disabled, failed to open log stream", "error", err)
+	}
+
+	return nil
+}
+
+// openLogStream opens a persistent log stream for reuse across multiple log entries.
+// Called internally by Connect() to establish the stream immediately after connection.
+func (c *GRPCClient) openLogStream(ctx context.Context) error {
+	if c.logStream != nil {
+		return nil // Already open
+	}
+
+	c.logChannel = make(chan *streamingv1alpha1.LogEntry)
+
+	if c.client == nil {
+		return fmt.Errorf("client not initialized")
+	}
+
+	stream, err := c.client.StreamLogs(ctx)
+	if err != nil {
+		return fmt.Errorf("failed to open log stream: %w", err)
+	}
+
+	go func() {
+		for entry := range c.logChannel {
+			if err := stream.Send(entry); err != nil {
+				c.log.Info("streaming logs failing, ignoring", "error", err)
+			}
+		}
+	}()
+
+	c.logStream = stream
+	c.log.V(1).Info("opened persistent log stream")
+	return nil
+}
+
+// Log sends a log entry to the server via persistent stream.
+// The stream is opened during Connect() and reused for all log entries.
+// Errors are logged silently - streaming failures don't interrupt execution.
+func (c *GRPCClient) Log(ctx context.Context, level, message string, fields map[string]string) error {
+	if c.logChannel == nil {
+		// Log streaming not initialized
+		return nil
+	}
+
+	// Send log entry asynchronously via channel
+	c.logChannel <- &streamingv1alpha1.LogEntry{
+		ExecutionId: c.executionID,
+		Timestamp:   time.Now().Format(time.RFC3339),
+		Level:       level,
+		Message:     message,
+		Fields:      fields,
+	}
+
 	return nil
 }
 
@@ -174,46 +236,6 @@ func (c *GRPCClient) StopHeartbeat() {
 	}
 	c.mu.Unlock()
 	c.heartbeatWg.Wait()
-}
-
-// Log sends a log entry to the server immediately via StreamLogs RPC.
-func (c *GRPCClient) Log(ctx context.Context, level, message string, fields map[string]string) error {
-	c.mu.Lock()
-	if c.conn == nil {
-		c.mu.Unlock()
-		return fmt.Errorf("not connected to streaming server")
-	}
-	client := c.client
-	c.mu.Unlock()
-
-	entry := &streamingv1alpha1.LogEntry{
-		ExecutionId: c.executionID,
-		Timestamp:   time.Now().Format(time.RFC3339),
-		Level:       level,
-		Message:     message,
-		Fields:      fields,
-	}
-
-	// Use proto-generated client for StreamLogs (single entry)
-	stream, err := client.StreamLogs(ctx)
-	if err != nil {
-		c.log.V(2).Error(err, "failed to create stream")
-		return fmt.Errorf("failed to create stream: %w", err)
-	}
-
-	if err := stream.Send(entry); err != nil {
-		c.log.V(2).Error(err, "failed to send log entry")
-		return fmt.Errorf("failed to send log: %w", err)
-	}
-
-	// Close send and receive response
-	_, err = stream.CloseAndRecv()
-	if err != nil {
-		c.log.V(2).Error(err, "failed to close stream")
-		return fmt.Errorf("failed to close stream: %w", err)
-	}
-
-	return nil
 }
 
 // ReportProgress sends a progress update to the server via ReportProgress RPC.
@@ -263,6 +285,11 @@ func (c *GRPCClient) ReportCompletion(ctx context.Context, success bool, errorMs
 		Timestamp:    time.Now().Format(time.RFC3339),
 	}
 
+	c.log.V(1).Info(
+		"Sending completion report",
+		"executionId", report.ExecutionId,
+		"success", success)
+
 	_, err := client.ReportCompletion(ctx, report)
 	if err != nil {
 		c.log.Error(err, "failed to report completion")
@@ -273,10 +300,20 @@ func (c *GRPCClient) ReportCompletion(ctx context.Context, success bool, errorMs
 	return nil
 }
 
-// Close closes the gRPC connection.
+// Close closes the log stream and gRPC connection.
 func (c *GRPCClient) Close() error {
 	c.StopHeartbeat()
 
+	// Close log stream first
+	if c.logStream != nil {
+		if _, err := c.logStream.CloseAndRecv(); err != nil {
+			c.log.V(1).Error(err, "failed to close log stream gracefully")
+		}
+		c.logStream = nil
+		c.log.V(1).Info("closed persistent log stream")
+	}
+
+	// Close connection
 	c.mu.Lock()
 	defer c.mu.Unlock()
 

@@ -61,6 +61,21 @@ Scenario: On-site event (Jan 29 - Feb 28)
 
 ### 2. **Create ScheduleException resource**
 
+#### 📋 **Semantic Note: Extend Type Follows Base Schedule Semantics**
+
+**The `extend` type uses the same "off hours" semantics as the base schedule:**
+
+- **`start`** = ⬇️ **Begin hibernation** (shutdown time)
+- **`end`** = ⬆️ **Begin wakeup** (startup time)
+
+You're defining **additional hibernation windows** (when to sleep), not when to stay awake.
+
+| Type | `start` Semantic | `end` Semantic | Mindset |
+|------|-----------------|----------------|----------|
+| **Base schedule** | ⬇️ Begin hibernation | ⬆️ Begin wakeup | Off hours (when to sleep) |
+| **`extend` exception** | ⬇️ Begin hibernation | ⬆️ Begin wakeup | **Same as base** ✅ |
+| **`suspend` exception** | ✋ Begin stay-awake | ✅ End stay-awake | Inverted (when to stay awake) ⚠️ |
+
 Create independent `ScheduleException` that references the HibernatePlan:
 
 ```yaml

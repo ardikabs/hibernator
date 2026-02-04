@@ -8,7 +8,9 @@ package k8sutil
 import (
 	"context"
 	"fmt"
+	"strings"
 
+	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/client-go/dynamic"
 	"k8s.io/client-go/kubernetes"
 	"k8s.io/client-go/rest"
@@ -93,4 +95,15 @@ func resolveRestConfig(cfg *K8SConnectorConfig) (*rest.Config, error) {
 	}
 
 	return restConfig, nil
+}
+
+func ObjectKeyFromString(s string) (types.NamespacedName, error) {
+	parts := strings.SplitN(s, "/", 2)
+	if len(parts) != 2 {
+		return types.NamespacedName{}, fmt.Errorf("invalid format: %s (expected namespace/name)", s)
+	}
+	return types.NamespacedName{
+		Namespace: parts[0],
+		Name:      parts[1],
+	}, nil
 }

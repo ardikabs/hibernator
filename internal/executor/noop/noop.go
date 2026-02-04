@@ -115,7 +115,7 @@ func (e *Executor) Shutdown(ctx context.Context, log logr.Logger, spec executor.
 	}
 
 	log.Info("generating restore state",
-		"executionID", restoreState.GeneratedID,
+		"generatedID", restoreState.GeneratedID,
 		"operationTime", restoreState.OperationTime,
 	)
 
@@ -127,7 +127,7 @@ func (e *Executor) Shutdown(ctx context.Context, log logr.Logger, spec executor.
 
 	log.Info("NoOp shutdown completed successfully",
 		"target", spec.TargetName,
-		"executionID", restoreState.GeneratedID,
+		"generatedID", restoreState.GeneratedID,
 		"restoreDataSize", len(restoreData),
 	)
 
@@ -153,7 +153,7 @@ func (e *Executor) WakeUp(ctx context.Context, log logr.Logger, spec executor.Sp
 	}
 
 	log.Info("restore state loaded",
-		"executionID", restoreState.GeneratedID,
+		"generatedID", restoreState.GeneratedID,
 		"shutdownTime", restoreState.OperationTime,
 		"originalTarget", restoreState.TargetName,
 		"failureMode", restoreState.Parameters.FailureMode,
@@ -182,7 +182,7 @@ func (e *Executor) WakeUp(ctx context.Context, log logr.Logger, spec executor.Sp
 
 	log.Info("NoOp wakeup completed successfully",
 		"target", spec.TargetName,
-		"executionID", restoreState.GeneratedID,
+		"generatedID", restoreState.GeneratedID,
 	)
 
 	return nil

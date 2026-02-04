@@ -48,6 +48,8 @@ type ExecutionState struct {
 
 // ExecutionServiceServer implements the business logic for execution tracking
 type ExecutionServiceServer struct {
+	streamingv1alpha1.UnimplementedExecutionServiceServer
+
 	log           logr.Logger
 	k8sClient     client.Client
 	eventRecorder record.EventRecorder
@@ -85,6 +87,8 @@ func (s *ExecutionServiceServer) EmitLog(ctx context.Context, entry *streamingv1
 		return fmt.Errorf("log entry is nil")
 	}
 
+	log := s.log.WithName("runner-logs")
+
 	// Get execution metadata from cache (queries K8s API only on first access)
 	meta, err := s.getOrCacheExecutionMetadata(ctx, entry.ExecutionId)
 	if err != nil {
@@ -119,13 +123,13 @@ func (s *ExecutionServiceServer) EmitLog(ctx context.Context, entry *streamingv1
 	// Emit log at appropriate level
 	switch entry.Level {
 	case "ERROR":
-		s.log.Error(nil, entry.Message, kvs...)
+		log.Error(nil, entry.Message, kvs...)
 	case "WARN", "INFO":
-		s.log.Info(entry.Message, kvs...)
+		log.Info(entry.Message, kvs...)
 	case "DEBUG":
-		s.log.V(1).Info(entry.Message, kvs...)
+		log.V(1).Info(entry.Message, kvs...)
 	default:
-		s.log.V(1).Info(entry.Message, kvs...)
+		log.V(1).Info(entry.Message, kvs...)
 	}
 
 	return nil
@@ -133,7 +137,6 @@ func (s *ExecutionServiceServer) EmitLog(ctx context.Context, entry *streamingv1
 
 // ReportProgress handles progress reporting for an execution
 func (s *ExecutionServiceServer) ReportProgress(ctx context.Context, req *streamingv1alpha1.ProgressReport) (*streamingv1alpha1.ProgressResponse, error) {
-	logger := log.FromContext(ctx)
 
 	s.executionStatusMu.Lock()
 	state, exists := s.executionStatus[req.ExecutionId]
@@ -152,10 +155,10 @@ func (s *ExecutionServiceServer) ReportProgress(ctx context.Context, req *stream
 	// Get execution metadata from cache (queries K8s API only on first access)
 	meta, err := s.getOrCacheExecutionMetadata(ctx, req.ExecutionId)
 	if err != nil {
-		logger.Error(err, "Failed to get execution metadata for progress event",
+		s.log.Error(err, "Failed to get execution metadata for progress event",
 			"executionId", req.ExecutionId)
 		// Continue without metadata - just log with executionId
-		logger.Info("Progress reported",
+		s.log.Info("Progress reported",
 			"executionId", req.ExecutionId,
 			"progress", req.ProgressPercent,
 			"message", req.Message,
@@ -163,7 +166,7 @@ func (s *ExecutionServiceServer) ReportProgress(ctx context.Context, req *stream
 		return &streamingv1alpha1.ProgressResponse{Acknowledged: true}, nil
 	}
 
-	logger.Info("Progress reported",
+	s.log.Info("Progress reported",
 		"namespace", meta.Namespace,
 		"plan", meta.PlanName,
 		"target", meta.TargetName,
@@ -175,7 +178,7 @@ func (s *ExecutionServiceServer) ReportProgress(ctx context.Context, req *stream
 	// Fetch HibernatePlan for event recording
 	plan, err := s.fetchHibernatePlan(ctx, meta.Namespace, meta.PlanName)
 	if err != nil {
-		logger.Error(err, "Failed to fetch HibernatePlan for progress event",
+		s.log.Error(err, "Failed to fetch HibernatePlan for progress event",
 			"namespace", meta.Namespace,
 			"plan", meta.PlanName)
 	} else if plan != nil {
@@ -191,7 +194,11 @@ func (s *ExecutionServiceServer) ReportProgress(ctx context.Context, req *stream
 
 // ReportCompletion handles completion reporting for an execution
 func (s *ExecutionServiceServer) ReportCompletion(ctx context.Context, req *streamingv1alpha1.CompletionReport) (*streamingv1alpha1.CompletionResponse, error) {
-	logger := log.FromContext(ctx)
+	s.log.V(1).Info("Received completion report",
+		"executionId", req.ExecutionId,
+		"success", req.Success,
+		"errorMsg", req.ErrorMessage,
+	)
 
 	s.executionStatusMu.Lock()
 	state, exists := s.executionStatus[req.ExecutionId]
@@ -210,16 +217,17 @@ func (s *ExecutionServiceServer) ReportCompletion(ctx context.Context, req *stre
 	// Get execution metadata from cache (queries K8s API only on first access)
 	meta, err := s.getOrCacheExecutionMetadata(ctx, req.ExecutionId)
 	if err != nil {
-		logger.Error(err, "Failed to get execution metadata for completion event",
+		s.log.Error(err, "Failed to get execution metadata for completion event",
 			"executionId", req.ExecutionId)
+
 		// Continue without metadata - just log with executionId
-		logger.Info("Completion reported",
+		s.log.Info("Completion reported",
 			"executionId", req.ExecutionId,
 			"success", req.Success,
 			"message", req.ErrorMessage,
 		)
 	} else {
-		logger.Info("Completion reported",
+		s.log.Info("Completion reported",
 			"namespace", meta.Namespace,
 			"plan", meta.PlanName,
 			"target", meta.TargetName,
@@ -231,7 +239,7 @@ func (s *ExecutionServiceServer) ReportCompletion(ctx context.Context, req *stre
 		// Fetch HibernatePlan for event recording
 		plan, fetchErr := s.fetchHibernatePlan(ctx, meta.Namespace, meta.PlanName)
 		if fetchErr != nil {
-			logger.Error(fetchErr, "Failed to fetch HibernatePlan for completion event",
+			s.log.Error(fetchErr, "Failed to fetch HibernatePlan for completion event",
 				"namespace", meta.Namespace,
 				"plan", meta.PlanName)
 		} else if plan != nil {
@@ -261,8 +269,6 @@ func (s *ExecutionServiceServer) ReportCompletion(ctx context.Context, req *stre
 
 // Heartbeat handles heartbeat requests
 func (s *ExecutionServiceServer) Heartbeat(ctx context.Context, req *streamingv1alpha1.HeartbeatRequest) (*streamingv1alpha1.HeartbeatResponse, error) {
-	logger := log.FromContext(ctx)
-
 	s.executionStatusMu.Lock()
 	state, exists := s.executionStatus[req.ExecutionId]
 	if !exists {
@@ -274,7 +280,7 @@ func (s *ExecutionServiceServer) Heartbeat(ctx context.Context, req *streamingv1
 	state.LastUpdate = time.Now()
 	s.executionStatusMu.Unlock()
 
-	logger.V(2).Info("Heartbeat received", "executionId", req.ExecutionId)
+	s.log.V(2).Info("Heartbeat received", "executionId", req.ExecutionId)
 
 	return &streamingv1alpha1.HeartbeatResponse{
 		Acknowledged: true,

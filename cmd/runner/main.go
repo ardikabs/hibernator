@@ -68,14 +68,14 @@ func parseFlags() *Config {
 	envMappings := map[string]*string{
 		"HIBERNATOR_EXECUTION_ID":           &cfg.ExecutionID,
 		"HIBERNATOR_CONTROL_PLANE_ENDPOINT": &cfg.ControlPlaneEndpoint,
+		"HIBERNATOR_GRPC_ENDPOINT":          &cfg.GRPCEndpoint,
+		"HIBERNATOR_WEBSOCKET_ENDPOINT":     &cfg.WebSocketEndpoint,
+		"HIBERNATOR_HTTP_CALLBACK_ENDPOINT": &cfg.HTTPCallbackEndpoint,
 		"HIBERNATOR_TARGET_PARAMS":          &cfg.TargetParams,
 		"HIBERNATOR_CONNECTOR_KIND":         &cfg.ConnectorKind,
 		"HIBERNATOR_CONNECTOR_NAME":         &cfg.ConnectorName,
 		"HIBERNATOR_CONNECTOR_NAMESPACE":    &cfg.ConnectorNamespace,
 		"POD_NAMESPACE":                     &cfg.Namespace,
-		"HIBERNATOR_GRPC_ENDPOINT":          &cfg.GRPCEndpoint,
-		"HIBERNATOR_WEBSOCKET_ENDPOINT":     &cfg.WebSocketEndpoint,
-		"HIBERNATOR_HTTP_CALLBACK_ENDPOINT": &cfg.HTTPCallbackEndpoint,
 	}
 	for envKey, target := range envMappings {
 		if v := os.Getenv(envKey); v != "" {

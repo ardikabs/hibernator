@@ -74,10 +74,14 @@ var _ = BeforeSuite(func() {
 })
 
 var _ = AfterSuite(func() {
-	cancel()
+	if cancel != nil {
+		cancel()
+	}
 	By("tearing down the test environment")
-	err := testEnv.Stop()
-	Expect(err).NotTo(HaveOccurred())
+	if testEnv != nil {
+		err := testEnv.Stop()
+		Expect(err).NotTo(HaveOccurred())
+	}
 })
 
 var _ = Describe("HibernatePlan Controller", func() {
@@ -303,6 +307,9 @@ var _ = Describe("HibernatePlan Controller", func() {
 						},
 					},
 				},
+				Status: hibernatorv1alpha1.HibernatePlanStatus{
+					CurrentCycleID: "test-cycle",
+				},
 			}
 
 			Expect(k8sClient.Create(ctx, plan)).To(Succeed())
@@ -322,6 +329,85 @@ var _ = Describe("HibernatePlan Controller", func() {
 
 			Expect(jobs.Items[0].Spec.Template.Spec.ServiceAccountName).To(Equal("runner-fixed-sa"))
 		})
+
+		It("Should create job with proper labels for lookup", func() {
+			reconciler := &HibernatePlanReconciler{
+				Client:               k8sClient,
+				Log:                  ctrl.Log.WithName("controllers").WithName("HibernatePlan"),
+				Scheme:               scheme.Scheme,
+				Planner:              scheduler.NewPlanner(),
+				ScheduleEvaluator:    scheduler.NewScheduleEvaluator(),
+				ControlPlaneEndpoint: "",
+				RunnerImage:          "",
+				RunnerServiceAccount: "hibernator-runner",
+			}
+
+			plan := &hibernatorv1alpha1.HibernatePlan{
+				TypeMeta: metav1.TypeMeta{
+					APIVersion: "hibernator.ardikabs.com/v1alpha1",
+					Kind:       "HibernatePlan",
+				},
+				ObjectMeta: metav1.ObjectMeta{
+					Name:      "label-test-plan",
+					Namespace: "test-ns",
+				},
+				Spec: hibernatorv1alpha1.HibernatePlanSpec{
+					Schedule: hibernatorv1alpha1.Schedule{
+						Timezone: "UTC",
+						OffHours: []hibernatorv1alpha1.OffHourWindow{
+							{
+								Start:      "20:00",
+								End:        "06:00",
+								DaysOfWeek: []string{"MON"},
+							},
+						},
+					},
+					Execution: hibernatorv1alpha1.Execution{
+						Strategy: hibernatorv1alpha1.ExecutionStrategy{Type: hibernatorv1alpha1.StrategySequential},
+					},
+					Targets: []hibernatorv1alpha1.Target{
+						{
+							Name: "test-target",
+							Type: "ec2",
+							ConnectorRef: hibernatorv1alpha1.ConnectorRef{
+								Kind: "CloudProvider",
+								Name: "aws",
+							},
+						},
+					},
+				},
+				Status: hibernatorv1alpha1.HibernatePlanStatus{
+					CurrentCycleID: "abc123",
+				},
+			}
+
+			Expect(k8sClient.Create(ctx, plan)).To(Succeed())
+			// Update status separately (status is a subresource)
+			plan.Status.CurrentCycleID = "abc123"
+			Expect(k8sClient.Status().Update(ctx, plan)).To(Succeed())
+			target := &plan.Spec.Targets[0]
+			operation := "shutdown"
+			err := reconciler.createRunnerJob(ctx, reconciler.Log, plan, target, operation)
+			Expect(err).NotTo(HaveOccurred())
+
+			// Verify job can be found by label-based lookup
+			var jobs batchv1.JobList
+			Eventually(func() int {
+				_ = k8sClient.List(ctx, &jobs, client.InNamespace("test-ns"), client.MatchingLabels{
+					LabelPlan:      plan.Name,
+					LabelTarget:    target.Name,
+					LabelOperation: operation,
+					LabelCycleID:   plan.Status.CurrentCycleID,
+				})
+				return len(jobs.Items)
+			}, timeout, interval).Should(Equal(1))
+
+			job := jobs.Items[0]
+			Expect(job.Labels[LabelPlan]).To(Equal(plan.Name))
+			Expect(job.Labels[LabelTarget]).To(Equal(target.Name))
+			Expect(job.Labels[LabelOperation]).To(Equal(operation))
+			Expect(job.Labels[LabelCycleID]).NotTo(BeEmpty())
+		})
 	})
 })
 
@@ -333,7 +419,7 @@ func setupControllerWithManager(mgr ctrl.Manager) error {
 		Scheme:            mgr.GetScheme(),
 		Planner:           scheduler.NewPlanner(),
 		ScheduleEvaluator: scheduler.NewScheduleEvaluator(),
-	}).SetupWithManager(mgr)
+	}).SetupWithManager(mgr, 1)
 }
 
 // Placeholder for additional test utilities

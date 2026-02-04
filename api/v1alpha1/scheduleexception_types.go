@@ -23,10 +23,12 @@ const (
 )
 
 // ExceptionState represents the lifecycle state of an exception.
-// +kubebuilder:validation:Enum=Active;Expired
+// +kubebuilder:validation:Enum=Pending;Active;Expired
 type ExceptionState string
 
 const (
+	// ExceptionStatePending indicates the exception is not yet active.
+	ExceptionStatePending ExceptionState = "Pending"
 	// ExceptionStateActive indicates the exception is currently active.
 	ExceptionStateActive ExceptionState = "Active"
 	// ExceptionStateExpired indicates the exception has passed its validUntil time.
@@ -87,7 +89,7 @@ type ScheduleExceptionSpec struct {
 // ScheduleExceptionStatus defines the observed state of ScheduleException.
 type ScheduleExceptionStatus struct {
 	// State is the current lifecycle state of the exception.
-	// +kubebuilder:validation:Enum=Active;Expired
+	// +kubebuilder:validation:Enum=Pending;Active;Expired
 	State ExceptionState `json:"state,omitempty"`
 
 	// AppliedAt is when the exception was first applied.
@@ -109,8 +111,8 @@ type ScheduleExceptionStatus struct {
 // +kubebuilder:printcolumn:name="Plan",type=string,JSONPath=`.spec.planRef.name`
 // +kubebuilder:printcolumn:name="Type",type=string,JSONPath=`.spec.type`
 // +kubebuilder:printcolumn:name="State",type=string,JSONPath=`.status.state`
-// +kubebuilder:printcolumn:name="ValidFrom",type=date,JSONPath=`.spec.validFrom`
-// +kubebuilder:printcolumn:name="ValidUntil",type=date,JSONPath=`.spec.validUntil`
+// +kubebuilder:printcolumn:name="ValidFrom",type=string,JSONPath=`.spec.validFrom`
+// +kubebuilder:printcolumn:name="ValidUntil",type=string,JSONPath=`.spec.validUntil`
 // +kubebuilder:printcolumn:name="Age",type=date,JSONPath=`.metadata.creationTimestamp`
 
 // ScheduleException is the Schema for the scheduleexceptions API.

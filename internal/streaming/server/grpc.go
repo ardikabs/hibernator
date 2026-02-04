@@ -83,8 +83,8 @@ func NewServer(
 	// Create and register execution service
 	executionService := NewExecutionServiceServer(k8sClient, eventRecorder)
 
-	// Note: In a real implementation, you would register the generated protobuf service
-	// For now, we use the manual types and handle via the webhook fallback or custom registration
+	// Register gRPC services
+	streamingv1alpha1.RegisterExecutionServiceServer(grpcServer, executionService)
 
 	return &Server{
 		grpcServer:       grpcServer,

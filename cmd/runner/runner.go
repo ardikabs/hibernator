@@ -105,15 +105,15 @@ func (s *streamingLogSender) Log(ctx context.Context, level, message string, fie
 // run executes the hibernation operation.
 func (r *runner) run(ctx context.Context) error {
 	cfg := r.cfg
-	log := r.log
-
-	log.Info("starting runner",
+	log := r.log.WithValues(
 		"operation", cfg.Operation,
 		"target", cfg.Target,
 		"targetType", cfg.TargetType,
 		"plan", cfg.Plan,
 		"executionId", cfg.ExecutionID,
 	)
+
+	log.Info("starting runner")
 
 	// Start heartbeat if streaming is available
 	if r.streamClient != nil {
@@ -537,10 +537,7 @@ func initStreamingClient(ctx context.Context, log logr.Logger, cfg *Config) (str
 	webSocketEndpoint := cfg.WebSocketEndpoint
 	httpCallbackEndpoint := cfg.HTTPCallbackEndpoint
 
-	// Legacy: Use ControlPlaneEndpoint if specific endpoints not set
-	if grpcEndpoint == "" && webSocketEndpoint == "" && httpCallbackEndpoint == "" && cfg.ControlPlaneEndpoint != "" {
-		httpCallbackEndpoint = cfg.ControlPlaneEndpoint
-	}
+	log.Info("DEBUG: Initializing streaming client", "executionID", cfg.ExecutionID)
 
 	clientCfg := streamclient.ClientConfig{
 		Type:         streamclient.ClientTypeAuto,
@@ -575,7 +572,11 @@ func initStreamingClient(ctx context.Context, log logr.Logger, cfg *Config) (str
 // reportProgress reports execution progress via streaming client.
 func (r *runner) reportProgress(ctx context.Context, phase string, percent int32, message string) {
 	// Always log to stdout (via DualWriteSink which also streams)
-	r.log.Info("progress", "phase", phase, "percent", percent, "message", message)
+	r.log.Info("progress",
+		"phase", phase,
+		"percent", percent,
+		"message", message,
+	)
 
 	// Report progress separately via ReportProgress RPC
 	if r.streamClient != nil {

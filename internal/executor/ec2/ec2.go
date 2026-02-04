@@ -305,7 +305,3 @@ func (e *Executor) findInstances(ctx context.Context, client EC2Client, selector
 
 	return instances, nil
 }
-
-func init() {
-	executor.Register(New())
-}

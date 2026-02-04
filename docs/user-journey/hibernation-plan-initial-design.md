@@ -45,13 +45,29 @@ Design and deploy a `HibernatePlan` that reliably hibernates and restores multip
 
 Determine when resources should be hibernated and awake. Use human-readable time windows with timezone awareness.
 
+#### 📋 **Schedule Semantics: "Off Hours" Concept**
+
+**Important:** The base schedule uses **"off hours" semantics** - you define WHEN to be ASLEEP:
+
+- **`start`** = ⬇️ **Begin hibernation** (shutdown time)
+- **`end`** = ⬆️ **Begin wakeup** (startup time)
+
 ```yaml
 schedule:
   timezone: "America/New_York"  # or your region: Asia/Jakarta, Europe/London, etc.
   offHours:
-    - start: "20:00"            # 8 PM
-      end: "06:00"              # 6 AM next day
+    - start: "20:00"            # ⬇️ Hibernate at 8 PM (shutdown begins)
+      end: "06:00"              # ⬆️ Wake up at 6 AM (startup begins)
       daysOfWeek: ["MON", "TUE", "WED", "THU", "FRI"]  # Weekdays only
+```
+
+**Timeline visualization:**
+```
+00:00 ━━━━━ 06:00 ━━━━━━━━━━━━━━━ 20:00 ━━━━━ 24:00
+💤 Hibernated | ✅ Active (awake) | 💤 Hibernated
+              ↑                    ↑
+            WAKEUP               SHUTDOWN
+            (end)                (start)
 ```
 
 **Decision branches:**

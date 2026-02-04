@@ -7,6 +7,7 @@ package scheduler
 
 import (
 	"fmt"
+	"strconv"
 	"strings"
 	"time"
 
@@ -589,9 +590,18 @@ func ConvertOffHoursToCron(windows []OffHourWindow) (string, string, error) {
 
 // parseTime parses HH:MM format into hour and minute.
 func parseTime(timeStr string) (hour, min int, err error) {
-	_, err = fmt.Sscanf(timeStr, "%d:%d", &hour, &min)
-	if err != nil {
+	parts := strings.Split(timeStr, ":")
+	if len(parts) != 2 {
 		return 0, 0, fmt.Errorf("invalid time format %q, expected HH:MM", timeStr)
+	}
+
+	hour, err = strconv.Atoi(parts[0])
+	if err != nil {
+		return 0, 0, fmt.Errorf("invalid hour in %q: %w", timeStr, err)
+	}
+	min, err = strconv.Atoi(parts[1])
+	if err != nil {
+		return 0, 0, fmt.Errorf("invalid minute in %q: %w", timeStr, err)
 	}
 	if hour < 0 || hour > 23 {
 		return 0, 0, fmt.Errorf("hour %d out of range (0-23)", hour)
@@ -605,6 +615,10 @@ func parseTime(timeStr string) (hour, min int, err error) {
 // convertDaysToCron converts day names (MON, TUE, etc.) to cron day-of-week format.
 // Returns a comma-separated string like "1,2,3,4,5" for MON-FRI.
 func convertDaysToCron(days []string) (string, error) {
+	if len(days) == 0 {
+		return "", fmt.Errorf("at least one day of week is required")
+	}
+
 	dayMap := map[string]int{
 		"SUN": 0,
 		"MON": 1,

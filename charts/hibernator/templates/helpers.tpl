@@ -72,3 +72,21 @@ Create the name of the runner service account to use
 {{- default "hibernator-runner" .Values.runnerServiceAccount.name }}
 {{- end }}
 {{- end }}
+
+{{/*
+Get webhook CA bundle from Secret or use provided value
+*/}}
+{{- define "hibernator.webhook.caBundle" -}}
+{{- if .Values.webhook.certManager.enabled -}}
+{{- /* cert-manager will inject the CA bundle automatically */ -}}
+{{- else -}}
+{{- $secret := lookup "v1" "Secret" .Release.Namespace .Values.webhook.certs.secretName -}}
+{{- if $secret -}}
+{{- /* Use ca.crt from the generated Secret */ -}}
+{{- index $secret.data "ca.crt" | default "" -}}
+{{- else -}}
+{{- /* Fallback to manually provided CA bundle (if any) */ -}}
+{{- .Values.webhook.certs.caBundle | default "" | b64enc -}}
+{{- end -}}
+{{- end -}}
+{{- end -}}
