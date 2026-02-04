@@ -27,9 +27,71 @@ type EC2Selector struct {
 
 // RDSParameters defines the expected parameters for the RDS executor.
 type RDSParameters struct {
-	SnapshotBeforeStop bool   `json:"snapshotBeforeStop,omitempty"`
-	InstanceID         string `json:"instanceId,omitempty"`
-	ClusterID          string `json:"clusterId,omitempty"`
+	SnapshotBeforeStop bool        `json:"snapshotBeforeStop,omitempty"`
+	Selector           RDSSelector `json:"selector"`
+}
+
+// RDSSelector defines how to find RDS instances and clusters.
+//
+// MUTUAL EXCLUSIVITY RULES:
+// Only ONE of the following selection methods can be used:
+//  1. Tag-based selection: Tags OR ExcludeTags (mutually exclusive with each other)
+//  2. Explicit IDs: InstanceIDs and/or ClusterIDs (intent-based, discovers exactly what you specify)
+//  3. Discovery mode: IncludeAll
+//
+// RESOURCE TYPE CONTROL:
+// For intent-based selection (InstanceIDs/ClusterIDs), resource types are implicit:
+//   - If InstanceIDs specified → discovers instances
+//   - If ClusterIDs specified → discovers clusters
+//   - If both specified → discovers both
+//
+// For dynamic discovery (Tags/ExcludeTags/IncludeAll), DiscoverInstances and DiscoverClusters
+// must be explicitly enabled (opt-out by default):
+//   - Neither set: no resources discovered (no-op)
+//   - DiscoverInstances: true only: discovers only DB instances
+//   - DiscoverClusters: true only: discovers only DB clusters
+//   - Both true: discovers both instances and clusters
+//
+// Examples:
+//   - Valid: {Tags: {"env": "prod"}, DiscoverInstances: true}  // only instances with tag
+//   - Valid: {ExcludeTags: {"critical": "true"}, DiscoverClusters: true}  // only clusters
+//   - Valid: {InstanceIDs: ["db-1", "db-2"], ClusterIDs: ["cluster-1"]}  // explicit both
+//   - Valid: {IncludeAll: true, DiscoverInstances: true, DiscoverClusters: true}  // all resources
+//   - No-op: {Tags: {"env": "prod"}}  // no discovery flags set, nothing discovered
+//   - Invalid: {Tags: {...}, InstanceIDs: [...]} - cannot mix tag-based with explicit IDs
+//   - Invalid: {Tags: {...}, ExcludeTags: {...}} - tags and excludeTags are mutually exclusive
+//   - Invalid: {IncludeAll: true, Tags: {...}} - includeAll cannot be combined with other methods
+type RDSSelector struct {
+	// Tags for inclusion. If value is empty string "", matches any instance with that key.
+	// If value is non-empty, matches only exact key=value.
+	// Mutually exclusive with: ExcludeTags, InstanceIDs, ClusterIDs, IncludeAll.
+	Tags map[string]string `json:"tags,omitempty"`
+
+	// ExcludeTags for exclusion. Same logic: empty value = exclude if key exists.
+	// Mutually exclusive with: Tags, InstanceIDs, ClusterIDs, IncludeAll.
+	ExcludeTags map[string]string `json:"excludeTags,omitempty"`
+
+	// Explicit DB instance IDs to target.
+	// Can be combined with ClusterIDs, but mutually exclusive with tag-based selection or IncludeAll.
+	InstanceIDs []string `json:"instanceIds,omitempty"`
+
+	// Explicit DB cluster IDs to target.
+	// Can be combined with InstanceIDs, but mutually exclusive with tag-based selection or IncludeAll.
+	ClusterIDs []string `json:"clusterIds,omitempty"`
+
+	// IncludeAll discovers all DB instances and clusters in the account/region.
+	// Mutually exclusive with all other selection methods.
+	IncludeAll bool `json:"includeAll,omitempty"`
+
+	// DiscoverInstances controls whether to discover DB instances for dynamic selection methods.
+	// Only used with Tags, ExcludeTags, or IncludeAll (ignored for explicit InstanceIDs/ClusterIDs).
+	// Must be explicitly set to true to discover instances. Default: false (opt-out, no-op).
+	DiscoverInstances bool `json:"discoverInstances,omitempty"`
+
+	// DiscoverClusters controls whether to discover DB clusters for dynamic selection methods.
+	// Only used with Tags, ExcludeTags, or IncludeAll (ignored for explicit InstanceIDs/ClusterIDs).
+	// Must be explicitly set to true to discover clusters. Default: false (opt-out, no-op).
+	DiscoverClusters bool `json:"discoverClusters,omitempty"`
 }
 
 // EKSParameters defines the expected parameters for the EKS executor.

@@ -88,7 +88,8 @@ spec:
         kind: CloudProvider
         name: aws-production
       parameters:
-        instanceId: production-db
+        selector:
+          instanceIds: ["production-db"]
         snapshotBeforeStop: true
 
     # Frontend ASG (via EC2 instances)
@@ -225,7 +226,8 @@ spec:
         kind: CloudProvider
         name: aws-production
       parameters:
-        instanceId: dev-database
+        selector:
+          instanceIds: ["dev-database"]
 
   behavior:
     mode: Strict
@@ -270,7 +272,8 @@ spec:
         name: aws-production
         namespace: hibernator-system
       parameters:
-        instanceId: simple-app-db
+        selector:
+          instanceIds: ["simple-app-db"]
 
   behavior:
     mode: BestEffort

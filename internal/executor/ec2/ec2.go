@@ -271,10 +271,23 @@ func (e *Executor) findInstances(ctx context.Context, client EC2Client, selector
 	var filters []types.Filter
 
 	// Add tag filters
+	tagKeyOnlySelectors := []string{}
 	for key, value := range selector.Tags {
+		if value == "" {
+			tagKeyOnlySelectors = append(tagKeyOnlySelectors, key)
+			continue
+		}
+
 		filters = append(filters, types.Filter{
 			Name:   aws.String(fmt.Sprintf("tag:%s", key)),
 			Values: []string{value},
+		})
+	}
+
+	if len(tagKeyOnlySelectors) > 0 {
+		filters = append(filters, types.Filter{
+			Name:   aws.String("tag-key"),
+			Values: tagKeyOnlySelectors,
 		})
 	}
 
@@ -286,7 +299,7 @@ func (e *Executor) findInstances(ctx context.Context, client EC2Client, selector
 	// Exclude terminated and shutting-down instances
 	filters = append(filters, types.Filter{
 		Name:   aws.String("instance-state-name"),
-		Values: []string{"running", "stopped", "pending", "stopping"},
+		Values: []string{"running"},
 	})
 
 	if len(filters) > 0 {

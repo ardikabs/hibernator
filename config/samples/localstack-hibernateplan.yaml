@@ -45,4 +45,8 @@ spec:
         kind: CloudProvider
         name: localstack
       parameters:
+        selector:
+          tags:
+            environment: test
+            hibernated: "true"
         snapshotBeforeStop: false

@@ -67,7 +67,7 @@ func TestValidateParams_EC2_UnknownField(t *testing.T) {
 }
 
 func TestValidateParams_RDS_Valid(t *testing.T) {
-	params := []byte(`{"instanceId": "my-db"}`)
+	params := []byte(`{"selector": {"instanceIds": ["my-db"]}}`)
 	result := ValidateParams("rds", params)
 
 	if result == nil {
@@ -79,26 +79,26 @@ func TestValidateParams_RDS_Valid(t *testing.T) {
 }
 
 func TestValidateParams_RDS_BothInstanceAndCluster(t *testing.T) {
-	params := []byte(`{"instanceId": "my-db", "clusterId": "my-cluster"}`)
+	params := []byte(`{"selector": {"instanceIds": ["my-db"], "tags": {"env": "prod"}}}`)
 	result := ValidateParams("rds", params)
 
 	if result == nil {
 		t.Fatal("expected non-nil result")
 	}
 	if !result.HasErrors() {
-		t.Error("expected error when both instanceId and clusterId specified")
+		t.Error("expected error when multiple selector methods specified")
 	}
 }
 
 func TestValidateParams_RDS_MissingBoth(t *testing.T) {
-	params := []byte(`{"snapshotBeforeStop": true}`)
+	params := []byte(`{"snapshotBeforeStop": true, "selector": {}}`)
 	result := ValidateParams("rds", params)
 
 	if result == nil {
 		t.Fatal("expected non-nil result")
 	}
 	if !result.HasErrors() {
-		t.Error("expected error when neither instanceId nor clusterId specified")
+		t.Error("expected error when selector has no selection method")
 	}
 }
 
