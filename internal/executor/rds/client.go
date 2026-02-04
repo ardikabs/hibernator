@@ -68,6 +68,12 @@ type RDSClient interface {
 		params *rds.StartDBClusterInput,
 		optFns ...func(*rds.Options),
 	) (*rds.StartDBClusterOutput, error)
+
+	ListTagsForResource(
+		ctx context.Context,
+		params *rds.ListTagsForResourceInput,
+		optFns ...func(*rds.Options),
+	) (*rds.ListTagsForResourceOutput, error)
 }
 
 // STSClient is the interface for AWS STS operations used for role assumption.

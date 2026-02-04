@@ -143,7 +143,7 @@ func init() {
 	Register("ec2", []string{"selector"}, validateEC2Params)
 
 	// RDS validator
-	Register("rds", []string{"instanceId", "clusterId", "snapshotBeforeStop"}, validateRDSParams)
+	Register("rds", []string{"selector", "snapshotBeforeStop"}, validateRDSParams)
 
 	// EKS validator (only handles Managed Node Groups via AWS API)
 	Register("eks", []string{"clusterName", "nodeGroups"}, validateEKSParams)
@@ -189,7 +189,7 @@ func validateRDSParams(params []byte) *Result {
 	result := &Result{}
 
 	if len(params) == 0 {
-		result.AddError("parameters required: either instanceId or clusterId must be specified")
+		result.AddError("parameters required: selector must specify at least one selection method")
 		return result
 	}
 
@@ -199,12 +199,52 @@ func validateRDSParams(params []byte) *Result {
 		return result
 	}
 
-	// Validate target - either instanceId or clusterId required, but not both
-	if p.InstanceID == "" && p.ClusterID == "" {
-		result.AddError("either instanceId or clusterId must be specified")
+	// Validate selector - at least one selection method required
+	hasSelection := len(p.Selector.Tags) > 0 ||
+		len(p.Selector.ExcludeTags) > 0 ||
+		len(p.Selector.InstanceIDs) > 0 ||
+		len(p.Selector.ClusterIDs) > 0 ||
+		p.Selector.IncludeAll
+
+	if !hasSelection {
+		result.AddError("selector must specify at least one of: tags, excludeTags, instanceIds, clusterIds, or includeAll")
 	}
-	if p.InstanceID != "" && p.ClusterID != "" {
-		result.AddError("only one of instanceId or clusterId can be specified, not both")
+
+	// Count selection methods used
+	methodCount := 0
+	if len(p.Selector.Tags) > 0 || len(p.Selector.ExcludeTags) > 0 {
+		methodCount++
+	}
+	if len(p.Selector.InstanceIDs) > 0 || len(p.Selector.ClusterIDs) > 0 {
+		methodCount++
+	}
+	if p.Selector.IncludeAll {
+		methodCount++
+	}
+
+	// Only one selection method allowed
+	if methodCount > 1 {
+		result.AddError("selector must use only one method: either (tags/excludeTags), (instanceIds/clusterIds), or includeAll")
+	}
+
+	// Tags and ExcludeTags are mutually exclusive
+	if len(p.Selector.Tags) > 0 && len(p.Selector.ExcludeTags) > 0 {
+		result.AddError("selector.tags and selector.excludeTags are mutually exclusive")
+	}
+
+	// Validate DiscoverInstances and DiscoverClusters are only used with dynamic discovery
+	isDynamicDiscovery := len(p.Selector.Tags) > 0 || len(p.Selector.ExcludeTags) > 0 || p.Selector.IncludeAll
+	isIntentBased := len(p.Selector.InstanceIDs) > 0 || len(p.Selector.ClusterIDs) > 0
+
+	if isIntentBased && (p.Selector.DiscoverInstances || p.Selector.DiscoverClusters) {
+		result.AddWarning("discoverInstances and discoverClusters are ignored when using explicit instanceIds or clusterIds")
+	}
+
+	// For dynamic discovery, at least one resource type must be explicitly enabled (opt-out)
+	if isDynamicDiscovery {
+		if !p.Selector.DiscoverInstances && !p.Selector.DiscoverClusters {
+			result.AddError("at least one of discoverInstances or discoverClusters must be explicitly set to true for dynamic discovery (tags/excludeTags/includeAll)")
+		}
 	}
 
 	return result

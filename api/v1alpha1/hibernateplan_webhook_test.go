@@ -37,7 +37,7 @@ func ec2Params() *Parameters {
 // rdsParams returns valid RDS executor parameters.
 func rdsParams() *Parameters {
 	return &Parameters{
-		Raw: []byte(`{"instanceId": "my-db-instance"}`),
+		Raw: []byte(`{"selector": {"instanceIds": ["my-db-instance"]}}`),
 	}
 }
 
