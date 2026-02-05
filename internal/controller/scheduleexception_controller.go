@@ -329,7 +329,7 @@ func (r *ScheduleExceptionReconciler) triggerPlanReconciliation(ctx context.Cont
 
 // reconcileDelete handles ScheduleException deletion.
 func (r *ScheduleExceptionReconciler) reconcileDelete(ctx context.Context, log logr.Logger, exception *hibernatorv1alpha1.ScheduleException) (ctrl.Result, error) {
-	log.Info("reconciling exception deletion")
+	log.V(1).Info("reconciling exception deletion")
 	orig := exception.DeepCopy()
 
 	// Update HibernatePlan status to remove this exception from active exceptions list
@@ -342,7 +342,7 @@ func (r *ScheduleExceptionReconciler) reconcileDelete(ctx context.Context, log l
 	if controllerutil.ContainsFinalizer(exception, ExceptionFinalizerName) {
 		controllerutil.RemoveFinalizer(exception, ExceptionFinalizerName)
 		if err := r.Patch(ctx, exception, client.MergeFrom(orig)); err != nil {
-			return ctrl.Result{}, fmt.Errorf("remove finalizer: %w", err)
+			return ctrl.Result{}, client.IgnoreNotFound(err)
 		}
 	}
 

@@ -132,7 +132,7 @@ func (e *Executor) Shutdown(ctx context.Context, log logr.Logger, spec executor.
 	)
 
 	return executor.RestoreData{
-		Type: ExecutorType,
+		Type: e.Type(),
 		Data: restoreData,
 	}, nil
 }

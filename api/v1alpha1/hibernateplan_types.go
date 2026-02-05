@@ -194,6 +194,27 @@ type Parameters struct {
 	Raw []byte `json:"-"`
 }
 
+// MarshalJSON implements json.Marshaler for Parameters.
+// Note: This method is only called when p is non-nil. Nil pointers with omitempty
+// are omitted entirely, and nil pointers without omitempty output "null" directly.
+func (p *Parameters) MarshalJSON() ([]byte, error) {
+	if len(p.Raw) == 0 {
+		return []byte("{}"), nil
+	}
+	return p.Raw, nil
+}
+
+// UnmarshalJSON implements json.Unmarshaler for Parameters.
+func (p *Parameters) UnmarshalJSON(data []byte) error {
+	if len(data) == 0 || string(data) == "null" {
+		p.Raw = nil
+		return nil
+	}
+	p.Raw = make([]byte, len(data))
+	copy(p.Raw, data)
+	return nil
+}
+
 // HibernatePlanSpec defines the desired state of HibernatePlan.
 type HibernatePlanSpec struct {
 	// Schedule defines when hibernation occurs.

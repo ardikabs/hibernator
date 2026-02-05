@@ -10,6 +10,7 @@ import (
 	"fmt"
 	"sort"
 	"strings"
+	"time"
 )
 
 // Result holds the outcome of parameter validation.
@@ -140,16 +141,16 @@ func checkUnknownFields(params []byte, knownFields []string, executorType string
 // init registers all built-in executor validators.
 func init() {
 	// EC2 validator
-	Register("ec2", []string{"selector"}, validateEC2Params)
+	Register("ec2", []string{"selector", "waitConfig"}, validateEC2Params)
 
 	// RDS validator
-	Register("rds", []string{"selector", "snapshotBeforeStop"}, validateRDSParams)
+	Register("rds", []string{"selector", "snapshotBeforeStop", "waitConfig"}, validateRDSParams)
 
 	// EKS validator (only handles Managed Node Groups via AWS API)
-	Register("eks", []string{"clusterName", "nodeGroups"}, validateEKSParams)
+	Register("eks", []string{"clusterName", "nodeGroups", "waitConfig"}, validateEKSParams)
 
 	// Karpenter validator
-	Register("karpenter", []string{"nodePools"}, validateKarpenterParams)
+	Register("karpenter", []string{"nodePools", "waitConfig"}, validateKarpenterParams)
 
 	// GKE validator
 	Register("gke", []string{"nodePools"}, validateGKEParams)
@@ -158,7 +159,7 @@ func init() {
 	Register("cloudsql", []string{"instanceName", "project"}, validateCloudSQLParams)
 
 	// WorkloadScaler validator
-	Register("workloadscaler", []string{"includedGroups", "namespace", "workloadSelector"}, validateWorkloadScalerParams)
+	Register("workloadscaler", []string{"includedGroups", "namespace", "workloadSelector", "waitConfig"}, validateWorkloadScalerParams)
 }
 
 // validateEC2Params validates EC2 executor parameters.
@@ -179,6 +180,13 @@ func validateEC2Params(params []byte) *Result {
 	// Validate selector - either tags or instanceIds required
 	if len(p.Selector.Tags) == 0 && len(p.Selector.InstanceIDs) == 0 {
 		result.AddError("either selector.tags or selector.instanceIds must be specified")
+	}
+
+	// Validate WaitConfig timeout format if waiting is enabled
+	if p.WaitConfig.Enabled && p.WaitConfig.Timeout != "" {
+		if err := validateWaitTimeout(p.WaitConfig.Timeout); err != nil {
+			result.AddError("waitConfig.timeout has invalid duration format: %v", err)
+		}
 	}
 
 	return result
@@ -247,6 +255,13 @@ func validateRDSParams(params []byte) *Result {
 		}
 	}
 
+	// Validate WaitConfig timeout format if waiting is enabled
+	if p.WaitConfig.Enabled && p.WaitConfig.Timeout != "" {
+		if err := validateWaitTimeout(p.WaitConfig.Timeout); err != nil {
+			result.AddError("waitConfig.timeout has invalid duration format: %v", err)
+		}
+	}
+
 	return result
 }
 
@@ -272,6 +287,13 @@ func validateEKSParams(params []byte) *Result {
 
 	// nodeGroups is optional - empty means all node groups in the cluster
 
+	// Validate WaitConfig timeout format if waiting is enabled
+	if p.WaitConfig.Enabled && p.WaitConfig.Timeout != "" {
+		if err := validateWaitTimeout(p.WaitConfig.Timeout); err != nil {
+			result.AddError("waitConfig.timeout has invalid duration format: %v", err)
+		}
+	}
+
 	return result
 }
 
@@ -291,6 +313,13 @@ func validateKarpenterParams(params []byte) *Result {
 	}
 
 	// Empty nodePools is valid - means target all NodePools in the cluster
+
+	// Validate WaitConfig timeout format if waiting is enabled
+	if p.WaitConfig.Enabled && p.WaitConfig.Timeout != "" {
+		if err := validateWaitTimeout(p.WaitConfig.Timeout); err != nil {
+			result.AddError("waitConfig.timeout has invalid duration format: %v", err)
+		}
+	}
 
 	return result
 }
@@ -377,6 +406,13 @@ func validateWorkloadScalerParams(params []byte) *Result {
 		}
 	}
 
+	// Validate WaitConfig timeout format if waiting is enabled
+	if p.WaitConfig.Enabled && p.WaitConfig.Timeout != "" {
+		if err := validateWaitTimeout(p.WaitConfig.Timeout); err != nil {
+			result.AddError("waitConfig.timeout has invalid duration format: %v", err)
+		}
+	}
+
 	return result
 }
 
@@ -417,4 +453,14 @@ func validateLabelSelector(ls *LabelSelector) error {
 	}
 
 	return nil
+}
+
+// validateWaitTimeout validates the timeout field in WaitConfig.
+// Empty string is valid (means no timeout). Non-empty must be parseable as duration.
+func validateWaitTimeout(timeout string) error {
+	if timeout == "" {
+		return nil
+	}
+	_, err := time.ParseDuration(timeout)
+	return err
 }

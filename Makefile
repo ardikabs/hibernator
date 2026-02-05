@@ -292,6 +292,7 @@ mocks-eks: mockery ## Generate mocks for EKS executor clients.
 	@echo "$(CYAN)Generating mocks for EKS executor...$(RESET)"
 	$(MOCKERY) --name=EKSClient --dir=./internal/executor/eks --output=./internal/executor/eks/mocks --outpkg=mocks
 	$(MOCKERY) --name=STSClient --dir=./internal/executor/eks --output=./internal/executor/eks/mocks --outpkg=mocks
+	$(MOCKERY) --name=K8SClient --dir=./internal/executor/eks --output=./internal/executor/eks/mocks --outpkg=mocks
 	@echo "$(GREEN)EKS mocks generated$(RESET)"
 
 .PHONY: mocks-ec2
@@ -303,7 +304,7 @@ mocks-ec2: mockery ## Generate mocks for EC2 executor client.
 .PHONY: mocks-karpenter
 mocks-karpenter: mockery ## Generate mocks for Karpenter executor client.
 	@echo "$(CYAN)Generating mocks for Karpenter executor...$(RESET)"
-	$(MOCKERY) --name=K8sClient --dir=./internal/executor/karpenter --output=./internal/executor/karpenter/mocks --outpkg=mocks
+	$(MOCKERY) --name=Client --dir=./internal/executor/karpenter --output=./internal/executor/karpenter/mocks --outpkg=mocks
 	@echo "$(GREEN)Karpenter mocks generated$(RESET)"
 
 .PHONY: mocks-rds

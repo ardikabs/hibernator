@@ -7,6 +7,7 @@ package eks
 
 import (
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"testing"
@@ -17,6 +18,7 @@ import (
 	"github.com/go-logr/logr"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/mock"
+	corev1 "k8s.io/api/core/v1"
 
 	"github.com/ardikabs/hibernator/internal/executor"
 	"github.com/ardikabs/hibernator/internal/executor/eks/mocks"
@@ -32,12 +34,17 @@ func TestNew(t *testing.T) {
 func TestNewWithClients(t *testing.T) {
 	mockEKS := &mocks.EKSClient{}
 	mockSTS := &mocks.STSClient{}
+	mockK8S := &mocks.K8SClient{}
 
 	eksFactory := func(cfg aws.Config) EKSClient { return mockEKS }
 	stsFactory := func(cfg aws.Config) STSClient { return mockSTS }
+	k8sFactory := func(ctx context.Context, spec *executor.Spec) (K8SClient, error) { return mockK8S, nil }
 
 	e := NewWithClients(eksFactory, stsFactory, nil)
+	e.k8sFactory = k8sFactory
+
 	assert.NotNil(t, e)
+	assert.NotNil(t, e.k8sFactory)
 }
 
 func TestExecutorType(t *testing.T) {
@@ -121,6 +128,21 @@ func TestShutdown_WithSpecificNodeGroups(t *testing.T) {
 	ctx := context.Background()
 
 	mockEKS := &mocks.EKSClient{}
+	mockK8S := &mocks.K8SClient{}
+
+	caDataEncoded := base64.StdEncoding.EncodeToString([]byte("test-ca-data"))
+
+	// Setup expectation for DescribeCluster (for K8S client setup)
+	mockEKS.On("DescribeCluster", mock.Anything, &eks.DescribeClusterInput{
+		Name: aws.String("my-cluster"),
+	}).Return(&eks.DescribeClusterOutput{
+		Cluster: &types.Cluster{
+			Endpoint: aws.String("https://eks.example.com"),
+			CertificateAuthority: &types.Certificate{
+				Data: aws.String(caDataEncoded),
+			},
+		},
+	}, nil)
 
 	// Setup expectations for DescribeNodegroup calls
 	mockEKS.On("DescribeNodegroup", mock.Anything, &eks.DescribeNodegroupInput{
@@ -145,8 +167,10 @@ func TestShutdown_WithSpecificNodeGroups(t *testing.T) {
 
 	eksFactory := func(cfg aws.Config) EKSClient { return mockEKS }
 	stsFactory := func(cfg aws.Config) STSClient { return &mocks.STSClient{} }
+	k8sFactory := func(ctx context.Context, spec *executor.Spec) (K8SClient, error) { return mockK8S, nil }
 
 	e := NewWithClients(eksFactory, stsFactory, nil)
+	e.k8sFactory = k8sFactory
 
 	spec := executor.Spec{
 		TargetName: "test-cluster",
@@ -176,6 +200,21 @@ func TestShutdown_WithListAllNodeGroups(t *testing.T) {
 	ctx := context.Background()
 
 	mockEKS := &mocks.EKSClient{}
+	mockK8S := &mocks.K8SClient{}
+
+	caDataEncoded := base64.StdEncoding.EncodeToString([]byte("test-ca-data"))
+
+	// Setup expectation for DescribeCluster (for K8S client setup)
+	mockEKS.On("DescribeCluster", mock.Anything, &eks.DescribeClusterInput{
+		Name: aws.String("my-cluster"),
+	}).Return(&eks.DescribeClusterOutput{
+		Cluster: &types.Cluster{
+			Endpoint: aws.String("https://eks.example.com"),
+			CertificateAuthority: &types.Certificate{
+				Data: aws.String(caDataEncoded),
+			},
+		},
+	}, nil)
 
 	// Setup expectation for ListNodegroups
 	mockEKS.On("ListNodegroups", mock.Anything, &eks.ListNodegroupsInput{
@@ -205,8 +244,10 @@ func TestShutdown_WithListAllNodeGroups(t *testing.T) {
 
 	eksFactory := func(cfg aws.Config) EKSClient { return mockEKS }
 	stsFactory := func(cfg aws.Config) STSClient { return &mocks.STSClient{} }
+	k8sFactory := func(ctx context.Context, spec *executor.Spec) (K8SClient, error) { return mockK8S, nil }
 
 	e := NewWithClients(eksFactory, stsFactory, nil)
+	e.k8sFactory = k8sFactory
 
 	spec := executor.Spec{
 		TargetName: "test-cluster",
@@ -232,6 +273,21 @@ func TestShutdown_DescribeNodegroupError(t *testing.T) {
 	ctx := context.Background()
 
 	mockEKS := &mocks.EKSClient{}
+	mockK8S := &mocks.K8SClient{}
+
+	caDataEncoded := base64.StdEncoding.EncodeToString([]byte("test-ca-data"))
+
+	// Setup expectation for DescribeCluster (for K8S client setup)
+	mockEKS.On("DescribeCluster", mock.Anything, &eks.DescribeClusterInput{
+		Name: aws.String("my-cluster"),
+	}).Return(&eks.DescribeClusterOutput{
+		Cluster: &types.Cluster{
+			Endpoint: aws.String("https://eks.example.com"),
+			CertificateAuthority: &types.Certificate{
+				Data: aws.String(caDataEncoded),
+			},
+		},
+	}, nil)
 
 	// Setup expectation to return error
 	mockEKS.On("DescribeNodegroup", mock.Anything, mock.Anything).
@@ -239,8 +295,10 @@ func TestShutdown_DescribeNodegroupError(t *testing.T) {
 
 	eksFactory := func(cfg aws.Config) EKSClient { return mockEKS }
 	stsFactory := func(cfg aws.Config) STSClient { return &mocks.STSClient{} }
+	k8sFactory := func(ctx context.Context, spec *executor.Spec) (K8SClient, error) { return mockK8S, nil }
 
 	e := NewWithClients(eksFactory, stsFactory, nil)
+	e.k8sFactory = k8sFactory
 
 	spec := executor.Spec{
 		TargetName: "test-cluster",
@@ -364,6 +422,57 @@ func TestRestoreState_JSON(t *testing.T) {
 	assert.Equal(t, int32(5), decoded.NodeGroups["ng-2"].DesiredSize)
 }
 
+// ============================================================================
+// K8S client integration tests
+// ============================================================================
+
+func TestWaitForNodesDeleted_Success(t *testing.T) {
+	ctx := context.Background()
+	mockK8S := &mocks.K8SClient{}
+
+	// First call: 2 nodes exist
+	// Second call: 0 nodes exist (deleted)
+	callCount := 0
+	mockK8S.On("ListNode", mock.Anything, "eks.amazonaws.com/nodegroup=ng-1").Return(
+		func(ctx context.Context, selector string) *corev1.NodeList {
+			callCount++
+			if callCount == 1 {
+				return &corev1.NodeList{
+					Items: []corev1.Node{
+						{}, {}, // 2 nodes
+					},
+				}
+			}
+			return &corev1.NodeList{Items: []corev1.Node{}} // No nodes
+		},
+		func(ctx context.Context, selector string) error {
+			return nil
+		},
+	)
+
+	e := New()
+
+	err := e.waitForNodesDeleted(ctx, logr.Discard(), mockK8S, "my-cluster", "ng-1", "30s")
+	assert.NoError(t, err)
+
+	mockK8S.AssertExpectations(t)
+}
+
+func TestWaitForNodesDeleted_ListNodeError(t *testing.T) {
+	ctx := context.Background()
+	mockK8S := &mocks.K8SClient{}
+
+	mockK8S.On("ListNode", mock.Anything, mock.Anything).Return(
+		nil, errors.New("API error"),
+	)
+
+	e := New()
+
+	err := e.waitForNodesDeleted(ctx, logr.Discard(), mockK8S, "my-cluster", "ng-1", "5s")
+	assert.Error(t, err)
+	assert.Contains(t, err.Error(), "list nodes")
+}
+
 func TestNodeGroupState_JSON(t *testing.T) {
 	state := NodeGroupState{
 		DesiredSize: 3,
@@ -399,4 +508,276 @@ func TestParameters_JSON(t *testing.T) {
 
 func TestExecutorType_Constant(t *testing.T) {
 	assert.Equal(t, "eks", ExecutorType)
+}
+
+// ============================================================================
+// Helper method tests
+// ============================================================================
+
+func TestGetClusterInfo_Success(t *testing.T) {
+	ctx := context.Background()
+	mockEKS := &mocks.EKSClient{}
+
+	caDataEncoded := base64.StdEncoding.EncodeToString([]byte("test-ca-data"))
+
+	mockEKS.On("DescribeCluster", mock.Anything, &eks.DescribeClusterInput{
+		Name: aws.String("my-cluster"),
+	}).Return(&eks.DescribeClusterOutput{
+		Cluster: &types.Cluster{
+			Endpoint: aws.String("https://eks.example.com"),
+			CertificateAuthority: &types.Certificate{
+				Data: aws.String(caDataEncoded),
+			},
+		},
+	}, nil)
+
+	eksFactory := func(cfg aws.Config) EKSClient { return mockEKS }
+	e := NewWithClients(eksFactory, nil, nil)
+
+	info, err := e.getClusterInfo(ctx, mockEKS, "my-cluster")
+	assert.NoError(t, err)
+	assert.NotNil(t, info)
+	assert.Equal(t, "https://eks.example.com", info.Endpoint)
+	assert.Equal(t, []byte("test-ca-data"), info.CAData)
+
+	mockEKS.AssertExpectations(t)
+}
+
+func TestGetClusterInfo_ClusterNotFound(t *testing.T) {
+	ctx := context.Background()
+	mockEKS := &mocks.EKSClient{}
+
+	mockEKS.On("DescribeCluster", mock.Anything, mock.Anything).Return(
+		&eks.DescribeClusterOutput{Cluster: nil}, nil,
+	)
+
+	eksFactory := func(cfg aws.Config) EKSClient { return mockEKS }
+	e := NewWithClients(eksFactory, nil, nil)
+
+	_, err := e.getClusterInfo(ctx, mockEKS, "my-cluster")
+	assert.Error(t, err)
+	assert.Contains(t, err.Error(), "not found")
+}
+
+func TestGetClusterInfo_MissingEndpoint(t *testing.T) {
+	ctx := context.Background()
+	mockEKS := &mocks.EKSClient{}
+
+	mockEKS.On("DescribeCluster", mock.Anything, mock.Anything).Return(
+		&eks.DescribeClusterOutput{
+			Cluster: &types.Cluster{
+				Endpoint: nil, // Missing endpoint
+				CertificateAuthority: &types.Certificate{
+					Data: aws.String("dGVzdA=="),
+				},
+			},
+		}, nil,
+	)
+
+	eksFactory := func(cfg aws.Config) EKSClient { return mockEKS }
+	e := NewWithClients(eksFactory, nil, nil)
+
+	_, err := e.getClusterInfo(ctx, mockEKS, "my-cluster")
+	assert.Error(t, err)
+	assert.Contains(t, err.Error(), "endpoint not available")
+}
+
+func TestGetClusterInfo_InvalidCAData(t *testing.T) {
+	ctx := context.Background()
+	mockEKS := &mocks.EKSClient{}
+
+	mockEKS.On("DescribeCluster", mock.Anything, mock.Anything).Return(
+		&eks.DescribeClusterOutput{
+			Cluster: &types.Cluster{
+				Endpoint: aws.String("https://eks.example.com"),
+				CertificateAuthority: &types.Certificate{
+					Data: aws.String("invalid-base64!!!"),
+				},
+			},
+		}, nil,
+	)
+
+	eksFactory := func(cfg aws.Config) EKSClient { return mockEKS }
+	e := NewWithClients(eksFactory, nil, nil)
+
+	_, err := e.getClusterInfo(ctx, mockEKS, "my-cluster")
+	assert.Error(t, err)
+	assert.Contains(t, err.Error(), "decode certificate authority")
+}
+
+func TestDetermineTargetNodeGroups_SpecificNodeGroups(t *testing.T) {
+	ctx := context.Background()
+	mockEKS := &mocks.EKSClient{}
+
+	eksFactory := func(cfg aws.Config) EKSClient { return mockEKS }
+	e := NewWithClients(eksFactory, nil, nil)
+
+	params := Parameters{
+		ClusterName: "my-cluster",
+		NodeGroups: []NodeGroup{
+			{Name: "ng-1"},
+			{Name: "ng-2"},
+		},
+	}
+
+	result, err := e.determineTargetNodeGroups(ctx, logr.Discard(), mockEKS, "my-cluster", params)
+	assert.NoError(t, err)
+	assert.Equal(t, []string{"ng-1", "ng-2"}, result)
+
+	// Should not call ListNodegroups when specific node groups are provided
+	mockEKS.AssertNotCalled(t, "ListNodegroups")
+}
+
+func TestDetermineTargetNodeGroups_AllNodeGroups(t *testing.T) {
+	ctx := context.Background()
+	mockEKS := &mocks.EKSClient{}
+
+	mockEKS.On("ListNodegroups", mock.Anything, &eks.ListNodegroupsInput{
+		ClusterName: aws.String("my-cluster"),
+	}).Return(&eks.ListNodegroupsOutput{
+		Nodegroups: []string{"ng-a", "ng-b", "ng-c"},
+	}, nil)
+
+	eksFactory := func(cfg aws.Config) EKSClient { return mockEKS }
+	e := NewWithClients(eksFactory, nil, nil)
+
+	params := Parameters{
+		ClusterName: "my-cluster",
+		NodeGroups:  []NodeGroup{}, // Empty means all
+	}
+
+	result, err := e.determineTargetNodeGroups(ctx, logr.Discard(), mockEKS, "my-cluster", params)
+	assert.NoError(t, err)
+	assert.Equal(t, []string{"ng-a", "ng-b", "ng-c"}, result)
+
+	mockEKS.AssertExpectations(t)
+}
+
+func TestDetermineTargetNodeGroups_NoNodeGroupsFound(t *testing.T) {
+	ctx := context.Background()
+	mockEKS := &mocks.EKSClient{}
+
+	mockEKS.On("ListNodegroups", mock.Anything, mock.Anything).Return(
+		&eks.ListNodegroupsOutput{Nodegroups: []string{}}, nil,
+	)
+
+	eksFactory := func(cfg aws.Config) EKSClient { return mockEKS }
+	e := NewWithClients(eksFactory, nil, nil)
+
+	params := Parameters{
+		ClusterName: "my-cluster",
+		NodeGroups:  []NodeGroup{}, // Empty means all
+	}
+
+	_, err := e.determineTargetNodeGroups(ctx, logr.Discard(), mockEKS, "my-cluster", params)
+	assert.Error(t, err)
+	assert.Contains(t, err.Error(), "no node groups found")
+}
+
+func TestSetupK8SClient_Success(t *testing.T) {
+	ctx := context.Background()
+	mockEKS := &mocks.EKSClient{}
+	mockK8S := &mocks.K8SClient{}
+
+	caDataEncoded := base64.StdEncoding.EncodeToString([]byte("test-ca-data"))
+
+	mockEKS.On("DescribeCluster", mock.Anything, &eks.DescribeClusterInput{
+		Name: aws.String("my-cluster"),
+	}).Return(&eks.DescribeClusterOutput{
+		Cluster: &types.Cluster{
+			Endpoint: aws.String("https://eks.example.com"),
+			CertificateAuthority: &types.Certificate{
+				Data: aws.String(caDataEncoded),
+			},
+		},
+	}, nil)
+
+	eksFactory := func(cfg aws.Config) EKSClient { return mockEKS }
+	k8sFactory := func(ctx context.Context, spec *executor.Spec) (K8SClient, error) {
+		return mockK8S, nil
+	}
+
+	e := NewWithClients(eksFactory, nil, nil)
+	e.k8sFactory = k8sFactory
+
+	spec := executor.Spec{
+		ConnectorConfig: executor.ConnectorConfig{
+			AWS: &executor.AWSConnectorConfig{Region: "us-east-1"},
+		},
+	}
+
+	cfg := aws.Config{Region: "us-east-1"}
+
+	client, err := e.setupK8SClient(ctx, logr.Discard(), mockEKS, cfg, &spec, "my-cluster")
+	assert.NoError(t, err)
+	assert.NotNil(t, client)
+	assert.NotNil(t, spec.ConnectorConfig.K8S)
+	assert.Equal(t, "my-cluster", spec.ConnectorConfig.K8S.ClusterName)
+	assert.Equal(t, "https://eks.example.com", spec.ConnectorConfig.K8S.ClusterEndpoint)
+	assert.Equal(t, []byte("test-ca-data"), spec.ConnectorConfig.K8S.ClusterCAData)
+	assert.True(t, spec.ConnectorConfig.K8S.UseEKSToken)
+
+	mockEKS.AssertExpectations(t)
+}
+
+func TestSetupK8SClient_ClusterInfoError(t *testing.T) {
+	ctx := context.Background()
+	mockEKS := &mocks.EKSClient{}
+
+	mockEKS.On("DescribeCluster", mock.Anything, mock.Anything).Return(
+		nil, errors.New("cluster not found"),
+	)
+
+	eksFactory := func(cfg aws.Config) EKSClient { return mockEKS }
+	e := NewWithClients(eksFactory, nil, nil)
+
+	spec := executor.Spec{
+		ConnectorConfig: executor.ConnectorConfig{
+			AWS: &executor.AWSConnectorConfig{Region: "us-east-1"},
+		},
+	}
+
+	cfg := aws.Config{Region: "us-east-1"}
+
+	_, err := e.setupK8SClient(ctx, logr.Discard(), mockEKS, cfg, &spec, "my-cluster")
+	assert.Error(t, err)
+	assert.Contains(t, err.Error(), "cluster not found")
+}
+
+func TestSetupK8SClient_K8SFactoryError(t *testing.T) {
+	ctx := context.Background()
+	mockEKS := &mocks.EKSClient{}
+
+	caDataEncoded := base64.StdEncoding.EncodeToString([]byte("test-ca-data"))
+
+	mockEKS.On("DescribeCluster", mock.Anything, mock.Anything).Return(
+		&eks.DescribeClusterOutput{
+			Cluster: &types.Cluster{
+				Endpoint: aws.String("https://eks.example.com"),
+				CertificateAuthority: &types.Certificate{
+					Data: aws.String(caDataEncoded),
+				},
+			},
+		}, nil,
+	)
+
+	eksFactory := func(cfg aws.Config) EKSClient { return mockEKS }
+	k8sFactory := func(ctx context.Context, spec *executor.Spec) (K8SClient, error) {
+		return nil, errors.New("k8s client creation failed")
+	}
+
+	e := NewWithClients(eksFactory, nil, nil)
+	e.k8sFactory = k8sFactory
+
+	spec := executor.Spec{
+		ConnectorConfig: executor.ConnectorConfig{
+			AWS: &executor.AWSConnectorConfig{Region: "us-east-1"},
+		},
+	}
+
+	cfg := aws.Config{Region: "us-east-1"}
+
+	_, err := e.setupK8SClient(ctx, logr.Discard(), mockEKS, cfg, &spec, "my-cluster")
+	assert.Error(t, err)
+	assert.Contains(t, err.Error(), "create Kubernetes client")
 }

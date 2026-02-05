@@ -11,6 +11,7 @@ import (
 	"time"
 
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/util/yaml"
 )
 
 func TestExecutionStrategyType_Constants(t *testing.T) {
@@ -902,5 +903,372 @@ func TestK8SCluster_TypeMeta(t *testing.T) {
 	}
 	if cluster.Name != "prod-eks" {
 		t.Errorf("Name: got %q, want %q", cluster.Name, "prod-eks")
+	}
+}
+
+// Parameters type tests
+
+func TestParameters_MarshalJSON(t *testing.T) {
+	tests := []struct {
+		name    string
+		params  *Parameters
+		want    string
+		wantErr bool
+	}{
+		{
+			name: "with data",
+			params: &Parameters{
+				Raw: []byte(`{"namespace":{"literals":["default"]},"workloadSelector":{"matchLabels":{"app":"test"}}}`),
+			},
+			want:    `{"namespace":{"literals":["default"]},"workloadSelector":{"matchLabels":{"app":"test"}}}`,
+			wantErr: false,
+		},
+		{
+			name:    "nil parameters",
+			params:  nil,
+			want:    `null`, // Direct marshal of nil pointer returns null, not {}
+			wantErr: false,
+		},
+		{
+			name:    "empty raw",
+			params:  &Parameters{Raw: nil},
+			want:    `{}`,
+			wantErr: false,
+		},
+		{
+			name:    "empty json object",
+			params:  &Parameters{Raw: []byte(`{}`)},
+			want:    `{}`,
+			wantErr: false,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got, err := json.Marshal(tt.params)
+			if (err != nil) != tt.wantErr {
+				t.Errorf("MarshalJSON() error = %v, wantErr %v", err, tt.wantErr)
+				return
+			}
+			if string(got) != tt.want {
+				t.Errorf("MarshalJSON() = %s, want %s", string(got), tt.want)
+			}
+		})
+	}
+}
+
+func TestParameters_UnmarshalJSON(t *testing.T) {
+	tests := []struct {
+		name    string
+		input   string
+		wantRaw string
+		wantErr bool
+	}{
+		{
+			name:    "workloadscaler parameters",
+			input:   `{"namespace":{"literals":["default"]},"workloadSelector":{"matchLabels":{"app":"echoserver"}}}`,
+			wantRaw: `{"namespace":{"literals":["default"]},"workloadSelector":{"matchLabels":{"app":"echoserver"}}}`,
+			wantErr: false,
+		},
+		{
+			name:    "rds parameters",
+			input:   `{"selector":{"instanceIds":["db-1","db-2"]},"snapshotBeforeStop":true}`,
+			wantRaw: `{"selector":{"instanceIds":["db-1","db-2"]},"snapshotBeforeStop":true}`,
+			wantErr: false,
+		},
+		{
+			name:    "empty object",
+			input:   `{}`,
+			wantRaw: `{}`,
+			wantErr: false,
+		},
+		{
+			name:    "null",
+			input:   `null`,
+			wantRaw: ``,
+			wantErr: false,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			var params Parameters
+			err := json.Unmarshal([]byte(tt.input), &params)
+			if (err != nil) != tt.wantErr {
+				t.Errorf("UnmarshalJSON() error = %v, wantErr %v", err, tt.wantErr)
+				return
+			}
+			if string(params.Raw) != tt.wantRaw {
+				t.Errorf("UnmarshalJSON() Raw = %s, want %s", string(params.Raw), tt.wantRaw)
+			}
+		})
+	}
+}
+
+func TestParameters_RoundTrip(t *testing.T) {
+	original := &Parameters{
+		Raw: []byte(`{"namespace":{"literals":["default","kube-system"]},"includedGroups":["Deployment","StatefulSet"]}`),
+	}
+
+	// Marshal
+	data, err := json.Marshal(original)
+	if err != nil {
+		t.Fatalf("Marshal failed: %v", err)
+	}
+
+	// Unmarshal
+	var decoded Parameters
+	if err := json.Unmarshal(data, &decoded); err != nil {
+		t.Fatalf("Unmarshal failed: %v", err)
+	}
+
+	// Compare
+	if string(decoded.Raw) != string(original.Raw) {
+		t.Errorf("Round trip failed: got %s, want %s", string(decoded.Raw), string(original.Raw))
+	}
+}
+
+func TestTarget_WithParameters(t *testing.T) {
+	target := Target{
+		Name: "test-scaler",
+		Type: "workloadscaler",
+		ConnectorRef: ConnectorRef{
+			Kind: "K8SCluster",
+			Name: "local",
+		},
+		Parameters: &Parameters{
+			Raw: []byte(`{"namespace":{"literals":["default"]},"workloadSelector":{"matchLabels":{"app":"test"}}}`),
+		},
+	}
+
+	// Marshal target
+	data, err := json.Marshal(target)
+	if err != nil {
+		t.Fatalf("Marshal failed: %v", err)
+	}
+
+	// Unmarshal target
+	var decoded Target
+	if err := json.Unmarshal(data, &decoded); err != nil {
+		t.Fatalf("Unmarshal failed: %v", err)
+	}
+
+	// Verify parameters preserved
+	if decoded.Parameters == nil {
+		t.Fatal("Parameters is nil after unmarshal")
+	}
+	if len(decoded.Parameters.Raw) == 0 {
+		t.Fatal("Parameters.Raw is empty after unmarshal")
+	}
+
+	// Verify we can parse the nested structure
+	var parsedParams map[string]interface{}
+	if err := json.Unmarshal(decoded.Parameters.Raw, &parsedParams); err != nil {
+		t.Fatalf("Failed to parse parameters: %v", err)
+	}
+
+	// Check namespace field exists
+	if _, ok := parsedParams["namespace"]; !ok {
+		t.Error("Expected 'namespace' field in parameters")
+	}
+
+	// Check workloadSelector field exists
+	if _, ok := parsedParams["workloadSelector"]; !ok {
+		t.Error("Expected 'workloadSelector' field in parameters")
+	}
+}
+
+func TestTarget_WithNilParameters(t *testing.T) {
+	target := Target{
+		Name: "test-target",
+		Type: "noop",
+		ConnectorRef: ConnectorRef{
+			Kind: "CloudProvider",
+			Name: "aws-dev",
+		},
+		Parameters: nil,
+	}
+
+	// Marshal
+	data, err := json.Marshal(target)
+	if err != nil {
+		t.Fatalf("Marshal failed: %v", err)
+	}
+
+	// Unmarshal
+	var decoded Target
+	if err := json.Unmarshal(data, &decoded); err != nil {
+		t.Fatalf("Unmarshal failed: %v", err)
+	}
+
+	// Verify parameters is nil (omitted)
+	if decoded.Parameters != nil {
+		t.Errorf("Expected nil parameters, got %v", decoded.Parameters)
+	}
+}
+
+func TestTarget_YAMLParsing(t *testing.T) {
+	tests := []struct {
+		name           string
+		yaml           string
+		expectedName   string
+		expectedType   string
+		expectedKind   string
+		expectedParams string // expected JSON in Parameters.Raw
+	}{
+		{
+			name: "EKS target with parameters",
+			yaml: `name: eks-cluster
+type: eks
+connectorRef:
+  kind: K8SCluster
+  name: prod-cluster
+parameters:
+  clusterName: production-cluster
+  nodeGroups:
+  - name: app-nodes
+  - name: worker-nodes`,
+			expectedName:   "eks-cluster",
+			expectedType:   "eks",
+			expectedKind:   "K8SCluster",
+			expectedParams: `{"clusterName":"production-cluster","nodeGroups":[{"name":"app-nodes"},{"name":"worker-nodes"}]}`,
+		},
+		{
+			name: "RDS target with parameters",
+			yaml: `name: database-rds
+type: rds
+connectorRef:
+  kind: CloudProvider
+  name: aws-prod
+parameters:
+  snapshotBeforeStop: true
+  selector:
+    instanceIds:
+    - production-db`,
+			expectedName:   "database-rds",
+			expectedType:   "rds",
+			expectedKind:   "CloudProvider",
+			expectedParams: `{"selector":{"instanceIds":["production-db"]},"snapshotBeforeStop":true}`,
+		},
+		{
+			name: "EC2 target with parameters",
+			yaml: `name: frontend-instances
+type: ec2
+connectorRef:
+  kind: CloudProvider
+  name: aws-prod
+parameters:
+  selector:
+    tags:
+      Environment: production
+      Component: frontend`,
+			expectedName:   "frontend-instances",
+			expectedType:   "ec2",
+			expectedKind:   "CloudProvider",
+			expectedParams: `{"selector":{"tags":{"Component":"frontend","Environment":"production"}}}`,
+		},
+		{
+			name: "Karpenter target with parameters",
+			yaml: `name: karpenter-nodes
+type: karpenter
+connectorRef:
+  kind: K8SCluster
+  name: eks-prod
+parameters:
+  nodePools:
+  - default
+  - spot`,
+			expectedName:   "karpenter-nodes",
+			expectedType:   "karpenter",
+			expectedKind:   "K8SCluster",
+			expectedParams: `{"nodePools":["default","spot"]}`,
+		},
+		{
+			name: "WorkloadScaler target with parameters",
+			yaml: `name: scale-deployments
+type: workloadscaler
+connectorRef:
+  kind: K8SCluster
+  name: local
+parameters:
+  includedGroups:
+    - Deployment
+    - StatefulSet
+  namespace:
+    literals:
+      - app-team-a
+      - app-team-b
+  workloadSelector:
+    matchLabels:
+      app.kubernetes.io/part-of: payments`,
+			expectedName:   "scale-deployments",
+			expectedType:   "workloadscaler",
+			expectedKind:   "K8SCluster",
+			expectedParams: `{"includedGroups":["Deployment","StatefulSet"],"namespace":{"literals":["app-team-a","app-team-b"]},"workloadSelector":{"matchLabels":{"app.kubernetes.io/part-of":"payments"}}}`,
+		},
+		{
+			name: "Target without parameters",
+			yaml: `name: simple-target
+type: noop
+connectorRef:
+  kind: CloudProvider
+  name: noop-provider`,
+			expectedName:   "simple-target",
+			expectedType:   "noop",
+			expectedKind:   "CloudProvider",
+			expectedParams: "",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			var target Target
+			err := yaml.Unmarshal([]byte(tt.yaml), &target)
+			if err != nil {
+				t.Fatalf("YAML Unmarshal failed: %v", err)
+			}
+
+			// Verify basic fields
+			if target.Name != tt.expectedName {
+				t.Errorf("Name: got %q, want %q", target.Name, tt.expectedName)
+			}
+			if target.Type != tt.expectedType {
+				t.Errorf("Type: got %q, want %q", target.Type, tt.expectedType)
+			}
+			if target.ConnectorRef.Kind != tt.expectedKind {
+				t.Errorf("ConnectorRef.Kind: got %q, want %q", target.ConnectorRef.Kind, tt.expectedKind)
+			}
+
+			// Verify parameters
+			if tt.expectedParams == "" {
+				if target.Parameters != nil {
+					t.Errorf("Expected nil parameters, got %v", target.Parameters)
+				}
+			} else {
+				if target.Parameters == nil {
+					t.Fatal("Parameters is nil, expected data")
+				}
+				if len(target.Parameters.Raw) == 0 {
+					t.Fatal("Parameters.Raw is empty, expected data")
+				}
+
+				// Unmarshal both to maps for comparison (to ignore field order)
+				var gotMap, wantMap map[string]interface{}
+				if err := json.Unmarshal(target.Parameters.Raw, &gotMap); err != nil {
+					t.Fatalf("Failed to unmarshal parsed parameters: %v", err)
+				}
+				if err := json.Unmarshal([]byte(tt.expectedParams), &wantMap); err != nil {
+					t.Fatalf("Failed to unmarshal expected parameters: %v", err)
+				}
+
+				// Compare as JSON strings (re-marshal for consistent formatting)
+				gotJSON, _ := json.Marshal(gotMap)
+				wantJSON, _ := json.Marshal(wantMap)
+
+				if string(gotJSON) != string(wantJSON) {
+					t.Errorf("Parameters.Raw:\ngot:  %s\nwant: %s", gotJSON, wantJSON)
+				}
+			}
+		})
 	}
 }

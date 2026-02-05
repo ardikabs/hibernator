@@ -12,6 +12,7 @@ import (
 	"os"
 	"os/signal"
 	"syscall"
+	"time"
 
 	"github.com/go-logr/zapr"
 	"go.uber.org/zap"
@@ -35,28 +36,30 @@ func init() {
 
 // Config holds runner configuration.
 type Config struct {
-	Operation            string // "shutdown" or "wakeup"
-	Target               string // Target name
-	TargetType           string // Executor type (e.g., "eks", "rds", "ec2")
-	Plan                 string // HibernatePlan name
-	Namespace            string // HibernatePlan namespace
-	ExecutionID          string // Unique execution identifier
-	TargetParams         string // JSON-encoded target parameters
-	ConnectorKind        string // Connector kind (CloudProvider, K8SCluster)
-	ConnectorName        string // Connector name
-	ConnectorNamespace   string // Connector namespace
-	TokenPath            string // Path to the stream token
-	ControlPlaneEndpoint string // Legacy streaming endpoint
-	GRPCEndpoint         string // gRPC streaming endpoint
-	WebSocketEndpoint    string // WebSocket streaming endpoint
-	HTTPCallbackEndpoint string // HTTP callback endpoint (fallback)
-	UseTLS               bool   // Enable TLS for gRPC connections
+	Timeout              time.Duration // Overall execution timeout
+	Operation            string        // "shutdown" or "wakeup"
+	Target               string        // Target name
+	TargetType           string        // Executor type (e.g., "eks", "rds", "ec2")
+	Plan                 string        // HibernatePlan name
+	Namespace            string        // HibernatePlan namespace
+	ExecutionID          string        // Unique execution identifier
+	TargetParams         string        // JSON-encoded target parameters
+	ConnectorKind        string        // Connector kind (CloudProvider, K8SCluster)
+	ConnectorName        string        // Connector name
+	ConnectorNamespace   string        // Connector namespace
+	TokenPath            string        // Path to the stream token
+	ControlPlaneEndpoint string        // Legacy streaming endpoint
+	GRPCEndpoint         string        // gRPC streaming endpoint
+	WebSocketEndpoint    string        // WebSocket streaming endpoint
+	HTTPCallbackEndpoint string        // HTTP callback endpoint (fallback)
+	UseTLS               bool          // Enable TLS for gRPC connections
 }
 
 // parseFlags parses command-line flags and environment variables.
 func parseFlags() *Config {
 	cfg := &Config{}
 
+	flag.DurationVar(&cfg.Timeout, "timeout", time.Hour, "Overall execution timeout, default 1h")
 	flag.StringVar(&cfg.Operation, "operation", "", "Operation: shutdown or wakeup")
 	flag.StringVar(&cfg.Target, "target", "", "Target name")
 	flag.StringVar(&cfg.TargetType, "target-type", "", "Target type (executor type)")
@@ -104,7 +107,7 @@ func main() {
 	log := zapr.NewLogger(zapLog)
 
 	// Set up signal handling
-	ctx, cancel := context.WithCancel(context.Background())
+	ctx, cancel := context.WithTimeout(context.Background(), cfg.Timeout)
 	defer cancel()
 
 	sigCh := make(chan os.Signal, 1)

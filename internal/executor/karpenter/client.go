@@ -3,41 +3,53 @@ package karpenter
 import (
 	"context"
 
-	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
+	corev1 "k8s.io/api/core/v1"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/client-go/dynamic"
+	"k8s.io/client-go/kubernetes"
 )
 
-// K8sClient is the interface for Kubernetes dynamic API operations.
-// It defines the minimal set of Kubernetes API methods needed by the Karpenter executor.
-type K8sClient interface {
-	// For Karpenter NodePool resources
-	// Resource returns a namespaced dynamic resource interface for a given GroupVersionResource.
+// Client provides an abstraction over Kubernetes API operations needed by the Karpenter executor.
+// It combines dynamic client operations (for custom resources like NodePool) with typed client
+// operations (for built-in resources like Node) into a unified interface.
+type Client interface {
+	// Resource returns a dynamic resource interface for interacting with custom resources
+	// (e.g., Karpenter NodePool) identified by their GroupVersionResource.
 	Resource(gvr schema.GroupVersionResource) dynamic.NamespaceableResourceInterface
+
+	// ListNode retrieves all Node resources matching the given label selector.
+	// This is used to verify that all nodes managed by a NodePool have been deleted
+	// during the hibernation process.
+	ListNode(ctx context.Context, selector string) (*corev1.NodeList, error)
 }
 
-// K8sResourceInterface is the interface for Kubernetes resource operations.
-// It wraps the namespaced dynamic resource interface.
-type K8sResourceInterface interface {
-	// Namespace returns a namespaced dynamic resource interface.
-	Namespace(namespace string) dynamic.ResourceInterface
+// client is the concrete implementation of the Client interface.
+// It wraps both dynamic.Interface and kubernetes.Interface to provide unified access
+// to Kubernetes API operations. This dual-client approach allows:
+//   - Dynamic client: For Karpenter NodePool CRDs (custom resources)
+//   - Typed client: For Node resources (built-in, type-safe operations)
+type client struct {
+	// Dynamic provides unstructured access to custom resources via the dynamic API.
+	Dynamic dynamic.Interface
+
+	// Typed provides strongly-typed access to built-in Kubernetes resources.
+	Typed kubernetes.Interface
 }
 
-// K8sResourceClient is the interface for CRUD operations on a specific Kubernetes resource.
-// This mirrors the essential methods from dynamic.ResourceInterface used by the executor.
-type K8sResourceClient interface {
-	// Create creates a new resource.
-	Create(ctx context.Context, obj *unstructured.Unstructured, opts ...interface{}) (*unstructured.Unstructured, error)
+// Resource returns a namespaced dynamic resource interface for the specified GroupVersionResource.
+// This method delegates to the underlying dynamic client and is primarily used for operations
+// on Karpenter NodePool custom resources (karpenter.sh/v1/nodepools).
+func (c *client) Resource(gvr schema.GroupVersionResource) dynamic.NamespaceableResourceInterface {
+	return c.Dynamic.Resource(gvr)
+}
 
-	// Update updates an existing resource.
-	Update(ctx context.Context, obj *unstructured.Unstructured, opts ...interface{}) (*unstructured.Unstructured, error)
-
-	// Get retrieves a resource by name.
-	Get(ctx context.Context, name string, opts ...interface{}) (*unstructured.Unstructured, error)
-
-	// List lists resources in a namespace.
-	List(ctx context.Context, opts ...interface{}) (*unstructured.UnstructuredList, error)
-
-	// Delete deletes a resource by name.
-	Delete(ctx context.Context, name string, opts ...interface{}) error
+// ListNode retrieves all Node resources from the cluster that match the given label selector.
+// The selector is typically used to filter nodes by their Karpenter NodePool association
+// (e.g., "karpenter.sh/nodepool=default"). This method uses the typed Kubernetes client
+// for type-safe operations and better performance compared to dynamic client queries.
+func (c *client) ListNode(ctx context.Context, selector string) (*corev1.NodeList, error) {
+	return c.Typed.CoreV1().Nodes().List(ctx, metav1.ListOptions{
+		LabelSelector: selector,
+	})
 }

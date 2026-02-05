@@ -16,6 +16,8 @@ import (
 	"github.com/ardikabs/hibernator/pkg/executorparams"
 )
 
+const ExecutorType = "gke"
+
 // Executor implements hibernation for GKE node pools.
 type Executor struct{}
 
@@ -26,7 +28,7 @@ func New() *Executor {
 
 // Type returns the executor type.
 func (e *Executor) Type() string {
-	return "gke"
+	return ExecutorType
 }
 
 // Validate validates the executor spec.

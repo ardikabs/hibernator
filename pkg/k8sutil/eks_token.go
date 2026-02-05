@@ -100,10 +100,11 @@ func (s *eksTokenSource) generatePresignedToken(ctx context.Context) (string, ti
 	// Set query parameters for GetCallerIdentity + expiry
 	query := req.URL.Query()
 	query.Set("Action", "GetCallerIdentity")
+	query.Set("Version", "2011-06-15")
 	query.Set("X-Amz-Expires", expiresSeconds)
 	req.URL.RawQuery = query.Encode()
 
-	// Add custom header for cluster identification
+	// Add x-k8s-aws-id as a HEADER (it will be signed)
 	req.Header.Set("x-k8s-aws-id", s.clusterName)
 
 	// Get AWS credentials from config

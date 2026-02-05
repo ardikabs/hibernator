@@ -16,6 +16,8 @@ import (
 	"github.com/ardikabs/hibernator/pkg/executorparams"
 )
 
+const ExecutorType = "cloudsql"
+
 // Executor implements hibernation for GCP Cloud SQL instances.
 type Executor struct{}
 
@@ -26,7 +28,7 @@ func New() *Executor {
 
 // Type returns the executor type.
 func (e *Executor) Type() string {
-	return "cloudsql"
+	return ExecutorType
 }
 
 // Validate validates the executor spec.
