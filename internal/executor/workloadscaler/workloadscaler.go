@@ -16,12 +16,15 @@ import (
 	"github.com/ardikabs/hibernator/internal/executor"
 	"github.com/ardikabs/hibernator/pkg/executorparams"
 	"github.com/ardikabs/hibernator/pkg/k8sutil"
-	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"github.com/ardikabs/hibernator/pkg/waiter"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/labels"
 	"k8s.io/apimachinery/pkg/runtime/schema"
-	"k8s.io/client-go/dynamic"
-	"k8s.io/client-go/kubernetes"
+)
+
+const (
+	ExecutorType       = "workloadscaler"
+	DefaultWaitTimeout = "5m"
 )
 
 // Executor implements workload downscaling using the scale subresource.
@@ -30,13 +33,21 @@ type Executor struct {
 }
 
 // ClientFactory is a function type for creating Kubernetes clients.
-type ClientFactory func(ctx context.Context, spec *executor.Spec) (dynamic.Interface, kubernetes.Interface, error)
+type ClientFactory func(ctx context.Context, spec *executor.Spec) (Client, error)
 
 // New creates a new WorkloadScaler executor with real Kubernetes clients.
 func New() *Executor {
 	return &Executor{
-		clientFactory: func(ctx context.Context, spec *executor.Spec) (dynamic.Interface, kubernetes.Interface, error) {
-			return k8sutil.BuildClients(ctx, spec.ConnectorConfig.K8S)
+		clientFactory: func(ctx context.Context, spec *executor.Spec) (Client, error) {
+			dynamic, typed, err := k8sutil.BuildClients(ctx, spec.ConnectorConfig.K8S)
+			if err != nil {
+				return nil, err
+			}
+
+			return &client{
+				Dynamic: dynamic,
+				Typed:   typed,
+			}, nil
 		},
 	}
 }
@@ -51,7 +62,7 @@ func NewWithClients(clientFactory ClientFactory) *Executor {
 
 // Type returns the executor type.
 func (e *Executor) Type() string {
-	return "workloadscaler"
+	return ExecutorType
 }
 
 // Validate validates the executor spec.
@@ -98,7 +109,6 @@ type RestoreState struct {
 
 // Shutdown scales down all matched workloads to zero replicas.
 func (e *Executor) Shutdown(ctx context.Context, log logr.Logger, spec executor.Spec) (executor.RestoreData, error) {
-	_ = log
 	var params executorparams.WorkloadScalerParameters
 	if len(spec.Parameters) > 0 {
 		if err := json.Unmarshal(spec.Parameters, &params); err != nil {
@@ -113,13 +123,13 @@ func (e *Executor) Shutdown(ctx context.Context, log logr.Logger, spec executor.
 	}
 
 	// Build clients using injected factory
-	dynamicClient, k8sClient, err := e.clientFactory(ctx, &spec)
+	client, err := e.clientFactory(ctx, &spec)
 	if err != nil {
 		return executor.RestoreData{}, fmt.Errorf("build kubernetes clients: %w", err)
 	}
 
 	// Discover target namespaces
-	targetNamespaces, err := e.discoverNamespaces(ctx, k8sClient, params.Namespace)
+	targetNamespaces, err := e.discoverNamespaces(ctx, client, params.Namespace)
 	if err != nil {
 		return executor.RestoreData{}, fmt.Errorf("discover namespaces: %w", err)
 	}
@@ -137,7 +147,7 @@ func (e *Executor) Shutdown(ctx context.Context, log logr.Logger, spec executor.
 				return executor.RestoreData{}, fmt.Errorf("resolve GVR for %s: %w", kind, err)
 			}
 
-			states, err := e.scaleDownWorkloads(ctx, dynamicClient, ns, gvr, params.WorkloadSelector)
+			states, err := e.scaleDownWorkloads(ctx, log, client, ns, gvr, params.WorkloadSelector, params)
 			if err != nil {
 				return executor.RestoreData{}, fmt.Errorf("scale down %s in namespace %s: %w", kind, ns, err)
 			}
@@ -161,7 +171,13 @@ func (e *Executor) Shutdown(ctx context.Context, log logr.Logger, spec executor.
 
 // WakeUp restores all workloads to their previous replica counts.
 func (e *Executor) WakeUp(ctx context.Context, log logr.Logger, spec executor.Spec, restore executor.RestoreData) error {
-	_ = log
+	var params executorparams.WorkloadScalerParameters
+	if len(spec.Parameters) > 0 {
+		if err := json.Unmarshal(spec.Parameters, &params); err != nil {
+			return fmt.Errorf("parse parameters: %w", err)
+		}
+	}
+
 	if len(restore.Data) == 0 {
 		return fmt.Errorf("restore data is required for wake-up")
 	}
@@ -172,7 +188,7 @@ func (e *Executor) WakeUp(ctx context.Context, log logr.Logger, spec executor.Sp
 	}
 
 	// Build clients using injected factory
-	dynamicClient, _, err := e.clientFactory(ctx, &spec)
+	client, err := e.clientFactory(ctx, &spec)
 	if err != nil {
 		return fmt.Errorf("build kubernetes clients: %w", err)
 	}
@@ -185,7 +201,7 @@ func (e *Executor) WakeUp(ctx context.Context, log logr.Logger, spec executor.Sp
 			Resource: state.Resource,
 		}
 
-		if err := e.restoreWorkload(ctx, dynamicClient, state, gvr); err != nil {
+		if err := e.restoreWorkload(ctx, log, client, state, gvr, params); err != nil {
 			return fmt.Errorf("restore %s/%s in namespace %s: %w", state.Kind, state.Name, state.Namespace, err)
 		}
 	}
@@ -194,7 +210,7 @@ func (e *Executor) WakeUp(ctx context.Context, log logr.Logger, spec executor.Sp
 }
 
 // discoverNamespaces returns the list of target namespaces based on the selector.
-func (e *Executor) discoverNamespaces(ctx context.Context, k8sClient kubernetes.Interface, nsSelector executorparams.NamespaceSelector) ([]string, error) {
+func (e *Executor) discoverNamespaces(ctx context.Context, client Client, nsSelector executorparams.NamespaceSelector) ([]string, error) {
 	// If literals are specified, use them directly
 	if len(nsSelector.Literals) > 0 {
 		return nsSelector.Literals, nil
@@ -203,9 +219,7 @@ func (e *Executor) discoverNamespaces(ctx context.Context, k8sClient kubernetes.
 	// If selector is specified, list namespaces by label selector
 	if len(nsSelector.Selector) > 0 {
 		labelSelector := labels.SelectorFromSet(nsSelector.Selector)
-		nsList, err := k8sClient.CoreV1().Namespaces().List(ctx, metav1.ListOptions{
-			LabelSelector: labelSelector.String(),
-		})
+		nsList, err := client.ListNamespaces(ctx, labelSelector.String())
 		if err != nil {
 			return nil, fmt.Errorf("list namespaces: %w", err)
 		}
@@ -221,7 +235,14 @@ func (e *Executor) discoverNamespaces(ctx context.Context, k8sClient kubernetes.
 }
 
 // scaleDownWorkloads scales down all matching workloads in a namespace and returns their states.
-func (e *Executor) scaleDownWorkloads(ctx context.Context, dynamicClient dynamic.Interface, namespace string, gvr schema.GroupVersionResource, workloadSelector *executorparams.LabelSelector) ([]WorkloadState, error) {
+func (e *Executor) scaleDownWorkloads(ctx context.Context,
+	log logr.Logger,
+	client Client,
+	namespace string,
+	gvr schema.GroupVersionResource,
+	workloadSelector *executorparams.LabelSelector,
+	params executorparams.WorkloadScalerParameters) ([]WorkloadState, error) {
+
 	// Convert label selector to Kubernetes labels.Selector
 	selector := labels.Everything()
 	if workloadSelector != nil {
@@ -231,9 +252,7 @@ func (e *Executor) scaleDownWorkloads(ctx context.Context, dynamicClient dynamic
 	}
 
 	// List all resources of this type in the namespace
-	list, err := dynamicClient.Resource(gvr).Namespace(namespace).List(ctx, metav1.ListOptions{
-		LabelSelector: selector.String(),
-	})
+	list, err := client.ListWorkloads(ctx, gvr, namespace, selector.String())
 	if err != nil {
 		return nil, fmt.Errorf("list resources: %w", err)
 	}
@@ -241,7 +260,7 @@ func (e *Executor) scaleDownWorkloads(ctx context.Context, dynamicClient dynamic
 	var states []WorkloadState
 	for _, item := range list.Items {
 		// Get the scale subresource for this workload
-		scaleObj, err := dynamicClient.Resource(gvr).Namespace(namespace).Get(ctx, item.GetName(), metav1.GetOptions{}, "scale")
+		scaleObj, err := client.GetScale(ctx, gvr, namespace, item.GetName())
 		if err != nil {
 			// Skip resources that don't support scale subresource
 			// TODO: we can set an info log that the corresponding object
@@ -276,9 +295,20 @@ func (e *Executor) scaleDownWorkloads(ctx context.Context, dynamicClient dynamic
 		}
 
 		// Update the scale subresource
-		_, err = dynamicClient.Resource(gvr).Namespace(namespace).Update(ctx, scaleObj, metav1.UpdateOptions{}, "scale")
+		_, err = client.UpdateScale(ctx, gvr, namespace, scaleObj)
 		if err != nil {
 			return nil, fmt.Errorf("update scale for %s/%s: %w", item.GetKind(), item.GetName(), err)
+		}
+
+		// Wait for replicas to scale if configured
+		if params.WaitConfig.Enabled {
+			timeout := params.WaitConfig.Timeout
+			if timeout == "" {
+				timeout = DefaultWaitTimeout
+			}
+			if err := e.waitForReplicasScaled(ctx, log, client, gvr, item.GetNamespace(), item.GetName(), 0, timeout); err != nil {
+				return nil, fmt.Errorf("wait for %s/%s to scale: %w", item.GetKind(), item.GetName(), err)
+			}
 		}
 	}
 
@@ -286,9 +316,9 @@ func (e *Executor) scaleDownWorkloads(ctx context.Context, dynamicClient dynamic
 }
 
 // restoreWorkload restores a single workload to its previous replica count.
-func (e *Executor) restoreWorkload(ctx context.Context, dynamicClient dynamic.Interface, state WorkloadState, gvr schema.GroupVersionResource) error {
+func (e *Executor) restoreWorkload(ctx context.Context, log logr.Logger, client Client, state WorkloadState, gvr schema.GroupVersionResource, params executorparams.WorkloadScalerParameters) error {
 	// Get the scale subresource
-	scaleObj, err := dynamicClient.Resource(gvr).Namespace(state.Namespace).Get(ctx, state.Name, metav1.GetOptions{}, "scale")
+	scaleObj, err := client.GetScale(ctx, gvr, state.Namespace, state.Name)
 	if err != nil {
 		return fmt.Errorf("get scale subresource: %w", err)
 	}
@@ -299,9 +329,20 @@ func (e *Executor) restoreWorkload(ctx context.Context, dynamicClient dynamic.In
 	}
 
 	// Update the scale subresource
-	_, err = dynamicClient.Resource(gvr).Namespace(state.Namespace).Update(ctx, scaleObj, metav1.UpdateOptions{}, "scale")
+	_, err = client.UpdateScale(ctx, gvr, state.Namespace, scaleObj)
 	if err != nil {
 		return fmt.Errorf("update scale subresource: %w", err)
+	}
+
+	// Wait for replicas to scale if configured
+	if params.WaitConfig.Enabled {
+		timeout := params.WaitConfig.Timeout
+		if timeout == "" {
+			timeout = DefaultWaitTimeout
+		}
+		if err := e.waitForReplicasScaled(ctx, log, client, gvr, state.Namespace, state.Name, int64(state.Replicas), timeout); err != nil {
+			return fmt.Errorf("wait for %s/%s to scale: %w", state.Kind, state.Name, err)
+		}
 	}
 
 	return nil
@@ -367,4 +408,53 @@ func parseCRDFormat(spec string) (schema.GroupVersionResource, error) {
 		Version:  version,
 		Resource: resource,
 	}, nil
+}
+
+// waitForReplicasScaled waits for a workload's replica count to match the desired count.
+func (e *Executor) waitForReplicasScaled(ctx context.Context, log logr.Logger, client Client, gvr schema.GroupVersionResource, namespace, name string, desiredReplicas int64, timeoutStr string) error {
+	log.Info("waiting for workload replicas to scale",
+		"namespace", namespace,
+		"name", name,
+		"desiredReplicas", desiredReplicas,
+		"timeout", timeoutStr,
+	)
+
+	w, err := waiter.NewWaiter(ctx, log, timeoutStr)
+	if err != nil {
+		return fmt.Errorf("create waiter: %w", err)
+	}
+
+	checkFn := func() (bool, string, error) {
+		// Get the scale subresource
+		scaleObj, err := client.GetScale(ctx, gvr, namespace, name)
+		if err != nil {
+			return false, "", fmt.Errorf("get scale subresource: %w", err)
+		}
+
+		// Check status.replicas (current replica count)
+		statusReplicas, found, err := unstructured.NestedInt64(scaleObj.Object, "status", "replicas")
+		if err != nil {
+			return false, "", fmt.Errorf("get status.replicas: %w", err)
+		}
+		if !found {
+			return false, "status.replicas not available", nil
+		}
+
+		if statusReplicas == desiredReplicas {
+			return true, fmt.Sprintf("replicas=%d/%d", statusReplicas, desiredReplicas), nil
+		}
+		return false, fmt.Sprintf("replicas=%d/%d (waiting)", statusReplicas, desiredReplicas), nil
+	}
+
+	description := fmt.Sprintf("%s/%s in namespace %s to scale to %d replicas", gvr.Resource, name, namespace, desiredReplicas)
+	if err := w.Poll(description, checkFn); err != nil {
+		return fmt.Errorf("%s/%s: %w", namespace, name, err)
+	}
+
+	log.Info("workload scaled successfully",
+		"namespace", namespace,
+		"name", name,
+		"replicas", desiredReplicas,
+	)
+	return nil
 }

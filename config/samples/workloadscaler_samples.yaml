@@ -6,3 +6,53 @@ metadata:
   name: kubeconfig-local
   namespace: hibernator-system
 type: Opaque
+---
+apiVersion: hibernator.ardikabs.com/v1alpha1
+kind: K8SCluster
+metadata:
+  name: local
+  namespace: hibernator-system
+spec:
+  k8s:
+    kubeconfigRef:
+      name: kubeconfig-local
+      namespace: hibernator-system
+---
+apiVersion: hibernator.ardikabs.com/v1alpha1
+kind: HibernatePlan
+metadata:
+  name: workloadscaler-test
+  namespace: hibernator-system
+spec:
+  # Schedule for testing (every weeknight 8 PM to 6 AM)
+  schedule:
+    timezone: UTC
+    offHours:
+      - start: "20:00"
+        end: "10:00"
+        daysOfWeek: ["MON", "TUE", "WED", "THU", "FRI"]
+
+  # Sequential execution with different delays to observe order
+  execution:
+    strategy:
+      type: Sequential
+
+  behavior:
+    mode: Strict
+    failFast: false
+
+  targets:
+    - name: k3d-local
+      type: workloadscaler
+      connectorRef:
+        kind: K8SCluster
+        name: local
+      parameters:
+        waitConfig:
+          enabled: true
+        namespace:
+          literals:
+            - default
+        workloadSelector:
+          matchLabels:
+            app: echoserver

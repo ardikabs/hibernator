@@ -195,6 +195,19 @@ Each executor:
 - **Credential Isolation**: Per-execution Secret mounting
 - **Token Validation**: TokenReview for streaming auth
 - **RBAC**: Minimal permissions for controller and runner
+
+### File Operations (CRITICAL)
+
+**NEVER use heredoc syntax for file operations.** Always use `replace_string_in_file` or `multi_replace_string_in_file` tools:
+
+- ✅ **DO**: Use `replace_string_in_file` with 3-5 lines of context before/after the target text
+- ✅ **DO**: Use `multi_replace_string_in_file` for multiple independent edits (improves efficiency)
+- ✅ **DO**: Read existing file content first to ensure accurate string matching
+- ❌ **DON'T**: Use heredoc syntax (`<<EOF`) for any file creation or modification
+- ❌ **DON'T**: Use shell redirection (`>`, `>>`) for file operations
+
+**Why**: Heredocs cause whitespace/formatting issues, make diffs unclear, and can accidentally replace unintended content. Tool-based edits provide precise string matching and clear visibility of changes.
+
 ### Git Workflow (CRITICAL)
 
 **NEVER auto-commit to git.** All git commits must be explicitly requested by the user:

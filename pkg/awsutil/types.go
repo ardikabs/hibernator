@@ -12,4 +12,5 @@ type AWSConnectorConfig struct {
 	AssumeRoleArn   string
 	AccessKeyID     string
 	SecretAccessKey string
+	SessionToken    string
 }

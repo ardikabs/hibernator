@@ -10,6 +10,7 @@ package eks
 
 import (
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"fmt"
 
@@ -22,9 +23,14 @@ import (
 	"github.com/ardikabs/hibernator/internal/executor"
 	"github.com/ardikabs/hibernator/pkg/awsutil"
 	"github.com/ardikabs/hibernator/pkg/executorparams"
+	"github.com/ardikabs/hibernator/pkg/k8sutil"
+	"github.com/ardikabs/hibernator/pkg/waiter"
 )
 
-const ExecutorType = "eks"
+const (
+	ExecutorType       = "eks"
+	DefaultWaitTimeout = "10m"
+)
 
 // Parameters is an alias for the shared EKS parameter type.
 type Parameters = executorparams.EKSParameters
@@ -49,6 +55,7 @@ type NodeGroupState struct {
 type Executor struct {
 	eksFactory      EKSClientFactory
 	stsFactory      STSClientFactory
+	k8sFactory      K8SClientFactory
 	awsConfigLoader AWSConfigLoader
 }
 
@@ -58,17 +65,31 @@ type EKSClientFactory func(cfg aws.Config) EKSClient
 // STSClientFactory is a function type for creating STS clients.
 type STSClientFactory func(cfg aws.Config) STSClient
 
+// K8SClientFactory is a function type for creating K8S clients.
+type K8SClientFactory func(ctx context.Context, spec *executor.Spec) (K8SClient, error)
+
 // AWSConfigLoader is a function type for loading AWS config.
 type AWSConfigLoader func(ctx context.Context, spec executor.Spec) (aws.Config, error)
 
 // New creates a new EKS executor with real AWS clients.
 func New() *Executor {
+
 	return &Executor{
 		eksFactory: func(cfg aws.Config) EKSClient {
 			return eks.NewFromConfig(cfg)
 		},
 		stsFactory: func(cfg aws.Config) STSClient {
 			return sts.NewFromConfig(cfg)
+		},
+		k8sFactory: func(ctx context.Context, spec *executor.Spec) (K8SClient, error) {
+			_, typed, err := k8sutil.BuildClients(ctx, spec.ConnectorConfig.K8S)
+			if err != nil {
+				return nil, err
+			}
+
+			return &k8sClient{
+				Typed: typed,
+			}, nil
 		},
 	}
 }
@@ -139,32 +160,21 @@ func (e *Executor) Shutdown(ctx context.Context, log logr.Logger, spec executor.
 	eksClient := e.eksFactory(cfg)
 	clusterName := params.ClusterName
 
+	// Retrieve cluster information and setup K8S client
+	k8sClient, err := e.setupK8SClient(ctx, log, eksClient, cfg, &spec, clusterName)
+	if err != nil {
+		return executor.RestoreData{}, fmt.Errorf("setup Kubernetes client: %w", err)
+	}
+
 	restoreState := RestoreState{
 		ClusterName: clusterName,
 		NodeGroups:  make(map[string]NodeGroupState),
 	}
 
 	// Determine target node groups
-	var targetNodeGroups []string
-	if len(params.NodeGroups) == 0 {
-		// Empty means all node groups in the cluster
-		log.Info("discovering all node groups in cluster", "clusterName", clusterName)
-		targetNodeGroups, err = e.listNodeGroups(ctx, eksClient, clusterName)
-		if err != nil {
-			log.Error(err, "failed to list node groups", "clusterName", clusterName)
-			return executor.RestoreData{}, fmt.Errorf("list node groups: %w", err)
-		}
-	} else {
-		for _, ng := range params.NodeGroups {
-			targetNodeGroups = append(targetNodeGroups, ng.Name)
-		}
-	}
-
-	log.Info("target node groups determined", "count", len(targetNodeGroups))
-
-	if len(targetNodeGroups) == 0 {
-		log.Error(nil, "no node groups found", "clusterName", clusterName)
-		return executor.RestoreData{}, fmt.Errorf("no node groups found in cluster %s", clusterName)
+	targetNodeGroups, err := e.determineTargetNodeGroups(ctx, log, eksClient, clusterName, params)
+	if err != nil {
+		return executor.RestoreData{}, fmt.Errorf("determine target node groups: %w", err)
 	}
 
 	// Scale each node group to zero
@@ -173,7 +183,7 @@ func (e *Executor) Shutdown(ctx context.Context, log logr.Logger, spec executor.
 			"clusterName", clusterName,
 			"nodeGroup", ngName,
 		)
-		state, err := e.scaleNodeGroupToZero(ctx, eksClient, clusterName, ngName)
+		state, err := e.scaleNodeGroupToZero(ctx, log, eksClient, k8sClient, clusterName, ngName, params)
 		if err != nil {
 			log.Error(err, "failed to scale node group",
 				"clusterName", clusterName,
@@ -202,7 +212,7 @@ func (e *Executor) Shutdown(ctx context.Context, log logr.Logger, spec executor.
 	)
 
 	return executor.RestoreData{
-		Type: ExecutorType,
+		Type: e.Type(),
 		Data: restoreData,
 	}, nil
 }
@@ -213,6 +223,13 @@ func (e *Executor) WakeUp(ctx context.Context, log logr.Logger, spec executor.Sp
 		"target", spec.TargetName,
 		"targetType", spec.TargetType,
 	)
+
+	// Parse parameters
+	params, err := e.parseParams(spec.Parameters)
+	if err != nil {
+		log.Error(err, "failed to parse parameters")
+		return fmt.Errorf("parse parameters: %w", err)
+	}
 
 	var restoreState RestoreState
 	if err := json.Unmarshal(restore.Data, &restoreState); err != nil {
@@ -242,7 +259,7 @@ func (e *Executor) WakeUp(ctx context.Context, log logr.Logger, spec executor.Sp
 			"minSize", state.MinSize,
 			"maxSize", state.MaxSize,
 		)
-		if err := e.restoreNodeGroup(ctx, eksClient, restoreState.ClusterName, ngName, state); err != nil {
+		if err := e.restoreNodeGroup(ctx, log, eksClient, restoreState.ClusterName, ngName, state, params); err != nil {
 			log.Error(err, "failed to restore node group",
 				"clusterName", restoreState.ClusterName,
 				"nodeGroup", ngName,
@@ -292,7 +309,7 @@ func (e *Executor) listNodeGroups(ctx context.Context, client EKSClient, cluster
 	return out.Nodegroups, nil
 }
 
-func (e *Executor) scaleNodeGroupToZero(ctx context.Context, eksClient EKSClient, clusterName, ngName string) (NodeGroupState, error) {
+func (e *Executor) scaleNodeGroupToZero(ctx context.Context, log logr.Logger, eksClient EKSClient, k8sClient K8SClient, clusterName, ngName string, params Parameters) (NodeGroupState, error) {
 	// Get current state
 	desc, err := eksClient.DescribeNodegroup(ctx, &eks.DescribeNodegroupInput{
 		ClusterName:   aws.String(clusterName),
@@ -322,10 +339,21 @@ func (e *Executor) scaleNodeGroupToZero(ctx context.Context, eksClient EKSClient
 		return NodeGroupState{}, err
 	}
 
+	// Wait for Node Group scale down is complete if configured
+	if params.WaitConfig.Enabled {
+		timeout := params.WaitConfig.Timeout
+		if timeout == "" {
+			timeout = DefaultWaitTimeout
+		}
+		if err := e.waitForNodesDeleted(ctx, log, k8sClient, clusterName, ngName, timeout); err != nil {
+			return NodeGroupState{}, fmt.Errorf("wait for node group active: %w", err)
+		}
+	}
+
 	return state, nil
 }
 
-func (e *Executor) restoreNodeGroup(ctx context.Context, client EKSClient, clusterName, ngName string, state NodeGroupState) error {
+func (e *Executor) restoreNodeGroup(ctx context.Context, log logr.Logger, client EKSClient, clusterName, ngName string, state NodeGroupState, params Parameters) error {
 	_, err := client.UpdateNodegroupConfig(ctx, &eks.UpdateNodegroupConfigInput{
 		ClusterName:   aws.String(clusterName),
 		NodegroupName: aws.String(ngName),
@@ -335,5 +363,188 @@ func (e *Executor) restoreNodeGroup(ctx context.Context, client EKSClient, clust
 			MaxSize:     aws.Int32(state.MaxSize),
 		},
 	})
-	return err
+	if err != nil {
+		return err
+	}
+
+	// Wait for node group to reach ACTIVE state if configured
+	if params.WaitConfig.Enabled {
+		timeout := params.WaitConfig.Timeout
+		if timeout == "" {
+			timeout = DefaultWaitTimeout
+		}
+		if err := e.waitForNodeGroupActive(ctx, log, client, clusterName, ngName, timeout); err != nil {
+			return fmt.Errorf("wait for node group active: %w", err)
+		}
+	}
+
+	return nil
+}
+
+// waitForNodesDeleted waits for all Nodes managed by the ManagedNodeGroup to be deleted.
+func (e *Executor) waitForNodesDeleted(ctx context.Context, log logr.Logger, client K8SClient, clusterName, ngName, timeout string) error {
+	log.Info("waiting for ManagedNodeGroup nodes to be deleted",
+		"managedNodeGroup", ngName,
+		"timeout", timeout,
+	)
+
+	w, err := waiter.NewWaiter(ctx, log, timeout)
+	if err != nil {
+		return fmt.Errorf("create waiter: %w", err)
+	}
+
+	// List Nodes with the ManagedNodeGroup label
+	labelSelector := fmt.Sprintf("eks.amazonaws.com/nodegroup=%s", ngName)
+
+	if err := w.Poll(fmt.Sprintf("ManagedNodeGroup %s nodes to be deleted", ngName), func() (bool, string, error) {
+		// List all nodes with the nodepool label
+		nodes, err := client.ListNode(ctx, labelSelector)
+		if err != nil {
+			return false, "", fmt.Errorf("list nodes: %w", err)
+		}
+
+		nodeCount := len(nodes.Items)
+		if nodeCount == 0 {
+			return true, "all nodes deleted", nil
+		}
+
+		return false, fmt.Sprintf("%d node(s) still exist, waiting for deletion", nodeCount), nil
+	}); err != nil {
+		return fmt.Errorf("Node Group %s: %w", ngName, err)
+	}
+
+	log.Info("All ManagedNodeGroup nodes deleted successfully", "nodeGroup", ngName)
+	return nil
+}
+
+// waitForNodeGroupActive polls the node group status until it reaches ACTIVE state.
+func (e *Executor) waitForNodeGroupActive(ctx context.Context, log logr.Logger, eksClient EKSClient, clusterName, ngName, timeout string) error {
+	w, err := waiter.NewWaiter(ctx, log, timeout)
+	if err != nil {
+		return err
+	}
+
+	return w.Poll(fmt.Sprintf("node group %s/%s to become active", clusterName, ngName), func() (bool, string, error) {
+		desc, err := eksClient.DescribeNodegroup(ctx, &eks.DescribeNodegroupInput{
+			ClusterName:   aws.String(clusterName),
+			NodegroupName: aws.String(ngName),
+		})
+		if err != nil {
+			return false, "", err
+		}
+
+		status := string(desc.Nodegroup.Status)
+		currentSize := aws.ToInt32(desc.Nodegroup.ScalingConfig.DesiredSize)
+		desiredSize := aws.ToInt32(desc.Nodegroup.ScalingConfig.DesiredSize)
+
+		statusStr := fmt.Sprintf("status=%s, current=%d, desired=%d", status, currentSize, desiredSize)
+
+		if desc.Nodegroup.Status == types.NodegroupStatusActive {
+			return true, statusStr, nil
+		}
+
+		return false, statusStr, nil
+	})
+}
+
+// setupK8SClient retrieves cluster information from EKS and creates a Kubernetes client.
+// This method fetches the cluster endpoint and CA certificate, then initializes a K8S client
+// that can be used to monitor node deletion during hibernation.
+func (e *Executor) setupK8SClient(ctx context.Context, log logr.Logger, eksClient EKSClient, cfg aws.Config, spec *executor.Spec, clusterName string) (K8SClient, error) {
+	log.Info("retrieving EKS cluster information", "clusterName", clusterName)
+
+	clusterInfo, err := e.getClusterInfo(ctx, eksClient, clusterName)
+	if err != nil {
+		return nil, err
+	}
+
+	// Setup K8S connector config with cluster credentials
+	spec.ConnectorConfig.K8S = &executor.K8SConnectorConfig{
+		ClusterName:     clusterName,
+		Region:          cfg.Region,
+		ClusterEndpoint: clusterInfo.Endpoint,
+		ClusterCAData:   clusterInfo.CAData,
+		UseEKSToken:     true,
+		AWS:             spec.ConnectorConfig.AWS,
+	}
+
+	k8sClient, err := e.k8sFactory(ctx, spec)
+	if err != nil {
+		log.Error(err, "failed to create Kubernetes client")
+		return nil, fmt.Errorf("create Kubernetes client: %w", err)
+	}
+
+	log.Info("Kubernetes client created successfully")
+	return k8sClient, nil
+}
+
+// clusterInfo holds essential EKS cluster information.
+type clusterInfo struct {
+	Endpoint string
+	CAData   []byte
+}
+
+// getClusterInfo retrieves and validates essential cluster information from EKS.
+func (e *Executor) getClusterInfo(ctx context.Context, eksClient EKSClient, clusterName string) (*clusterInfo, error) {
+	output, err := eksClient.DescribeCluster(ctx, &eks.DescribeClusterInput{
+		Name: aws.String(clusterName),
+	})
+	if err != nil {
+		return nil, fmt.Errorf("describe cluster %s: %w", clusterName, err)
+	}
+
+	if output.Cluster == nil {
+		return nil, fmt.Errorf("cluster %s not found", clusterName)
+	}
+
+	endpoint := aws.ToString(output.Cluster.Endpoint)
+	if endpoint == "" {
+		return nil, fmt.Errorf("cluster endpoint not available")
+	}
+
+	caDataEncoded := aws.ToString(output.Cluster.CertificateAuthority.Data)
+	if caDataEncoded == "" {
+		return nil, fmt.Errorf("cluster certificate authority data missing")
+	}
+
+	caData, err := base64.StdEncoding.DecodeString(caDataEncoded)
+	if err != nil {
+		return nil, fmt.Errorf("decode certificate authority data: %w", err)
+	}
+
+	return &clusterInfo{
+		Endpoint: endpoint,
+		CAData:   caData,
+	}, nil
+}
+
+// determineTargetNodeGroups resolves which node groups should be scaled based on parameters.
+// If no specific node groups are provided in parameters, it will discover all node groups in the cluster.
+func (e *Executor) determineTargetNodeGroups(ctx context.Context, log logr.Logger, eksClient EKSClient, clusterName string, params Parameters) ([]string, error) {
+	var targetNodeGroups []string
+
+	if len(params.NodeGroups) == 0 {
+		// Empty means all node groups in the cluster
+		log.Info("discovering all node groups in cluster", "clusterName", clusterName)
+		nodeGroups, err := e.listNodeGroups(ctx, eksClient, clusterName)
+		if err != nil {
+			log.Error(err, "failed to list node groups", "clusterName", clusterName)
+			return nil, fmt.Errorf("list node groups: %w", err)
+		}
+		targetNodeGroups = nodeGroups
+	} else {
+		// Use explicitly specified node groups
+		for _, ng := range params.NodeGroups {
+			targetNodeGroups = append(targetNodeGroups, ng.Name)
+		}
+	}
+
+	log.Info("target node groups determined", "count", len(targetNodeGroups))
+
+	if len(targetNodeGroups) == 0 {
+		log.Error(nil, "no node groups found", "clusterName", clusterName)
+		return nil, fmt.Errorf("no node groups found in cluster %s", clusterName)
+	}
+
+	return targetNodeGroups, nil
 }

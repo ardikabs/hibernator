@@ -261,6 +261,7 @@ func (r *runner) buildExecutorSpec(ctx context.Context, params map[string]interf
 const (
 	awsAccessKeyIDKey     = "AWS_ACCESS_KEY_ID"
 	awsSecretAccessKeyKey = "AWS_SECRET_ACCESS_KEY"
+	awsSessionToken       = "AWS_SESSION_TOKEN"
 	kubeconfigKey         = "kubeconfig"
 )
 
@@ -333,6 +334,11 @@ func (r *runner) buildAWSConnectorConfig(ctx context.Context, provider *hibernat
 
 		awsCfg.AccessKeyID = accessKeyID
 		awsCfg.SecretAccessKey = secretAccessKey
+
+		session, ok := secret.Data[awsSessionToken]
+		if ok {
+			awsCfg.SessionToken = string(session)
+		}
 	}
 
 	return awsCfg, nil

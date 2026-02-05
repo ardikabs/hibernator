@@ -1,0 +1,114 @@
+apiVersion: v1
+stringData:
+  AWS_ACCESS_KEY_ID: "ASIABCDEFGHI3V2Y5XQ"
+  AWS_SECRET_ACCESS_KEY: "u134mpleSecretAccessKey1234567890exampleSecretA"
+  AWS_SESSION_TOKEN: "IQojB3JpZ2luX2VjEOr//////////wEaCXVzLWVhc3QtMSJGMEQCIDzv7v1+...exampleSessionToken..."
+kind: Secret
+metadata:
+  name: aws-creds
+  namespace: hibernator-system
+type: Opaque
+---
+apiVersion: hibernator.ardikabs.com/v1alpha1
+kind: CloudProvider
+metadata:
+  name: aws-creds
+  namespace: hibernator-system
+spec:
+  type: aws
+  aws:
+    accountId: "1234567890"
+    region: ap-southeast-3
+    auth:
+      static:
+        secretRef:
+          name: aws-creds
+          namespace: hibernator-system
+---
+apiVersion: hibernator.ardikabs.com/v1alpha1
+kind: K8SCluster
+metadata:
+  name: remote-eks
+  namespace: hibernator-system
+spec:
+  providerRef:
+    name: aws-creds
+    namespace: hibernator-system
+  eks:
+    name: my-remote-eks-cluster
+    region: ap-southeast-3
+---
+apiVersion: hibernator.ardikabs.com/v1alpha1
+kind: HibernatePlan
+metadata:
+  name: workloadscaler-remote-test
+  namespace: hibernator-system
+spec:
+  suspend: true
+
+  schedule:
+    timezone: UTC
+    offHours:
+      - start: "20:00"
+        end: "09:00"
+        daysOfWeek: ["MON", "TUE", "WED", "THU", "FRI"]
+
+  # Sequential execution with different delays to observe order
+  execution:
+    strategy:
+      type: Sequential
+
+  behavior:
+    mode: Strict
+    failFast: false
+
+  targets:
+    - name: ec2-remote
+      type: ec2
+      connectorRef:
+        kind: CloudProvider
+        name: aws-creds
+      parameters:
+        waitConfig:
+          enabled: true
+        selector:
+          tags:
+            service_name: temp-testing-vm
+
+    - name: eks-cluster-remote
+      type: workloadscaler
+      connectorRef:
+        kind: K8SCluster
+        name: remote-eks
+      parameters:
+        waitConfig:
+          enabled: true
+        namespace:
+          literals:
+            - default
+        workloadSelector:
+          matchLabels:
+            app: echoserver
+
+    - name: karpenter-remote
+      type: karpenter
+      connectorRef:
+        kind: K8SCluster
+        name: remote-eks
+      parameters:
+        waitConfig:
+          enabled: true
+        nodePools:
+          - default
+
+    - name: eks-remote
+      type: eks
+      connectorRef:
+        kind: CloudProvider
+        name: aws-creds
+      parameters:
+        waitConfig:
+          enabled: true
+        clusterName: my-remote-eks-cluster
+        nodeGroups:
+          - name: my-remote-node-group

@@ -27,7 +27,7 @@ func BuildAWSConfig(ctx context.Context, cfg *AWSConnectorConfig) (aws.Config, e
 		opts = append(opts, config.WithRegion(cfg.Region))
 	}
 	if cfg.AccessKeyID != "" || cfg.SecretAccessKey != "" {
-		provider := credentials.NewStaticCredentialsProvider(cfg.AccessKeyID, cfg.SecretAccessKey, "")
+		provider := credentials.NewStaticCredentialsProvider(cfg.AccessKeyID, cfg.SecretAccessKey, cfg.SessionToken)
 		opts = append(opts, config.WithCredentialsProvider(provider))
 	}
 

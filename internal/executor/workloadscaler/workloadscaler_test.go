@@ -8,10 +8,16 @@ package workloadscaler
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"testing"
 
 	"github.com/ardikabs/hibernator/internal/executor"
+	"github.com/ardikabs/hibernator/internal/executor/workloadscaler/mocks"
+	"github.com/go-logr/logr"
 	"github.com/stretchr/testify/assert"
+	corev1 "k8s.io/api/core/v1"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime/schema"
 )
 
@@ -42,27 +48,275 @@ func TestValidate_MissingNamespace(t *testing.T) {
 
 func TestShutdown_ScalesMatchingWorkloads(t *testing.T) {
 	ctx := context.Background()
-	_ = ctx
+	mockClient := mocks.NewClient(t)
 
-	// Validate executor can be created
-	e := New()
-	assert.Equal(t, "workloadscaler", e.Type())
+	// No need to mock ListNamespaces when using literal namespaces
+	// (literals are returned directly without calling the API)
+
+	// Mock workload listing
+	gvr := schema.GroupVersionResource{Group: "apps", Version: "v1", Resource: "deployments"}
+	workloadList := &unstructured.UnstructuredList{
+		Items: []unstructured.Unstructured{
+			{
+				Object: map[string]interface{}{
+					"apiVersion": "apps/v1",
+					"kind":       "Deployment",
+					"metadata": map[string]interface{}{
+						"name":      "test-deployment",
+						"namespace": "default",
+					},
+				},
+			},
+		},
+	}
+	mockClient.EXPECT().ListWorkloads(ctx, gvr, "default", "").Return(workloadList, nil)
+
+	// Mock get scale (current replicas = 3)
+	scaleObj := &unstructured.Unstructured{
+		Object: map[string]interface{}{
+			"spec": map[string]interface{}{
+				"replicas": int64(3),
+			},
+			"status": map[string]interface{}{
+				"replicas": int64(3),
+			},
+		},
+	}
+	mockClient.EXPECT().GetScale(ctx, gvr, "default", "test-deployment").Return(scaleObj, nil)
+
+	// Mock update scale (set to 0)
+	mockClient.EXPECT().UpdateScale(ctx, gvr, "default", scaleObj).Return(scaleObj, nil)
+
+	clientFactory := func(ctx context.Context, spec *executor.Spec) (Client, error) {
+		return mockClient, nil
+	}
+
+	e := NewWithClients(clientFactory)
+
+	spec := executor.Spec{
+		TargetName: "test-workloads",
+		TargetType: "workloadscaler",
+		Parameters: json.RawMessage(`{
+			"includedGroups": ["Deployment"],
+			"namespace": {"literals": ["default"]}
+		}`),
+		ConnectorConfig: executor.ConnectorConfig{
+			K8S: &executor.K8SConnectorConfig{},
+		},
+	}
+
+	restoreData, err := e.Shutdown(ctx, logr.Discard(), spec)
+	assert.NoError(t, err)
+	assert.Equal(t, "workloadscaler", restoreData.Type)
+
+	// Verify restore data contains the workload state
+	var restoreState RestoreState
+	err = json.Unmarshal(restoreData.Data, &restoreState)
+	assert.NoError(t, err)
+	assert.Len(t, restoreState.Items, 1)
+	assert.Equal(t, "test-deployment", restoreState.Items[0].Name)
+	assert.Equal(t, "default", restoreState.Items[0].Namespace)
+	assert.Equal(t, int32(3), restoreState.Items[0].Replicas)
 }
 
 func TestShutdown_SelectorNamespaces(t *testing.T) {
 	ctx := context.Background()
-	_ = ctx
+	mockClient := mocks.NewClient(t)
 
-	e := New()
-	assert.NotNil(t, e)
+	// Mock namespace listing with selector
+	mockClient.EXPECT().ListNamespaces(ctx, "env=staging").Return(&corev1.NamespaceList{
+		Items: []corev1.Namespace{
+			{ObjectMeta: metav1.ObjectMeta{Name: "staging-1", Labels: map[string]string{"env": "staging"}}},
+			{ObjectMeta: metav1.ObjectMeta{Name: "staging-2", Labels: map[string]string{"env": "staging"}}},
+		},
+	}, nil)
+
+	// Mock workload listing for staging-1
+	gvr := schema.GroupVersionResource{Group: "apps", Version: "v1", Resource: "deployments"}
+	mockClient.EXPECT().ListWorkloads(ctx, gvr, "staging-1", "").Return(&unstructured.UnstructuredList{Items: []unstructured.Unstructured{}}, nil)
+
+	// Mock workload listing for staging-2
+	mockClient.EXPECT().ListWorkloads(ctx, gvr, "staging-2", "").Return(&unstructured.UnstructuredList{Items: []unstructured.Unstructured{}}, nil)
+
+	clientFactory := func(ctx context.Context, spec *executor.Spec) (Client, error) {
+		return mockClient, nil
+	}
+
+	e := NewWithClients(clientFactory)
+
+	spec := executor.Spec{
+		TargetName: "test-workloads",
+		TargetType: "workloadscaler",
+		Parameters: json.RawMessage(`{
+			"includedGroups": ["Deployment"],
+			"namespace": {"selector": {"env": "staging"}}
+		}`),
+		ConnectorConfig: executor.ConnectorConfig{
+			K8S: &executor.K8SConnectorConfig{},
+		},
+	}
+
+	restoreData, err := e.Shutdown(ctx, logr.Discard(), spec)
+	assert.NoError(t, err)
+	assert.Equal(t, "workloadscaler", restoreData.Type)
 }
 
 func TestWakeUp_RestoresReplicas(t *testing.T) {
 	ctx := context.Background()
-	_ = ctx
+	mockClient := mocks.NewClient(t)
 
+	gvr := schema.GroupVersionResource{Group: "apps", Version: "v1", Resource: "deployments"}
+
+	// Mock get scale (currently at 0)
+	scaleObj := &unstructured.Unstructured{
+		Object: map[string]interface{}{
+			"spec": map[string]interface{}{
+				"replicas": int64(0),
+			},
+			"status": map[string]interface{}{
+				"replicas": int64(0),
+			},
+		},
+	}
+	mockClient.EXPECT().GetScale(ctx, gvr, "default", "test-deployment").Return(scaleObj, nil)
+
+	// Mock update scale (restore to 3)
+	mockClient.EXPECT().UpdateScale(ctx, gvr, "default", scaleObj).Return(scaleObj, nil)
+
+	clientFactory := func(ctx context.Context, spec *executor.Spec) (Client, error) {
+		return mockClient, nil
+	}
+
+	e := NewWithClients(clientFactory)
+
+	spec := executor.Spec{
+		TargetName: "test-workloads",
+		TargetType: "workloadscaler",
+		Parameters: json.RawMessage(`{
+			"includedGroups": ["Deployment"],
+			"namespace": {"literals": ["default"]}
+		}`),
+		ConnectorConfig: executor.ConnectorConfig{
+			K8S: &executor.K8SConnectorConfig{},
+		},
+	}
+
+	// Create restore data
+	restoreState := RestoreState{
+		Items: []WorkloadState{
+			{
+				Group:     "apps",
+				Version:   "v1",
+				Resource:  "deployments",
+				Kind:      "Deployment",
+				Namespace: "default",
+				Name:      "test-deployment",
+				Replicas:  3,
+			},
+		},
+	}
+	restoreDataBytes, _ := json.Marshal(restoreState)
+	restoreData := executor.RestoreData{
+		Type: "workloadscaler",
+		Data: restoreDataBytes,
+	}
+
+	err := e.WakeUp(ctx, logr.Discard(), spec, restoreData)
+	assert.NoError(t, err)
+}
+
+func TestShutdown_InvalidParameters(t *testing.T) {
 	e := New()
-	assert.NotNil(t, e)
+	ctx := context.Background()
+
+	spec := executor.Spec{
+		TargetName: "test-workloads",
+		TargetType: "workloadscaler",
+		Parameters: json.RawMessage(`{invalid json}`),
+		ConnectorConfig: executor.ConnectorConfig{
+			K8S: &executor.K8SConnectorConfig{},
+		},
+	}
+
+	_, err := e.Shutdown(ctx, logr.Discard(), spec)
+	assert.Error(t, err)
+}
+
+func TestShutdown_K8sFactoryError(t *testing.T) {
+	clientFactory := func(ctx context.Context, spec *executor.Spec) (Client, error) {
+		return nil, errors.New("failed to create k8s client")
+	}
+
+	e := NewWithClients(clientFactory)
+	ctx := context.Background()
+
+	spec := executor.Spec{
+		TargetName: "test-workloads",
+		TargetType: "workloadscaler",
+		Parameters: json.RawMessage(`{
+			"includedGroups": ["Deployment"],
+			"namespace": {"literals": ["default"]}
+		}`),
+		ConnectorConfig: executor.ConnectorConfig{
+			K8S: &executor.K8SConnectorConfig{},
+		},
+	}
+
+	_, err := e.Shutdown(ctx, logr.Discard(), spec)
+	assert.Error(t, err)
+	assert.Contains(t, err.Error(), "build kubernetes clients")
+}
+
+func TestWakeUp_InvalidRestoreData(t *testing.T) {
+	e := New()
+	ctx := context.Background()
+
+	spec := executor.Spec{
+		TargetName: "test-workloads",
+		TargetType: "workloadscaler",
+		ConnectorConfig: executor.ConnectorConfig{
+			K8S: &executor.K8SConnectorConfig{},
+		},
+	}
+
+	restore := executor.RestoreData{
+		Type: "workloadscaler",
+		Data: json.RawMessage(`{invalid json}`),
+	}
+
+	err := e.WakeUp(ctx, logr.Discard(), spec, restore)
+	assert.Error(t, err)
+}
+
+func TestWakeUp_K8sFactoryError(t *testing.T) {
+	clientFactory := func(ctx context.Context, spec *executor.Spec) (Client, error) {
+		return nil, errors.New("failed to create k8s client")
+	}
+
+	e := NewWithClients(clientFactory)
+	ctx := context.Background()
+
+	spec := executor.Spec{
+		TargetName: "test-workloads",
+		TargetType: "workloadscaler",
+		Parameters: json.RawMessage(`{
+			"includedGroups": ["Deployment"],
+			"namespace": {"literals": ["default"]}
+		}`),
+		ConnectorConfig: executor.ConnectorConfig{
+			K8S: &executor.K8SConnectorConfig{},
+		},
+	}
+
+	restoreData, _ := json.Marshal(RestoreState{Items: []WorkloadState{}})
+	restore := executor.RestoreData{
+		Type: "workloadscaler",
+		Data: restoreData,
+	}
+
+	err := e.WakeUp(ctx, logr.Discard(), spec, restore)
+	assert.Error(t, err)
+	assert.Contains(t, err.Error(), "build kubernetes clients")
 }
 
 // ===== GVR Resolution Tests =====

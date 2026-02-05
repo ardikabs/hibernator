@@ -7,6 +7,7 @@ package server
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"net"
@@ -30,6 +31,18 @@ func (s *ExecutionServiceServer) StreamLogs(stream grpc.ClientStreamingServer[st
 	ctx := stream.Context()
 	var count int64
 	var executionID string
+	var lastLogLevel string
+	startTime := time.Now()
+
+	// Cleanup tracking on stream exit
+	defer func() {
+		duration := time.Since(startTime)
+		s.log.V(1).Info("stream closed",
+			"executionId", executionID,
+			"count", count,
+			"duration", duration,
+		)
+	}()
 
 	for {
 		entry, err := stream.Recv()
@@ -40,11 +53,35 @@ func (s *ExecutionServiceServer) StreamLogs(stream grpc.ClientStreamingServer[st
 			})
 		}
 		if err != nil {
-			s.log.Error(err, "error receiving log entry")
+			// Check if this is a graceful stream closure
+			if isGracefulStreamClosure(err) {
+				// Detect if runner failed (last log was ERROR)
+				if lastLogLevel == "ERROR" {
+					s.log.Info("runner closed stream after error",
+						"executionId", executionID,
+						"count", count,
+						"reason", err.Error(),
+					)
+				} else {
+					s.log.Info("runner closed stream normally",
+						"executionId", executionID,
+						"count", count,
+						"reason", err.Error(),
+					)
+				}
+				return nil
+			}
+
+			// Log unexpected errors at ERROR level
+			s.log.Error(err, "unexpected stream error",
+				"executionId", executionID,
+				"count", count,
+			)
 			return status.Errorf(codes.Internal, "receive error: %v", err)
 		}
 
 		executionID = entry.ExecutionId
+		lastLogLevel = entry.Level
 		count++
 
 		// Delegate to business logic layer (EmitLog pipes logs with full context)
@@ -127,4 +164,36 @@ func (s *Server) Start(ctx context.Context) error {
 // ExecutionService returns the execution service for direct access.
 func (s *Server) ExecutionService() *ExecutionServiceServer {
 	return s.executionService
+}
+
+// isGracefulStreamClosure checks if the error represents a normal stream closure.
+// This includes client-initiated closures, context cancellations, and timeouts.
+func isGracefulStreamClosure(err error) bool {
+	if err == nil {
+		return false
+	}
+
+	// Check for EOF (client closed stream normally)
+	if errors.Is(err, io.EOF) {
+		return true
+	}
+
+	// Check for gRPC status codes indicating graceful closure
+	if st, ok := status.FromError(err); ok {
+		switch st.Code() {
+		case codes.Canceled:
+			// Client canceled context (normal for runner failures/exits)
+			return true
+		case codes.DeadlineExceeded:
+			// Timeout - can be considered graceful depending on use case
+			return true
+		}
+	}
+
+	// Check for context errors (when client context is canceled)
+	if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+		return true
+	}
+
+	return false
 }

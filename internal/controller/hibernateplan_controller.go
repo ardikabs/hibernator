@@ -927,7 +927,7 @@ func (r *HibernatePlanReconciler) createRunnerJob(ctx context.Context, log logr.
 
 // reconcileDelete handles plan deletion.
 func (r *HibernatePlanReconciler) reconcileDelete(ctx context.Context, log logr.Logger, plan *hibernatorv1alpha1.HibernatePlan) (ctrl.Result, error) {
-	log.V(1).Info("handling deletion")
+	log.V(1).Info("reconciling plan deletion")
 	orig := plan.DeepCopy()
 
 	// Clean up jobs
@@ -950,7 +950,7 @@ func (r *HibernatePlanReconciler) reconcileDelete(ctx context.Context, log logr.
 	// Remove finalizer
 	controllerutil.RemoveFinalizer(plan, FinalizerName)
 	if err := r.Patch(ctx, plan, client.MergeFrom(orig)); err != nil {
-		return ctrl.Result{}, fmt.Errorf("remove finalizer from plan: %w", err)
+		return ctrl.Result{}, client.IgnoreNotFound(err)
 	}
 
 	return ctrl.Result{}, nil

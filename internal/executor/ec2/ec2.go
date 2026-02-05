@@ -19,9 +19,13 @@ import (
 	"github.com/ardikabs/hibernator/internal/executor"
 	"github.com/ardikabs/hibernator/pkg/awsutil"
 	"github.com/ardikabs/hibernator/pkg/executorparams"
+	"github.com/ardikabs/hibernator/pkg/waiter"
 )
 
-const ExecutorType = "ec2"
+const (
+	ExecutorType       = "ec2"
+	DefaultWaitTimeout = "5m"
+)
 
 // Parameters is an alias for the shared EC2 parameter type.
 type Parameters = executorparams.EC2Parameters
@@ -167,6 +171,17 @@ func (e *Executor) Shutdown(ctx context.Context, log logr.Logger, spec executor.
 			return executor.RestoreData{}, fmt.Errorf("stop instances: %w", err)
 		}
 		log.Info("instances stopped successfully", "count", len(instancesToStop))
+
+		// Wait for instances to reach stopped state if configured
+		if params.WaitConfig.Enabled {
+			timeout := params.WaitConfig.Timeout
+			if timeout == "" {
+				timeout = DefaultWaitTimeout
+			}
+			if err := e.waitForInstancesStopped(ctx, log, client, instancesToStop, timeout); err != nil {
+				return executor.RestoreData{}, fmt.Errorf("wait for instances stopped: %w", err)
+			}
+		}
 	} else {
 		log.Info("no running instances to stop")
 	}
@@ -183,7 +198,7 @@ func (e *Executor) Shutdown(ctx context.Context, log logr.Logger, spec executor.
 	)
 
 	return executor.RestoreData{
-		Type: ExecutorType,
+		Type: e.Type(),
 		Data: restoreData,
 	}, nil
 }
@@ -194,6 +209,12 @@ func (e *Executor) WakeUp(ctx context.Context, log logr.Logger, spec executor.Sp
 		"target", spec.TargetName,
 		"targetType", spec.TargetType,
 	)
+
+	params, err := e.parseParams(spec.Parameters)
+	if err != nil {
+		log.Error(err, "failed to parse parameters")
+		return fmt.Errorf("parse parameters: %w", err)
+	}
 
 	var restoreState RestoreState
 	if err := json.Unmarshal(restore.Data, &restoreState); err != nil {
@@ -233,12 +254,101 @@ func (e *Executor) WakeUp(ctx context.Context, log logr.Logger, spec executor.Sp
 			return fmt.Errorf("start instances: %w", err)
 		}
 		log.Info("instances started successfully", "count", len(instancesToStart))
+
+		// Wait for instances to reach running state if configured
+		if params.WaitConfig.Enabled {
+			timeout := params.WaitConfig.Timeout
+			if timeout == "" {
+				timeout = DefaultWaitTimeout
+			}
+			if err := e.waitForInstancesRunning(ctx, log, client, instancesToStart, timeout); err != nil {
+				return fmt.Errorf("wait for instances running: %w", err)
+			}
+		}
 	} else {
 		log.Info("no instances to start")
 	}
 
 	log.Info("EC2 wakeup completed successfully")
 	return nil
+}
+
+// waitForInstancesStopped waits for all instances to reach stopped state.
+func (e *Executor) waitForInstancesStopped(ctx context.Context, log logr.Logger, client EC2Client, instanceIDs []string, timeout string) error {
+	w, err := waiter.NewWaiter(ctx, log, timeout)
+	if err != nil {
+		return fmt.Errorf("create waiter: %w", err)
+	}
+
+	checkFunc := func() (bool, string, error) {
+		resp, err := client.DescribeInstances(ctx, &ec2.DescribeInstancesInput{
+			InstanceIds: instanceIDs,
+		})
+		if err != nil {
+			return false, "", fmt.Errorf("describe instances: %w", err)
+		}
+
+		stopped := 0
+		stopping := 0
+		other := 0
+		for _, reservation := range resp.Reservations {
+			for _, instance := range reservation.Instances {
+				switch instance.State.Name {
+				case types.InstanceStateNameStopped:
+					stopped++
+				case types.InstanceStateNameStopping:
+					stopping++
+				default:
+					other++
+				}
+			}
+		}
+
+		status := fmt.Sprintf("stopped=%d, stopping=%d, other=%d", stopped, stopping, other)
+		done := stopped == len(instanceIDs)
+		return done, status, nil
+	}
+
+	return w.Poll("instances to stop", checkFunc)
+}
+
+// waitForInstancesRunning waits for all instances to reach running state.
+func (e *Executor) waitForInstancesRunning(ctx context.Context, log logr.Logger, client EC2Client, instanceIDs []string, timeout string) error {
+	w, err := waiter.NewWaiter(ctx, log, timeout)
+	if err != nil {
+		return fmt.Errorf("create waiter: %w", err)
+	}
+
+	checkFunc := func() (bool, string, error) {
+		resp, err := client.DescribeInstances(ctx, &ec2.DescribeInstancesInput{
+			InstanceIds: instanceIDs,
+		})
+		if err != nil {
+			return false, "", fmt.Errorf("describe instances: %w", err)
+		}
+
+		running := 0
+		pending := 0
+		other := 0
+		for _, reservation := range resp.Reservations {
+			for _, instance := range reservation.Instances {
+				switch instance.State.Name {
+				case types.InstanceStateNameRunning:
+					running++
+				case types.InstanceStateNamePending:
+					pending++
+				default:
+					other++
+				}
+			}
+		}
+
+		status := fmt.Sprintf("running=%d, pending=%d, other=%d", running, pending, other)
+		done := running == len(instanceIDs)
+		return done, status, nil
+	}
+
+	return w.Poll("instances to start", checkFunc)
 }
 
 func (e *Executor) parseParams(raw json.RawMessage) (Parameters, error) {

@@ -14,9 +14,37 @@ Licensed under the Apache License, Version 2.0.
 //   - Pure Go types with no Kubernetes dependencies
 package executorparams
 
+// WaitConfig configures whether to wait for operations to complete and timeout settings.
+// When Enabled=true, executors will poll asynchronously until operations reach the desired state.
+// Progress is logged through streamlogs at regular intervals (15s) for observability.
+//
+// Timeout behavior:
+//   - If Enabled=false: no waiting, operation returns immediately after API call (default behavior)
+//   - If Timeout is set (e.g., "5m"): operation will fail if not completed within duration
+//   - If Timeout is empty string: it subjected to each executor default timeout
+//
+// Defaults vary by executor based on expected operation duration:
+//   - EC2: 5m
+//   - EKS: 10m
+//   - RDS: 15m
+//   - Karpenter: 5m
+//   - WorkloadScaler: 5m
+type WaitConfig struct {
+	// Enabled controls whether to wait for operation completion.
+	// Default: false (opt-in, backward compatible with existing behavior)
+	Enabled bool `json:"enabled,omitempty"`
+
+	// Timeout is the maximum duration to wait for operation completion.
+	// Format: duration string (e.g., "5m", "10m", "15m30s")
+	// Empty string means no timeout (wait indefinitely).
+	// Only applies when Enabled=true.
+	Timeout string `json:"timeout,omitempty"`
+}
+
 // EC2Parameters defines the expected parameters for the EC2 executor.
 type EC2Parameters struct {
-	Selector EC2Selector `json:"selector"`
+	Selector   EC2Selector `json:"selector"`
+	WaitConfig WaitConfig  `json:"waitConfig"`
 }
 
 // EC2Selector defines how to find EC2 instances.
@@ -29,6 +57,7 @@ type EC2Selector struct {
 type RDSParameters struct {
 	SnapshotBeforeStop bool        `json:"snapshotBeforeStop,omitempty"`
 	Selector           RDSSelector `json:"selector"`
+	WaitConfig         WaitConfig  `json:"waitConfig"`
 }
 
 // RDSSelector defines how to find RDS instances and clusters.
@@ -102,6 +131,7 @@ type EKSParameters struct {
 	ClusterName string `json:"clusterName"`
 	// NodeGroups to hibernate. If empty, all node groups in the cluster are targeted.
 	NodeGroups []EKSNodeGroup `json:"nodeGroups,omitempty"`
+	WaitConfig WaitConfig     `json:"waitConfig"`
 }
 
 // EKSNodeGroup specifies a managed node group to hibernate.
@@ -111,7 +141,8 @@ type EKSNodeGroup struct {
 
 // KarpenterParameters defines the expected parameters for the Karpenter executor.
 type KarpenterParameters struct {
-	NodePools []string `json:"nodePools"`
+	NodePools  []string   `json:"nodePools"`
+	WaitConfig WaitConfig `json:"waitConfig"`
 }
 
 // GKEParameters defines the expected parameters for the GKE executor.
@@ -135,6 +166,9 @@ type WorkloadScalerParameters struct {
 
 	// WorkloadSelector filters workloads by labels (optional).
 	WorkloadSelector *LabelSelector `json:"workloadSelector,omitempty"`
+
+	// WaitConfig controls whether to wait for replica counts to match desired state.
+	WaitConfig WaitConfig `json:"waitConfig"`
 }
 
 // NamespaceSelector defines how to select namespaces.

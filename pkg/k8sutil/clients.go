@@ -38,7 +38,7 @@ func BuildClients(ctx context.Context, cfg *K8SConnectorConfig) (dynamic.Interfa
 
 	restConfig, err := buildRestConfig(ctx, cfg)
 	if err != nil {
-		return nil, nil, err
+		return nil, nil, fmt.Errorf("build rest config: %w", err)
 	}
 
 	k8sClient, err := kubernetes.NewForConfig(restConfig)
