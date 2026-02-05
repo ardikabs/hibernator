@@ -98,7 +98,7 @@ func (e *Executor) Validate(spec executor.Spec) error {
 }
 
 // Shutdown stops EC2 instances matching the selector.
-func (e *Executor) Shutdown(ctx context.Context, log logr.Logger, spec executor.Spec) (executor.RestoreData, error) {
+func (e *Executor) Shutdown(ctx context.Context, log logr.Logger, spec executor.Spec) error {
 	log.Info("EC2 executor starting shutdown",
 		"target", spec.TargetName,
 		"targetType", spec.TargetType,
@@ -107,7 +107,7 @@ func (e *Executor) Shutdown(ctx context.Context, log logr.Logger, spec executor.
 	params, err := e.parseParams(spec.Parameters)
 	if err != nil {
 		log.Error(err, "failed to parse parameters")
-		return executor.RestoreData{}, fmt.Errorf("parse parameters: %w", err)
+		return fmt.Errorf("parse parameters: %w", err)
 	}
 
 	log.Info("parameters parsed",
@@ -120,7 +120,7 @@ func (e *Executor) Shutdown(ctx context.Context, log logr.Logger, spec executor.
 	cfg, err := e.loadAWSConfig(ctx, spec)
 	if err != nil {
 		log.Error(err, "failed to load AWS config")
-		return executor.RestoreData{}, fmt.Errorf("load AWS config: %w", err)
+		return fmt.Errorf("load AWS config: %w", err)
 	}
 
 	client := e.ec2Factory(cfg)
@@ -130,34 +130,53 @@ func (e *Executor) Shutdown(ctx context.Context, log logr.Logger, spec executor.
 	instances, err := e.findInstances(ctx, client, params.Selector)
 	if err != nil {
 		log.Error(err, "failed to find instances")
-		return executor.RestoreData{}, fmt.Errorf("find instances: %w", err)
+		return fmt.Errorf("find instances: %w", err)
 	}
 
 	log.Info("instances discovered", "totalInstances", len(instances))
 
-	restoreState := RestoreState{
-		Instances: make([]InstanceState, 0, len(instances)),
+	// Determine if we're capturing from live running state
+	hasRunningInstances := false
+	for _, inst := range instances {
+		if inst.State.Name == types.InstanceStateNameRunning {
+			hasRunningInstances = true
+			break
+		}
 	}
+
+	// Build unified map-based restore data (key = instanceID)
+	restoreData := make(map[string]json.RawMessage)
 
 	var instancesToStop []string
 	for _, inst := range instances {
 		instanceID := aws.ToString(inst.InstanceId)
 		wasRunning := inst.State.Name == types.InstanceStateNameRunning
 
-		restoreState.Instances = append(restoreState.Instances, InstanceState{
+		// Store state with instanceID as key
+		state := InstanceState{
 			InstanceID: instanceID,
 			WasRunning: wasRunning,
-		})
-
-		if wasRunning {
-			instancesToStop = append(instancesToStop, instanceID)
 		}
-
+		stateBytes, _ := json.Marshal(state)
+		restoreData[instanceID] = stateBytes
 		log.Info("instance state captured",
 			"instanceId", instanceID,
 			"state", inst.State.Name,
 			"willStop", wasRunning,
 		)
+
+		// Add to stop list if running
+		if wasRunning {
+			instancesToStop = append(instancesToStop, instanceID)
+		}
+
+		// Incremental save: persist this instance's restore data immediately
+		if spec.SaveRestoreData != nil {
+			if err := spec.SaveRestoreData(instanceID, state, wasRunning); err != nil {
+				log.Error(err, "failed to save restore data incrementally", "instanceId", instanceID)
+				// Continue processing - save at end as fallback
+			}
+		}
 	}
 
 	// Stop running instances
@@ -168,7 +187,7 @@ func (e *Executor) Shutdown(ctx context.Context, log logr.Logger, spec executor.
 		})
 		if err != nil {
 			log.Error(err, "failed to stop instances")
-			return executor.RestoreData{}, fmt.Errorf("stop instances: %w", err)
+			return fmt.Errorf("stop instances: %w", err)
 		}
 		log.Info("instances stopped successfully", "count", len(instancesToStop))
 
@@ -179,28 +198,20 @@ func (e *Executor) Shutdown(ctx context.Context, log logr.Logger, spec executor.
 				timeout = DefaultWaitTimeout
 			}
 			if err := e.waitForInstancesStopped(ctx, log, client, instancesToStop, timeout); err != nil {
-				return executor.RestoreData{}, fmt.Errorf("wait for instances stopped: %w", err)
+				return fmt.Errorf("wait for instances stopped: %w", err)
 			}
 		}
 	} else {
-		log.Info("no running instances to stop")
-	}
-
-	restoreData, err := json.Marshal(restoreState)
-	if err != nil {
-		log.Error(err, "failed to marshal restore state")
-		return executor.RestoreData{}, fmt.Errorf("marshal restore state: %w", err)
+		log.Info("no running instances to stop, all already at desired state")
 	}
 
 	log.Info("EC2 shutdown completed successfully",
-		"totalInstances", len(restoreState.Instances),
+		"totalInstances", len(restoreData),
 		"stoppedInstances", len(instancesToStop),
+		"isLive", hasRunningInstances,
 	)
 
-	return executor.RestoreData{
-		Type: e.Type(),
-		Data: restoreData,
-	}, nil
+	return nil
 }
 
 // WakeUp starts previously running EC2 instances.
@@ -216,13 +227,7 @@ func (e *Executor) WakeUp(ctx context.Context, log logr.Logger, spec executor.Sp
 		return fmt.Errorf("parse parameters: %w", err)
 	}
 
-	var restoreState RestoreState
-	if err := json.Unmarshal(restore.Data, &restoreState); err != nil {
-		log.Error(err, "failed to unmarshal restore state")
-		return fmt.Errorf("unmarshal restore state: %w", err)
-	}
-
-	log.Info("restore state loaded", "totalInstances", len(restoreState.Instances))
+	log.Info("restore state loaded", "totalInstances", len(restore.Data))
 
 	cfg, err := e.loadAWSConfig(ctx, spec)
 	if err != nil {
@@ -234,7 +239,13 @@ func (e *Executor) WakeUp(ctx context.Context, log logr.Logger, spec executor.Sp
 
 	// Start instances that were previously running
 	var instancesToStart []string
-	for _, inst := range restoreState.Instances {
+	for instanceID, stateBytes := range restore.Data {
+		var inst InstanceState
+		if err := json.Unmarshal(stateBytes, &inst); err != nil {
+			log.Error(err, "failed to unmarshal instance state", "instanceId", instanceID)
+			return fmt.Errorf("unmarshal instance state %s: %w", instanceID, err)
+		}
+
 		if inst.WasRunning {
 			instancesToStart = append(instancesToStart, inst.InstanceID)
 			log.Info("instance marked for start",

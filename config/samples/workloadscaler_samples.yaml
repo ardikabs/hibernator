@@ -56,3 +56,17 @@ spec:
         workloadSelector:
           matchLabels:
             app: echoserver
+    - name: k3d-local-sandbox
+      type: workloadscaler
+      connectorRef:
+        kind: K8SCluster
+        name: local
+      parameters:
+        waitConfig:
+          enabled: true
+        namespace:
+          literals:
+            - default
+        workloadSelector:
+          matchLabels:
+            app: sandbox

@@ -10,6 +10,7 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
+	"sync"
 	"time"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
@@ -144,7 +145,7 @@ func (r *runner) run(ctx context.Context) error {
 	r.reportProgress(ctx, "preparing", 20, "Building executor spec")
 
 	// Build executor spec from connector
-	spec, err := r.buildExecutorSpec(ctx, params)
+	spec, flusher, err := r.buildExecutorSpec(ctx, params)
 	if err != nil {
 		r.log.Error(err, "failed to build executor spec")
 		return fmt.Errorf("build executor spec: %w", err)
@@ -161,29 +162,32 @@ func (r *runner) run(ctx context.Context) error {
 	r.reportProgress(ctx, "executing", 50, fmt.Sprintf("Executing %s operation", cfg.Operation))
 
 	// Execute the operation
-	restoreData, durationMs, err := r.executeOperation(ctx, exec, spec)
+	durationMs, err := r.executeOperation(ctx, exec, spec, flusher)
+
+	// Operation failure: report and return
 	if err != nil {
+		if cfg.Operation == "shutdown" {
+			r.log.Error(err, "shutdown failed")
+		}
 		r.reportCompletion(ctx, false, err.Error(), durationMs)
 		return err
 	}
 
-	// Report progress: saving restore data
-	r.reportProgress(ctx, "finalizing", 90, "Saving restore data")
+	// Report progress: finalizing
+	r.reportProgress(ctx, "finalizing", 90, "Finalizing operation")
 
-	// Persist restore data to ConfigMap (REQUIRED for wake-up)
-	// This is done directly by the runner to ensure data survives even if
-	// network connection to controller fails.
-	if restoreData != nil {
-		if err := r.saveRestoreData(ctx, restoreData); err != nil {
-			// FATAL: Without restore data, wake-up is impossible
-			r.log.Error(err, "CRITICAL: failed to save restore data to ConfigMap")
-			r.reportCompletion(ctx, false, fmt.Sprintf("restore data save failed: %v", err), durationMs)
-			return fmt.Errorf("save restore data: %w", err)
+	// Wake-up success: mark target as restored for cleanup coordination
+	if cfg.Operation == "wakeup" {
+		rm := restore.NewManager(r.k8sClient)
+		if err := rm.MarkTargetRestored(ctx, r.cfg.Namespace, r.cfg.Plan, r.cfg.Target); err != nil {
+			// Non-fatal: continue even if marking fails
+			r.log.Error(err, "failed to mark target as restored (non-fatal)")
+		} else {
+			r.log.Info("Target marked as restored",
+				"plan", r.cfg.Plan,
+				"target", r.cfg.Target,
+			)
 		}
-		r.log.Info("Restore data saved to ConfigMap",
-			"plan", r.cfg.Plan,
-			"target", r.cfg.Target,
-		)
 	}
 
 	// Report completion to controller (status only, no restore data payload)
@@ -194,19 +198,30 @@ func (r *runner) run(ctx context.Context) error {
 }
 
 // executeOperation runs the shutdown or wakeup operation.
-func (r *runner) executeOperation(ctx context.Context, exec executor.Executor, spec *executor.Spec) (*executor.RestoreData, int64, error) {
+// For shutdown operations, returns a flush function to save accumulated restore data.
+func (r *runner) executeOperation(ctx context.Context, exec executor.Executor, spec *executor.Spec, flushFunc func() error) (int64, error) {
 	startTime := time.Now()
 
-	var restoreData *executor.RestoreData
 	var operationErr error
 
 	switch r.cfg.Operation {
 	case "shutdown":
-		rd, err := exec.Shutdown(ctx, r.log, *spec)
+		// Defer flush to ensure accumulated restore data is saved even on error
+		if flushFunc != nil {
+			defer func() {
+				if flushErr := flushFunc(); flushErr != nil {
+					r.log.Error(flushErr, "failed to flush accumulated restore data")
+					// If shutdown succeeded but flush failed, prioritize flush error
+					if operationErr == nil {
+						operationErr = fmt.Errorf("flush restore data: %w", flushErr)
+					}
+				}
+			}()
+		}
+
+		err := exec.Shutdown(ctx, r.log, *spec)
 		if err != nil {
 			operationErr = err
-		} else {
-			restoreData = &rd
 		}
 	case "wakeup":
 		rd, err := r.loadRestoreData(ctx)
@@ -224,19 +239,16 @@ func (r *runner) executeOperation(ctx context.Context, exec executor.Executor, s
 
 	if operationErr != nil {
 		r.log.Error(operationErr, "operation failed", "duration", duration)
-		return nil, durationMs, operationErr
+		return durationMs, operationErr
 	}
 
-	r.log.Info("operation completed",
-		"duration", duration,
-		"hasRestoreData", restoreData != nil,
-	)
+	r.log.Info("operation completed", "duration", duration)
 
-	return restoreData, durationMs, nil
+	return durationMs, nil
 }
 
 // buildExecutorSpec constructs the executor spec from connector configuration.
-func (r *runner) buildExecutorSpec(ctx context.Context, params map[string]interface{}) (*executor.Spec, error) {
+func (r *runner) buildExecutorSpec(ctx context.Context, params map[string]interface{}) (*executor.Spec, func() error, error) {
 	paramsBytes, _ := json.Marshal(params)
 	spec := &executor.Spec{
 		TargetName: r.cfg.Target,
@@ -244,18 +256,24 @@ func (r *runner) buildExecutorSpec(ctx context.Context, params map[string]interf
 		Parameters: paramsBytes,
 	}
 
+	// Add incremental save callback for shutdown operations
+	var flusher func() error
+	if r.cfg.Operation == "shutdown" {
+		spec.SaveRestoreData, flusher = r.createSaveRestoreDataCallback(ctx)
+	}
+
 	switch r.cfg.ConnectorKind {
 	case "CloudProvider":
 		if err := r.loadCloudProviderConfig(ctx, spec); err != nil {
-			return nil, err
+			return nil, nil, err
 		}
 	case "K8SCluster":
 		if err := r.loadK8SClusterConfig(ctx, spec); err != nil {
-			return nil, err
+			return nil, nil, err
 		}
 	}
 
-	return spec, nil
+	return spec, flusher, nil
 }
 
 const (
@@ -471,6 +489,126 @@ func (r *runner) loadK8SClusterConfig(ctx context.Context, spec *executor.Spec) 
 	return nil
 }
 
+// restoreDataAccumulator batches incremental saves in memory before flushing to ConfigMap.
+// This reduces Kubernetes API calls from N*2 to 1 (where N = number of resources).
+type restoreDataAccumulator struct {
+	mu          sync.Mutex
+	liveKeys    map[string]interface{} // High-quality state (isLive=true)
+	nonLiveKeys map[string]interface{} // Low-quality state (isLive=false)
+	log         logr.Logger
+}
+
+// add accumulates a key-value pair in memory with per-key quality tracking.
+func (a *restoreDataAccumulator) add(key string, value interface{}, isLive bool) error {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+
+	// Track quality per key by storing in separate maps
+	if isLive {
+		a.liveKeys[key] = value
+		// Remove from nonLive if it was there (quality upgrade)
+		delete(a.nonLiveKeys, key)
+	} else {
+		// Only add to nonLive if NOT already in live (preserve higher quality)
+		if _, existsInLive := a.liveKeys[key]; !existsInLive {
+			a.nonLiveKeys[key] = value
+		}
+	}
+
+	a.log.V(1).Info("restore data accumulated in memory",
+		"key", key,
+		"isLive", isLive,
+		"totalLiveKeys", len(a.liveKeys),
+		"totalNonLiveKeys", len(a.nonLiveKeys),
+	)
+	return nil
+}
+
+// flush saves all accumulated data to ConfigMap in separate batches by quality.
+// This preserves per-key quality information during merge while batching API calls.
+func (a *restoreDataAccumulator) flush(ctx context.Context, rm *restore.Manager, namespace, plan, target, executorType string) error {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+
+	totalKeys := len(a.liveKeys) + len(a.nonLiveKeys)
+	if totalKeys == 0 {
+		a.log.V(1).Info("no restore data to flush")
+		return nil
+	}
+
+	// Flush high-quality (isLive=true) keys first
+	if len(a.liveKeys) > 0 {
+		liveData := &restore.Data{
+			Target:     target,
+			Executor:   executorType,
+			Version:    1,
+			CreatedAt:  metav1.Now(),
+			IsLive:     true,
+			CapturedAt: time.Now().Format(time.RFC3339),
+			State:      a.liveKeys,
+		}
+
+		if err := rm.SaveOrPreserve(ctx, namespace, plan, target, liveData); err != nil {
+			return fmt.Errorf("flush live keys to ConfigMap: %w", err)
+		}
+
+		a.log.Info("restore data (live) flushed to ConfigMap",
+			"liveKeys", len(a.liveKeys),
+			"plan", plan,
+			"target", target,
+		)
+	}
+
+	// Flush low-quality (isLive=false) keys
+	if len(a.nonLiveKeys) > 0 {
+		nonLiveData := &restore.Data{
+			Target:     target,
+			Executor:   executorType,
+			Version:    1,
+			CreatedAt:  metav1.Now(),
+			IsLive:     false,
+			CapturedAt: time.Now().Format(time.RFC3339),
+			State:      a.nonLiveKeys,
+		}
+
+		if err := rm.SaveOrPreserve(ctx, namespace, plan, target, nonLiveData); err != nil {
+			return fmt.Errorf("flush non-live keys to ConfigMap: %w", err)
+		}
+
+		a.log.Info("restore data (non-live) flushed to ConfigMap",
+			"nonLiveKeys", len(a.nonLiveKeys),
+			"plan", plan,
+			"target", target,
+		)
+	}
+
+	return nil
+}
+
+// createSaveRestoreDataCallback returns a callback function and flush function for batched persistence.
+// The callback accumulates saves in memory; flush writes accumulated data in two API calls (live + non-live).
+// This reduces API calls significantly (1000 resources: 2000 calls → 2 calls) while preserving per-key quality.
+func (r *runner) createSaveRestoreDataCallback(ctx context.Context) (executor.SaveRestoreDataFunc, func() error) {
+	accumulator := &restoreDataAccumulator{
+		liveKeys:    make(map[string]interface{}),
+		nonLiveKeys: make(map[string]interface{}),
+		log:         r.log,
+	}
+
+	// Callback: accumulate in memory (no API call)
+	callback := func(key string, value interface{}, isLive bool) error {
+		return accumulator.add(key, value, isLive)
+	}
+
+	// Flush function: save all accumulated data at once
+	flush := func() error {
+		rm := restore.NewManager(r.k8sClient)
+		return accumulator.flush(ctx, rm, r.cfg.Namespace, r.cfg.Plan, r.cfg.Target, r.cfg.TargetType)
+	}
+
+	return callback, flush
+}
+
 // loadRestoreData retrieves restore data from ConfigMap.
 func (r *runner) loadRestoreData(ctx context.Context) (*executor.RestoreData, error) {
 	restoreMgr := restore.NewManager(r.k8sClient)
@@ -484,48 +622,20 @@ func (r *runner) loadRestoreData(ctx context.Context) (*executor.RestoreData, er
 		return nil, fmt.Errorf("no restore data found for plan=%s target=%s", r.cfg.Plan, r.cfg.Target)
 	}
 
-	stateBytes, err := json.Marshal(data.State)
-	if err != nil {
-		return nil, fmt.Errorf("marshal state: %w", err)
+	// Convert state map to unified map[string]json.RawMessage format
+	unifiedData := make(map[string]json.RawMessage)
+	for key, value := range data.State {
+		valueBytes, err := json.Marshal(value)
+		if err != nil {
+			return nil, fmt.Errorf("marshal state value for key %s: %w", key, err)
+		}
+		unifiedData[key] = valueBytes
 	}
 
 	return &executor.RestoreData{
 		Type: data.Executor,
-		Data: stateBytes,
+		Data: unifiedData,
 	}, nil
-}
-
-// saveRestoreData persists restore data to ConfigMap.
-func (r *runner) saveRestoreData(ctx context.Context, data *executor.RestoreData) error {
-	if r.cfg.Namespace == "" || r.cfg.Plan == "" {
-		return fmt.Errorf("plan namespace and name required for restore data storage")
-	}
-
-	if r.cfg.Target == "" || data == nil || data.Type == "" {
-		return fmt.Errorf("target name and restore data type required")
-	}
-
-	restoreData := &restore.Data{
-		Target:    r.cfg.Target,
-		Executor:  data.Type,
-		Version:   1,
-		CreatedAt: metav1.Now(),
-	}
-
-	if len(data.Data) > 0 {
-		var stateMap map[string]interface{}
-		if err := json.Unmarshal(data.Data, &stateMap); err != nil {
-			return fmt.Errorf("unmarshal restore data: %w", err)
-		}
-		restoreData.State = stateMap
-	}
-
-	rm := restore.NewManager(r.k8sClient)
-	if err := rm.Save(ctx, r.cfg.Namespace, r.cfg.Plan, r.cfg.Target, restoreData); err != nil {
-		return fmt.Errorf("save restore data: %w", err)
-	}
-
-	return nil
 }
 
 // ----------------------------------------------------------------------------

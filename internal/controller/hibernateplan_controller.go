@@ -27,6 +27,7 @@ import (
 
 	hibernatorv1alpha1 "github.com/ardikabs/hibernator/api/v1alpha1"
 	"github.com/ardikabs/hibernator/internal/recovery"
+	"github.com/ardikabs/hibernator/internal/restore"
 	"github.com/ardikabs/hibernator/internal/scheduler"
 	"github.com/ardikabs/hibernator/pkg/k8sutil"
 )
@@ -55,6 +56,9 @@ const (
 
 	// AnnotationTarget is the annotation for target name.
 	AnnotationTarget = "hibernator/target"
+
+	// AnnotationSuspendedAtPhase is the annotation for the plan phase at suspension time.
+	AnnotationSuspendedAtPhase = "hibernator.ardikabs.com/suspended-at-phase"
 
 	// RunnerImage is the default runner image.
 	RunnerImage = "ghcr.io/ardikabs/hibernator-runner:latest"
@@ -90,6 +94,7 @@ type HibernatePlanReconciler struct {
 	Scheme            *runtime.Scheme
 	Planner           *scheduler.Planner
 	ScheduleEvaluator *scheduler.ScheduleEvaluator
+	RestoreManager    *restore.Manager
 
 	// ControlPlaneEndpoint is the endpoint for runner streaming.
 	ControlPlaneEndpoint string
@@ -159,8 +164,20 @@ func (r *HibernatePlanReconciler) Reconcile(ctx context.Context, req ctrl.Reques
 
 	// Handle suspend/resume toggle
 	if plan.Spec.Suspend && plan.Status.Phase != hibernatorv1alpha1.PhaseSuspended {
+		orig := plan.DeepCopy()
+
 		// Transition to Suspended phase
 		log.Info("suspending plan", "currentPhase", plan.Status.Phase)
+
+		if plan.Annotations == nil {
+			plan.Annotations = make(map[string]string)
+		}
+
+		plan.Annotations[AnnotationSuspendedAtPhase] = string(plan.Status.Phase)
+		if err := r.Patch(ctx, plan, client.MergeFrom(orig)); err != nil {
+			return ctrl.Result{}, fmt.Errorf("update suspension annotation: %w", err)
+		}
+
 		if err := r.statusUpdater.Update(ctx, plan, MutatorFunc(func(obj client.Object) client.Object {
 			p := obj.(*hibernatorv1alpha1.HibernatePlan)
 			p.Status.Phase = hibernatorv1alpha1.PhaseSuspended
@@ -176,7 +193,37 @@ func (r *HibernatePlanReconciler) Reconcile(ctx context.Context, req ctrl.Reques
 	}
 
 	if !plan.Spec.Suspend && plan.Status.Phase == hibernatorv1alpha1.PhaseSuspended {
-		// Resume: always transition to Active regardless of previous operation
+		suspendedAtPhase := plan.Annotations[AnnotationSuspendedAtPhase]
+		hasRestoreData, err := r.RestoreManager.HasRestoreData(ctx, plan.Namespace, plan.Name)
+		if err != nil {
+			return ctrl.Result{}, err
+		}
+
+		shouldHibernate, _, err := r.evaluateSchedule(ctx, log, plan)
+		if err != nil {
+			return ctrl.Result{}, err
+		}
+
+		// If suspended during hibernation AND restore point exists AND schedule says active → force wake-up
+		if suspendedAtPhase != "" && suspendedAtPhase != string(hibernatorv1alpha1.PhaseActive) && hasRestoreData && !shouldHibernate {
+			log.Info("forcing wake-up after unsuspend", "suspendedAtPhase", suspendedAtPhase, "hasRestoreData", hasRestoreData)
+
+			// Transition to WakingUp phase to trigger wake-up
+			if err := r.statusUpdater.Update(ctx, plan, MutatorFunc(func(obj client.Object) client.Object {
+				p := obj.(*hibernatorv1alpha1.HibernatePlan)
+				p.Status.Phase = hibernatorv1alpha1.PhaseWakingUp
+				now := metav1.Now()
+				p.Status.LastTransitionTime = &now
+				return p
+			})); err != nil {
+				return ctrl.Result{}, err
+			}
+
+			// Immediately start wake-up
+			return r.startWakeUp(ctx, log, plan)
+		}
+
+		// Resume: transition to Active (normal path when no force wake-up needed)
 		log.Info("resuming plan from suspended state")
 		if err := r.statusUpdater.Update(ctx, plan, MutatorFunc(func(obj client.Object) client.Object {
 			p := obj.(*hibernatorv1alpha1.HibernatePlan)
@@ -236,13 +283,18 @@ func (r *HibernatePlanReconciler) Reconcile(ctx context.Context, req ctrl.Reques
 			return r.startHibernation(ctx, log, plan)
 		}
 
-	case hibernatorv1alpha1.PhaseHibernating:
-		return r.reconcileHibernation(ctx, log, plan)
-
+	// Step 9: Phase guard - skip duplicate shutdown when already Hibernated
 	case hibernatorv1alpha1.PhaseHibernated:
+		if desiredPhase == hibernatorv1alpha1.PhaseHibernating {
+			log.V(1).Info("already hibernated, skipping duplicate shutdown")
+			return ctrl.Result{RequeueAfter: 5 * time.Minute}, nil
+		}
 		if desiredPhase == hibernatorv1alpha1.PhaseWakingUp {
 			return r.startWakeUp(ctx, log, plan)
 		}
+
+	case hibernatorv1alpha1.PhaseHibernating:
+		return r.reconcileHibernation(ctx, log, plan)
 
 	case hibernatorv1alpha1.PhaseWakingUp:
 		return r.reconcileWakeUp(ctx, log, plan)
@@ -756,6 +808,14 @@ func (r *HibernatePlanReconciler) reconcileExecution(ctx context.Context, log lo
 
 		if err := r.finalizeOperation(ctx, log, plan, operation); err != nil {
 			return ctrl.Result{}, err
+		}
+
+		// Cleanup restore data after successful wake-up
+		if operation == "wakeup" {
+			if err := r.cleanupAfterWakeUp(ctx, log, plan); err != nil {
+				log.Error(err, "failed to cleanup after wake-up (non-fatal)")
+				// Continue - cleanup failure is non-fatal
+			}
 		}
 
 		return ctrl.Result{}, nil
@@ -1312,6 +1372,49 @@ func (r *HibernatePlanReconciler) finalizeOperation(ctx context.Context, log log
 	}
 
 	log.Info("operation completed", "operation", operation, "cycleID", currentCycleID)
+	return nil
+}
+
+// cleanupAfterWakeUp handles restore data cleanup after successful wake-up.
+// This is separated from finalizeOperation to keep status updates and restore data
+// management concerns cleanly separated.
+func (r *HibernatePlanReconciler) cleanupAfterWakeUp(ctx context.Context, log logr.Logger, plan *hibernatorv1alpha1.HibernatePlan) error {
+	orig := plan.DeepCopy()
+
+	// Extract target names
+	targetNames := make([]string, 0, len(plan.Spec.Targets))
+	for _, target := range plan.Spec.Targets {
+		targetNames = append(targetNames, target.Name)
+	}
+
+	// Check if all targets have been marked as restored
+	restored, err := r.RestoreManager.MarkAllTargetsRestored(ctx, plan.Namespace, plan.Name, targetNames)
+	if err != nil {
+		return fmt.Errorf("check restored targets: %w", err)
+	}
+
+	if !restored {
+		log.V(1).Info("not all targets restored yet, keeping restore data locked")
+		return nil
+	}
+
+	log.Info("all targets restored, unlocking restore data")
+
+	// Unlock restore data (clear restored-* annotations)
+	if err := r.RestoreManager.UnlockRestoreData(ctx, plan.Namespace, plan.Name); err != nil {
+		return fmt.Errorf("unlock restore data: %w", err)
+	}
+
+	// Clean up suspension tracking annotation
+	if _, ok := plan.Annotations[AnnotationSuspendedAtPhase]; ok {
+		delete(plan.Annotations, AnnotationSuspendedAtPhase)
+
+		if err := r.Patch(ctx, plan, client.MergeFrom(orig)); err != nil {
+			return fmt.Errorf("remove restore data locked annotation: %w", err)
+		}
+		log.V(1).Info("removed restore data locked annotation")
+	}
+
 	return nil
 }
 

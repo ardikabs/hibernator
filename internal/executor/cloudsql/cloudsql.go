@@ -49,33 +49,16 @@ func (e *Executor) Validate(spec executor.Spec) error {
 }
 
 // Shutdown stops a Cloud SQL instance.
-func (e *Executor) Shutdown(ctx context.Context, log logr.Logger, spec executor.Spec) (executor.RestoreData, error) {
+func (e *Executor) Shutdown(ctx context.Context, log logr.Logger, spec executor.Spec) error {
 	_ = log
 	var params executorparams.CloudSQLParameters
 	if err := json.Unmarshal(spec.Parameters, &params); err != nil {
-		return executor.RestoreData{}, fmt.Errorf("parse parameters: %w", err)
+		return fmt.Errorf("parse parameters: %w", err)
 	}
 
 	// TODO: Implement actual Cloud SQL API calls using google.golang.org/api/sqladmin/v1
 	// For now, return a placeholder implementation
-
-	state := InstanceState{
-		InstanceName: params.InstanceName,
-		Project:      params.Project,
-		Tier:         "",         // Would be fetched from Cloud SQL API
-		Status:       "RUNNABLE", // Current status before stopping
-	}
-
-	// Build restore data
-	stateBytes, err := json.Marshal(state)
-	if err != nil {
-		return executor.RestoreData{}, fmt.Errorf("marshal restore data: %w", err)
-	}
-
-	return executor.RestoreData{
-		Type: e.Type(),
-		Data: stateBytes,
-	}, nil
+	return nil
 }
 
 // WakeUp starts a Cloud SQL instance.
@@ -85,14 +68,17 @@ func (e *Executor) WakeUp(ctx context.Context, log logr.Logger, spec executor.Sp
 		return fmt.Errorf("restore data is required for wake-up")
 	}
 
-	var state InstanceState
-	if err := json.Unmarshal(restore.Data, &state); err != nil {
-		return fmt.Errorf("unmarshal restore data: %w", err)
-	}
+	// Iterate over all instances in restore data
+	for instanceName, stateBytes := range restore.Data {
+		var state InstanceState
+		if err := json.Unmarshal(stateBytes, &state); err != nil {
+			return fmt.Errorf("unmarshal instance state %s: %w", instanceName, err)
+		}
 
-	// TODO: Implement actual Cloud SQL API calls to start the instance
-	// For now, this is a placeholder
-	_ = state
+		// TODO: Implement actual Cloud SQL API calls to start the instance
+		// For now, this is a placeholder
+		_ = state
+	}
 
 	return nil
 }

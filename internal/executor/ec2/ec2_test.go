@@ -146,16 +146,8 @@ func TestShutdown_StopRunningInstances(t *testing.T) {
 		},
 	}
 
-	restore, err := e.Shutdown(ctx, logr.Discard(), spec)
+	err := e.Shutdown(ctx, logr.Discard(), spec)
 	assert.NoError(t, err)
-	assert.Equal(t, "ec2", restore.Type)
-
-	var state RestoreState
-	err = json.Unmarshal(restore.Data, &state)
-	assert.NoError(t, err)
-	assert.Equal(t, 2, len(state.Instances))
-	assert.True(t, state.Instances[0].WasRunning)
-	assert.False(t, state.Instances[1].WasRunning)
 
 	mockEC2.AssertExpectations(t)
 }
@@ -183,13 +175,8 @@ func TestShutdown_NoInstancesToStop(t *testing.T) {
 		},
 	}
 
-	restore, err := e.Shutdown(ctx, logr.Discard(), spec)
+	err := e.Shutdown(ctx, logr.Discard(), spec)
 	assert.NoError(t, err)
-
-	var state RestoreState
-	err = json.Unmarshal(restore.Data, &state)
-	assert.NoError(t, err)
-	assert.Equal(t, 0, len(state.Instances))
 }
 
 func TestShutdown_DescribeInstancesError(t *testing.T) {
@@ -214,7 +201,7 @@ func TestShutdown_DescribeInstancesError(t *testing.T) {
 		},
 	}
 
-	_, err := e.Shutdown(ctx, logr.Discard(), spec)
+	err := e.Shutdown(ctx, logr.Discard(), spec)
 	assert.Error(t, err)
 	assert.Contains(t, err.Error(), "access denied")
 }
@@ -233,14 +220,9 @@ func TestWakeUp_StartPreviouslyRunningInstances(t *testing.T) {
 
 	e := NewWithClients(ec2Factory, nil)
 
-	restoreState := RestoreState{
-		Instances: []InstanceState{
-			{InstanceID: "i-123456", WasRunning: true},
-			{InstanceID: "i-789012", WasRunning: false},
-		},
-	}
-
-	restoreData, _ := json.Marshal(restoreState)
+	// Create per-instance restore data (key = instanceID)
+	instance1State, _ := json.Marshal(InstanceState{InstanceID: "i-123456", WasRunning: true})
+	instance2State, _ := json.Marshal(InstanceState{InstanceID: "i-789012", WasRunning: false})
 
 	spec := executor.Spec{
 		TargetName: "test-instances",
@@ -252,7 +234,10 @@ func TestWakeUp_StartPreviouslyRunningInstances(t *testing.T) {
 
 	restore := executor.RestoreData{
 		Type: "ec2",
-		Data: restoreData,
+		Data: map[string]json.RawMessage{
+			"i-123456": instance1State,
+			"i-789012": instance2State,
+		},
 	}
 
 	err := e.WakeUp(ctx, logr.Discard(), spec, restore)
@@ -275,7 +260,9 @@ func TestWakeUp_InvalidRestoreData(t *testing.T) {
 
 	restore := executor.RestoreData{
 		Type: "ec2",
-		Data: json.RawMessage(`{invalid json}`),
+		Data: map[string]json.RawMessage{
+			"invalid": json.RawMessage(`{invalid json}`),
+		},
 	}
 
 	err := e.WakeUp(ctx, logr.Discard(), spec, restore)
@@ -295,7 +282,7 @@ func TestShutdown_InvalidParameters(t *testing.T) {
 		},
 	}
 
-	_, err := e.Shutdown(ctx, logr.Discard(), spec)
+	err := e.Shutdown(ctx, logr.Discard(), spec)
 	assert.Error(t, err)
 }
 

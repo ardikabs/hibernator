@@ -24,6 +24,7 @@ import (
 
 	hibernatorv1alpha1 "github.com/ardikabs/hibernator/api/v1alpha1"
 	"github.com/ardikabs/hibernator/internal/controller"
+	"github.com/ardikabs/hibernator/internal/restore"
 	"github.com/ardikabs/hibernator/internal/scheduler"
 	"github.com/ardikabs/hibernator/internal/streaming/auth"
 	"github.com/ardikabs/hibernator/internal/streaming/server"
@@ -119,6 +120,7 @@ func main() {
 		Scheme:               mgr.GetScheme(),
 		Planner:              scheduler.NewPlanner(),
 		ScheduleEvaluator:    scheduler.NewScheduleEvaluator(),
+		RestoreManager:       restore.NewManager(mgr.GetClient()),
 		ControlPlaneEndpoint: controlPlaneEndpoint,
 		RunnerImage:          runnerImage,
 		RunnerServiceAccount: runnerServiceAccount,

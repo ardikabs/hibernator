@@ -19,6 +19,14 @@ import (
 func (r *HibernatePlanReconciler) startWakeUp(ctx context.Context, log logr.Logger, plan *hibernatorv1alpha1.HibernatePlan) (ctrl.Result, error) {
 	log.V(1).Info("starting wake-up")
 
+	hasRestoreData, err := r.RestoreManager.HasRestoreData(ctx, plan.Namespace, plan.Name)
+	if err != nil {
+		return r.setError(ctx, plan, fmt.Errorf("check restore data: %w", err))
+	}
+	if !hasRestoreData {
+		return r.setError(ctx, plan, fmt.Errorf("cannot wake up: no restore point found"))
+	}
+
 	// Initialize wakeup operation
 	execPlan, err := r.initializeOperation(ctx, log, plan, "wakeup")
 	if err != nil {

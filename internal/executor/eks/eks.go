@@ -133,7 +133,7 @@ func (e *Executor) Validate(spec executor.Spec) error {
 }
 
 // Shutdown performs EKS Managed Node Group hibernation by scaling to zero.
-func (e *Executor) Shutdown(ctx context.Context, log logr.Logger, spec executor.Spec) (executor.RestoreData, error) {
+func (e *Executor) Shutdown(ctx context.Context, log logr.Logger, spec executor.Spec) error {
 	log.Info("EKS executor starting shutdown",
 		"target", spec.TargetName,
 		"targetType", spec.TargetType,
@@ -142,7 +142,7 @@ func (e *Executor) Shutdown(ctx context.Context, log logr.Logger, spec executor.
 	params, err := e.parseParams(spec.Parameters)
 	if err != nil {
 		log.Error(err, "failed to parse parameters")
-		return executor.RestoreData{}, fmt.Errorf("parse parameters: %w", err)
+		return fmt.Errorf("parse parameters: %w", err)
 	}
 
 	log.Info("parameters parsed",
@@ -154,7 +154,7 @@ func (e *Executor) Shutdown(ctx context.Context, log logr.Logger, spec executor.
 	cfg, err := e.loadAWSConfig(ctx, spec)
 	if err != nil {
 		log.Error(err, "failed to load AWS config")
-		return executor.RestoreData{}, fmt.Errorf("load AWS config: %w", err)
+		return fmt.Errorf("load AWS config: %w", err)
 	}
 
 	eksClient := e.eksFactory(cfg)
@@ -163,7 +163,7 @@ func (e *Executor) Shutdown(ctx context.Context, log logr.Logger, spec executor.
 	// Retrieve cluster information and setup K8S client
 	k8sClient, err := e.setupK8SClient(ctx, log, eksClient, cfg, &spec, clusterName)
 	if err != nil {
-		return executor.RestoreData{}, fmt.Errorf("setup Kubernetes client: %w", err)
+		return fmt.Errorf("setup Kubernetes client: %w", err)
 	}
 
 	restoreState := RestoreState{
@@ -174,7 +174,7 @@ func (e *Executor) Shutdown(ctx context.Context, log logr.Logger, spec executor.
 	// Determine target node groups
 	targetNodeGroups, err := e.determineTargetNodeGroups(ctx, log, eksClient, clusterName, params)
 	if err != nil {
-		return executor.RestoreData{}, fmt.Errorf("determine target node groups: %w", err)
+		return fmt.Errorf("determine target node groups: %w", err)
 	}
 
 	// Scale each node group to zero
@@ -189,7 +189,7 @@ func (e *Executor) Shutdown(ctx context.Context, log logr.Logger, spec executor.
 				"clusterName", clusterName,
 				"nodeGroup", ngName,
 			)
-			return executor.RestoreData{}, fmt.Errorf("scale node group %s: %w", ngName, err)
+			return fmt.Errorf("scale node group %s: %w", ngName, err)
 		}
 		restoreState.NodeGroups[ngName] = state
 		log.Info("node group scaled successfully",
@@ -198,12 +198,14 @@ func (e *Executor) Shutdown(ctx context.Context, log logr.Logger, spec executor.
 			"previousMin", state.MinSize,
 			"previousMax", state.MaxSize,
 		)
-	}
 
-	restoreData, err := json.Marshal(restoreState)
-	if err != nil {
-		log.Error(err, "failed to marshal restore state")
-		return executor.RestoreData{}, fmt.Errorf("marshal restore state: %w", err)
+		// Incremental save: persist this node group's restore data immediately
+		if spec.SaveRestoreData != nil {
+			if err := spec.SaveRestoreData(ngName, state, state.DesiredSize > 0); err != nil {
+				log.Error(err, "failed to save restore data incrementally", "nodeGroup", ngName)
+				// Continue processing - save at end as fallback
+			}
+		}
 	}
 
 	log.Info("EKS shutdown completed successfully",
@@ -211,10 +213,7 @@ func (e *Executor) Shutdown(ctx context.Context, log logr.Logger, spec executor.
 		"nodeGroupCount", len(restoreState.NodeGroups),
 	)
 
-	return executor.RestoreData{
-		Type: e.Type(),
-		Data: restoreData,
-	}, nil
+	return nil
 }
 
 // WakeUp restores EKS Managed Node Groups to their original scaling configuration.
@@ -231,16 +230,7 @@ func (e *Executor) WakeUp(ctx context.Context, log logr.Logger, spec executor.Sp
 		return fmt.Errorf("parse parameters: %w", err)
 	}
 
-	var restoreState RestoreState
-	if err := json.Unmarshal(restore.Data, &restoreState); err != nil {
-		log.Error(err, "failed to unmarshal restore state")
-		return fmt.Errorf("unmarshal restore state: %w", err)
-	}
-
-	log.Info("restore state loaded",
-		"clusterName", restoreState.ClusterName,
-		"nodeGroupCount", len(restoreState.NodeGroups),
-	)
+	log.Info("restore state loaded", "nodeGroupCount", len(restore.Data))
 
 	cfg, err := e.loadAWSConfig(ctx, spec)
 	if err != nil {
@@ -249,19 +239,26 @@ func (e *Executor) WakeUp(ctx context.Context, log logr.Logger, spec executor.Sp
 	}
 
 	eksClient := e.eksFactory(cfg)
+	clusterName := params.ClusterName
 
 	// Restore each node group
-	for ngName, state := range restoreState.NodeGroups {
+	for ngName, stateBytes := range restore.Data {
+		var state NodeGroupState
+		if err := json.Unmarshal(stateBytes, &state); err != nil {
+			log.Error(err, "failed to unmarshal node group state", "nodeGroup", ngName)
+			return fmt.Errorf("unmarshal node group state %s: %w", ngName, err)
+		}
+
 		log.Info("restoring node group",
-			"clusterName", restoreState.ClusterName,
+			"clusterName", clusterName,
 			"nodeGroup", ngName,
 			"desiredSize", state.DesiredSize,
 			"minSize", state.MinSize,
 			"maxSize", state.MaxSize,
 		)
-		if err := e.restoreNodeGroup(ctx, log, eksClient, restoreState.ClusterName, ngName, state, params); err != nil {
+		if err := e.restoreNodeGroup(ctx, log, eksClient, clusterName, ngName, state, params); err != nil {
 			log.Error(err, "failed to restore node group",
-				"clusterName", restoreState.ClusterName,
+				"clusterName", clusterName,
 				"nodeGroup", ngName,
 			)
 			return fmt.Errorf("restore node group %s: %w", ngName, err)
@@ -270,8 +267,8 @@ func (e *Executor) WakeUp(ctx context.Context, log logr.Logger, spec executor.Sp
 	}
 
 	log.Info("EKS wakeup completed successfully",
-		"clusterName", restoreState.ClusterName,
-		"nodeGroupCount", len(restoreState.NodeGroups),
+		"clusterName", clusterName,
+		"nodeGroupCount", len(restore.Data),
 	)
 	return nil
 }

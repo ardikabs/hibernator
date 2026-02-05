@@ -30,6 +30,9 @@ const (
 	// AnnotationRestoreVersion is the annotation for restore data version.
 	AnnotationRestoreVersion = "hibernator.ardikabs.com/restore-version"
 
+	// AnnotationRestoredPrefix is the prefix for per-target restoration tracking annotations.
+	AnnotationRestoredPrefix = "hibernator.ardikabs.com/restored-"
+
 	// DataKeyRestore is the ConfigMap data key for restore data.
 	DataKeyRestore = "restore.json"
 
@@ -61,6 +64,14 @@ type Data struct {
 	// CreatedAt is when the restore data was created.
 	CreatedAt metav1.Time `json:"createdAt"`
 
+	// IsLive indicates if the restore data was captured from a running/active state.
+	// true = high quality (resources were running), false = low quality (resources already shutdown).
+	// IsLive resets to false when wakening from hibernation.
+	IsLive bool `json:"isLive"`
+
+	// CapturedAt is the ISO8601 timestamp when the restore data was captured by the executor.
+	CapturedAt string `json:"capturedAt,omitempty"`
+
 	// State contains executor-specific restore state.
 	State map[string]interface{} `json:"state,omitempty"`
 }
@@ -70,20 +81,21 @@ func configMapName(planName string) string {
 	return fmt.Sprintf("hibernator-restore-%s", planName)
 }
 
-// Save persists restore data for a target.
-func (m *Manager) Save(ctx context.Context, namespace, planName, targetName string, data *Data) error {
+// CreateOrSave persists restore data for a target.
+func (m *Manager) CreateOrSave(ctx context.Context, namespace, planName, targetName string, data *Data) error {
 	cmName := configMapName(planName)
 
 	// Get or create the ConfigMap
-	var cm corev1.ConfigMap
+	cm := &corev1.ConfigMap{}
 	err := m.client.Get(ctx, types.NamespacedName{
 		Namespace: namespace,
 		Name:      cmName,
-	}, &cm)
+	}, cm)
 
+	var patch client.Patch
 	if errors.IsNotFound(err) {
 		// Create new ConfigMap
-		cm = corev1.ConfigMap{
+		cm = &corev1.ConfigMap{
 			ObjectMeta: metav1.ObjectMeta{
 				Name:      cmName,
 				Namespace: namespace,
@@ -96,6 +108,8 @@ func (m *Manager) Save(ctx context.Context, namespace, planName, targetName stri
 		}
 	} else if err != nil {
 		return fmt.Errorf("get restore configmap: %w", err)
+	} else {
+		patch = client.MergeFrom(cm.DeepCopy())
 	}
 
 	// Serialize data
@@ -118,9 +132,10 @@ func (m *Manager) Save(ctx context.Context, namespace, planName, targetName stri
 
 	// Create or update
 	if cm.ResourceVersion == "" {
-		return m.client.Create(ctx, &cm)
+		return m.client.Create(ctx, cm)
 	}
-	return m.client.Update(ctx, &cm)
+
+	return m.client.Patch(ctx, cm, patch)
 }
 
 // Load retrieves restore data for a target.
@@ -154,44 +169,76 @@ func (m *Manager) Load(ctx context.Context, namespace, planName, targetName stri
 	return &data, nil
 }
 
-// LoadAll retrieves all restore data for a plan.
-func (m *Manager) LoadAll(ctx context.Context, namespace, planName string) (map[string]*Data, error) {
-	cmName := configMapName(planName)
-
-	var cm corev1.ConfigMap
-	err := m.client.Get(ctx, types.NamespacedName{
-		Namespace: namespace,
-		Name:      cmName,
-	}, &cm)
-
-	if errors.IsNotFound(err) {
-		return nil, nil // No restore data
-	}
+// SaveOrPreserve saves restore data with quality-aware preservation and merge logic.
+// Quality rules:
+//   - If existing data has IsLive=true and new has IsLive=false, preserves existing keys
+//   - If same quality or new is better, merges new keys into existing state
+//
+// Merge logic:
+//   - New keys are added to existing State map
+//   - Existing keys are preserved if existing IsLive=true and new IsLive=false
+//   - Existing keys are overwritten if new IsLive=true or same quality
+func (m *Manager) SaveOrPreserve(ctx context.Context, namespace, planName, targetName string, data *Data) error {
+	// Check if restore data already exists
+	existing, err := m.Load(ctx, namespace, planName, targetName)
 	if err != nil {
-		return nil, fmt.Errorf("get restore configmap: %w", err)
+		return fmt.Errorf("check existing restore data: %w", err)
 	}
 
-	result := make(map[string]*Data)
-	for key, dataStr := range cm.Data {
-		// Skip non-JSON keys
-		if len(key) < 6 || key[len(key)-5:] != ".json" {
-			continue
-		}
-
-		var data Data
-		if err := json.Unmarshal([]byte(dataStr), &data); err != nil {
-			continue // Skip malformed entries
-		}
-
-		targetName := key[:len(key)-5] // Remove .json suffix
-		result[targetName] = &data
+	if existing == nil {
+		// No existing data, save as-is
+		return m.CreateOrSave(ctx, namespace, planName, targetName, data)
 	}
 
-	return result, nil
+	// Merge logic: combine existing and new state maps
+	existingIsLive := existing.IsLive
+	newIsLive := data.IsLive
+
+	// Determine which quality to use for final result
+	finalIsLive := existingIsLive || newIsLive // Best quality wins
+
+	// Merge State maps
+	mergedState := make(map[string]interface{})
+
+	// First, copy all existing state
+	for key, value := range existing.State {
+		mergedState[key] = value
+	}
+
+	// Then, merge new state based on quality rules
+	for key, newValue := range data.State {
+		existingValue, existsInOld := existing.State[key]
+
+		if !existsInOld {
+			// New key not in existing → always add
+			mergedState[key] = newValue
+		} else if existingIsLive && !newIsLive {
+			// Existing key is high-quality, new is low-quality → preserve existing
+			mergedState[key] = existingValue
+		} else {
+			// New is same/better quality → overwrite
+			mergedState[key] = newValue
+		}
+	}
+
+	// Create merged data with best quality and combined state
+	mergedData := &Data{
+		Target:     data.Target,
+		Executor:   data.Executor,
+		Version:    data.Version,
+		CreatedAt:  data.CreatedAt,
+		IsLive:     finalIsLive,
+		CapturedAt: data.CapturedAt,
+		State:      mergedState,
+	}
+
+	// Save merged data
+	return m.CreateOrSave(ctx, namespace, planName, targetName, mergedData)
 }
 
-// Delete removes restore data for a target.
-func (m *Manager) Delete(ctx context.Context, namespace, planName, targetName string) error {
+// MarkTargetRestored marks a target as successfully restored.
+// Sets annotation: hibernator.ardikabs.com/restored-{targetName}: "true"
+func (m *Manager) MarkTargetRestored(ctx context.Context, namespace, planName, targetName string) error {
 	cmName := configMapName(planName)
 
 	var cm corev1.ConfigMap
@@ -201,25 +248,39 @@ func (m *Manager) Delete(ctx context.Context, namespace, planName, targetName st
 	}, &cm)
 
 	if errors.IsNotFound(err) {
-		return nil // Already gone
+		// ConfigMap doesn't exist - nothing to mark
+		return nil
 	}
 	if err != nil {
 		return fmt.Errorf("get restore configmap: %w", err)
 	}
 
-	key := fmt.Sprintf("%s.json", targetName)
-	delete(cm.Data, key)
+	// Set annotation
+	if cm.Annotations == nil {
+		cm.Annotations = make(map[string]string)
+	}
+	annotationKey := AnnotationRestoredPrefix + targetName
+	cm.Annotations[annotationKey] = "true"
 
-	// If empty, delete the entire ConfigMap
-	if len(cm.Data) == 0 {
-		return m.client.Delete(ctx, &cm)
+	// Reset IsLive flag for this target's data after successful restore
+	key := fmt.Sprintf("%s.json", targetName)
+	if val, ok := cm.Data[key]; ok {
+		var data Data
+		if err := json.Unmarshal([]byte(val), &data); err == nil {
+			// Mark data as consumed - next hibernation should capture fresh live state
+			data.IsLive = false
+
+			if dataBytes, err := json.Marshal(&data); err == nil {
+				cm.Data[key] = string(dataBytes)
+			}
+		}
 	}
 
 	return m.client.Update(ctx, &cm)
 }
 
-// DeleteAll removes all restore data for a plan.
-func (m *Manager) DeleteAll(ctx context.Context, namespace, planName string) error {
+// MarkAllTargetsRestored checks if all targets have been restored.
+func (m *Manager) MarkAllTargetsRestored(ctx context.Context, namespace, planName string, targetNames []string) (bool, error) {
 	cmName := configMapName(planName)
 
 	var cm corev1.ConfigMap
@@ -229,16 +290,71 @@ func (m *Manager) DeleteAll(ctx context.Context, namespace, planName string) err
 	}, &cm)
 
 	if errors.IsNotFound(err) {
-		return nil // Already gone
+		// No ConfigMap means no restore data, consider all restored
+		return true, nil
+	}
+	if err != nil {
+		return false, fmt.Errorf("get restore configmap: %w", err)
+	}
+
+	// Check if all targets have restored annotation
+	for _, targetName := range targetNames {
+		annotationKey := AnnotationRestoredPrefix + targetName
+		if cm.Annotations[annotationKey] != "true" {
+			return false, nil
+		}
+	}
+
+	return true, nil
+}
+
+// UnlockRestoreData clears all restored-* annotations without deleting ConfigMap data.
+// This unlocks the restore data for the next hibernation cycle.
+func (m *Manager) UnlockRestoreData(ctx context.Context, namespace, planName string) error {
+	cmName := configMapName(planName)
+
+	cm := &corev1.ConfigMap{}
+	err := m.client.Get(ctx, types.NamespacedName{
+		Namespace: namespace,
+		Name:      cmName,
+	}, cm)
+
+	if errors.IsNotFound(err) {
+		// No ConfigMap to unlock
+		return nil
 	}
 	if err != nil {
 		return fmt.Errorf("get restore configmap: %w", err)
 	}
 
-	return m.client.Delete(ctx, &cm)
+	// Remove all restored-* annotations
+	if cm.Annotations != nil {
+		for key := range cm.Annotations {
+			if len(key) > len(AnnotationRestoredPrefix) && key[:len(AnnotationRestoredPrefix)] == AnnotationRestoredPrefix {
+				delete(cm.Annotations, key)
+			}
+		}
+	}
+
+	return m.client.Update(ctx, cm)
 }
 
-// GetConfigMapRef returns the ConfigMap reference for a plan's restore data.
-func (m *Manager) GetConfigMapRef(planName string) string {
-	return configMapName(planName)
+// HasRestoreData checks if restore ConfigMap exists for the plan.
+func (m *Manager) HasRestoreData(ctx context.Context, namespace, planName string) (bool, error) {
+	cmName := configMapName(planName)
+
+	var cm corev1.ConfigMap
+	err := m.client.Get(ctx, types.NamespacedName{
+		Namespace: namespace,
+		Name:      cmName,
+	}, &cm)
+
+	if errors.IsNotFound(err) {
+		return false, nil
+	}
+	if err != nil {
+		return false, fmt.Errorf("get restore configmap: %w", err)
+	}
+
+	return len(cm.Data) > 0, nil
 }
