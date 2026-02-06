@@ -295,3 +295,288 @@ func TestIsRegistered(t *testing.T) {
 		t.Error("expected nonexistent to not be registered")
 	}
 }
+
+func TestValidateParams_WorkloadScaler_Valid_NamespaceLiterals(t *testing.T) {
+	params := []byte(`{"namespace": {"literals": ["default", "kube-system"]}}`)
+	result := ValidateParams("workloadscaler", params)
+
+	if result == nil {
+		t.Fatal("expected non-nil result")
+	}
+	if result.HasErrors() {
+		t.Errorf("expected no errors, got: %v", result.Errors)
+	}
+}
+
+func TestValidateParams_WorkloadScaler_Valid_NamespaceSelector(t *testing.T) {
+	params := []byte(`{"namespace": {"selector": {"env": "prod"}}}`)
+	result := ValidateParams("workloadscaler", params)
+
+	if result == nil {
+		t.Fatal("expected non-nil result")
+	}
+	if result.HasErrors() {
+		t.Errorf("expected no errors, got: %v", result.Errors)
+	}
+}
+
+func TestValidateParams_WorkloadScaler_Valid_WithWorkloadSelector_MatchLabels(t *testing.T) {
+	params := []byte(`{
+		"namespace": {"literals": ["default"]},
+		"workloadSelector": {
+			"matchLabels": {
+				"app": "nginx",
+				"tier": "frontend"
+			}
+		}
+	}`)
+	result := ValidateParams("workloadscaler", params)
+
+	if result == nil {
+		t.Fatal("expected non-nil result")
+	}
+	if result.HasErrors() {
+		t.Errorf("expected no errors, got: %v", result.Errors)
+	}
+}
+
+func TestValidateParams_WorkloadScaler_Valid_WithWorkloadSelector_MatchExpressions(t *testing.T) {
+	params := []byte(`{
+		"namespace": {"literals": ["default"]},
+		"workloadSelector": {
+			"matchExpressions": [
+				{
+					"key": "environment",
+					"operator": "In",
+					"values": ["prod", "staging"]
+				},
+				{
+					"key": "app",
+					"operator": "Exists"
+				}
+			]
+		}
+	}`)
+	result := ValidateParams("workloadscaler", params)
+
+	if result == nil {
+		t.Fatal("expected non-nil result")
+	}
+	if result.HasErrors() {
+		t.Errorf("expected no errors, got: %v", result.Errors)
+	}
+}
+
+func TestValidateParams_WorkloadScaler_Valid_WithIncludedGroups(t *testing.T) {
+	params := []byte(`{
+		"namespace": {"literals": ["default"]},
+		"includedGroups": ["Deployment", "StatefulSet"]
+	}`)
+	result := ValidateParams("workloadscaler", params)
+
+	if result == nil {
+		t.Fatal("expected non-nil result")
+	}
+	if result.HasErrors() {
+		t.Errorf("expected no errors, got: %v", result.Errors)
+	}
+}
+
+func TestValidateParams_WorkloadScaler_Invalid_LabelKey(t *testing.T) {
+	params := []byte(`{
+		"namespace": {"literals": ["default"]},
+		"workloadSelector": {
+			"matchLabels": {
+				"invalid key with spaces": "value"
+			}
+		}
+	}`)
+	result := ValidateParams("workloadscaler", params)
+
+	if result == nil {
+		t.Fatal("expected non-nil result")
+	}
+	if !result.HasErrors() {
+		t.Error("expected error for invalid label key with spaces")
+	}
+}
+
+func TestValidateParams_WorkloadScaler_Invalid_MatchExpressionsOperator(t *testing.T) {
+	params := []byte(`{
+		"namespace": {"literals": ["default"]},
+		"workloadSelector": {
+			"matchExpressions": [
+				{
+					"key": "app",
+					"operator": "InvalidOperator",
+					"values": ["nginx"]
+				}
+			]
+		}
+	}`)
+	result := ValidateParams("workloadscaler", params)
+
+	if result == nil {
+		t.Fatal("expected non-nil result")
+	}
+	if !result.HasErrors() {
+		t.Error("expected error for invalid matchExpressions operator")
+	}
+}
+
+func TestValidateParams_WorkloadScaler_Invalid_ExistsOperatorWithValues(t *testing.T) {
+	params := []byte(`{
+		"namespace": {"literals": ["default"]},
+		"workloadSelector": {
+			"matchExpressions": [
+				{
+					"key": "app",
+					"operator": "Exists",
+					"values": ["should-not-have-values"]
+				}
+			]
+		}
+	}`)
+	result := ValidateParams("workloadscaler", params)
+
+	if result == nil {
+		t.Fatal("expected non-nil result")
+	}
+	if !result.HasErrors() {
+		t.Error("expected error for Exists operator with values")
+	}
+}
+
+func TestValidateParams_WorkloadScaler_Invalid_InOperatorWithoutValues(t *testing.T) {
+	params := []byte(`{
+		"namespace": {"literals": ["default"]},
+		"workloadSelector": {
+			"matchExpressions": [
+				{
+					"key": "app",
+					"operator": "In",
+					"values": []
+				}
+			]
+		}
+	}`)
+	result := ValidateParams("workloadscaler", params)
+
+	if result == nil {
+		t.Fatal("expected non-nil result")
+	}
+	if !result.HasErrors() {
+		t.Error("expected error for In operator without values")
+	}
+}
+
+func TestValidateParams_WorkloadScaler_MissingNamespace(t *testing.T) {
+	params := []byte(`{"includedGroups": ["Deployment"]}`)
+	result := ValidateParams("workloadscaler", params)
+
+	if result == nil {
+		t.Fatal("expected non-nil result")
+	}
+	if !result.HasErrors() {
+		t.Error("expected error for missing namespace")
+	}
+}
+
+func TestValidateParams_WorkloadScaler_BothNamespaceLiteralsAndSelector(t *testing.T) {
+	params := []byte(`{
+		"namespace": {
+			"literals": ["default"],
+			"selector": {"env": "prod"}
+		}
+	}`)
+	result := ValidateParams("workloadscaler", params)
+
+	if result == nil {
+		t.Fatal("expected non-nil result")
+	}
+	if !result.HasErrors() {
+		t.Error("expected error when both namespace literals and selector are specified")
+	}
+}
+
+func TestValidateParams_WorkloadScaler_EmptyParams(t *testing.T) {
+	result := ValidateParams("workloadscaler", nil)
+
+	if result == nil {
+		t.Fatal("expected non-nil result")
+	}
+	if !result.HasErrors() {
+		t.Error("expected error for empty params (missing namespace)")
+	}
+}
+
+func TestValidateParams_WorkloadScaler_InvalidWaitTimeout(t *testing.T) {
+	params := []byte(`{
+		"namespace": {"literals": ["default"]},
+		"waitConfig": {
+			"enabled": true,
+			"timeout": "invalid-duration"
+		}
+	}`)
+	result := ValidateParams("workloadscaler", params)
+
+	if result == nil {
+		t.Fatal("expected non-nil result")
+	}
+	if !result.HasErrors() {
+		t.Error("expected error for invalid wait timeout format")
+	}
+}
+
+func TestValidateParams_WorkloadScaler_ValidWaitTimeout(t *testing.T) {
+	params := []byte(`{
+		"namespace": {"literals": ["default"]},
+		"waitConfig": {
+			"enabled": true,
+			"timeout": "5m"
+		}
+	}`)
+	result := ValidateParams("workloadscaler", params)
+
+	if result == nil {
+		t.Fatal("expected non-nil result")
+	}
+	if result.HasErrors() {
+		t.Errorf("expected no errors, got: %v", result.Errors)
+	}
+}
+
+func TestValidateParams_WorkloadScaler_Valid_ComplexSelector(t *testing.T) {
+	params := []byte(`{
+		"namespace": {"literals": ["production", "staging"]},
+		"includedGroups": ["Deployment", "StatefulSet", "DaemonSet"],
+		"workloadSelector": {
+			"matchLabels": {
+				"app": "backend"
+			},
+			"matchExpressions": [
+				{
+					"key": "tier",
+					"operator": "In",
+					"values": ["api", "worker"]
+				},
+				{
+					"key": "deprecated",
+					"operator": "DoesNotExist"
+				}
+			]
+		},
+		"waitConfig": {
+			"enabled": true,
+			"timeout": "10m"
+		}
+	}`)
+	result := ValidateParams("workloadscaler", params)
+
+	if result == nil {
+		t.Fatal("expected non-nil result")
+	}
+	if result.HasErrors() {
+		t.Errorf("expected no errors, got: %v", result.Errors)
+	}
+}

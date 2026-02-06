@@ -11,6 +11,10 @@ import (
 	"sort"
 	"strings"
 	"time"
+
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/apis/meta/v1/validation"
+	"k8s.io/apimachinery/pkg/util/validation/field"
 )
 
 // Result holds the outcome of parameter validation.
@@ -416,40 +420,16 @@ func validateWorkloadScalerParams(params []byte) *Result {
 	return result
 }
 
-// validateLabelSelector validates a LabelSelector structure.
-func validateLabelSelector(ls *LabelSelector) error {
+// validateLabelSelector validates a LabelSelector structure using Kubernetes validation.
+func validateLabelSelector(ls *metav1.LabelSelector) error {
 	if ls == nil {
 		return nil
 	}
 
-	// Validate matchExpressions
-	for i, req := range ls.MatchExpressions {
-		if req.Key == "" {
-			return fmt.Errorf("matchExpressions[%d].key is required", i)
-		}
-
-		validOperators := map[string]bool{
-			"In":           true,
-			"NotIn":        true,
-			"Exists":       true,
-			"DoesNotExist": true,
-		}
-
-		if !validOperators[req.Operator] {
-			return fmt.Errorf("matchExpressions[%d].operator must be one of: In, NotIn, Exists, DoesNotExist", i)
-		}
-
-		// Validate values based on operator
-		switch req.Operator {
-		case "In", "NotIn":
-			if len(req.Values) == 0 {
-				return fmt.Errorf("matchExpressions[%d].values must be non-empty for operator %s", i, req.Operator)
-			}
-		case "Exists", "DoesNotExist":
-			if len(req.Values) > 0 {
-				return fmt.Errorf("matchExpressions[%d].values must be empty for operator %s", i, req.Operator)
-			}
-		}
+	// Use built-in Kubernetes validation for label selectors
+	fldPath := field.NewPath("workloadSelector")
+	if errs := validation.ValidateLabelSelector(ls, validation.LabelSelectorValidationOptions{}, fldPath); len(errs) > 0 {
+		return fmt.Errorf("%v", errs.ToAggregate())
 	}
 
 	return nil

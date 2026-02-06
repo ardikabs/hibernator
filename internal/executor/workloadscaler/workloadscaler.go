@@ -17,6 +17,7 @@ import (
 	"github.com/ardikabs/hibernator/pkg/executorparams"
 	"github.com/ardikabs/hibernator/pkg/k8sutil"
 	"github.com/ardikabs/hibernator/pkg/waiter"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/labels"
 	"k8s.io/apimachinery/pkg/runtime/schema"
@@ -230,24 +231,20 @@ func (e *Executor) discoverNamespaces(ctx context.Context, client Client, nsSele
 }
 
 // scaleDownWorkloads scales down all matching workloads in a namespace and returns their states.
-// Returns: (statesMap, hadNonZero, error)
-// - statesMap: map with key = namespace/kind/name
-// - hadNonZero: true if any workload had replicas > 0 before scaling
+// It returns the count of workloads that had non-zero replicas before scaling down, and any error encountered.
 func (e *Executor) scaleDownWorkloads(ctx context.Context,
 	log logr.Logger,
 	client Client,
 	namespace string,
 	gvr schema.GroupVersionResource,
-	workloadSelector *executorparams.LabelSelector,
+	workloadSelector *metav1.LabelSelector,
 	params executorparams.WorkloadScalerParameters,
 	callback executor.SaveRestoreDataFunc) (int, error) {
 
 	// Convert label selector to Kubernetes labels.Selector
-	selector := labels.Everything()
-	if workloadSelector != nil {
-		if len(workloadSelector.MatchLabels) > 0 {
-			selector = labels.SelectorFromSet(workloadSelector.MatchLabels)
-		}
+	selector, err := metav1.LabelSelectorAsSelector(workloadSelector)
+	if err != nil {
+		return 0, fmt.Errorf("invalid label selector: %w", err)
 	}
 
 	// List all resources of this type in the namespace
