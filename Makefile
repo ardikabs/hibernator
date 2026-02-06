@@ -111,11 +111,11 @@ verify: generate fmt vet ## Verify code is properly formatted and generated.
 test: test-unit ## Alias for test-unit.
 
 .PHONY: test-unit
-test-unit: envtest $(COVERAGE_DIR) ## Run unit tests with coverage.
+test-unit: $(COVERAGE_DIR) ## Run unit tests with coverage.
 	@echo "$(CYAN)Running unit tests...$(RESET)"
-	@KUBEBUILDER_ASSETS="$(shell $(ENVTEST) use -p path)" \
-		$(GOCMD) test $(UNIT_TEST_PKGS) \
+	@$(GOCMD) test $(UNIT_TEST_PKGS) \
 		-race \
+		-cover \
 		-coverprofile=$(COVERAGE_PROFILE) \
 		-covermode=atomic \
 		-v 2>&1 | grep -E '(^=== RUN|^--- PASS|^--- FAIL|^PASS|^FAIL|coverage:)'
@@ -126,10 +126,9 @@ test-unit: envtest $(COVERAGE_DIR) ## Run unit tests with coverage.
 	@echo "$(GREEN)Coverage report saved to: $(COVERAGE_PROFILE)$(RESET)"
 
 .PHONY: test-unit-verbose
-test-unit-verbose: envtest $(COVERAGE_DIR) ## Run unit tests with verbose output.
+test-unit-verbose: $(COVERAGE_DIR) ## Run unit tests with verbose output.
 	@echo "$(CYAN)Running unit tests (verbose)...$(RESET)"
-	KUBEBUILDER_ASSETS="$(shell $(ENVTEST) use -p path)" \
-		$(GOCMD) test $(UNIT_TEST_PKGS) \
+	@$(GOCMD) test $(UNIT_TEST_PKGS) \
 		-race \
 		-coverprofile=$(COVERAGE_PROFILE) \
 		-covermode=atomic \
@@ -170,14 +169,13 @@ test-e2e: envtest ## Run E2E tests.
 		$(GOCMD) test ./test/e2e/... -v -ginkgo.v
 
 .PHONY: test-pkg
-test-pkg: envtest ## Run tests for a specific package. Usage: make test-pkg PKG=./internal/scheduler/...
+test-pkg: ## Run tests for a specific package. Usage: make test-pkg PKG=./internal/scheduler/...
 	@if [ -z "$(PKG)" ]; then \
 		echo "$(RED)Error: PKG is required. Usage: make test-pkg PKG=./internal/scheduler/...$(RESET)"; \
 		exit 1; \
 	fi
 	@echo "$(CYAN)Running tests for $(PKG)...$(RESET)"
-	KUBEBUILDER_ASSETS="$(shell $(ENVTEST) use -p path)" \
-		$(GOCMD) test $(PKG) -v -race -coverprofile=$(COVERAGE_DIR)/pkg-coverage.out
+	@$(GOCMD) test $(PKG) -v -race -coverprofile=$(COVERAGE_DIR)/pkg-coverage.out
 	@$(GOCMD) tool cover -func=$(COVERAGE_DIR)/pkg-coverage.out | tail -1
 
 $(COVERAGE_DIR):

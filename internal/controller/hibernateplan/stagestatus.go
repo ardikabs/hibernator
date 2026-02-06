@@ -1,4 +1,4 @@
-package controller
+package hibernateplan
 
 import (
 	"fmt"
@@ -23,7 +23,7 @@ type StageStatus struct {
 }
 
 // getStageStatus returns detailed status information about a stage's execution progress.
-func (r *HibernatePlanReconciler) getStageStatus(log logr.Logger, plan *hibernatorv1alpha1.HibernatePlan, stage scheduler.ExecutionStage) StageStatus {
+func (r *Reconciler) getStageStatus(log logr.Logger, plan *hibernatorv1alpha1.HibernatePlan, stage scheduler.ExecutionStage) StageStatus {
 	status := StageStatus{}
 	terminalCount := 0
 

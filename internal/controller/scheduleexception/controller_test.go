@@ -3,7 +3,7 @@ Copyright 2026 Ardika Saputro.
 Licensed under the Apache License, Version 2.0.
 */
 
-package controller
+package scheduleexception
 
 import (
 	"context"
@@ -13,6 +13,7 @@ import (
 	"time"
 
 	hibernatorv1alpha1 "github.com/ardikabs/hibernator/api/v1alpha1"
+	"github.com/ardikabs/hibernator/internal/wellknown"
 	"github.com/go-logr/logr"
 	"k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -60,7 +61,7 @@ var interceptorFunc = interceptor.Funcs{Patch: func(
 	return clnt.Update(ctx, obj)
 }}
 
-func newScheduleExceptionReconciler(objs ...client.Object) (*ScheduleExceptionReconciler, client.Client) {
+func newScheduleExceptionReconciler(objs ...client.Object) (*Reconciler, client.Client) {
 	scheme := newTestScheme()
 	fakeClient := fake.NewClientBuilder().
 		WithScheme(scheme).
@@ -69,7 +70,7 @@ func newScheduleExceptionReconciler(objs ...client.Object) (*ScheduleExceptionRe
 		WithInterceptorFuncs(interceptorFunc).
 		Build()
 
-	reconciler := &ScheduleExceptionReconciler{
+	reconciler := &Reconciler{
 		Client: fakeClient,
 		Log:    logr.Discard(),
 		Scheme: scheme,
@@ -211,9 +212,9 @@ func TestScheduleExceptionReconciler_AddsPlanLabel(t *testing.T) {
 		t.Fatalf("Get() error = %v", err)
 	}
 
-	labelValue, ok := updated.Labels[LabelPlan]
+	labelValue, ok := updated.Labels[wellknown.LabelPlan]
 	if !ok {
-		t.Errorf("Label %s not found", LabelPlan)
+		t.Errorf("Label %s not found", wellknown.LabelPlan)
 	}
 	if labelValue != "test-plan" {
 		t.Errorf("Label value = %v, want %v", labelValue, "test-plan")
@@ -251,7 +252,7 @@ func TestScheduleExceptionReconciler_ExpiresException(t *testing.T) {
 		ObjectMeta: metav1.ObjectMeta{
 			Name:      "expired-exception",
 			Namespace: "default",
-			Labels:    map[string]string{LabelPlan: "test-plan"},
+			Labels:    map[string]string{wellknown.LabelPlan: "test-plan"},
 		},
 		Spec: hibernatorv1alpha1.ScheduleExceptionSpec{
 			PlanRef: hibernatorv1alpha1.PlanReference{
@@ -359,8 +360,8 @@ func TestScheduleExceptionReconciler_TriggersPlanReconciliation(t *testing.T) {
 	}
 
 	// Verify label was added
-	if updated.Labels[LabelPlan] != "test-plan" {
-		t.Errorf("Label %s = %v, want %v", LabelPlan, updated.Labels[LabelPlan], "test-plan")
+	if updated.Labels[wellknown.LabelPlan] != "test-plan" {
+		t.Errorf("Label %s = %v, want %v", wellknown.LabelPlan, updated.Labels[wellknown.LabelPlan], "test-plan")
 	}
 
 	// Verify status was initialized
@@ -379,9 +380,9 @@ func TestScheduleExceptionReconciler_TriggersPlanReconciliation(t *testing.T) {
 		t.Fatalf("Get() plan error = %v", err)
 	}
 
-	triggerAnnotation, ok := updatedPlan.Annotations[AnnotationExceptionTrigger]
+	triggerAnnotation, ok := updatedPlan.Annotations[wellknown.AnnotationExceptionTrigger]
 	if !ok {
-		t.Errorf("Plan should have annotation %s to trigger reconciliation", AnnotationExceptionTrigger)
+		t.Errorf("Plan should have annotation %s to trigger reconciliation", wellknown.AnnotationExceptionTrigger)
 	}
 	if triggerAnnotation == "" {
 		t.Error("Trigger annotation should not be empty")
@@ -434,8 +435,8 @@ func TestScheduleExceptionReconciler_HandlesDeletion(t *testing.T) {
 		ObjectMeta: metav1.ObjectMeta{
 			Name:              "test-exception",
 			Namespace:         "default",
-			Labels:            map[string]string{LabelPlan: "test-plan"},
-			Finalizers:        []string{ExceptionFinalizerName},
+			Labels:            map[string]string{wellknown.LabelPlan: "test-plan"},
+			Finalizers:        []string{wellknown.ExceptionFinalizerName},
 			DeletionTimestamp: &now,
 		},
 		Spec: hibernatorv1alpha1.ScheduleExceptionSpec{

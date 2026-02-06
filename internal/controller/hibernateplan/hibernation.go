@@ -3,7 +3,7 @@ Copyright 2026 Ardika Saputro.
 Licensed under the Apache License, Version 2.0.
 */
 
-package controller
+package hibernateplan
 
 import (
 	"context"
@@ -16,7 +16,7 @@ import (
 )
 
 // startHibernation initiates the hibernation (shutdown) process.
-func (r *HibernatePlanReconciler) startHibernation(ctx context.Context, log logr.Logger, plan *hibernatorv1alpha1.HibernatePlan) (ctrl.Result, error) {
+func (r *Reconciler) startHibernation(ctx context.Context, log logr.Logger, plan *hibernatorv1alpha1.HibernatePlan) (ctrl.Result, error) {
 	log.V(1).Info("starting hibernation")
 
 	// Initialize shutdown operation
@@ -31,7 +31,7 @@ func (r *HibernatePlanReconciler) startHibernation(ctx context.Context, log logr
 
 // reconcileHibernation continues the hibernation (shutdown) process.
 // It monitors job progress and advances through execution stages.
-func (r *HibernatePlanReconciler) reconcileHibernation(ctx context.Context, log logr.Logger, plan *hibernatorv1alpha1.HibernatePlan) (ctrl.Result, error) {
+func (r *Reconciler) reconcileHibernation(ctx context.Context, log logr.Logger, plan *hibernatorv1alpha1.HibernatePlan) (ctrl.Result, error) {
 	// Check job statuses and progress through stages
 	return r.reconcileExecution(ctx, log, plan, "shutdown")
 }

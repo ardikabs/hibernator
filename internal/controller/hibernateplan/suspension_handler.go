@@ -1,10 +1,12 @@
-package controller
+package hibernateplan
 
 import (
 	"context"
 	"fmt"
 
 	hibernatorv1alpha1 "github.com/ardikabs/hibernator/api/v1alpha1"
+	"github.com/ardikabs/hibernator/internal/controller/status"
+	"github.com/ardikabs/hibernator/internal/wellknown"
 	"github.com/go-logr/logr"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	ctrl "sigs.k8s.io/controller-runtime"
@@ -13,7 +15,7 @@ import (
 
 // reconcileSuspension handles suspension state transitions (both suspend and resume).
 // Returns (handled, result, error) where handled indicates if a state transition occurred.
-func (r *HibernatePlanReconciler) reconcileSuspension(ctx context.Context, log logr.Logger, plan *hibernatorv1alpha1.HibernatePlan) (bool, ctrl.Result, error) {
+func (r *Reconciler) reconcileSuspension(ctx context.Context, log logr.Logger, plan *hibernatorv1alpha1.HibernatePlan) (bool, ctrl.Result, error) {
 	// Handle suspend transition
 	if plan.Spec.Suspend && plan.Status.Phase != hibernatorv1alpha1.PhaseSuspended {
 		result, err := r.transitionToSuspended(ctx, log, plan)
@@ -31,7 +33,7 @@ func (r *HibernatePlanReconciler) reconcileSuspension(ctx context.Context, log l
 }
 
 // transitionToSuspended handles transitioning a plan to suspended state.
-func (r *HibernatePlanReconciler) transitionToSuspended(ctx context.Context, log logr.Logger, plan *hibernatorv1alpha1.HibernatePlan) (ctrl.Result, error) {
+func (r *Reconciler) transitionToSuspended(ctx context.Context, log logr.Logger, plan *hibernatorv1alpha1.HibernatePlan) (ctrl.Result, error) {
 	orig := plan.DeepCopy()
 
 	log.Info("suspending plan", "currentPhase", plan.Status.Phase)
@@ -40,14 +42,14 @@ func (r *HibernatePlanReconciler) transitionToSuspended(ctx context.Context, log
 	if plan.Annotations == nil {
 		plan.Annotations = make(map[string]string)
 	}
-	plan.Annotations[AnnotationSuspendedAtPhase] = string(plan.Status.Phase)
+	plan.Annotations[wellknown.AnnotationSuspendedAtPhase] = string(plan.Status.Phase)
 
 	if err := r.Patch(ctx, plan, client.MergeFrom(orig)); err != nil {
 		return ctrl.Result{}, fmt.Errorf("update suspension annotation: %w", err)
 	}
 
 	// Transition to Suspended phase
-	if err := r.statusUpdater.Update(ctx, plan, MutatorFunc(func(obj client.Object) client.Object {
+	if err := r.statusUpdater.Update(ctx, plan, status.MutatorFunc(func(obj client.Object) client.Object {
 		p := obj.(*hibernatorv1alpha1.HibernatePlan)
 		p.Status.Phase = hibernatorv1alpha1.PhaseSuspended
 		p.Status.ErrorMessage = "" // Clear error message (clean slate for resume)
@@ -62,7 +64,7 @@ func (r *HibernatePlanReconciler) transitionToSuspended(ctx context.Context, log
 }
 
 // transitionFromSuspended handles transitioning a plan from suspended state back to active operation.
-func (r *HibernatePlanReconciler) transitionFromSuspended(ctx context.Context, log logr.Logger, plan *hibernatorv1alpha1.HibernatePlan) (ctrl.Result, error) {
+func (r *Reconciler) transitionFromSuspended(ctx context.Context, log logr.Logger, plan *hibernatorv1alpha1.HibernatePlan) (ctrl.Result, error) {
 	log.Info("resuming plan from suspended state")
 
 	// Check if we need to force wake-up
@@ -73,7 +75,7 @@ func (r *HibernatePlanReconciler) transitionFromSuspended(ctx context.Context, l
 	}
 
 	// Normal resume: transition to Active phase
-	if err := r.statusUpdater.Update(ctx, plan, MutatorFunc(func(obj client.Object) client.Object {
+	if err := r.statusUpdater.Update(ctx, plan, status.MutatorFunc(func(obj client.Object) client.Object {
 		p := obj.(*hibernatorv1alpha1.HibernatePlan)
 		p.Status.Phase = hibernatorv1alpha1.PhaseActive
 		now := metav1.Now()
@@ -91,8 +93,8 @@ func (r *HibernatePlanReconciler) transitionFromSuspended(ctx context.Context, l
 // - Plan was suspended during hibernation (not Active)
 // - Restore data exists
 // - Current schedule says we should be awake
-func (r *HibernatePlanReconciler) shouldForceWakeUpOnResume(ctx context.Context, log logr.Logger, plan *hibernatorv1alpha1.HibernatePlan) (bool, error) {
-	suspendedAtPhase := plan.Annotations[AnnotationSuspendedAtPhase]
+func (r *Reconciler) shouldForceWakeUpOnResume(ctx context.Context, log logr.Logger, plan *hibernatorv1alpha1.HibernatePlan) (bool, error) {
+	suspendedAtPhase := plan.Annotations[wellknown.AnnotationSuspendedAtPhase]
 
 	// Only consider forced wake-up if suspended during hibernation
 	if suspendedAtPhase == "" || suspendedAtPhase == string(hibernatorv1alpha1.PhaseActive) {
@@ -119,14 +121,14 @@ func (r *HibernatePlanReconciler) shouldForceWakeUpOnResume(ctx context.Context,
 }
 
 // forceWakeUpOnResume transitions plan to WakingUp phase and starts wake-up immediately.
-func (r *HibernatePlanReconciler) forceWakeUpOnResume(ctx context.Context, log logr.Logger, plan *hibernatorv1alpha1.HibernatePlan) (ctrl.Result, error) {
-	suspendedAtPhase := plan.Annotations[AnnotationSuspendedAtPhase]
+func (r *Reconciler) forceWakeUpOnResume(ctx context.Context, log logr.Logger, plan *hibernatorv1alpha1.HibernatePlan) (ctrl.Result, error) {
+	suspendedAtPhase := plan.Annotations[wellknown.AnnotationSuspendedAtPhase]
 	log.Info("forcing wake-up after unsuspend",
 		"suspendedAtPhase", suspendedAtPhase,
 		"reason", "restore data exists and schedule indicates active period")
 
 	// Transition to WakingUp phase
-	if err := r.statusUpdater.Update(ctx, plan, MutatorFunc(func(obj client.Object) client.Object {
+	if err := r.statusUpdater.Update(ctx, plan, status.MutatorFunc(func(obj client.Object) client.Object {
 		p := obj.(*hibernatorv1alpha1.HibernatePlan)
 		p.Status.Phase = hibernatorv1alpha1.PhaseWakingUp
 		now := metav1.Now()
