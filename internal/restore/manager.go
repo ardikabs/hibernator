@@ -12,6 +12,7 @@ import (
 
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/errors"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
 	"sigs.k8s.io/controller-runtime/pkg/client"
@@ -27,8 +28,8 @@ const (
 	// LabelManagedBy is the label key for managed-by.
 	LabelManagedBy = "app.kubernetes.io/managed-by"
 
-	// AnnotationRestoreVersion is the annotation for restore data version.
-	AnnotationRestoreVersion = "hibernator.ardikabs.com/restore-version"
+	// AnnotationPreviousRestoreState is the annotation key for previous restore state snapshot.
+	AnnotationPreviousRestoreState = "hibernator.ardikabs.com/restore-previous-state"
 
 	// AnnotationRestoredPrefix is the prefix for per-target restoration tracking annotations.
 	AnnotationRestoredPrefix = "hibernator.ardikabs.com/restored-"
@@ -73,7 +74,7 @@ type Data struct {
 	CapturedAt string `json:"capturedAt,omitempty"`
 
 	// State contains executor-specific restore state.
-	State map[string]interface{} `json:"state,omitempty"`
+	State map[string]any `json:"state,omitempty"`
 }
 
 // configMapName generates the ConfigMap name for a plan's restore data.
@@ -81,8 +82,68 @@ func configMapName(planName string) string {
 	return fmt.Sprintf("hibernator-restore-%s", planName)
 }
 
-// CreateOrSave persists restore data for a target.
-func (m *Manager) CreateOrSave(ctx context.Context, namespace, planName, targetName string, data *Data) error {
+// PrepareRestorePoint ensures a clean ConfigMap exists for storing restore data for the plan.
+func (m *Manager) PrepareRestorePoint(ctx context.Context, namespace, planName string) error {
+	cmName := configMapName(planName)
+
+	// Check if ConfigMap exists
+	cm := &corev1.ConfigMap{}
+	err := m.client.Get(ctx, types.NamespacedName{
+		Namespace: namespace,
+		Name:      cmName,
+	}, cm)
+
+	if apierrors.IsNotFound(err) {
+		// Create new ConfigMap
+		cm = &corev1.ConfigMap{
+			ObjectMeta: metav1.ObjectMeta{
+				Name:      cmName,
+				Namespace: namespace,
+				Labels: map[string]string{
+					LabelPlan: planName,
+				},
+			},
+			Data: make(map[string]string),
+		}
+		return m.client.Create(ctx, cm)
+	}
+
+	if err != nil {
+		return fmt.Errorf("get restore configmap: %w", err)
+	}
+
+	// Otherwise exists - clear restore point
+	// Assuming plan reset means reset all live data to not live, and snapshot the previous state as-is in the annotation
+	if cm.Annotations == nil {
+		cm.Annotations = make(map[string]string)
+	}
+
+	previous, err := json.Marshal(cm.Data)
+	if err == nil {
+		if len(previous) == 0 {
+			previous = []byte("n/a")
+		}
+		cm.Annotations[AnnotationPreviousRestoreState] = string(previous)
+	}
+
+	for key, val := range cm.Data {
+		state := &Data{}
+		if err := json.Unmarshal([]byte(val), state); err == nil {
+			// Reset IsLive flag
+			state.IsLive = false
+		}
+
+		stateBytes, err := json.Marshal(state)
+		if err == nil {
+			cm.Data[key] = string(stateBytes)
+		}
+	}
+
+	return m.client.Update(ctx, cm)
+}
+
+// Save persists restore data for a target.
+func (m *Manager) Save(ctx context.Context, namespace, planName, targetName string, data *Data) error {
 	cmName := configMapName(planName)
 
 	// Get or create the ConfigMap
@@ -92,7 +153,6 @@ func (m *Manager) CreateOrSave(ctx context.Context, namespace, planName, targetN
 		Name:      cmName,
 	}, cm)
 
-	var patch client.Patch
 	if errors.IsNotFound(err) {
 		// Create new ConfigMap
 		cm = &corev1.ConfigMap{
@@ -100,17 +160,16 @@ func (m *Manager) CreateOrSave(ctx context.Context, namespace, planName, targetN
 				Name:      cmName,
 				Namespace: namespace,
 				Labels: map[string]string{
-					LabelPlan:      planName,
-					LabelManagedBy: "hibernator",
+					LabelPlan: planName,
 				},
 			},
 			Data: make(map[string]string),
 		}
 	} else if err != nil {
 		return fmt.Errorf("get restore configmap: %w", err)
-	} else {
-		patch = client.MergeFrom(cm.DeepCopy())
 	}
+
+	patch := client.MergeFrom(cm.DeepCopy())
 
 	// Serialize data
 	dataBytes, err := json.Marshal(data)
@@ -130,7 +189,6 @@ func (m *Manager) CreateOrSave(ctx context.Context, namespace, planName, targetN
 	}
 	cm.Data[key] = string(dataBytes)
 
-	// Create or update
 	if cm.ResourceVersion == "" {
 		return m.client.Create(ctx, cm)
 	}
@@ -187,7 +245,7 @@ func (m *Manager) SaveOrPreserve(ctx context.Context, namespace, planName, targe
 
 	if existing == nil {
 		// No existing data, save as-is
-		return m.CreateOrSave(ctx, namespace, planName, targetName, data)
+		return m.Save(ctx, namespace, planName, targetName, data)
 	}
 
 	// Merge logic: combine existing and new state maps
@@ -198,7 +256,7 @@ func (m *Manager) SaveOrPreserve(ctx context.Context, namespace, planName, targe
 	finalIsLive := existingIsLive || newIsLive // Best quality wins
 
 	// Merge State maps
-	mergedState := make(map[string]interface{})
+	mergedState := make(map[string]any)
 
 	// First, copy all existing state
 	for key, value := range existing.State {
@@ -233,7 +291,7 @@ func (m *Manager) SaveOrPreserve(ctx context.Context, namespace, planName, targe
 	}
 
 	// Save merged data
-	return m.CreateOrSave(ctx, namespace, planName, targetName, mergedData)
+	return m.Save(ctx, namespace, planName, targetName, mergedData)
 }
 
 // MarkTargetRestored marks a target as successfully restored.
@@ -339,7 +397,8 @@ func (m *Manager) UnlockRestoreData(ctx context.Context, namespace, planName str
 	return m.client.Update(ctx, cm)
 }
 
-// HasRestoreData checks if restore ConfigMap exists for the plan.
+// HasRestoreData checks if restore ConfigMap exists for the plan, and at least have eligible restore point,
+// as indicated by `.isLive=true`
 func (m *Manager) HasRestoreData(ctx context.Context, namespace, planName string) (bool, error) {
 	cmName := configMapName(planName)
 
@@ -354,6 +413,19 @@ func (m *Manager) HasRestoreData(ctx context.Context, namespace, planName string
 	}
 	if err != nil {
 		return false, fmt.Errorf("get restore configmap: %w", err)
+	}
+
+	for _, val := range cm.Data {
+		var data Data
+		if err := json.Unmarshal([]byte(val), &data); err != nil {
+			return false, nil
+		}
+
+		// Return early if any data is live
+		// Runner will take care of restore point staleness
+		if data.IsLive {
+			return true, nil
+		}
 	}
 
 	return len(cm.Data) > 0, nil

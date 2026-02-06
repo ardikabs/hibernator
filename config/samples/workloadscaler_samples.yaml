@@ -29,7 +29,7 @@ spec:
     timezone: UTC
     offHours:
       - start: "20:00"
-        end: "10:00"
+        end: "14:00"
         daysOfWeek: ["MON", "TUE", "WED", "THU", "FRI"]
 
   # Sequential execution with different delays to observe order
@@ -70,3 +70,19 @@ spec:
         workloadSelector:
           matchLabels:
             app: sandbox
+---
+apiVersion: hibernator.ardikabs.com/v1alpha1
+kind: ScheduleException
+metadata:
+  name: for-security-patch
+  namespace: hibernator-system
+spec:
+  planRef:
+    name: workloadscaler-test
+  type: suspend
+  validFrom: "2026-02-05T00:00:00Z"
+  validUntil: "2026-02-15T23:59:59Z"
+  windows:
+    - start: "07:00"
+      end: "13:00"  # Hibernate entire day
+      daysOfWeek: ["THU","FRI", "SAT", "SUN"]

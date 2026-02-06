@@ -16,7 +16,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
 )
 
-func TestManager_CreateOrSave(t *testing.T) {
+func TestManager_Save(t *testing.T) {
 	scheme := runtime.NewScheme()
 	_ = corev1.AddToScheme(scheme)
 
@@ -45,9 +45,9 @@ func TestManager_CreateOrSave(t *testing.T) {
 		},
 	}
 
-	err := mgr.CreateOrSave(ctx, namespace, planName, targetName, data)
+	err := mgr.Save(ctx, namespace, planName, targetName, data)
 	if err != nil {
-		t.Fatalf("CreateOrSave() error = %v", err)
+		t.Fatalf("Save() error = %v", err)
 	}
 
 	// Test Load
@@ -349,9 +349,9 @@ func TestManager_MarkTargetRestored(t *testing.T) {
 		},
 	}
 
-	err := mgr.CreateOrSave(ctx, namespace, planName, targetName, data)
+	err := mgr.Save(ctx, namespace, planName, targetName, data)
 	if err != nil {
-		t.Fatalf("CreateOrSave() error = %v", err)
+		t.Fatalf("Save() error = %v", err)
 	}
 
 	// Mark as restored
@@ -430,9 +430,9 @@ func TestManager_MarkAllTargetsRestored(t *testing.T) {
 			IsLive:    true,
 			State:     map[string]interface{}{"key": "value"},
 		}
-		err := mgr.CreateOrSave(ctx, namespace, planName, target, data)
+		err := mgr.Save(ctx, namespace, planName, target, data)
 		if err != nil {
-			t.Fatalf("CreateOrSave() error = %v", err)
+			t.Fatalf("Save() error = %v", err)
 		}
 	}
 
@@ -500,9 +500,9 @@ func TestManager_UnlockRestoreData(t *testing.T) {
 			IsLive:    true,
 			State:     map[string]interface{}{"key": "value"},
 		}
-		err := mgr.CreateOrSave(ctx, namespace, planName, target, data)
+		err := mgr.Save(ctx, namespace, planName, target, data)
 		if err != nil {
-			t.Fatalf("CreateOrSave() error = %v", err)
+			t.Fatalf("Save() error = %v", err)
 		}
 		err = mgr.MarkTargetRestored(ctx, namespace, planName, target)
 		if err != nil {
@@ -572,9 +572,9 @@ func TestManager_HasRestoreData(t *testing.T) {
 		IsLive:    true,
 		State:     map[string]interface{}{"key": "value"},
 	}
-	err = mgr.CreateOrSave(ctx, namespace, planName, "test-target", data)
+	err = mgr.Save(ctx, namespace, planName, "test-target", data)
 	if err != nil {
-		t.Fatalf("CreateOrSave() error = %v", err)
+		t.Fatalf("Save() error = %v", err)
 	}
 
 	// Now should have data

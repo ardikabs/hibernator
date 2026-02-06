@@ -21,6 +21,7 @@ import (
 type RestoreData struct {
 	// Type of the executor that produced this data.
 	Type string `json:"type"`
+
 	// Data is a unified map of resource key → resource state (as JSON).
 	// Keys are executor-specific:
 	// - EC2: instanceID (e.g., "i-1234567890abcdef0")
@@ -30,12 +31,11 @@ type RestoreData struct {
 	// - RDS: instanceID or clusterID with prefix (e.g., "instance:my-db", "cluster:my-cluster")
 	// - Noop: operation ID (e.g., "noop-12345")
 	Data map[string]json.RawMessage `json:"data"`
+
 	// IsLive indicates whether data was captured from running resources (true)
 	// or from already-shutdown state (false). High-quality data (IsLive=true)
 	// is preserved over low-quality data (IsLive=false) during save operations.
 	IsLive bool `json:"isLive"`
-	// CapturedAt is the ISO8601 timestamp when this data was captured.
-	CapturedAt string `json:"capturedAt,omitempty"`
 }
 
 // SaveRestoreDataFunc is a callback for incremental restore data persistence.

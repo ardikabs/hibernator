@@ -13,6 +13,7 @@ import (
 
 	"github.com/aws/smithy-go"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/utils/ptr"
 
 	hibernatorv1alpha1 "github.com/ardikabs/hibernator/api/v1alpha1"
 )
@@ -77,9 +78,14 @@ func ClassifyError(err error) ErrorClassification {
 	errMsg := strings.ToLower(err.Error())
 
 	transientPatterns := []string{
-		"timeout", "connection refused", "temporary failure",
-		"rate limit", "throttling", "service unavailable",
-		"too many requests", "deadline exceeded",
+		"timeout",
+		"connection refused",
+		"temporary failure",
+		"rate limit",
+		"throttling",
+		"service unavailable",
+		"too many requests",
+		"deadline exceeded",
 	}
 
 	for _, pattern := range transientPatterns {
@@ -175,10 +181,14 @@ func CalculateBackoff(attempt int32) time.Duration {
 
 // RecordRetryAttempt updates the plan status for a retry attempt.
 func RecordRetryAttempt(plan *hibernatorv1alpha1.HibernatePlan, err error) {
-	now := metav1.Now()
 	plan.Status.RetryCount++
-	plan.Status.LastRetryTime = &now
-	plan.Status.ErrorMessage = err.Error()
+	plan.Status.LastRetryTime = ptr.To(metav1.Now())
+
+	if err != nil {
+		plan.Status.ErrorMessage = err.Error()
+	} else {
+		plan.Status.ErrorMessage = "unknown error"
+	}
 }
 
 // ResetRetryState clears retry tracking when transitioning out of error state.

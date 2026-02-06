@@ -212,16 +212,11 @@ run: generate fmt vet ## Run controller from source.
 	$(GOCMD) run ./cmd/controller
 
 .PHONY: docker-build
-docker-build: ## Build docker images.
+docker-build: ## Build docker images and push to registry.
 	@echo "$(CYAN)Building Docker images...$(RESET)"
-	docker build -t $(IMG) -f Dockerfile --target controller .
-	docker build -t $(RUNNER_IMG) -f Dockerfile --target runner .
+	docker buildx build --push -t $(IMG) -f Dockerfile --target controller .
+	docker buildx build --push -t $(RUNNER_IMG) -f Dockerfile --target runner .
 	@echo "$(GREEN)Images built: $(IMG), $(RUNNER_IMG)$(RESET)"
-
-.PHONY: docker-push
-docker-push: ## Push docker images.
-	docker push $(IMG)
-	docker push $(RUNNER_IMG)
 
 .PHONY: clean
 clean: clean-coverage ## Clean build artifacts and coverage files.

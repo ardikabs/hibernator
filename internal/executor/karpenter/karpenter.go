@@ -136,44 +136,17 @@ func (e *Executor) Shutdown(ctx context.Context, log logr.Logger, spec executor.
 		return fmt.Errorf("no NodePools found in cluster")
 	}
 
-	// Store original state
-	nodePoolStates := make(map[string]NodePoolState)
-
-	// Quality detection: track if any NodePools existed before deletion
-	hasExistingNodePools := false
-
 	// Process each NodePool
 	for _, nodePoolName := range targetNodePools {
 		log.Info("scaling down NodePool", "nodePool", nodePoolName)
-		state, existed, err := e.scaleDownNodePool(ctx, log, client, nodePoolName, params)
-		if err != nil {
+		if err := e.scaleDownNodePool(ctx, log, client, nodePoolName, params, spec.SaveRestoreData); err != nil {
 			log.Error(err, "failed to scale down NodePool", "nodePool", nodePoolName)
 			return fmt.Errorf("scale down NodePool %s: %w", nodePoolName, err)
-		}
-
-		if existed {
-			hasExistingNodePools = true
-		}
-
-		nodePoolStates[nodePoolName] = state
-		log.Info("NodePool deleted successfully",
-			"nodePool", nodePoolName,
-			"hasSpec", state.Spec != nil,
-			"hasLabels", len(state.Labels) > 0,
-		)
-
-		// Incremental save: persist this NodePool's restore data immediately
-		if spec.SaveRestoreData != nil {
-			if err := spec.SaveRestoreData(nodePoolName, state, existed); err != nil {
-				log.Error(err, "failed to save restore data incrementally", "nodePool", nodePoolName)
-				// Continue processing - save at end as fallback
-			}
 		}
 	}
 
 	log.Info("Karpenter shutdown completed successfully",
-		"nodePoolCount", len(nodePoolStates),
-		"hasExistingNodePools", hasExistingNodePools,
+		"nodePoolCount", len(targetNodePools),
 	)
 
 	return nil
@@ -266,7 +239,7 @@ type NodePoolState struct {
 // scaleDownNodePool deletes the NodePool to remove all managed nodes.
 // Returns: (state, existed, error)
 // - existed: true if NodePool was found and deleted, false if already NotFound
-func (e *Executor) scaleDownNodePool(ctx context.Context, log logr.Logger, client Client, nodePoolName string, params executorparams.KarpenterParameters) (NodePoolState, bool, error) {
+func (e *Executor) scaleDownNodePool(ctx context.Context, log logr.Logger, client Client, nodePoolName string, params executorparams.KarpenterParameters, callback executor.SaveRestoreDataFunc) error {
 	nodePoolGVR := schema.GroupVersionResource{
 		Group:    "karpenter.sh",
 		Version:  "v1",
@@ -277,17 +250,16 @@ func (e *Executor) scaleDownNodePool(ctx context.Context, log logr.Logger, clien
 	nodePool, err := client.Resource(nodePoolGVR).Get(ctx, nodePoolName, metav1.GetOptions{})
 	if err != nil {
 		if apierrors.IsNotFound(err) {
-			// NodePool doesn't exist - return empty state, existed=false
-			return NodePoolState{}, false, nil
+			return nil
 		}
 
-		return NodePoolState{}, false, fmt.Errorf("get NodePool: %w", err)
+		return fmt.Errorf("get NodePool: %w", err)
 	}
 
 	// Save complete spec for recreation
 	spec, found, err := unstructured.NestedMap(nodePool.Object, "spec")
 	if err != nil || !found {
-		return NodePoolState{}, false, fmt.Errorf("get NodePool spec: %w", err)
+		return fmt.Errorf("get NodePool spec: %w", err)
 	}
 
 	// Save labels if present
@@ -303,7 +275,25 @@ func (e *Executor) scaleDownNodePool(ctx context.Context, log logr.Logger, clien
 
 	// Delete the NodePool - Karpenter will handle node cleanup
 	if err := client.Resource(nodePoolGVR).Delete(ctx, nodePoolName, metav1.DeleteOptions{}); err != nil {
-		return NodePoolState{}, false, fmt.Errorf("delete NodePool: %w", err)
+		if apierrors.IsNotFound(err) {
+			return nil
+		}
+
+		return fmt.Errorf("delete NodePool: %w", err)
+	}
+
+	log.Info("NodePool deleted successfully",
+		"nodePool", nodePoolName,
+		"hasSpec", state.Spec != nil,
+		"hasLabels", len(state.Labels) > 0,
+	)
+
+	// Incremental save: persist this NodePool's restore data immediately
+	if callback != nil {
+		if err := callback(nodePoolName, state, true); err != nil {
+			log.Error(err, "failed to save restore data incrementally", "nodePool", nodePoolName)
+			// Continue processing - save at end as fallback
+		}
 	}
 
 	// Wait for NodePool deletion if configured
@@ -313,12 +303,12 @@ func (e *Executor) scaleDownNodePool(ctx context.Context, log logr.Logger, clien
 			timeout = DefaultWaitTimeout
 		}
 		if err := e.waitForNodePoolDeleted(ctx, log, client, nodePoolName, timeout); err != nil {
-			return NodePoolState{}, false, fmt.Errorf("wait for NodePool deletion: %w", err)
+			return fmt.Errorf("wait for NodePool deletion: %w", err)
 		}
 	}
 
 	// NodePool existed and was deleted - existed=true
-	return state, true, nil
+	return nil
 }
 
 // restoreNodePool recreates the NodePool from saved state.

@@ -27,6 +27,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/log/zap"
 
 	hibernatorv1alpha1 "github.com/ardikabs/hibernator/api/v1alpha1"
+	"github.com/ardikabs/hibernator/internal/restore"
 	"github.com/ardikabs/hibernator/internal/scheduler"
 )
 
@@ -190,8 +191,134 @@ var _ = Describe("HibernatePlan Controller", func() {
 		})
 	})
 
-	// Note: RestoreManager tests are in internal/restore/manager_test.go
-	// The controller does not use RestoreManager - runners persist restore data directly
+	// Note: RestoreManager unit tests are in internal/restore/manager_test.go
+	// Controller integration with RestoreManager is tested via envtest (real ConfigMap operations)
+
+	Context("When initializing hibernation cycle", func() {
+		It("Should create restore point ConfigMap on first hibernation", func() {
+			restoreManager := restore.NewManager(k8sClient)
+			planName := "test-plan-restore-init"
+			namespace := "test-ns"
+
+			// Verify ConfigMap doesn't exist initially
+			cmName := "hibernator-restore-" + planName
+			var cm corev1.ConfigMap
+			err := k8sClient.Get(ctx, types.NamespacedName{
+				Namespace: namespace,
+				Name:      cmName,
+			}, &cm)
+			Expect(err).To(HaveOccurred())
+			Expect(err.Error()).To(ContainSubstring("not found"))
+
+			// Call PrepareRestorePoint (what controller does when entering Hibernating phase)
+			err = restoreManager.PrepareRestorePoint(ctx, namespace, planName)
+			Expect(err).NotTo(HaveOccurred())
+
+			// Verify ConfigMap was created with correct labels
+			Eventually(func() error {
+				return k8sClient.Get(ctx, types.NamespacedName{
+					Namespace: namespace,
+					Name:      cmName,
+				}, &cm)
+			}, timeout, interval).Should(Succeed())
+
+			Expect(cm.Labels).To(HaveKey("hibernator.ardikabs.com/plan"))
+			Expect(cm.Labels["hibernator.ardikabs.com/plan"]).To(Equal(planName))
+			Expect(cm.Data).To(BeEmpty()) // Should be empty on initialization
+			Expect(cm.Annotations).To(BeEmpty())
+		})
+
+		It("Should reset existing restore point ConfigMap on new hibernation cycle", func() {
+			restoreManager := restore.NewManager(k8sClient)
+			planName := "test-plan-restore-reset"
+			namespace := "test-ns"
+			cmName := "hibernator-restore-" + planName
+
+			// Pre-create ConfigMap with old data (simulating previous cycle)
+			oldCM := &corev1.ConfigMap{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:      cmName,
+					Namespace: namespace,
+					Labels: map[string]string{
+						"hibernator.ardikabs.com/plan": planName,
+					},
+					Annotations: map[string]string{
+						"hibernator.ardikabs.com/restored-target1": "true",
+						"hibernator.ardikabs.com/restored-target2": "true",
+					},
+				},
+				Data: map[string]string{
+					"target1.json": `{"target":"target1","state":{"key":"old-value"}}`,
+					"target2.json": `{"target":"target2","state":{"key":"old-value"}}`,
+				},
+			}
+			Expect(k8sClient.Create(ctx, oldCM)).To(Succeed())
+
+			// Verify old data exists
+			var cm corev1.ConfigMap
+			Expect(k8sClient.Get(ctx, types.NamespacedName{
+				Namespace: namespace,
+				Name:      cmName,
+			}, &cm)).To(Succeed())
+			Expect(cm.Data).To(HaveLen(2))
+			Expect(cm.Annotations).To(HaveLen(2))
+
+			// Call PrepareRestorePoint (should reset IsLive flags and add previous state annotation)
+			err := restoreManager.PrepareRestorePoint(ctx, namespace, planName)
+			Expect(err).NotTo(HaveOccurred())
+
+			// Verify ConfigMap was updated (data preserved with IsLive=false)
+			// PrepareRestorePoint preserves existing restore data but resets IsLive flags
+			// It also keeps restored-* annotations (doesn't clear them)
+			Eventually(func() bool {
+				err := k8sClient.Get(ctx, types.NamespacedName{
+					Namespace: namespace,
+					Name:      cmName,
+				}, &cm)
+				if err != nil {
+					return false
+				}
+				// Data should still exist (preserved), and previous state annotation added
+				return len(cm.Data) > 0 && cm.Annotations["hibernator.ardikabs.com/restore-previous-state"] != ""
+			}, timeout, interval).Should(BeTrue())
+
+			Expect(cm.Labels["hibernator.ardikabs.com/plan"]).To(Equal(planName))
+			// Verify restored-* annotations are still present (not cleared)
+			Expect(cm.Annotations).To(HaveKey("hibernator.ardikabs.com/restored-target1"))
+			Expect(cm.Annotations).To(HaveKey("hibernator.ardikabs.com/restored-target2"))
+		})
+
+		It("Should update ConfigMap even when already prepared (resets IsLive flags)", func() {
+			restoreManager := restore.NewManager(k8sClient)
+			planName := "test-plan-restore-idempotent"
+			namespace := "test-ns"
+			cmName := "hibernator-restore-" + planName
+
+			// First call - creates ConfigMap
+			err := restoreManager.PrepareRestorePoint(ctx, namespace, planName)
+			Expect(err).NotTo(HaveOccurred())
+
+			// Get ResourceVersion to detect updates
+			var cm corev1.ConfigMap
+			Expect(k8sClient.Get(ctx, types.NamespacedName{
+				Namespace: namespace,
+				Name:      cmName,
+			}, &cm)).To(Succeed())
+			firstResourceVersion := cm.ResourceVersion
+
+			// Second call - always updates (resets IsLive flags even if already false)
+			err = restoreManager.PrepareRestorePoint(ctx, namespace, planName)
+			Expect(err).NotTo(HaveOccurred())
+
+			// Verify update occurred (ResourceVersion changed)
+			// This is expected behavior: PrepareRestorePoint always resets IsLive flags
+			Expect(k8sClient.Get(ctx, types.NamespacedName{
+				Namespace: namespace,
+				Name:      cmName,
+			}, &cm)).To(Succeed())
+			Expect(cm.ResourceVersion).NotTo(Equal(firstResourceVersion))
+		})
+	})
 
 	Context("When testing schedule evaluation", func() {
 		It("Should correctly determine hibernation state", func() {
@@ -268,6 +395,7 @@ var _ = Describe("HibernatePlan Controller", func() {
 				Scheme:               scheme.Scheme,
 				Planner:              scheduler.NewPlanner(),
 				ScheduleEvaluator:    scheduler.NewScheduleEvaluator(),
+				RestoreManager:       restore.NewManager(k8sClient),
 				ControlPlaneEndpoint: "",
 				RunnerImage:          "",
 				RunnerServiceAccount: "runner-fixed-sa",
@@ -337,6 +465,7 @@ var _ = Describe("HibernatePlan Controller", func() {
 				Scheme:               scheme.Scheme,
 				Planner:              scheduler.NewPlanner(),
 				ScheduleEvaluator:    scheduler.NewScheduleEvaluator(),
+				RestoreManager:       restore.NewManager(k8sClient),
 				ControlPlaneEndpoint: "",
 				RunnerImage:          "",
 				RunnerServiceAccount: "hibernator-runner",
@@ -419,6 +548,7 @@ func setupControllerWithManager(mgr ctrl.Manager) error {
 		Scheme:            mgr.GetScheme(),
 		Planner:           scheduler.NewPlanner(),
 		ScheduleEvaluator: scheduler.NewScheduleEvaluator(),
+		RestoreManager:    restore.NewManager(mgr.GetClient()),
 	}).SetupWithManager(mgr, 1)
 }
 

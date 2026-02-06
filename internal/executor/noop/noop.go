@@ -107,28 +107,25 @@ func (e *Executor) Shutdown(ctx context.Context, log logr.Logger, spec executor.
 	}
 
 	// Create restore state
-	restoreState := RestoreState{
+	state := RestoreState{
 		Parameters:    params,
 		OperationTime: time.Now().UTC(),
 		GeneratedID:   uuid.New().String(),
 		TargetName:    spec.TargetName,
 	}
 
-	log.Info("generating restore state",
-		"generatedID", restoreState.GeneratedID,
-		"operationTime", restoreState.OperationTime,
-	)
-
-	// Build unified map-based restore data (key = operationID)
-	unifiedData := make(map[string]json.RawMessage)
-	stateBytes, _ := json.Marshal(restoreState)
-	unifiedData[restoreState.GeneratedID] = stateBytes
-
 	log.Info("NoOp shutdown completed successfully",
 		"target", spec.TargetName,
-		"generatedID", restoreState.GeneratedID,
-		"restoreDataSize", len(stateBytes),
+		"generatedID", state.GeneratedID,
 	)
+
+	// Incremental save: persist this instance's restore data immediately
+	if spec.SaveRestoreData != nil {
+		if err := spec.SaveRestoreData(spec.TargetName, state, true); err != nil {
+			log.Error(err, "failed to save restore data incrementally", "target", spec.TargetName)
+			// Continue processing - save at end as fallback
+		}
+	}
 
 	return nil
 }
@@ -142,30 +139,30 @@ func (e *Executor) WakeUp(ctx context.Context, log logr.Logger, spec executor.Sp
 	)
 
 	// Iterate over all operations in restore data (should be single operation for noop)
-	for operationID, stateBytes := range restore.Data {
-		var restoreState RestoreState
-		if err := json.Unmarshal(stateBytes, &restoreState); err != nil {
-			log.Error(err, "failed to unmarshal restore state", "operationId", operationID)
-			return fmt.Errorf("unmarshal restore state %s: %w", operationID, err)
+	for id, stateBytes := range restore.Data {
+		var state RestoreState
+		if err := json.Unmarshal(stateBytes, &state); err != nil {
+			log.Error(err, "failed to unmarshal restore state", "operationId", id)
+			return fmt.Errorf("unmarshal restore state %s: %w", id, err)
 		}
 
 		log.Info("restore state loaded",
-			"generatedID", restoreState.GeneratedID,
-			"shutdownTime", restoreState.OperationTime,
-			"originalTarget", restoreState.TargetName,
-			"failureMode", restoreState.Parameters.FailureMode,
+			"generatedID", state.GeneratedID,
+			"shutdownTime", state.OperationTime,
+			"originalTarget", state.TargetName,
+			"failureMode", state.Parameters.FailureMode,
 		)
 
 		// Check for failure simulation
-		if restoreState.Parameters.FailureMode == "wakeup" || restoreState.Parameters.FailureMode == "both" {
-			log.Info("simulating wakeup failure", "failureMode", restoreState.Parameters.FailureMode)
-			return fmt.Errorf("simulated wakeup failure (failureMode=%s)", restoreState.Parameters.FailureMode)
+		if state.Parameters.FailureMode == "wakeup" || state.Parameters.FailureMode == "both" {
+			log.Info("simulating wakeup failure", "failureMode", state.Parameters.FailureMode)
+			return fmt.Errorf("simulated wakeup failure (failureMode=%s)", state.Parameters.FailureMode)
 		}
 
 		// Simulate work with delay
-		delay := e.getDelay(restoreState.Parameters.RandomDelaySeconds)
+		delay := e.getDelay(state.Parameters.RandomDelaySeconds)
 		log.Info("simulating restoration work with random delay",
-			"maxDelaySeconds", restoreState.Parameters.RandomDelaySeconds,
+			"maxDelaySeconds", state.Parameters.RandomDelaySeconds,
 			"actualDelay", delay,
 		)
 
@@ -179,7 +176,7 @@ func (e *Executor) WakeUp(ctx context.Context, log logr.Logger, spec executor.Sp
 
 		log.Info("NoOp wakeup completed for operation",
 			"target", spec.TargetName,
-			"generatedID", restoreState.GeneratedID,
+			"generatedID", state.GeneratedID,
 		)
 	}
 

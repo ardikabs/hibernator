@@ -33,11 +33,6 @@ type Parameters = executorparams.EC2Parameters
 // Selector is an alias for the shared EC2 selector type.
 type Selector = executorparams.EC2Selector
 
-// RestoreState holds EC2 restore data.
-type RestoreState struct {
-	Instances []InstanceState `json:"instances"`
-}
-
 // InstanceState holds state for a single instance.
 type InstanceState struct {
 	InstanceID string `json:"instanceId"`
@@ -144,9 +139,6 @@ func (e *Executor) Shutdown(ctx context.Context, log logr.Logger, spec executor.
 		}
 	}
 
-	// Build unified map-based restore data (key = instanceID)
-	restoreData := make(map[string]json.RawMessage)
-
 	var instancesToStop []string
 	for _, inst := range instances {
 		instanceID := aws.ToString(inst.InstanceId)
@@ -157,8 +149,7 @@ func (e *Executor) Shutdown(ctx context.Context, log logr.Logger, spec executor.
 			InstanceID: instanceID,
 			WasRunning: wasRunning,
 		}
-		stateBytes, _ := json.Marshal(state)
-		restoreData[instanceID] = stateBytes
+
 		log.Info("instance state captured",
 			"instanceId", instanceID,
 			"state", inst.State.Name,
@@ -206,7 +197,7 @@ func (e *Executor) Shutdown(ctx context.Context, log logr.Logger, spec executor.
 	}
 
 	log.Info("EC2 shutdown completed successfully",
-		"totalInstances", len(restoreData),
+		"totalInstances", len(instances),
 		"stoppedInstances", len(instancesToStop),
 		"isLive", hasRunningInstances,
 	)

@@ -138,11 +138,7 @@ func (e *Executor) Shutdown(ctx context.Context, log logr.Logger, spec executor.
 		return fmt.Errorf("no namespaces found matching selector")
 	}
 
-	// Discover workloads across all target namespaces
-	// Use unified map format: key = namespace/kind/name
-	restoreData := make(map[string]json.RawMessage)
-	hasNonZeroReplicas := false // Quality detection
-
+	totalWorkloadscaled := 0
 	for _, ns := range targetNamespaces {
 		for _, kind := range includedGroups {
 			gvr, err := e.resolveGVR(kind)
@@ -150,24 +146,19 @@ func (e *Executor) Shutdown(ctx context.Context, log logr.Logger, spec executor.
 				return fmt.Errorf("resolve GVR for %s: %w", kind, err)
 			}
 
-			statesMap, hadNonZero, err := e.scaleDownWorkloads(ctx, log, client, ns, gvr, params.WorkloadSelector, params, spec)
+			counts, err := e.scaleDownWorkloads(ctx, log, client, ns, gvr, params.WorkloadSelector, params, spec.SaveRestoreData)
 			if err != nil {
 				return fmt.Errorf("scale down %s in namespace %s: %w", kind, ns, err)
 			}
 
 			// Track if any workload had non-zero replicas
-			if hadNonZero {
-				hasNonZeroReplicas = true
-			}
-
-			// Merge into unified map
-			for key, stateBytes := range statesMap {
-				restoreData[key] = stateBytes
+			if counts > 0 {
+				totalWorkloadscaled += counts
 			}
 		}
 	}
 
-	log.Info("hibernation completed", "workloadsScaled", len(restoreData), "hasNonZeroReplicas", hasNonZeroReplicas)
+	log.Info("hibernation completed", "numberOfWorkloadsScaled", totalWorkloadscaled)
 
 	return nil
 }
@@ -249,7 +240,7 @@ func (e *Executor) scaleDownWorkloads(ctx context.Context,
 	gvr schema.GroupVersionResource,
 	workloadSelector *executorparams.LabelSelector,
 	params executorparams.WorkloadScalerParameters,
-	spec executor.Spec) (map[string]json.RawMessage, bool, error) {
+	callback executor.SaveRestoreDataFunc) (int, error) {
 
 	// Convert label selector to Kubernetes labels.Selector
 	selector := labels.Everything()
@@ -262,12 +253,12 @@ func (e *Executor) scaleDownWorkloads(ctx context.Context,
 	// List all resources of this type in the namespace
 	list, err := client.ListWorkloads(ctx, gvr, namespace, selector.String())
 	if err != nil {
-		return nil, false, fmt.Errorf("list resources: %w", err)
+		return 0, fmt.Errorf("list resources: %w", err)
 	}
 
 	// Build unified map: key = namespace/kind/name
 	statesMap := make(map[string]json.RawMessage)
-	hadNonZero := false
+	counts := 0
 
 	for _, item := range list.Items {
 		// Get the scale subresource for this workload
@@ -282,7 +273,7 @@ func (e *Executor) scaleDownWorkloads(ctx context.Context,
 		// Get current replica count from scale.spec.replicas
 		replicas, found, err := unstructured.NestedInt64(scaleObj.Object, "spec", "replicas")
 		if err != nil {
-			return nil, false, fmt.Errorf("get replicas from scale for %s/%s: %w", item.GetKind(), item.GetName(), err)
+			return 0, fmt.Errorf("get replicas from scale for %s/%s: %w", item.GetKind(), item.GetName(), err)
 		}
 		if !found {
 			// Skip if scale object doesn't have spec.replicas
@@ -291,7 +282,7 @@ func (e *Executor) scaleDownWorkloads(ctx context.Context,
 
 		// Track if this workload has non-zero replicas
 		if replicas > 0 {
-			hadNonZero = true
+			counts++
 		}
 
 		// Store current state with key = namespace/kind/name
@@ -310,18 +301,18 @@ func (e *Executor) scaleDownWorkloads(ctx context.Context,
 
 		// Scale to zero by updating scale.spec.replicas
 		if err := unstructured.SetNestedField(scaleObj.Object, int64(0), "spec", "replicas"); err != nil {
-			return nil, false, fmt.Errorf("set replicas to zero in scale for %s/%s: %w", item.GetKind(), item.GetName(), err)
+			return 0, fmt.Errorf("set replicas to zero in scale for %s/%s: %w", item.GetKind(), item.GetName(), err)
 		}
 
 		// Update the scale subresource
 		_, err = client.UpdateScale(ctx, gvr, namespace, scaleObj)
 		if err != nil {
-			return nil, false, fmt.Errorf("update scale for %s/%s: %w", item.GetKind(), item.GetName(), err)
+			return 0, fmt.Errorf("update scale for %s/%s: %w", item.GetKind(), item.GetName(), err)
 		}
 
 		// Incremental save: persist this workload's restore data immediately
-		if spec.SaveRestoreData != nil {
-			if err := spec.SaveRestoreData(key, state, replicas > 0); err != nil {
+		if callback != nil {
+			if err := callback(key, state, replicas > 0); err != nil {
 				log.Error(err, "failed to save restore data incrementally", "workload", key)
 				// Continue processing - save at end as fallback
 			}
@@ -334,12 +325,12 @@ func (e *Executor) scaleDownWorkloads(ctx context.Context,
 				timeout = DefaultWaitTimeout
 			}
 			if err := e.waitForReplicasScaled(ctx, log, client, gvr, item.GetNamespace(), item.GetName(), 0, timeout); err != nil {
-				return nil, false, fmt.Errorf("wait for %s/%s to scale: %w", item.GetKind(), item.GetName(), err)
+				return 0, fmt.Errorf("wait for %s/%s to scale: %w", item.GetKind(), item.GetName(), err)
 			}
 		}
 	}
 
-	return statesMap, hadNonZero, nil
+	return counts, nil
 }
 
 // restoreWorkload restores a single workload to its previous replica count.
@@ -468,9 +459,9 @@ func (e *Executor) waitForReplicasScaled(ctx context.Context, log logr.Logger, c
 		}
 
 		if statusReplicas == desiredReplicas {
-			return true, fmt.Sprintf("replicas=%d/%d", statusReplicas, desiredReplicas), nil
+			return true, fmt.Sprintf("current replicas=%d has been met with desired replicas=%d", statusReplicas, desiredReplicas), nil
 		}
-		return false, fmt.Sprintf("replicas=%d/%d (waiting)", statusReplicas, desiredReplicas), nil
+		return false, fmt.Sprintf("current replicas=%d; desired replicas=%d (waiting)", statusReplicas, desiredReplicas), nil
 	}
 
 	description := fmt.Sprintf("%s/%s in namespace %s to scale to %d replicas", gvr.Resource, name, namespace, desiredReplicas)

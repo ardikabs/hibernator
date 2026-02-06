@@ -133,7 +133,7 @@ func (r *runner) run(ctx context.Context) error {
 	}
 
 	// Parse target parameters
-	var params map[string]interface{}
+	var params map[string]any
 	if cfg.TargetParams != "" {
 		if err := json.Unmarshal([]byte(cfg.TargetParams), &params); err != nil {
 			r.log.Error(err, "failed to parse target params")
@@ -227,9 +227,14 @@ func (r *runner) executeOperation(ctx context.Context, exec executor.Executor, s
 		rd, err := r.loadRestoreData(ctx)
 		if err != nil {
 			operationErr = fmt.Errorf("load restore data: %w", err)
-		} else {
-			operationErr = exec.WakeUp(ctx, r.log, *spec, *rd)
+			break
 		}
+
+		if !rd.IsLive {
+			r.log.Info("warning: restore data is from non-live source; restore point may be outdated. WIP")
+		}
+
+		operationErr = exec.WakeUp(ctx, r.log, *spec, *rd)
 	default:
 		operationErr = fmt.Errorf("unknown operation: %s", r.cfg.Operation)
 	}
@@ -248,7 +253,7 @@ func (r *runner) executeOperation(ctx context.Context, exec executor.Executor, s
 }
 
 // buildExecutorSpec constructs the executor spec from connector configuration.
-func (r *runner) buildExecutorSpec(ctx context.Context, params map[string]interface{}) (*executor.Spec, func() error, error) {
+func (r *runner) buildExecutorSpec(ctx context.Context, params map[string]any) (*executor.Spec, func() error, error) {
 	paramsBytes, _ := json.Marshal(params)
 	spec := &executor.Spec{
 		TargetName: r.cfg.Target,
@@ -493,13 +498,13 @@ func (r *runner) loadK8SClusterConfig(ctx context.Context, spec *executor.Spec) 
 // This reduces Kubernetes API calls from N*2 to 1 (where N = number of resources).
 type restoreDataAccumulator struct {
 	mu          sync.Mutex
-	liveKeys    map[string]interface{} // High-quality state (isLive=true)
-	nonLiveKeys map[string]interface{} // Low-quality state (isLive=false)
+	liveKeys    map[string]any // High-quality state (isLive=true)
+	nonLiveKeys map[string]any // Low-quality state (isLive=false)
 	log         logr.Logger
 }
 
 // add accumulates a key-value pair in memory with per-key quality tracking.
-func (a *restoreDataAccumulator) add(key string, value interface{}, isLive bool) error {
+func (a *restoreDataAccumulator) add(key string, value any, isLive bool) error {
 	a.mu.Lock()
 	defer a.mu.Unlock()
 
@@ -590,13 +595,13 @@ func (a *restoreDataAccumulator) flush(ctx context.Context, rm *restore.Manager,
 // This reduces API calls significantly (1000 resources: 2000 calls → 2 calls) while preserving per-key quality.
 func (r *runner) createSaveRestoreDataCallback(ctx context.Context) (executor.SaveRestoreDataFunc, func() error) {
 	accumulator := &restoreDataAccumulator{
-		liveKeys:    make(map[string]interface{}),
-		nonLiveKeys: make(map[string]interface{}),
+		liveKeys:    make(map[string]any),
+		nonLiveKeys: make(map[string]any),
 		log:         r.log,
 	}
 
 	// Callback: accumulate in memory (no API call)
-	callback := func(key string, value interface{}, isLive bool) error {
+	callback := func(key string, value any, isLive bool) error {
 		return accumulator.add(key, value, isLive)
 	}
 
@@ -623,18 +628,19 @@ func (r *runner) loadRestoreData(ctx context.Context) (*executor.RestoreData, er
 	}
 
 	// Convert state map to unified map[string]json.RawMessage format
-	unifiedData := make(map[string]json.RawMessage)
+	transormedData := make(map[string]json.RawMessage)
 	for key, value := range data.State {
 		valueBytes, err := json.Marshal(value)
 		if err != nil {
 			return nil, fmt.Errorf("marshal state value for key %s: %w", key, err)
 		}
-		unifiedData[key] = valueBytes
+		transormedData[key] = valueBytes
 	}
 
 	return &executor.RestoreData{
-		Type: data.Executor,
-		Data: unifiedData,
+		Type:   data.Executor,
+		Data:   transormedData,
+		IsLive: data.IsLive,
 	}, nil
 }
 
@@ -652,8 +658,6 @@ func initStreamingClient(ctx context.Context, log logr.Logger, cfg *Config) (str
 	grpcEndpoint := cfg.GRPCEndpoint
 	webSocketEndpoint := cfg.WebSocketEndpoint
 	httpCallbackEndpoint := cfg.HTTPCallbackEndpoint
-
-	log.Info("DEBUG: Initializing streaming client", "executionID", cfg.ExecutionID)
 
 	clientCfg := streamclient.ClientConfig{
 		Type:         streamclient.ClientTypeAuto,

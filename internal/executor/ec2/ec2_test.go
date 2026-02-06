@@ -290,25 +290,6 @@ func TestShutdown_InvalidParameters(t *testing.T) {
 // Data type tests
 // ============================================================================
 
-func TestRestoreState_JSON(t *testing.T) {
-	state := RestoreState{
-		Instances: []InstanceState{
-			{InstanceID: "i-123456", WasRunning: true},
-			{InstanceID: "i-789012", WasRunning: false},
-		},
-	}
-
-	data, err := json.Marshal(state)
-	assert.NoError(t, err)
-
-	var decoded RestoreState
-	err = json.Unmarshal(data, &decoded)
-	assert.NoError(t, err)
-	assert.Equal(t, 2, len(decoded.Instances))
-	assert.Equal(t, "i-123456", decoded.Instances[0].InstanceID)
-	assert.True(t, decoded.Instances[0].WasRunning)
-}
-
 func TestInstanceState_JSON(t *testing.T) {
 	state := InstanceState{
 		InstanceID: "i-123456",

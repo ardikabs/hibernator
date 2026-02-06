@@ -383,31 +383,6 @@ func TestShutdown_InvalidParameters(t *testing.T) {
 }
 
 // ============================================================================
-// Data type tests
-// ============================================================================
-
-func TestRestoreState_JSON(t *testing.T) {
-	state := RestoreState{
-		ClusterName: "my-cluster",
-		NodeGroups: map[string]NodeGroupState{
-			"ng-1": {DesiredSize: 3, MinSize: 1, MaxSize: 5},
-			"ng-2": {DesiredSize: 5, MinSize: 2, MaxSize: 10},
-		},
-	}
-
-	data, err := json.Marshal(state)
-	assert.NoError(t, err)
-
-	var decoded RestoreState
-	err = json.Unmarshal(data, &decoded)
-	assert.NoError(t, err)
-	assert.Equal(t, "my-cluster", decoded.ClusterName)
-	assert.Equal(t, 2, len(decoded.NodeGroups))
-	assert.Equal(t, int32(3), decoded.NodeGroups["ng-1"].DesiredSize)
-	assert.Equal(t, int32(5), decoded.NodeGroups["ng-2"].DesiredSize)
-}
-
-// ============================================================================
 // K8S client integration tests
 // ============================================================================
 

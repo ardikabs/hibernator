@@ -123,11 +123,9 @@ func (s *ExecutionServiceServer) EmitLog(ctx context.Context, entry *streamingv1
 	// Emit log at appropriate level
 	switch entry.Level {
 	case "ERROR":
-		log.Error(nil, entry.Message, kvs...)
+		log.Info(entry.Message, kvs...)
 	case "WARN", "INFO":
 		log.Info(entry.Message, kvs...)
-	case "DEBUG":
-		log.V(1).Info(entry.Message, kvs...)
 	default:
 		log.V(1).Info(entry.Message, kvs...)
 	}

@@ -38,12 +38,6 @@ type Parameters = executorparams.EKSParameters
 // NodeGroup is an alias for the shared EKS node group type.
 type NodeGroup = executorparams.EKSNodeGroup
 
-// RestoreState holds EKS restore data for managed node groups.
-type RestoreState struct {
-	ClusterName string                    `json:"clusterName"`
-	NodeGroups  map[string]NodeGroupState `json:"nodeGroups"`
-}
-
 // NodeGroupState holds state for a managed node group.
 type NodeGroupState struct {
 	DesiredSize int32 `json:"desired"`
@@ -166,11 +160,6 @@ func (e *Executor) Shutdown(ctx context.Context, log logr.Logger, spec executor.
 		return fmt.Errorf("setup Kubernetes client: %w", err)
 	}
 
-	restoreState := RestoreState{
-		ClusterName: clusterName,
-		NodeGroups:  make(map[string]NodeGroupState),
-	}
-
 	// Determine target node groups
 	targetNodeGroups, err := e.determineTargetNodeGroups(ctx, log, eksClient, clusterName, params)
 	if err != nil {
@@ -183,34 +172,19 @@ func (e *Executor) Shutdown(ctx context.Context, log logr.Logger, spec executor.
 			"clusterName", clusterName,
 			"nodeGroup", ngName,
 		)
-		state, err := e.scaleNodeGroupToZero(ctx, log, eksClient, k8sClient, clusterName, ngName, params)
-		if err != nil {
+
+		if err := e.scaleNodeGroupToZero(ctx, log, eksClient, k8sClient, clusterName, ngName, params, spec.SaveRestoreData); err != nil {
 			log.Error(err, "failed to scale node group",
 				"clusterName", clusterName,
 				"nodeGroup", ngName,
 			)
 			return fmt.Errorf("scale node group %s: %w", ngName, err)
 		}
-		restoreState.NodeGroups[ngName] = state
-		log.Info("node group scaled successfully",
-			"nodeGroup", ngName,
-			"previousDesired", state.DesiredSize,
-			"previousMin", state.MinSize,
-			"previousMax", state.MaxSize,
-		)
-
-		// Incremental save: persist this node group's restore data immediately
-		if spec.SaveRestoreData != nil {
-			if err := spec.SaveRestoreData(ngName, state, state.DesiredSize > 0); err != nil {
-				log.Error(err, "failed to save restore data incrementally", "nodeGroup", ngName)
-				// Continue processing - save at end as fallback
-			}
-		}
 	}
 
 	log.Info("EKS shutdown completed successfully",
 		"clusterName", clusterName,
-		"nodeGroupCount", len(restoreState.NodeGroups),
+		"nodeGroupCount", len(targetNodeGroups),
 	)
 
 	return nil
@@ -306,14 +280,14 @@ func (e *Executor) listNodeGroups(ctx context.Context, client EKSClient, cluster
 	return out.Nodegroups, nil
 }
 
-func (e *Executor) scaleNodeGroupToZero(ctx context.Context, log logr.Logger, eksClient EKSClient, k8sClient K8SClient, clusterName, ngName string, params Parameters) (NodeGroupState, error) {
+func (e *Executor) scaleNodeGroupToZero(ctx context.Context, log logr.Logger, eksClient EKSClient, k8sClient K8SClient, clusterName, ngName string, params Parameters, callback executor.SaveRestoreDataFunc) error {
 	// Get current state
 	desc, err := eksClient.DescribeNodegroup(ctx, &eks.DescribeNodegroupInput{
 		ClusterName:   aws.String(clusterName),
 		NodegroupName: aws.String(ngName),
 	})
 	if err != nil {
-		return NodeGroupState{}, err
+		return err
 	}
 
 	state := NodeGroupState{
@@ -323,7 +297,7 @@ func (e *Executor) scaleNodeGroupToZero(ctx context.Context, log logr.Logger, ek
 	}
 
 	// Scale to zero
-	_, err = eksClient.UpdateNodegroupConfig(ctx, &eks.UpdateNodegroupConfigInput{
+	if _, err = eksClient.UpdateNodegroupConfig(ctx, &eks.UpdateNodegroupConfigInput{
 		ClusterName:   aws.String(clusterName),
 		NodegroupName: aws.String(ngName),
 		ScalingConfig: &types.NodegroupScalingConfig{
@@ -331,9 +305,23 @@ func (e *Executor) scaleNodeGroupToZero(ctx context.Context, log logr.Logger, ek
 			DesiredSize: aws.Int32(0),
 			MaxSize:     aws.Int32(state.MaxSize), // Keep max
 		},
-	})
-	if err != nil {
-		return NodeGroupState{}, err
+	}); err != nil {
+		return err
+	}
+
+	log.Info("node group scaled successfully",
+		"nodeGroup", ngName,
+		"previousDesired", state.DesiredSize,
+		"previousMin", state.MinSize,
+		"previousMax", state.MaxSize,
+	)
+
+	// Incremental save: persist this node group's restore data immediately
+	if callback != nil {
+		if err := callback(ngName, state, state.DesiredSize > 0); err != nil {
+			log.Error(err, "failed to save restore data incrementally", "nodeGroup", ngName)
+			// Continue processing - save at end as fallback
+		}
 	}
 
 	// Wait for Node Group scale down is complete if configured
@@ -343,11 +331,11 @@ func (e *Executor) scaleNodeGroupToZero(ctx context.Context, log logr.Logger, ek
 			timeout = DefaultWaitTimeout
 		}
 		if err := e.waitForNodesDeleted(ctx, log, k8sClient, clusterName, ngName, timeout); err != nil {
-			return NodeGroupState{}, fmt.Errorf("wait for node group active: %w", err)
+			return fmt.Errorf("wait for node group active: %w", err)
 		}
 	}
 
-	return state, nil
+	return nil
 }
 
 func (e *Executor) restoreNodeGroup(ctx context.Context, log logr.Logger, client EKSClient, clusterName, ngName string, state NodeGroupState, params Parameters) error {
