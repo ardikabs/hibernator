@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/robfig/cron/v3"
+	"k8s.io/utils/clock"
 )
 
 // ExceptionType defines the type of schedule exception.
@@ -46,12 +47,14 @@ type Exception struct {
 
 // ScheduleEvaluator evaluates cron-based schedules to determine hibernation state.
 type ScheduleEvaluator struct {
+	Clock  clock.Clock
 	parser cron.Parser
 }
 
 // NewScheduleEvaluator creates a new schedule evaluator.
-func NewScheduleEvaluator() *ScheduleEvaluator {
+func NewScheduleEvaluator(clk clock.Clock) *ScheduleEvaluator {
 	return &ScheduleEvaluator{
+		Clock: clk,
 		// Use standard cron format with optional seconds
 		parser: cron.NewParser(cron.Minute | cron.Hour | cron.Dom | cron.Month | cron.Dow),
 	}
@@ -86,7 +89,8 @@ type EvaluationResult struct {
 
 // Evaluate determines if we should be in hibernation based on the schedule.
 // It compares the last hibernate and wake-up times to determine current state.
-func (e *ScheduleEvaluator) Evaluate(window ScheduleWindow, now time.Time) (*EvaluationResult, error) {
+func (e *ScheduleEvaluator) Evaluate(window ScheduleWindow) (*EvaluationResult, error) {
+	now := e.Clock.Now()
 	loc, err := time.LoadLocation(window.Timezone)
 	if err != nil {
 		return nil, fmt.Errorf("invalid timezone %s: %w", window.Timezone, err)
@@ -159,7 +163,8 @@ func (e *ScheduleEvaluator) findLastOccurrence(sched cron.Schedule, now time.Tim
 
 // NextRequeueTime calculates when the controller should next check the schedule.
 // Returns the earlier of: next hibernate time or next wake-up time.
-func (e *ScheduleEvaluator) NextRequeueTime(result *EvaluationResult, now time.Time) time.Duration {
+func (e *ScheduleEvaluator) NextRequeueTime(result *EvaluationResult) time.Duration {
+	now := e.Clock.Now()
 	var nextEvent time.Time
 
 	if result.ShouldHibernate {
@@ -185,32 +190,33 @@ func (e *ScheduleEvaluator) NextRequeueTime(result *EvaluationResult, now time.T
 // - extend: Union of base schedule + exception windows (more hibernation time)
 // - suspend: Carve-out from base schedule (keep awake during exception windows)
 // - replace: Use only exception windows, ignore base schedule entirely
-func (e *ScheduleEvaluator) EvaluateWithException(baseWindows []OffHourWindow, timezone string, exception *Exception, now time.Time) (*EvaluationResult, error) {
+func (e *ScheduleEvaluator) EvaluateWithException(baseWindows []OffHourWindow, timezone string, exception *Exception) (*EvaluationResult, error) {
 	// If no exception or exception is not active, evaluate base schedule only
-	if exception == nil || !e.isExceptionActive(exception, now) {
-		return e.evaluateWindows(baseWindows, timezone, now)
+	if exception == nil || !e.isExceptionActive(exception) {
+		return e.evaluateWindows(baseWindows, timezone)
 	}
 
 	switch exception.Type {
 	case ExceptionExtend:
-		return e.evaluateExtend(baseWindows, exception.Windows, timezone, now)
+		return e.evaluateExtend(baseWindows, exception.Windows, timezone)
 	case ExceptionSuspend:
-		return e.evaluateSuspend(baseWindows, exception, timezone, now)
+		return e.evaluateSuspend(baseWindows, exception, timezone)
 	case ExceptionReplace:
-		return e.evaluateWindows(exception.Windows, timezone, now)
+		return e.evaluateWindows(exception.Windows, timezone)
 	default:
 		// Unknown exception type, fall back to base schedule
-		return e.evaluateWindows(baseWindows, timezone, now)
+		return e.evaluateWindows(baseWindows, timezone)
 	}
 }
 
 // isExceptionActive checks if the exception is currently within its valid period.
-func (e *ScheduleEvaluator) isExceptionActive(exception *Exception, now time.Time) bool {
+func (e *ScheduleEvaluator) isExceptionActive(exception *Exception) bool {
+	now := e.Clock.Now()
 	return !now.Before(exception.ValidFrom) && !now.After(exception.ValidUntil)
 }
 
 // evaluateWindows evaluates a set of OffHourWindows and returns the result.
-func (e *ScheduleEvaluator) evaluateWindows(windows []OffHourWindow, timezone string, now time.Time) (*EvaluationResult, error) {
+func (e *ScheduleEvaluator) evaluateWindows(windows []OffHourWindow, timezone string) (*EvaluationResult, error) {
 	if len(windows) == 0 {
 		// No windows means no hibernation
 		return &EvaluationResult{
@@ -230,20 +236,20 @@ func (e *ScheduleEvaluator) evaluateWindows(windows []OffHourWindow, timezone st
 		Timezone:      timezone,
 	}
 
-	return e.Evaluate(window, now)
+	return e.Evaluate(window)
 }
 
 // evaluateExtend combines base windows with exception windows (union).
 // This means hibernation occurs during BOTH base and exception windows.
-func (e *ScheduleEvaluator) evaluateExtend(baseWindows, exceptionWindows []OffHourWindow, timezone string, now time.Time) (*EvaluationResult, error) {
+func (e *ScheduleEvaluator) evaluateExtend(baseWindows, exceptionWindows []OffHourWindow, timezone string) (*EvaluationResult, error) {
 	// Evaluate base schedule
-	baseResult, err := e.evaluateWindows(baseWindows, timezone, now)
+	baseResult, err := e.evaluateWindows(baseWindows, timezone)
 	if err != nil {
 		return nil, fmt.Errorf("evaluate base windows: %w", err)
 	}
 
 	// Evaluate exception windows
-	exceptionResult, err := e.evaluateWindows(exceptionWindows, timezone, now)
+	exceptionResult, err := e.evaluateWindows(exceptionWindows, timezone)
 	if err != nil {
 		return nil, fmt.Errorf("evaluate exception windows: %w", err)
 	}
@@ -271,7 +277,8 @@ func (e *ScheduleEvaluator) evaluateExtend(baseWindows, exceptionWindows []OffHo
 // evaluateSuspend evaluates schedule with suspension windows.
 // Suspension PREVENTS hibernation during exception windows, even if base schedule says hibernate.
 // Lead time prevents NEW hibernation starts within the buffer before suspension.
-func (e *ScheduleEvaluator) evaluateSuspend(baseWindows []OffHourWindow, exception *Exception, timezone string, now time.Time) (*EvaluationResult, error) {
+func (e *ScheduleEvaluator) evaluateSuspend(baseWindows []OffHourWindow, exception *Exception, timezone string) (*EvaluationResult, error) {
+	now := e.Clock.Now()
 	loc, err := time.LoadLocation(timezone)
 	if err != nil {
 		return nil, fmt.Errorf("invalid timezone %s: %w", timezone, err)
@@ -280,7 +287,7 @@ func (e *ScheduleEvaluator) evaluateSuspend(baseWindows []OffHourWindow, excepti
 	localNow := now.In(loc)
 
 	// First evaluate base schedule
-	baseResult, err := e.evaluateWindows(baseWindows, timezone, now)
+	baseResult, err := e.evaluateWindows(baseWindows, timezone)
 	if err != nil {
 		return nil, fmt.Errorf("evaluate base windows: %w", err)
 	}

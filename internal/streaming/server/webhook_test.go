@@ -171,7 +171,7 @@ func TestValidateExecutionAccess(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			execService := NewExecutionServiceServer(nil, nil)
+			execService := NewExecutionServiceServer(nil, nil, clk)
 
 			// Pre-cache metadata if provided
 			if tt.cacheMeta != nil {
@@ -181,8 +181,8 @@ func TestValidateExecutionAccess(t *testing.T) {
 			}
 
 			ws := &WebhookServer{
-				executionService: execService,
-				log:              logger,
+				execService: execService,
+				log:         logger,
 			}
 
 			err := ws.validateExecutionAccess(context.Background(), tt.result, tt.executionID)

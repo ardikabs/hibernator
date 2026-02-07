@@ -53,7 +53,7 @@ func (r *Reconciler) transitionToSuspended(ctx context.Context, log logr.Logger,
 		p := obj.(*hibernatorv1alpha1.HibernatePlan)
 		p.Status.Phase = hibernatorv1alpha1.PhaseSuspended
 		p.Status.ErrorMessage = "" // Clear error message (clean slate for resume)
-		now := metav1.Now()
+		now := metav1.NewTime(r.Clock.Now())
 		p.Status.LastTransitionTime = &now
 		return p
 	})); err != nil {
@@ -78,7 +78,7 @@ func (r *Reconciler) transitionFromSuspended(ctx context.Context, log logr.Logge
 	if err := r.statusUpdater.Update(ctx, plan, status.MutatorFunc(func(obj client.Object) client.Object {
 		p := obj.(*hibernatorv1alpha1.HibernatePlan)
 		p.Status.Phase = hibernatorv1alpha1.PhaseActive
-		now := metav1.Now()
+		now := metav1.NewTime(r.Clock.Now())
 		p.Status.LastTransitionTime = &now
 		return p
 	})); err != nil {
@@ -131,7 +131,7 @@ func (r *Reconciler) forceWakeUpOnResume(ctx context.Context, log logr.Logger, p
 	if err := r.statusUpdater.Update(ctx, plan, status.MutatorFunc(func(obj client.Object) client.Object {
 		p := obj.(*hibernatorv1alpha1.HibernatePlan)
 		p.Status.Phase = hibernatorv1alpha1.PhaseWakingUp
-		now := metav1.Now()
+		now := metav1.NewTime(r.Clock.Now())
 		p.Status.LastTransitionTime = &now
 		return p
 	})); err != nil {

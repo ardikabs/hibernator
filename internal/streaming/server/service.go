@@ -3,13 +3,18 @@ package server
 import (
 	"context"
 	"fmt"
+	"io"
 	"sync"
 	"time"
 
 	"github.com/go-logr/logr"
+	"google.golang.org/grpc"
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
 	batchv1 "k8s.io/api/batch/v1"
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/client-go/tools/record"
+	"k8s.io/utils/clock"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/log"
 
@@ -42,6 +47,8 @@ type ExecutionState struct {
 type ExecutionServiceServer struct {
 	streamingv1alpha1.UnimplementedExecutionServiceServer
 
+	clock clock.Clock
+
 	log           logr.Logger
 	k8sClient     client.Client
 	eventRecorder record.EventRecorder
@@ -59,15 +66,84 @@ type ExecutionServiceServer struct {
 func NewExecutionServiceServer(
 	k8sClient client.Client,
 	eventRecorder record.EventRecorder,
+	clk clock.Clock,
 ) *ExecutionServiceServer {
 	logger := log.Log.WithName("execution-service")
 
 	return &ExecutionServiceServer{
+		clock:           clk,
 		log:             logger,
 		k8sClient:       k8sClient,
 		eventRecorder:   eventRecorder,
 		executionStatus: make(map[string]*ExecutionState),
 		metadataCache:   make(map[string]*ExecutionMetadata),
+	}
+}
+
+// StreamLogs receives a stream of log entries from a runner via gRPC.
+// This is a transport-layer method that delegates to ExecutionServiceServer.
+func (s *ExecutionServiceServer) StreamLogs(stream grpc.ClientStreamingServer[streamingv1alpha1.LogEntry, streamingv1alpha1.StreamLogsResponse]) error {
+	ctx := stream.Context()
+	var count int64
+	var executionID string
+	var lastLogLevel string
+	startTime := time.Now()
+
+	// Cleanup tracking on stream exit
+	defer func() {
+		duration := time.Since(startTime)
+		s.log.V(1).Info("stream closed",
+			"executionId", executionID,
+			"count", count,
+			"duration", duration,
+		)
+	}()
+
+	for {
+		entry, err := stream.Recv()
+		if err == io.EOF {
+			s.log.V(1).Info("log stream completed", "executionId", executionID, "count", count)
+			return stream.SendAndClose(&streamingv1alpha1.StreamLogsResponse{
+				ReceivedCount: count,
+			})
+		}
+		if err != nil {
+			// Check if this is a graceful stream closure
+			if isGracefulStreamClosure(err) {
+				// Detect if runner failed (last log was ERROR)
+				if lastLogLevel == "ERROR" {
+					s.log.Info("runner closed stream after error",
+						"executionId", executionID,
+						"count", count,
+						"reason", err.Error(),
+					)
+				} else {
+					s.log.Info("runner closed stream normally",
+						"executionId", executionID,
+						"count", count,
+						"reason", err.Error(),
+					)
+				}
+				return nil
+			}
+
+			// Log unexpected errors at ERROR level
+			s.log.Error(err, "unexpected stream error",
+				"executionId", executionID,
+				"count", count,
+			)
+			return status.Errorf(codes.Internal, "receive error: %v", err)
+		}
+
+		executionID = entry.ExecutionId
+		lastLogLevel = entry.Level
+		count++
+
+		// Delegate to business logic layer (EmitLog pipes logs with full context)
+		if err := s.EmitLog(ctx, entry); err != nil {
+			s.log.Error(err, "failed to process log entry")
+			return status.Errorf(codes.Internal, "process error: %v", err)
+		}
 	}
 }
 
@@ -139,7 +215,7 @@ func (s *ExecutionServiceServer) ReportProgress(ctx context.Context, req *stream
 	state.Phase = req.Phase
 	state.ProgressPercent = req.ProgressPercent
 	state.Message = req.Message
-	state.LastUpdate = time.Now()
+	state.LastUpdate = s.clock.Now()
 	s.executionStatusMu.Unlock()
 
 	// Get execution metadata from cache (queries K8s API only on first access)
@@ -201,7 +277,7 @@ func (s *ExecutionServiceServer) ReportCompletion(ctx context.Context, req *stre
 	state.Completed = true
 	state.Success = req.Success
 	state.Error = req.ErrorMessage
-	state.LastUpdate = time.Now()
+	state.LastUpdate = s.clock.Now()
 	s.executionStatusMu.Unlock()
 
 	// Get execution metadata from cache (queries K8s API only on first access)
@@ -267,14 +343,14 @@ func (s *ExecutionServiceServer) Heartbeat(ctx context.Context, req *streamingv1
 		}
 		s.executionStatus[req.ExecutionId] = state
 	}
-	state.LastUpdate = time.Now()
+	state.LastUpdate = s.clock.Now()
 	s.executionStatusMu.Unlock()
 
 	s.log.V(2).Info("Heartbeat received", "executionId", req.ExecutionId)
 
 	return &streamingv1alpha1.HeartbeatResponse{
 		Acknowledged: true,
-		ServerTime:   time.Now().Format(time.RFC3339),
+		ServerTime:   s.clock.Now().Format(time.RFC3339),
 	}, nil
 }
 
@@ -340,7 +416,7 @@ func (s *ExecutionServiceServer) StartCleanupRoutine(ctx context.Context, staleD
 
 // cleanupStaleExecutions removes executions that haven't been updated within staleDuration.
 func (s *ExecutionServiceServer) cleanupStaleExecutions(staleDuration time.Duration) {
-	now := time.Now()
+	now := s.clock.Now()
 	var staleIDs []string
 
 	// Collect stale execution IDs (read lock)

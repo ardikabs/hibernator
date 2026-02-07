@@ -15,6 +15,8 @@ import (
 	batchv1 "k8s.io/api/batch/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
+	"k8s.io/utils/clock"
+	clocktesting "k8s.io/utils/clock/testing"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
 
 	streamingv1alpha1 "github.com/ardikabs/hibernator/api/streaming/v1alpha1"
@@ -22,15 +24,19 @@ import (
 	"github.com/ardikabs/hibernator/internal/wellknown"
 )
 
+var (
+	clk = clocktesting.NewFakeClock(time.Now())
+)
+
 func TestNewExecutionServiceServer(t *testing.T) {
-	server := NewExecutionServiceServer(nil, nil)
+	server := NewExecutionServiceServer(nil, nil, clk)
 
 	require.NotNil(t, server, "expected non-nil server")
 	assert.NotNil(t, server.executionStatus, "expected executionStatus to be initialized")
 }
 
 func TestReportProgress(t *testing.T) {
-	server := NewExecutionServiceServer(nil, nil)
+	server := NewExecutionServiceServer(nil, nil, clk)
 
 	tests := []struct {
 		name   string
@@ -85,7 +91,7 @@ func TestReportProgress(t *testing.T) {
 }
 
 func TestReportCompletion(t *testing.T) {
-	server := NewExecutionServiceServer(nil, nil)
+	server := NewExecutionServiceServer(nil, nil, clk)
 
 	tests := []struct {
 		name    string
@@ -137,7 +143,7 @@ func TestReportCompletion(t *testing.T) {
 }
 
 func TestHeartbeat(t *testing.T) {
-	server := NewExecutionServiceServer(nil, nil)
+	server := NewExecutionServiceServer(nil, nil, clk)
 
 	// First, create an execution state
 	_, _ = server.ReportProgress(context.Background(), &streamingv1alpha1.ProgressReport{
@@ -152,7 +158,7 @@ func TestHeartbeat(t *testing.T) {
 	server.executionStatusMu.RUnlock()
 
 	// Wait a bit and send heartbeat
-	time.Sleep(10 * time.Millisecond)
+	clk.Sleep(10 * time.Millisecond)
 
 	req := &streamingv1alpha1.HeartbeatRequest{
 		ExecutionId: "exec-hb",
@@ -172,7 +178,7 @@ func TestHeartbeat(t *testing.T) {
 }
 
 func TestHeartbeat_NonExistentExecution(t *testing.T) {
-	server := NewExecutionServiceServer(nil, nil)
+	server := NewExecutionServiceServer(nil, nil, clk)
 
 	req := &streamingv1alpha1.HeartbeatRequest{
 		ExecutionId: "non-existent",
@@ -206,7 +212,7 @@ func TestEmitLog(t *testing.T) {
 		WithObjects(job).
 		Build()
 
-	server := NewExecutionServiceServer(fakeClient, nil)
+	server := NewExecutionServiceServer(fakeClient, nil, clk)
 
 	// Test emitting a log entry
 	entry := &streamingv1alpha1.LogEntry{
@@ -224,7 +230,7 @@ func TestEmitLog(t *testing.T) {
 }
 
 func TestEmitLog_NilEntry(t *testing.T) {
-	server := NewExecutionServiceServer(nil, nil)
+	server := NewExecutionServiceServer(nil, nil, clk)
 
 	err := server.EmitLog(context.Background(), nil)
 	require.Error(t, err, "expected error for nil entry")
@@ -239,7 +245,7 @@ func TestEmitLog_JobNotFound(t *testing.T) {
 		WithScheme(scheme).
 		Build()
 
-	server := NewExecutionServiceServer(fakeClient, nil)
+	server := NewExecutionServiceServer(fakeClient, nil, clk)
 
 	// Test emitting a log entry when Job doesn't exist
 	entry := &streamingv1alpha1.LogEntry{
@@ -276,7 +282,7 @@ func TestGetExecutionMetadata(t *testing.T) {
 		WithObjects(job).
 		Build()
 
-	server := NewExecutionServiceServer(fakeClient, nil)
+	server := NewExecutionServiceServer(fakeClient, nil, clk)
 
 	meta, err := server.getExecutionMetadata(context.Background(), "my-plan-my-target-1234567890")
 	require.NoError(t, err)
@@ -295,7 +301,7 @@ func TestGetExecutionMetadata_NotFound(t *testing.T) {
 		WithScheme(scheme).
 		Build()
 
-	server := NewExecutionServiceServer(fakeClient, nil)
+	server := NewExecutionServiceServer(fakeClient, nil, clk)
 
 	_, err := server.getExecutionMetadata(context.Background(), "nonexistent-execution")
 	require.Error(t, err, "expected error for non-existent execution")
@@ -322,7 +328,7 @@ func TestGetExecutionMetadata_MissingPlanLabel(t *testing.T) {
 		WithObjects(job).
 		Build()
 
-	server := NewExecutionServiceServer(fakeClient, nil)
+	server := NewExecutionServiceServer(fakeClient, nil, clk)
 
 	_, err := server.getExecutionMetadata(context.Background(), "broken-execution")
 	require.Error(t, err, "expected error for missing plan label")
@@ -350,7 +356,7 @@ func TestGetOrCacheExecutionMetadata(t *testing.T) {
 		WithObjects(job).
 		Build()
 
-	server := NewExecutionServiceServer(fakeClient, nil)
+	server := NewExecutionServiceServer(fakeClient, nil, clk)
 
 	// First call should query K8s API and cache the result
 	meta1, err := server.getOrCacheExecutionMetadata(context.Background(), "cached-exec-123")
@@ -371,7 +377,7 @@ func TestGetOrCacheExecutionMetadata(t *testing.T) {
 }
 
 func TestEvictMetadataCache(t *testing.T) {
-	server := NewExecutionServiceServer(nil, nil)
+	server := NewExecutionServiceServer(nil, nil, clk)
 
 	// Manually add metadata to cache
 	server.metadataCacheMu.Lock()
@@ -415,7 +421,7 @@ func TestFetchHibernatePlan(t *testing.T) {
 		WithObjects(plan).
 		Build()
 
-	server := NewExecutionServiceServer(fakeClient, nil)
+	server := NewExecutionServiceServer(fakeClient, nil, clk)
 
 	result, err := server.fetchHibernatePlan(context.Background(), "test-namespace", "test-plan")
 	require.NoError(t, err)
@@ -431,14 +437,14 @@ func TestFetchHibernatePlan_NotFound(t *testing.T) {
 		WithScheme(scheme).
 		Build()
 
-	server := NewExecutionServiceServer(fakeClient, nil)
+	server := NewExecutionServiceServer(fakeClient, nil, clk)
 
 	_, err := server.fetchHibernatePlan(context.Background(), "test-namespace", "nonexistent")
 	require.Error(t, err, "expected error for non-existent plan")
 }
 
 func TestConcurrentAccess(t *testing.T) {
-	server := NewExecutionServiceServer(nil, nil)
+	server := NewExecutionServiceServer(nil, nil, clk)
 
 	done := make(chan bool)
 
@@ -469,7 +475,7 @@ func TestConcurrentAccess(t *testing.T) {
 }
 
 func TestMultipleExecutions(t *testing.T) {
-	server := NewExecutionServiceServer(nil, nil)
+	server := NewExecutionServiceServer(nil, nil, clk)
 
 	execIDs := []string{"exec-1", "exec-2", "exec-3"}
 
@@ -499,6 +505,7 @@ func TestCleanupExecution(t *testing.T) {
 	server := &ExecutionServiceServer{
 		metadataCache:   make(map[string]*ExecutionMetadata),
 		executionStatus: make(map[string]*ExecutionState),
+		clock:           clk,
 	}
 
 	execID := "exec-to-cleanup"
@@ -551,6 +558,7 @@ func TestCleanupStaleExecutions(t *testing.T) {
 	server := &ExecutionServiceServer{
 		metadataCache:   make(map[string]*ExecutionMetadata),
 		executionStatus: make(map[string]*ExecutionState),
+		clock:           clock.RealClock{},
 	}
 
 	staleDuration := 10 * time.Minute
@@ -624,6 +632,7 @@ func TestStartCleanupRoutine(t *testing.T) {
 	server := &ExecutionServiceServer{
 		metadataCache:   make(map[string]*ExecutionMetadata),
 		executionStatus: make(map[string]*ExecutionState),
+		clock:           clk,
 	}
 
 	// Use short durations for testing

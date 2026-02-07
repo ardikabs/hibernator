@@ -23,12 +23,12 @@ import (
 // testWebhookServer creates a webhook server with mocked dependencies for testing
 func testWebhookServer(t *testing.T) *WebhookServer {
 	log := logr.Discard()
-	execService := NewExecutionServiceServer(nil, nil)
+	execService := NewExecutionServiceServer(nil, nil, clk)
 
 	return &WebhookServer{
-		executionService: execService,
-		validator:        nil, // Will bypass auth for these tests
-		log:              log,
+		execService: execService,
+		validator:   nil, // Will bypass auth for these tests
+		log:         log,
 	}
 }
 

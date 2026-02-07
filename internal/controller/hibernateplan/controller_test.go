@@ -22,6 +22,7 @@ import (
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/types"
 	clientgoscheme "k8s.io/client-go/kubernetes/scheme"
+	clocktesting "k8s.io/utils/clock/testing"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
@@ -63,7 +64,7 @@ var interceptorFunc = interceptor.Funcs{Patch: func(
 	return clnt.Update(ctx, obj)
 }}
 
-func newHibernatePlanReconciler(objs ...client.Object) (*Reconciler, client.Client) {
+func newHibernatePlanReconciler(objs ...client.Object) (*Reconciler, client.Client, *clocktesting.FakeClock) {
 	scheme := newTestScheme()
 	fakeClient := fake.NewClientBuilder().
 		WithScheme(scheme).
@@ -72,20 +73,23 @@ func newHibernatePlanReconciler(objs ...client.Object) (*Reconciler, client.Clie
 		WithInterceptorFuncs(interceptorFunc).
 		Build()
 
+	clk := clocktesting.NewFakeClock(time.Now())
+
 	reconciler := &Reconciler{
 		Client:               fakeClient,
 		APIReader:            fakeClient,
+		Clock:                clk,
 		Log:                  logr.Discard(),
 		Scheme:               scheme,
 		Planner:              scheduler.NewPlanner(),
-		ScheduleEvaluator:    scheduler.NewScheduleEvaluator(),
+		ScheduleEvaluator:    scheduler.NewScheduleEvaluator(clk),
 		RestoreManager:       restore.NewManager(fakeClient),
 		ControlPlaneEndpoint: "http://localhost:8080",
 		RunnerImage:          "hibernator-runner:latest",
 		RunnerServiceAccount: "hibernator-runner",
 		statusUpdater:        status.NewSyncStatusUpdater(fakeClient),
 	}
-	return reconciler, fakeClient
+	return reconciler, fakeClient, clk
 }
 
 func TestHibernatePlanReconciler_InitializesStatus(t *testing.T) {
@@ -114,7 +118,7 @@ func TestHibernatePlanReconciler_InitializesStatus(t *testing.T) {
 		},
 	}
 
-	reconciler, fakeClient := newHibernatePlanReconciler(plan)
+	reconciler, fakeClient, _ := newHibernatePlanReconciler(plan)
 
 	// Reconcile multiple times to process through all stages
 	req := reconcile.Request{NamespacedName: types.NamespacedName{Name: "test-plan", Namespace: "default"}}
@@ -163,7 +167,7 @@ func TestHibernatePlanReconciler_AddsFinalizer(t *testing.T) {
 		},
 	}
 
-	reconciler, fakeClient := newHibernatePlanReconciler(plan)
+	reconciler, fakeClient, _ := newHibernatePlanReconciler(plan)
 
 	req := reconcile.Request{NamespacedName: types.NamespacedName{Name: "test-plan", Namespace: "default"}}
 	// First reconcile adds finalizer
@@ -193,7 +197,7 @@ func TestHibernatePlanReconciler_AddsFinalizer(t *testing.T) {
 func TestHibernatePlanReconciler_HandlesNotFound(t *testing.T) {
 	ctx := context.Background()
 
-	reconciler, _ := newHibernatePlanReconciler()
+	reconciler, _, _ := newHibernatePlanReconciler()
 
 	req := reconcile.Request{NamespacedName: types.NamespacedName{Name: "nonexistent", Namespace: "default"}}
 	result, err := reconciler.Reconcile(ctx, req)
@@ -236,7 +240,7 @@ func TestHibernatePlanReconciler_HandlesDeletion(t *testing.T) {
 		},
 	}
 
-	reconciler, fakeClient := newHibernatePlanReconciler(plan)
+	reconciler, fakeClient, _ := newHibernatePlanReconciler(plan)
 
 	req := reconcile.Request{NamespacedName: types.NamespacedName{Name: "test-plan", Namespace: "default"}}
 	_, err := reconciler.Reconcile(ctx, req)
@@ -291,19 +295,21 @@ func TestHibernatePlanReconciler_EvaluatesSchedule(t *testing.T) {
 		},
 	}
 
-	reconciler, _ := newHibernatePlanReconciler(plan)
+	reconciler, _, clk := newHibernatePlanReconciler(plan)
 
 	// Test schedule evaluator directly
 	evaluator := reconciler.ScheduleEvaluator
 
 	// Test during work hours (should NOT be hibernated)
 	workTime := time.Date(2026, 1, 28, 14, 0, 0, 0, time.UTC) // Wed 2 PM
+	clk.SetTime(workTime)                                     // Update clock for evaluator
+
 	window := scheduler.ScheduleWindow{
 		HibernateCron: "0 20 * * 1,2,3,4,5",
 		WakeUpCron:    "0 6 * * 2,3,4,5,6",
 		Timezone:      "UTC",
 	}
-	result, err := evaluator.Evaluate(window, workTime)
+	result, err := evaluator.Evaluate(window)
 	if err != nil {
 		t.Fatalf("Evaluate() error = %v", err)
 	}
@@ -313,7 +319,9 @@ func TestHibernatePlanReconciler_EvaluatesSchedule(t *testing.T) {
 
 	// Test during night hours (should be hibernated)
 	nightTime := time.Date(2026, 1, 28, 23, 0, 0, 0, time.UTC) // Wed 11 PM
-	result, err = evaluator.Evaluate(window, nightTime)
+	clk.SetTime(nightTime)                                     // Update clock
+
+	result, err = evaluator.Evaluate(window)
 	if err != nil {
 		t.Fatalf("Evaluate() error = %v", err)
 	}
@@ -482,7 +490,8 @@ func TestHibernatePlanReconciler_PicksNewestActiveException(t *testing.T) {
 		},
 	}
 
-	reconciler, _ := newHibernatePlanReconciler(plan, oldException, newException)
+	reconciler, _, clk := newHibernatePlanReconciler(plan, oldException, newException)
+	clk.SetTime(now) // Set the fake clock to 'now'
 
 	// Call getActiveException (internal method, but we can test it via Reconcile or make it public/helper)
 	// Since it's unexported, we'll test the effect via evaluateSchedule which calls it.
@@ -495,7 +504,7 @@ func TestHibernatePlanReconciler_PicksNewestActiveException(t *testing.T) {
 	// If oldException (extend 01:00-02:00) wins, it won't affect current state much unless we are in that window.
 	// If newException (suspend 03:00-04:00) wins, same.
 	// Let's check which one was selected by looking at the scheduler.Exception returned by getActiveException.
-	
+
 	activeExc, err := reconciler.getActiveException(ctx, plan)
 	if err != nil {
 		t.Fatalf("getActiveException() error = %v", err)
@@ -509,7 +518,7 @@ func TestHibernatePlanReconciler_PicksNewestActiveException(t *testing.T) {
 	if activeExc.Type != scheduler.ExceptionSuspend {
 		t.Errorf("Picked exception type = %v, want %v (the newer one)", activeExc.Type, scheduler.ExceptionSuspend)
 	}
-	
+
 	_ = shouldHibernate
 }
 

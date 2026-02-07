@@ -3,7 +3,6 @@ package hibernateplan
 import (
 	"context"
 	"fmt"
-	"time"
 
 	batchv1 "k8s.io/api/batch/v1"
 	corev1 "k8s.io/api/core/v1"
@@ -21,7 +20,7 @@ import (
 
 // createRunnerJob creates a Kubernetes Job for executing a target.
 func (r *Reconciler) createRunnerJob(ctx context.Context, log logr.Logger, plan *hibernatorv1alpha1.HibernatePlan, target *hibernatorv1alpha1.Target, operation string) error {
-	executionID := fmt.Sprintf("%s-%s-%d", plan.Name, target.Name, time.Now().Unix())
+	executionID := fmt.Sprintf("%s-%s-%d", plan.Name, target.Name, r.Clock.Now().Unix())
 
 	// Serialize target parameters
 	var paramsJSON []byte
@@ -282,4 +281,26 @@ func (r *Reconciler) findPlansForException(ctx context.Context, obj client.Objec
 			},
 		},
 	}
+}
+
+// findPlansForRunnerJob returns reconcile requests for HibernatePlans when a Runner Job changes.
+func (r *Reconciler) findPlansForRunnerJob(ctx context.Context, obj client.Object) []reconcile.Request {
+	job, ok := obj.(*batchv1.Job)
+	if !ok {
+		return nil
+	}
+
+	if planName, ok := job.Labels[wellknown.LabelPlan]; ok {
+		// Enqueue the referenced plan
+		return []reconcile.Request{
+			{
+				NamespacedName: types.NamespacedName{
+					Name:      planName,
+					Namespace: job.Namespace,
+				},
+			},
+		}
+	}
+
+	return nil
 }

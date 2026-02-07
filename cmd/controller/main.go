@@ -7,7 +7,6 @@ package main
 
 import (
 	"flag"
-	"fmt"
 	"os"
 	"time"
 
@@ -15,8 +14,8 @@ import (
 
 	"k8s.io/apimachinery/pkg/runtime"
 	utilruntime "k8s.io/apimachinery/pkg/util/runtime"
-	"k8s.io/client-go/kubernetes"
 	clientgoscheme "k8s.io/client-go/kubernetes/scheme"
+	"k8s.io/utils/clock"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/cache"
 	"sigs.k8s.io/controller-runtime/pkg/healthz"
@@ -29,8 +28,7 @@ import (
 	"github.com/ardikabs/hibernator/internal/controller/scheduleexception"
 	"github.com/ardikabs/hibernator/internal/restore"
 	"github.com/ardikabs/hibernator/internal/scheduler"
-	"github.com/ardikabs/hibernator/internal/streaming/auth"
-	"github.com/ardikabs/hibernator/internal/streaming/server"
+	"github.com/ardikabs/hibernator/internal/streaming"
 	"github.com/ardikabs/hibernator/pkg/envutil"
 )
 
@@ -115,14 +113,17 @@ func main() {
 		os.Exit(1)
 	}
 
+	clk := clock.RealClock{}
+
 	// Set up HibernatePlan controller
 	if err = (&hibernateplan.Reconciler{
 		Client:               mgr.GetClient(),
 		APIReader:            mgr.GetAPIReader(),
+		Clock:                clk,
 		Log:                  ctrl.Log.WithName("controllers").WithName("HibernatePlan"),
 		Scheme:               mgr.GetScheme(),
 		Planner:              scheduler.NewPlanner(),
-		ScheduleEvaluator:    scheduler.NewScheduleEvaluator(),
+		ScheduleEvaluator:    scheduler.NewScheduleEvaluator(clk),
 		RestoreManager:       restore.NewManager(mgr.GetClient()),
 		ControlPlaneEndpoint: controlPlaneEndpoint,
 		RunnerImage:          runnerImage,
@@ -136,6 +137,7 @@ func main() {
 	if err = (&scheduleexception.Reconciler{
 		Client:    mgr.GetClient(),
 		APIReader: mgr.GetAPIReader(),
+		Clock:     clk,
 		Log:       ctrl.Log.WithName("controllers").WithName("ScheduleException"),
 		Scheme:    mgr.GetScheme(),
 	}).SetupWithManager(mgr, workers); err != nil {
@@ -167,8 +169,12 @@ func main() {
 
 	// Start streaming servers if enabled
 	if enableStreaming {
-		if err := startStreamingServers(mgr, grpcServerAddr, websocketServerAddr); err != nil {
-			setupLog.Error(err, "unable to start streaming servers")
+		if err := streaming.SetupStreamingServerWithManager(mgr, streaming.Options{
+			GRPCAddr:      grpcServerAddr,
+			WebSocketAddr: websocketServerAddr,
+			Clock:         clk,
+		}); err != nil {
+			setupLog.Error(err, "unable to initialize streaming servers")
 			os.Exit(1)
 		}
 	}
@@ -178,44 +184,4 @@ func main() {
 		setupLog.Error(err, "problem running manager")
 		os.Exit(1)
 	}
-}
-
-// startStreamingServers initializes and starts gRPC and WebSocket streaming servers.
-func startStreamingServers(mgr ctrl.Manager, grpcAddr, wsAddr string) error {
-	log := ctrl.Log.WithName("streaming")
-
-	// Create Kubernetes clientset for TokenReview
-	clientset, err := kubernetes.NewForConfig(mgr.GetConfig())
-	if err != nil {
-		return err
-	}
-
-	// Create event recorder for streaming events
-	eventRecorder := mgr.GetEventRecorderFor("hibernator-streaming")
-
-	// Create shared execution service
-	// Runners persist restore data directly to ConfigMap - controller only orchestrates
-	execService := server.NewExecutionServiceServer(mgr.GetClient(), eventRecorder)
-
-	// Start gRPC server
-	grpcServer := server.NewServer(grpcAddr, clientset, mgr.GetClient(), eventRecorder, log)
-	if err := mgr.Add(grpcServer); err != nil {
-		return fmt.Errorf("failed to add grpc server to manager: %w", err)
-	}
-
-	// Start WebSocket server
-	validator := auth.NewTokenValidator(clientset, log)
-	wsServer := server.NewWebSocketServer(server.WebSocketServerOptions{
-		Addr:         wsAddr,
-		ExecService:  execService,
-		Validator:    validator,
-		K8sClientset: clientset,
-		Log:          log,
-	})
-
-	if err := mgr.Add(wsServer); err != nil {
-		return fmt.Errorf("failed to add websocket server to manager: %w", err)
-	}
-
-	return nil
 }

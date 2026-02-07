@@ -1,25 +1,10 @@
-/*
-Copyright 2026 Ardika Saputro.
+//go:build e2e
 
-Licensed under the Apache License, Version 2.0 (the "License");
-you may not use this file except in compliance with the License.
-You may obtain a copy of the License at
-
-    http://www.apache.org/licenses/LICENSE-2.0
-
-Unless required by applicable law or agreed to in writing, software
-distributed under the License is distributed on an "AS IS" BASIS,
-WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-See the License for the specific language governing permissions and
-limitations under the License.
-*/
-
-package e2e
+package tests
 
 import (
 	"context"
 	"path/filepath"
-	"testing"
 	"time"
 
 	. "github.com/onsi/ginkgo/v2"
@@ -29,6 +14,7 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/client-go/kubernetes/scheme"
 	"k8s.io/client-go/rest"
+	clocktesting "k8s.io/utils/clock/testing"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/envtest"
@@ -38,25 +24,23 @@ import (
 	metricsserver "sigs.k8s.io/controller-runtime/pkg/metrics/server"
 
 	hibernatorv1alpha1 "github.com/ardikabs/hibernator/api/v1alpha1"
-	"github.com/ardikabs/hibernator/internal/controller"
+	"github.com/ardikabs/hibernator/internal/controller/hibernateplan"
+	"github.com/ardikabs/hibernator/internal/restore"
 	"github.com/ardikabs/hibernator/internal/scheduler"
 )
 
 var (
-	cfg           *rest.Config
-	k8sClient     client.Client
-	testEnv       *envtest.Environment
-	ctx           context.Context
-	cancel        context.CancelFunc
-	mgr           manager.Manager
-	reconciler    *controller.HibernatePlanReconciler
-	testNamespace = "hibernator-e2e-test"
+	cfg                     *rest.Config
+	k8sClient               client.Client
+	testEnv                 *envtest.Environment
+	ctx                     context.Context
+	cancel                  context.CancelFunc
+	mgr                     manager.Manager
+	fakeClock               *clocktesting.FakeClock
+	hibernateplanReconciler *hibernateplan.Reconciler
+	restoreManager          *restore.Manager
+	testNamespace           = "hibernator-e2e-test"
 )
-
-func TestE2E(t *testing.T) {
-	RegisterFailHandler(Fail)
-	RunSpecs(t, "E2E Test Suite")
-}
 
 var _ = BeforeSuite(func() {
 	logf.SetLogger(zap.New(zap.WriteTo(GinkgoWriter), zap.UseDevMode(true)))
@@ -101,19 +85,25 @@ var _ = BeforeSuite(func() {
 
 	// Initialize scheduler components
 	planner := scheduler.NewPlanner()
-	evaluator := scheduler.NewScheduleEvaluator()
+	fakeClock = clocktesting.NewFakeClock(time.Now())
+	evaluator := scheduler.NewScheduleEvaluator(fakeClock)
+	restoreManager = restore.NewManager(mgr.GetClient())
 
-	reconciler = &controller.HibernatePlanReconciler{
+	hibernateplanReconciler = &hibernateplan.Reconciler{
 		Client:               mgr.GetClient(),
+		APIReader:            mgr.GetAPIReader(),
+		Clock:                fakeClock,
 		Log:                  ctrl.Log.WithName("controllers").WithName("HibernatePlan"),
 		Scheme:               mgr.GetScheme(),
 		Planner:              planner,
 		ScheduleEvaluator:    evaluator,
+		RestoreManager:       restoreManager,
 		ControlPlaneEndpoint: "https://hibernator.example.com",
 		RunnerImage:          "ghcr.io/ardikabs/hibernator-runner:test",
+		RunnerServiceAccount: "hibernator-runner-sa",
 	}
 
-	err = reconciler.SetupWithManager(mgr, 1)
+	err = hibernateplanReconciler.SetupWithManager(mgr, 1)
 	Expect(err).NotTo(HaveOccurred())
 
 	// Start the manager in a goroutine

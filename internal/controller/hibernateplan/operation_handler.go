@@ -63,7 +63,7 @@ func (r *Reconciler) initializeOperation(ctx context.Context, log logr.Logger, p
 
 		p.Status.CurrentStageIndex = 0
 		p.Status.CurrentOperation = operation
-		p.Status.LastTransitionTime = ptr.To(metav1.Now())
+		p.Status.LastTransitionTime = ptr.To(metav1.NewTime(r.Clock.Now()))
 		return p
 	})); err != nil {
 		return scheduler.ExecutionPlan{}, err
@@ -77,7 +77,7 @@ func (r *Reconciler) initializeOperation(ctx context.Context, log logr.Logger, p
 func (r *Reconciler) buildOperationSummary(ctx context.Context, plan *hibernatorv1alpha1.HibernatePlan, operation string) *hibernatorv1alpha1.ExecutionOperationSummary {
 	summary := &hibernatorv1alpha1.ExecutionOperationSummary{
 		Operation: operation,
-		StartTime: metav1.Now(),
+		StartTime: metav1.NewTime(r.Clock.Now()),
 		Success:   true,
 	}
 
@@ -105,7 +105,7 @@ func (r *Reconciler) buildOperationSummary(ctx context.Context, plan *hibernator
 		})
 	}
 
-	now := metav1.Now()
+	now := metav1.NewTime(r.Clock.Now())
 	summary.EndTime = &now
 
 	return summary
@@ -197,7 +197,7 @@ func (r *Reconciler) finalizeOperation(ctx context.Context, log logr.Logger, pla
 		}
 
 		recovery.ResetRetryState(p)
-		p.Status.LastTransitionTime = ptr.To(metav1.Now())
+		p.Status.LastTransitionTime = ptr.To(metav1.NewTime(r.Clock.Now()))
 		return p
 	})); err != nil {
 		return err

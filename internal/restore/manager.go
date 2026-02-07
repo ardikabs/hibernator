@@ -68,6 +68,10 @@ func configMapName(planName string) string {
 	return fmt.Sprintf("hibernator-restore-%s", planName)
 }
 
+func GetRestoreConfigMap(planName string) string {
+	return configMapName(planName)
+}
+
 // PrepareRestorePoint ensures a clean ConfigMap exists for storing restore data for the plan.
 func (m *Manager) PrepareRestorePoint(ctx context.Context, namespace, planName string) error {
 	cmName := configMapName(planName)

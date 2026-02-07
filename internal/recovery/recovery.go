@@ -13,6 +13,7 @@ import (
 
 	"github.com/aws/smithy-go"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/utils/clock"
 	"k8s.io/utils/ptr"
 
 	hibernatorv1alpha1 "github.com/ardikabs/hibernator/api/v1alpha1"
@@ -181,9 +182,9 @@ func CalculateBackoff(attempt int32) time.Duration {
 }
 
 // RecordRetryAttempt updates the plan status for a retry attempt.
-func RecordRetryAttempt(plan *hibernatorv1alpha1.HibernatePlan, err error) {
+func RecordRetryAttempt(plan *hibernatorv1alpha1.HibernatePlan, clk clock.Clock, err error) {
 	plan.Status.RetryCount++
-	plan.Status.LastRetryTime = ptr.To(metav1.Now())
+	plan.Status.LastRetryTime = ptr.To(metav1.NewTime(clk.Now()))
 
 	if err != nil {
 		plan.Status.ErrorMessage = err.Error()

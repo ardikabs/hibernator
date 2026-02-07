@@ -20,6 +20,7 @@ import (
 	"k8s.io/apimachinery/pkg/types"
 	clientgoscheme "k8s.io/client-go/kubernetes/scheme"
 	"k8s.io/client-go/util/retry"
+	clocktesting "k8s.io/utils/clock/testing"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
@@ -70,7 +71,10 @@ func newScheduleExceptionReconciler(objs ...client.Object) (*Reconciler, client.
 		WithInterceptorFuncs(interceptorFunc).
 		Build()
 
+	clk := clocktesting.NewFakeClock(time.Now())
+
 	reconciler := &Reconciler{
+		Clock:  clk,
 		Client: fakeClient,
 		Log:    logr.Discard(),
 		Scheme: scheme,

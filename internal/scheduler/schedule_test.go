@@ -8,11 +8,15 @@ package scheduler
 import (
 	"testing"
 	"time"
+
+	clocktesting "k8s.io/utils/clock/testing"
+)
+
+var (
+	clk = clocktesting.NewFakeClock(time.Now())
 )
 
 func TestScheduleEvaluator_Evaluate(t *testing.T) {
-	evaluator := NewScheduleEvaluator()
-
 	tests := []struct {
 		name          string
 		window        ScheduleWindow
@@ -105,7 +109,10 @@ func TestScheduleEvaluator_Evaluate(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			result, err := evaluator.Evaluate(tt.window, tt.now)
+			fakeClock := clocktesting.NewFakeClock(tt.now)
+			evaluator := NewScheduleEvaluator(fakeClock)
+
+			result, err := evaluator.Evaluate(tt.window)
 			if (err != nil) != tt.wantErr {
 				t.Errorf("Evaluate() error = %v, wantErr %v", err, tt.wantErr)
 				return
@@ -124,7 +131,7 @@ func TestScheduleEvaluator_Evaluate(t *testing.T) {
 }
 
 func TestScheduleEvaluator_ValidateCron(t *testing.T) {
-	evaluator := NewScheduleEvaluator()
+	evaluator := NewScheduleEvaluator(clocktesting.NewFakeClock(time.Now()))
 
 	tests := []struct {
 		name    string
@@ -149,9 +156,8 @@ func TestScheduleEvaluator_ValidateCron(t *testing.T) {
 }
 
 func TestScheduleEvaluator_NextRequeueTime(t *testing.T) {
-	evaluator := NewScheduleEvaluator()
-
 	now := time.Date(2026, 1, 28, 14, 0, 0, 0, time.UTC) // Wednesday 2 PM
+	evaluator := NewScheduleEvaluator(clocktesting.NewFakeClock(now))
 
 	window := ScheduleWindow{
 		HibernateCron: "0 20 * * 1-5", // 8 PM weekdays
@@ -159,12 +165,12 @@ func TestScheduleEvaluator_NextRequeueTime(t *testing.T) {
 		Timezone:      "UTC",
 	}
 
-	result, err := evaluator.Evaluate(window, now)
+	result, err := evaluator.Evaluate(window)
 	if err != nil {
 		t.Fatalf("Evaluate() error = %v", err)
 	}
 
-	requeueDuration := evaluator.NextRequeueTime(result, now)
+	requeueDuration := evaluator.NextRequeueTime(result)
 
 	// Currently active (2 PM), next event is hibernate at 8 PM = 6 hours + 10s buffer
 	expectedDuration := 6*time.Hour + 10*time.Second
@@ -376,8 +382,6 @@ func TestConvertOffHoursToCron(t *testing.T) {
 }
 
 func TestScheduleEvaluator_EvaluateWithException(t *testing.T) {
-	evaluator := NewScheduleEvaluator()
-
 	// Base schedule: hibernate 20:00-06:00 on weekdays
 	baseWindows := []OffHourWindow{
 		{Start: "20:00", End: "06:00", DaysOfWeek: []string{"MON", "TUE", "WED", "THU", "FRI"}},
@@ -607,7 +611,8 @@ func TestScheduleEvaluator_EvaluateWithException(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			result, err := evaluator.EvaluateWithException(tt.baseWindows, tt.timezone, tt.exception, tt.now)
+			evaluator := NewScheduleEvaluator(clocktesting.NewFakeClock(tt.now))
+			result, err := evaluator.EvaluateWithException(tt.baseWindows, tt.timezone, tt.exception)
 
 			if (err != nil) != tt.wantErr {
 				t.Errorf("EvaluateWithException() error = %v, wantErr %v", err, tt.wantErr)
@@ -630,7 +635,7 @@ func TestScheduleEvaluator_EvaluateWithException(t *testing.T) {
 }
 
 func TestScheduleEvaluator_isInTimeWindows(t *testing.T) {
-	evaluator := NewScheduleEvaluator()
+	evaluator := NewScheduleEvaluator(clk)
 
 	tests := []struct {
 		name    string
@@ -683,7 +688,7 @@ func TestScheduleEvaluator_isInTimeWindows(t *testing.T) {
 }
 
 func TestScheduleEvaluator_isInLeadTimeWindow(t *testing.T) {
-	evaluator := NewScheduleEvaluator()
+	evaluator := NewScheduleEvaluator(clk)
 
 	tests := []struct {
 		name     string
@@ -732,8 +737,6 @@ func TestScheduleEvaluator_isInLeadTimeWindow(t *testing.T) {
 }
 
 func TestScheduleEvaluator_ComplexSchedules(t *testing.T) {
-	evaluator := NewScheduleEvaluator()
-
 	tests := []struct {
 		name          string
 		window        ScheduleWindow
@@ -822,7 +825,8 @@ func TestScheduleEvaluator_ComplexSchedules(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			result, err := evaluator.Evaluate(tt.window, tt.now)
+			evaluator := NewScheduleEvaluator(clocktesting.NewFakeClock(tt.now))
+			result, err := evaluator.Evaluate(tt.window)
 			if err != nil {
 				t.Fatalf("unexpected error: %v", err)
 			}
@@ -837,8 +841,6 @@ func TestScheduleEvaluator_ComplexSchedules(t *testing.T) {
 }
 
 func TestScheduleEvaluator_EdgeCases(t *testing.T) {
-	evaluator := NewScheduleEvaluator()
-
 	tests := []struct {
 		name    string
 		window  ScheduleWindow
@@ -889,7 +891,8 @@ func TestScheduleEvaluator_EdgeCases(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			_, err := evaluator.Evaluate(tt.window, tt.now)
+			evaluator := NewScheduleEvaluator(clocktesting.NewFakeClock(tt.now))
+			_, err := evaluator.Evaluate(tt.window)
 			if (err != nil) != tt.wantErr {
 				t.Errorf("expected error=%v, got error=%v", tt.wantErr, err)
 			}
@@ -1033,7 +1036,7 @@ func TestConvertOffHoursToCron_EdgeCases(t *testing.T) {
 }
 
 func TestScheduleEvaluator_RequeueCalculation(t *testing.T) {
-	evaluator := NewScheduleEvaluator()
+	evaluator := NewScheduleEvaluator(clk)
 
 	tests := []struct {
 		name           string
@@ -1071,7 +1074,9 @@ func TestScheduleEvaluator_RequeueCalculation(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			result, err := evaluator.Evaluate(tt.window, tt.now)
+			evaluator.Clock = clocktesting.NewFakeClock(tt.now)
+
+			result, err := evaluator.Evaluate(tt.window)
 			if err != nil {
 				t.Fatalf("unexpected error: %v", err)
 			}

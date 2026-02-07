@@ -36,11 +36,11 @@ type mockValidationResult struct {
 
 func TestWebhookServer_HandleHealthz(t *testing.T) {
 	log := logr.Discard()
-	execService := NewExecutionServiceServer(nil, nil)
+	execService := NewExecutionServiceServer(nil, nil, clk)
 
 	ws := &WebhookServer{
-		executionService: execService,
-		log:              log,
+		execService: execService,
+		log:         log,
 	}
 
 	req := httptest.NewRequest(http.MethodGet, "/healthz", nil)
@@ -58,11 +58,11 @@ func TestWebhookServer_HandleHealthz(t *testing.T) {
 
 func TestWebhookServer_HandleLogs_MethodNotAllowed(t *testing.T) {
 	log := logr.Discard()
-	execService := NewExecutionServiceServer(nil, nil)
+	execService := NewExecutionServiceServer(nil, nil, clk)
 
 	ws := &WebhookServer{
-		executionService: execService,
-		log:              log,
+		execService: execService,
+		log:         log,
 	}
 
 	req := httptest.NewRequest(http.MethodGet, "/v1alpha1/logs", nil)
@@ -77,11 +77,11 @@ func TestWebhookServer_HandleLogs_MethodNotAllowed(t *testing.T) {
 
 func TestWebhookServer_HandleProgress_MethodNotAllowed(t *testing.T) {
 	log := logr.Discard()
-	execService := NewExecutionServiceServer(nil, nil)
+	execService := NewExecutionServiceServer(nil, nil, clk)
 
 	ws := &WebhookServer{
-		executionService: execService,
-		log:              log,
+		execService: execService,
+		log:         log,
 	}
 
 	req := httptest.NewRequest(http.MethodGet, "/v1alpha1/progress", nil)
@@ -96,11 +96,11 @@ func TestWebhookServer_HandleProgress_MethodNotAllowed(t *testing.T) {
 
 func TestWebhookServer_HandleCompletion_MethodNotAllowed(t *testing.T) {
 	log := logr.Discard()
-	execService := NewExecutionServiceServer(nil, nil)
+	execService := NewExecutionServiceServer(nil, nil, clk)
 
 	ws := &WebhookServer{
-		executionService: execService,
-		log:              log,
+		execService: execService,
+		log:         log,
 	}
 
 	req := httptest.NewRequest(http.MethodGet, "/v1alpha1/completion", nil)
@@ -115,11 +115,11 @@ func TestWebhookServer_HandleCompletion_MethodNotAllowed(t *testing.T) {
 
 func TestWebhookServer_HandleHeartbeat_MethodNotAllowed(t *testing.T) {
 	log := logr.Discard()
-	execService := NewExecutionServiceServer(nil, nil)
+	execService := NewExecutionServiceServer(nil, nil, clk)
 
 	ws := &WebhookServer{
-		executionService: execService,
-		log:              log,
+		execService: execService,
+		log:         log,
 	}
 
 	req := httptest.NewRequest(http.MethodGet, "/v1alpha1/heartbeat", nil)
@@ -134,11 +134,11 @@ func TestWebhookServer_HandleHeartbeat_MethodNotAllowed(t *testing.T) {
 
 func TestWebhookServer_HandleCallback_MethodNotAllowed(t *testing.T) {
 	log := logr.Discard()
-	execService := NewExecutionServiceServer(nil, nil)
+	execService := NewExecutionServiceServer(nil, nil, clk)
 
 	ws := &WebhookServer{
-		executionService: execService,
-		log:              log,
+		execService: execService,
+		log:         log,
 	}
 
 	req := httptest.NewRequest(http.MethodGet, "/v1alpha1/callback", nil)
@@ -153,13 +153,13 @@ func TestWebhookServer_HandleCallback_MethodNotAllowed(t *testing.T) {
 
 func TestWebhookServer_HandleLogs_NoAuth(t *testing.T) {
 	log := logr.Discard()
-	execService := NewExecutionServiceServer(nil, nil)
+	execService := NewExecutionServiceServer(nil, nil, clk)
 
 	// Create a webhook server without a validator (nil validator will cause auth to fail)
 	ws := &WebhookServer{
-		executionService: execService,
-		validator:        nil, // No validator
-		log:              log,
+		execService: execService,
+		validator:   nil, // No validator
+		log:         log,
 	}
 
 	body := []byte(`[{"executionId":"exec-1","level":"INFO","message":"test"}]`)
@@ -175,11 +175,11 @@ func TestWebhookServer_HandleLogs_NoAuth(t *testing.T) {
 
 func TestWebhookServer_ProcessLog(t *testing.T) {
 	log := logr.Discard()
-	execService := NewExecutionServiceServer(nil, nil)
+	execService := NewExecutionServiceServer(nil, nil, clk)
 
 	ws := &WebhookServer{
-		executionService: execService,
-		log:              log,
+		execService: execService,
+		log:         log,
 	}
 
 	tests := []struct {
@@ -285,12 +285,12 @@ func TestWebhookServer_ValidateRequest_InvalidFormat(t *testing.T) {
 
 func TestWebhookServer_HandleCallback_InvalidJSON(t *testing.T) {
 	log := logr.Discard()
-	execService := NewExecutionServiceServer(nil, nil)
+	execService := NewExecutionServiceServer(nil, nil, clk)
 
 	ws := &WebhookServer{
-		executionService: execService,
-		validator:        nil,
-		log:              log,
+		execService: execService,
+		validator:   nil,
+		log:         log,
 	}
 
 	// Valid method but invalid JSON should be caught after auth (but we don't have auth here)
@@ -308,11 +308,11 @@ func TestWebhookServer_HandleCallback_InvalidJSON(t *testing.T) {
 
 func TestWebhookServer_ServerLifecycle(t *testing.T) {
 	log := logr.Discard()
-	execService := NewExecutionServiceServer(nil, nil)
+	execService := NewExecutionServiceServer(nil, nil, clk)
 
 	ws := &WebhookServer{
-		executionService: execService,
-		log:              log,
+		execService: execService,
+		log:         log,
 		server: &http.Server{
 			Addr:         ":0", // Random port
 			ReadTimeout:  5 * time.Second,
@@ -331,11 +331,11 @@ func TestWebhookServer_ServerLifecycle(t *testing.T) {
 
 func TestProcessLog_WithFields(t *testing.T) {
 	log := logr.Discard()
-	execService := NewExecutionServiceServer(nil, nil)
+	execService := NewExecutionServiceServer(nil, nil, clk)
 
 	ws := &WebhookServer{
-		executionService: execService,
-		log:              log,
+		execService: execService,
+		log:         log,
 	}
 
 	entry := &streamingv1alpha1.LogEntry{
@@ -429,11 +429,11 @@ func TestWebhookPayload_Types(t *testing.T) {
 
 func TestWebhookServer_Start_Cancellation(t *testing.T) {
 	log := logr.Discard()
-	execService := NewExecutionServiceServer(nil, nil)
+	execService := NewExecutionServiceServer(nil, nil, clk)
 
 	ws := &WebhookServer{
-		executionService: execService,
-		log:              log,
+		execService: execService,
+		log:         log,
 		server: &http.Server{
 			Addr: "127.0.0.1:0", // Use available port
 		},
