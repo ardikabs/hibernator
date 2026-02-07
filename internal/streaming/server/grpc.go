@@ -161,6 +161,11 @@ func (s *Server) Start(ctx context.Context) error {
 	return nil
 }
 
+// NeedLeaderElection indicates whether the server requires leader election.
+func (s *Server) NeedLeaderElection() bool {
+	return false
+}
+
 // ExecutionService returns the execution service for direct access.
 func (s *Server) ExecutionService() *ExecutionServiceServer {
 	return s.executionService

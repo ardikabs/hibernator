@@ -88,6 +88,11 @@ func (ws *WebhookServer) Start(ctx context.Context) error {
 	return nil
 }
 
+// NeedLeaderElection indicates whether the webhook server requires leader election.
+func (s *WebhookServer) NeedLeaderElection() bool {
+	return false
+}
+
 // handleCallback handles unified webhook callbacks.
 func (ws *WebhookServer) handleCallback(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
