@@ -1,10 +1,9 @@
-<!--
-RFC: 0005
-Title: ServiceAccount Semantic Enhancements
-Author: Hibernator Team
-Status: Proposed
-Date: 2026-02-01
--->
+---
+rfc: RFC-0005
+title: ServiceAccount Semantic Enhancements
+status: Proposed
+date: 2026-02-01
+---
 
 # RFC 0005 — ServiceAccount Semantic Enhancements
 

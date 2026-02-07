@@ -1,11 +1,9 @@
-
-<!--
-RFC: 0001
-Title: Hibernator Operator - Control Plane & Runner Model
-Author: Ardika Saputro (and contributors)
-Status: In Progress
-Date: 2026-01-29
--->
+---
+rfc: RFC-0001
+title: Hibernator Operator - Control Plane & Runner Model
+status: In Progress
+date: 2026-01-29
+---
 
 # RFC 0001 — Hibernator Operator: Control Plane + Runner Model
 
@@ -265,9 +263,8 @@ Last updated: 2026-02-07
 
 ## Appendix — examples
 
-- See `WORKPLAN.md` for example `HibernatePlan` YAML, Job template, and staged execution samples.
+- See `config/samples/hibernateplan_samples.yaml` for example `HibernatePlan` configurations.
 
 ## Links
 
-- Workplan: `WORKPLAN.md`
 - Agent guidelines: `AGENTS.md`

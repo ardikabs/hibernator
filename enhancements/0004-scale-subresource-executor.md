@@ -1,10 +1,9 @@
-<!--
-RFC: 0004
-Title: Scale Subresource Executor for Workload Downscaling
-Author: Hibernator Team
-Status: Implemented
-Date: 2026-01-31
--->
+---
+rfc: RFC-0004
+title: Scale Subresource Executor for Workload Downscaling
+status: Implemented
+date: 2026-01-31
+---
 
 # RFC 0004 — Scale Subresource Executor for Workload Downscaling
 
