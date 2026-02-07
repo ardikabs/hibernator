@@ -404,8 +404,8 @@ func (e *Executor) stopInstance(ctx context.Context, log logr.Logger, client RDS
 	}
 
 	// Wait for instance to stop if configured
-	if params.WaitConfig.Enabled {
-		if err := e.waitForInstanceStopped(ctx, log, client, instanceID, params.WaitConfig.Timeout); err != nil {
+	if params.AwaitCompletion.Enabled {
+		if err := e.waitForInstanceStopped(ctx, log, client, instanceID, params.AwaitCompletion.Timeout); err != nil {
 			return fmt.Errorf("wait for instance stopped: %w", err)
 		}
 	}
@@ -485,8 +485,8 @@ func (e *Executor) stopCluster(ctx context.Context, log logr.Logger, client RDSC
 	}
 
 	// Wait for cluster to stop if configured
-	if params.WaitConfig.Enabled {
-		if err := e.waitForClusterStopped(ctx, log, client, clusterID, params.WaitConfig.Timeout); err != nil {
+	if params.AwaitCompletion.Enabled {
+		if err := e.waitForClusterStopped(ctx, log, client, clusterID, params.AwaitCompletion.Timeout); err != nil {
 			return fmt.Errorf("wait for cluster stopped: %w", err)
 		}
 	}
@@ -520,8 +520,8 @@ func (e *Executor) startInstance(ctx context.Context, log logr.Logger, client RD
 	}
 
 	// Wait for instance to be available if configured
-	if params.WaitConfig.Enabled {
-		if err := e.waitForInstanceAvailable(ctx, log, client, instanceID, params.WaitConfig.Timeout); err != nil {
+	if params.AwaitCompletion.Enabled {
+		if err := e.waitForInstanceAvailable(ctx, log, client, instanceID, params.AwaitCompletion.Timeout); err != nil {
 			return fmt.Errorf("wait for instance available: %w", err)
 		}
 	}
@@ -555,8 +555,8 @@ func (e *Executor) startCluster(ctx context.Context, log logr.Logger, client RDS
 	}
 
 	// Wait for cluster to be available if configured
-	if params.WaitConfig.Enabled {
-		if err := e.waitForClusterAvailable(ctx, log, client, clusterID, params.WaitConfig.Timeout); err != nil {
+	if params.AwaitCompletion.Enabled {
+		if err := e.waitForClusterAvailable(ctx, log, client, clusterID, params.AwaitCompletion.Timeout); err != nil {
 			return fmt.Errorf("wait for cluster available: %w", err)
 		}
 	}

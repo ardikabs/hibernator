@@ -297,8 +297,8 @@ func (e *Executor) scaleDownNodePool(ctx context.Context, log logr.Logger, clien
 	}
 
 	// Wait for NodePool deletion if configured
-	if params.WaitConfig.Enabled {
-		timeout := params.WaitConfig.Timeout
+	if params.AwaitCompletion.Enabled {
+		timeout := params.AwaitCompletion.Timeout
 		if timeout == "" {
 			timeout = DefaultWaitTimeout
 		}
@@ -344,8 +344,8 @@ func (e *Executor) restoreNodePool(ctx context.Context, log logr.Logger, client 
 	}
 
 	// Wait for NodePool to be ready if configured
-	if params.WaitConfig.Enabled {
-		timeout := params.WaitConfig.Timeout
+	if params.AwaitCompletion.Enabled {
+		timeout := params.AwaitCompletion.Timeout
 		if timeout == "" {
 			timeout = DefaultWaitTimeout
 		}

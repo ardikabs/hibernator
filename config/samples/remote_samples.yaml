@@ -69,7 +69,7 @@ spec:
         kind: CloudProvider
         name: aws-creds
       parameters:
-        waitConfig:
+        awaitCompletion:
           enabled: true
         selector:
           tags:
@@ -81,7 +81,7 @@ spec:
         kind: K8SCluster
         name: remote-eks
       parameters:
-        waitConfig:
+        awaitCompletion:
           enabled: true
         namespace:
           literals:
@@ -96,7 +96,7 @@ spec:
         kind: K8SCluster
         name: remote-eks
       parameters:
-        waitConfig:
+        awaitCompletion:
           enabled: true
         nodePools:
           - default
@@ -107,7 +107,7 @@ spec:
         kind: CloudProvider
         name: aws-creds
       parameters:
-        waitConfig:
+        awaitCompletion:
           enabled: true
         clusterName: my-remote-eks-cluster
         nodeGroups:

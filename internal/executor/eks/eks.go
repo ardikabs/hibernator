@@ -325,8 +325,8 @@ func (e *Executor) scaleNodeGroupToZero(ctx context.Context, log logr.Logger, ek
 	}
 
 	// Wait for Node Group scale down is complete if configured
-	if params.WaitConfig.Enabled {
-		timeout := params.WaitConfig.Timeout
+	if params.AwaitCompletion.Enabled {
+		timeout := params.AwaitCompletion.Timeout
 		if timeout == "" {
 			timeout = DefaultWaitTimeout
 		}
@@ -353,8 +353,8 @@ func (e *Executor) restoreNodeGroup(ctx context.Context, log logr.Logger, client
 	}
 
 	// Wait for node group to reach ACTIVE state if configured
-	if params.WaitConfig.Enabled {
-		timeout := params.WaitConfig.Timeout
+	if params.AwaitCompletion.Enabled {
+		timeout := params.AwaitCompletion.Timeout
 		if timeout == "" {
 			timeout = DefaultWaitTimeout
 		}

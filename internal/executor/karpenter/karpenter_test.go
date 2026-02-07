@@ -276,7 +276,7 @@ func TestShutdown_DeletesNodePools(t *testing.T) {
 	// Mock Resource to return fake dynamic client
 	mockClient.On("Resource", gvr).Return(fakeDynamic.Resource(gvr))
 
-	// Mock ListNode to verify nodes are deleted (empty list) - only called if waitConfig.enabled=true
+	// Mock ListNode to verify nodes are deleted (empty list) - only called if awaitCompletion.enabled=true
 	mockClient.On("ListNode", ctx, "karpenter.sh/nodepool=default").Return(&corev1.NodeList{
 		Items: []corev1.Node{},
 	}, nil)
@@ -290,7 +290,7 @@ func TestShutdown_DeletesNodePools(t *testing.T) {
 	spec := executor.Spec{
 		TargetName: "test-cluster",
 		TargetType: "karpenter",
-		Parameters: json.RawMessage(`{"nodePools": ["default"], "waitConfig": {"enabled": true, "timeout": "1m"}}`),
+		Parameters: json.RawMessage(`{"nodePools": ["default"], "awaitCompletion": {"enabled": true, "timeout": "1m"}}`),
 		ConnectorConfig: executor.ConnectorConfig{
 			K8S: &executor.K8SConnectorConfig{
 				ClusterName: "my-cluster",
@@ -358,7 +358,7 @@ func TestShutdown_MultipleNodePools(t *testing.T) {
 	spec := executor.Spec{
 		TargetName: "test-cluster",
 		TargetType: "karpenter",
-		Parameters: json.RawMessage(`{"nodePools": ["default", "spot"], "waitConfig": {"enabled": true, "timeout": "1m"}}`),
+		Parameters: json.RawMessage(`{"nodePools": ["default", "spot"], "awaitCompletion": {"enabled": true, "timeout": "1m"}}`),
 		ConnectorConfig: executor.ConnectorConfig{
 			K8S: &executor.K8SConnectorConfig{
 				ClusterName: "my-cluster",
@@ -503,7 +503,7 @@ func TestShutdown_AllNodePools(t *testing.T) {
 	spec := executor.Spec{
 		TargetName: "test-cluster",
 		TargetType: "karpenter",
-		Parameters: json.RawMessage(`{"waitConfig": {"enabled": true, "timeout": "1m"}}`),
+		Parameters: json.RawMessage(`{"awaitCompletion": {"enabled": true, "timeout": "1m"}}`),
 		ConnectorConfig: executor.ConnectorConfig{
 			K8S: &executor.K8SConnectorConfig{
 				ClusterName: "my-cluster",
@@ -516,7 +516,7 @@ func TestShutdown_AllNodePools(t *testing.T) {
 	assert.NoError(t, err)
 }
 
-func TestShutdown_WithoutWaitConfig(t *testing.T) {
+func TestShutdown_WithoutAwaitCompletion(t *testing.T) {
 	ctx := context.Background()
 	mockClient := mocks.NewClient(t)
 
@@ -546,7 +546,7 @@ func TestShutdown_WithoutWaitConfig(t *testing.T) {
 	// Mock Resource to return fake dynamic client
 	mockClient.On("Resource", gvr).Return(fakeDynamic.Resource(gvr))
 
-	// ListNode should NOT be called when waitConfig is disabled
+	// ListNode should NOT be called when awaitCompletion is disabled
 	// No mock setup for ListNode
 
 	clientFactory := func(ctx context.Context, spec *executor.Spec) (Client, error) {
@@ -555,7 +555,7 @@ func TestShutdown_WithoutWaitConfig(t *testing.T) {
 
 	e := NewWithClients(clientFactory)
 
-	// No waitConfig means wait is disabled
+	// No awaitCompletion means wait is disabled
 	spec := executor.Spec{
 		TargetName: "test-cluster",
 		TargetType: "karpenter",

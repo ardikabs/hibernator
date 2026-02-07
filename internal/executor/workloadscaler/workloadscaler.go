@@ -316,8 +316,8 @@ func (e *Executor) scaleDownWorkloads(ctx context.Context,
 		}
 
 		// Wait for replicas to scale if configured
-		if params.WaitConfig.Enabled {
-			timeout := params.WaitConfig.Timeout
+		if params.AwaitCompletion.Enabled {
+			timeout := params.AwaitCompletion.Timeout
 			if timeout == "" {
 				timeout = DefaultWaitTimeout
 			}
@@ -350,8 +350,8 @@ func (e *Executor) restoreWorkload(ctx context.Context, log logr.Logger, client 
 	}
 
 	// Wait for replicas to scale if configured
-	if params.WaitConfig.Enabled {
-		timeout := params.WaitConfig.Timeout
+	if params.AwaitCompletion.Enabled {
+		timeout := params.AwaitCompletion.Timeout
 		if timeout == "" {
 			timeout = DefaultWaitTimeout
 		}

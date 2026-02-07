@@ -16,7 +16,7 @@ package executorparams
 
 import metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 
-// WaitConfig configures whether to wait for operations to complete and timeout settings.
+// AwaitCompletion configures whether to wait for operations to complete and timeout settings.
 // When Enabled=true, executors will poll asynchronously until operations reach the desired state.
 // Progress is logged through streamlogs at regular intervals (15s) for observability.
 //
@@ -31,9 +31,9 @@ import metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 //   - RDS: 15m
 //   - Karpenter: 5m
 //   - WorkloadScaler: 5m
-type WaitConfig struct {
+type AwaitCompletion struct {
 	// Enabled controls whether to wait for operation completion.
-	// Default: false (opt-in, backward compatible with existing behavior)
+	// Default: false
 	Enabled bool `json:"enabled,omitempty"`
 
 	// Timeout is the maximum duration to wait for operation completion.
@@ -45,8 +45,8 @@ type WaitConfig struct {
 
 // EC2Parameters defines the expected parameters for the EC2 executor.
 type EC2Parameters struct {
-	Selector   EC2Selector `json:"selector"`
-	WaitConfig WaitConfig  `json:"waitConfig"`
+	Selector        EC2Selector     `json:"selector"`
+	AwaitCompletion AwaitCompletion `json:"awaitCompletion"`
 }
 
 // EC2Selector defines how to find EC2 instances.
@@ -57,9 +57,9 @@ type EC2Selector struct {
 
 // RDSParameters defines the expected parameters for the RDS executor.
 type RDSParameters struct {
-	SnapshotBeforeStop bool        `json:"snapshotBeforeStop,omitempty"`
-	Selector           RDSSelector `json:"selector"`
-	WaitConfig         WaitConfig  `json:"waitConfig"`
+	SnapshotBeforeStop bool            `json:"snapshotBeforeStop,omitempty"`
+	Selector           RDSSelector     `json:"selector"`
+	AwaitCompletion    AwaitCompletion `json:"awaitCompletion"`
 }
 
 // RDSSelector defines how to find RDS instances and clusters.
@@ -132,8 +132,8 @@ type EKSParameters struct {
 	// ClusterName is the EKS cluster name (required).
 	ClusterName string `json:"clusterName"`
 	// NodeGroups to hibernate. If empty, all node groups in the cluster are targeted.
-	NodeGroups []EKSNodeGroup `json:"nodeGroups,omitempty"`
-	WaitConfig WaitConfig     `json:"waitConfig"`
+	NodeGroups      []EKSNodeGroup  `json:"nodeGroups,omitempty"`
+	AwaitCompletion AwaitCompletion `json:"awaitCompletion"`
 }
 
 // EKSNodeGroup specifies a managed node group to hibernate.
@@ -143,8 +143,8 @@ type EKSNodeGroup struct {
 
 // KarpenterParameters defines the expected parameters for the Karpenter executor.
 type KarpenterParameters struct {
-	NodePools  []string   `json:"nodePools"`
-	WaitConfig WaitConfig `json:"waitConfig"`
+	NodePools       []string        `json:"nodePools"`
+	AwaitCompletion AwaitCompletion `json:"awaitCompletion"`
 }
 
 // GKEParameters defines the expected parameters for the GKE executor.
@@ -169,8 +169,8 @@ type WorkloadScalerParameters struct {
 	// WorkloadSelector filters workloads by labels (optional).
 	WorkloadSelector *metav1.LabelSelector `json:"workloadSelector,omitempty"`
 
-	// WaitConfig controls whether to wait for replica counts to match desired state.
-	WaitConfig WaitConfig `json:"waitConfig"`
+	// AwaitCompletion controls whether to wait for replica counts to match desired state.
+	AwaitCompletion AwaitCompletion `json:"awaitCompletion"`
 }
 
 // NamespaceSelector defines how to select namespaces.

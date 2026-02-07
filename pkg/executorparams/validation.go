@@ -145,16 +145,16 @@ func checkUnknownFields(params []byte, knownFields []string, executorType string
 // init registers all built-in executor validators.
 func init() {
 	// EC2 validator
-	Register("ec2", []string{"selector", "waitConfig"}, validateEC2Params)
+	Register("ec2", []string{"selector", "awaitCompletion"}, validateEC2Params)
 
 	// RDS validator
-	Register("rds", []string{"selector", "snapshotBeforeStop", "waitConfig"}, validateRDSParams)
+	Register("rds", []string{"selector", "snapshotBeforeStop", "awaitCompletion"}, validateRDSParams)
 
 	// EKS validator (only handles Managed Node Groups via AWS API)
-	Register("eks", []string{"clusterName", "nodeGroups", "waitConfig"}, validateEKSParams)
+	Register("eks", []string{"clusterName", "nodeGroups", "awaitCompletion"}, validateEKSParams)
 
 	// Karpenter validator
-	Register("karpenter", []string{"nodePools", "waitConfig"}, validateKarpenterParams)
+	Register("karpenter", []string{"nodePools", "awaitCompletion"}, validateKarpenterParams)
 
 	// GKE validator
 	Register("gke", []string{"nodePools"}, validateGKEParams)
@@ -163,7 +163,7 @@ func init() {
 	Register("cloudsql", []string{"instanceName", "project"}, validateCloudSQLParams)
 
 	// WorkloadScaler validator
-	Register("workloadscaler", []string{"includedGroups", "namespace", "workloadSelector", "waitConfig"}, validateWorkloadScalerParams)
+	Register("workloadscaler", []string{"includedGroups", "namespace", "workloadSelector", "awaitCompletion"}, validateWorkloadScalerParams)
 }
 
 // validateEC2Params validates EC2 executor parameters.
@@ -186,10 +186,10 @@ func validateEC2Params(params []byte) *Result {
 		result.AddError("either selector.tags or selector.instanceIds must be specified")
 	}
 
-	// Validate WaitConfig timeout format if waiting is enabled
-	if p.WaitConfig.Enabled && p.WaitConfig.Timeout != "" {
-		if err := validateWaitTimeout(p.WaitConfig.Timeout); err != nil {
-			result.AddError("waitConfig.timeout has invalid duration format: %v", err)
+	// Validate AwaitCompletion timeout format if waiting is enabled
+	if p.AwaitCompletion.Enabled && p.AwaitCompletion.Timeout != "" {
+		if err := validateWaitTimeout(p.AwaitCompletion.Timeout); err != nil {
+			result.AddError("awaitCompletion.timeout has invalid duration format: %v", err)
 		}
 	}
 
@@ -259,10 +259,10 @@ func validateRDSParams(params []byte) *Result {
 		}
 	}
 
-	// Validate WaitConfig timeout format if waiting is enabled
-	if p.WaitConfig.Enabled && p.WaitConfig.Timeout != "" {
-		if err := validateWaitTimeout(p.WaitConfig.Timeout); err != nil {
-			result.AddError("waitConfig.timeout has invalid duration format: %v", err)
+	// Validate AwaitCompletion timeout format if waiting is enabled
+	if p.AwaitCompletion.Enabled && p.AwaitCompletion.Timeout != "" {
+		if err := validateWaitTimeout(p.AwaitCompletion.Timeout); err != nil {
+			result.AddError("awaitCompletion.timeout has invalid duration format: %v", err)
 		}
 	}
 
@@ -291,10 +291,10 @@ func validateEKSParams(params []byte) *Result {
 
 	// nodeGroups is optional - empty means all node groups in the cluster
 
-	// Validate WaitConfig timeout format if waiting is enabled
-	if p.WaitConfig.Enabled && p.WaitConfig.Timeout != "" {
-		if err := validateWaitTimeout(p.WaitConfig.Timeout); err != nil {
-			result.AddError("waitConfig.timeout has invalid duration format: %v", err)
+	// Validate AwaitCompletion timeout format if waiting is enabled
+	if p.AwaitCompletion.Enabled && p.AwaitCompletion.Timeout != "" {
+		if err := validateWaitTimeout(p.AwaitCompletion.Timeout); err != nil {
+			result.AddError("awaitCompletion.timeout has invalid duration format: %v", err)
 		}
 	}
 
@@ -318,10 +318,10 @@ func validateKarpenterParams(params []byte) *Result {
 
 	// Empty nodePools is valid - means target all NodePools in the cluster
 
-	// Validate WaitConfig timeout format if waiting is enabled
-	if p.WaitConfig.Enabled && p.WaitConfig.Timeout != "" {
-		if err := validateWaitTimeout(p.WaitConfig.Timeout); err != nil {
-			result.AddError("waitConfig.timeout has invalid duration format: %v", err)
+	// Validate AwaitCompletion timeout format if waiting is enabled
+	if p.AwaitCompletion.Enabled && p.AwaitCompletion.Timeout != "" {
+		if err := validateWaitTimeout(p.AwaitCompletion.Timeout); err != nil {
+			result.AddError("awaitCompletion.timeout has invalid duration format: %v", err)
 		}
 	}
 
@@ -410,10 +410,10 @@ func validateWorkloadScalerParams(params []byte) *Result {
 		}
 	}
 
-	// Validate WaitConfig timeout format if waiting is enabled
-	if p.WaitConfig.Enabled && p.WaitConfig.Timeout != "" {
-		if err := validateWaitTimeout(p.WaitConfig.Timeout); err != nil {
-			result.AddError("waitConfig.timeout has invalid duration format: %v", err)
+	// Validate AwaitCompletion timeout format if waiting is enabled
+	if p.AwaitCompletion.Enabled && p.AwaitCompletion.Timeout != "" {
+		if err := validateWaitTimeout(p.AwaitCompletion.Timeout); err != nil {
+			result.AddError("awaitCompletion.timeout has invalid duration format: %v", err)
 		}
 	}
 
@@ -435,7 +435,7 @@ func validateLabelSelector(ls *metav1.LabelSelector) error {
 	return nil
 }
 
-// validateWaitTimeout validates the timeout field in WaitConfig.
+// validateWaitTimeout validates the timeout field in AwaitCompletion.
 // Empty string is valid (means no timeout). Non-empty must be parseable as duration.
 func validateWaitTimeout(timeout string) error {
 	if timeout == "" {
