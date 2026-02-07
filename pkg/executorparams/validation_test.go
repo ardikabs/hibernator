@@ -513,7 +513,7 @@ func TestValidateParams_WorkloadScaler_EmptyParams(t *testing.T) {
 func TestValidateParams_WorkloadScaler_InvalidWaitTimeout(t *testing.T) {
 	params := []byte(`{
 		"namespace": {"literals": ["default"]},
-		"waitConfig": {
+		"awaitCompletion": {
 			"enabled": true,
 			"timeout": "invalid-duration"
 		}
@@ -531,7 +531,7 @@ func TestValidateParams_WorkloadScaler_InvalidWaitTimeout(t *testing.T) {
 func TestValidateParams_WorkloadScaler_ValidWaitTimeout(t *testing.T) {
 	params := []byte(`{
 		"namespace": {"literals": ["default"]},
-		"waitConfig": {
+		"awaitCompletion": {
 			"enabled": true,
 			"timeout": "5m"
 		}
@@ -566,7 +566,7 @@ func TestValidateParams_WorkloadScaler_Valid_ComplexSelector(t *testing.T) {
 				}
 			]
 		},
-		"waitConfig": {
+		"awaitCompletion": {
 			"enabled": true,
 			"timeout": "10m"
 		}

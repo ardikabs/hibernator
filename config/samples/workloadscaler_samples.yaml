@@ -48,7 +48,7 @@ spec:
         kind: K8SCluster
         name: local
       parameters:
-        waitConfig:
+        awaitCompletion:
           enabled: true
         namespace:
           literals:
@@ -62,7 +62,7 @@ spec:
         kind: K8SCluster
         name: local
       parameters:
-        waitConfig:
+        awaitCompletion:
           enabled: true
         namespace:
           literals:

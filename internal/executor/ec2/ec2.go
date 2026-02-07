@@ -183,8 +183,8 @@ func (e *Executor) Shutdown(ctx context.Context, log logr.Logger, spec executor.
 		log.Info("instances stopped successfully", "count", len(instancesToStop))
 
 		// Wait for instances to reach stopped state if configured
-		if params.WaitConfig.Enabled {
-			timeout := params.WaitConfig.Timeout
+		if params.AwaitCompletion.Enabled {
+			timeout := params.AwaitCompletion.Timeout
 			if timeout == "" {
 				timeout = DefaultWaitTimeout
 			}
@@ -258,8 +258,8 @@ func (e *Executor) WakeUp(ctx context.Context, log logr.Logger, spec executor.Sp
 		log.Info("instances started successfully", "count", len(instancesToStart))
 
 		// Wait for instances to reach running state if configured
-		if params.WaitConfig.Enabled {
-			timeout := params.WaitConfig.Timeout
+		if params.AwaitCompletion.Enabled {
+			timeout := params.AwaitCompletion.Timeout
 			if timeout == "" {
 				timeout = DefaultWaitTimeout
 			}
