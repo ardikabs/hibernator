@@ -344,48 +344,72 @@ func (r *Reconciler) getActiveException(ctx context.Context, plan *hibernatorv1a
 		return nil, fmt.Errorf("list schedule exceptions: %w", err)
 	}
 
-	// Find the first active exception
+	var activeExceptions []hibernatorv1alpha1.ScheduleException
+	now := time.Now()
+
+	// Filter for active exceptions
 	for _, exc := range exceptions.Items {
 		if exc.Status.State != hibernatorv1alpha1.ExceptionStateActive {
 			continue
 		}
 
 		// Verify it's within valid period
-		now := time.Now()
 		if now.Before(exc.Spec.ValidFrom.Time) || now.After(exc.Spec.ValidUntil.Time) {
 			continue
 		}
 
-		// Convert to scheduler.Exception
-		windows := make([]scheduler.OffHourWindow, len(exc.Spec.Windows))
-		for i, w := range exc.Spec.Windows {
-			windows[i] = scheduler.OffHourWindow{
-				Start:      w.Start,
-				End:        w.End,
-				DaysOfWeek: w.DaysOfWeek,
-			}
-		}
-
-		// Parse lead time
-		var leadTime time.Duration
-		if exc.Spec.LeadTime != "" {
-			var err error
-			leadTime, err = time.ParseDuration(exc.Spec.LeadTime)
-			if err != nil {
-				r.Log.Error(err, "failed to parse lead time, ignoring", "leadTime", exc.Spec.LeadTime)
-			}
-		}
-
-		return &scheduler.Exception{
-			Type:       scheduler.ExceptionType(exc.Spec.Type),
-			ValidFrom:  exc.Spec.ValidFrom.Time,
-			ValidUntil: exc.Spec.ValidUntil.Time,
-			LeadTime:   leadTime,
-			Windows:    windows,
-		}, nil
+		activeExceptions = append(activeExceptions, exc)
 	}
 
-	return nil, nil
+	if len(activeExceptions) == 0 {
+		return nil, nil
+	}
+
+	// If multiple active exceptions exist (e.g. webhook bypassed), pick the newest one (latest intent)
+	if len(activeExceptions) > 1 {
+		r.Log.Info("multiple active exceptions found, picking newest",
+			"count", len(activeExceptions),
+			"plan", plan.Name)
+
+		// Sort by CreationTimestamp descending (newest first)
+		for i := 0; i < len(activeExceptions)-1; i++ {
+			for j := i + 1; j < len(activeExceptions); j++ {
+				if activeExceptions[i].CreationTimestamp.Before(&activeExceptions[j].CreationTimestamp) {
+					activeExceptions[i], activeExceptions[j] = activeExceptions[j], activeExceptions[i]
+				}
+			}
+		}
+	}
+
+	exc := activeExceptions[0]
+
+	// Convert to scheduler.Exception
+	windows := make([]scheduler.OffHourWindow, len(exc.Spec.Windows))
+	for i, w := range exc.Spec.Windows {
+		windows[i] = scheduler.OffHourWindow{
+			Start:      w.Start,
+			End:        w.End,
+			DaysOfWeek: w.DaysOfWeek,
+		}
+	}
+
+	// Parse lead time
+	var leadTime time.Duration
+	if exc.Spec.LeadTime != "" {
+		var err error
+		leadTime, err = time.ParseDuration(exc.Spec.LeadTime)
+		if err != nil {
+			r.Log.Error(err, "failed to parse lead time, ignoring", "leadTime", exc.Spec.LeadTime)
+		}
+	}
+
+	return &scheduler.Exception{
+		Type:       scheduler.ExceptionType(exc.Spec.Type),
+		ValidFrom:  exc.Spec.ValidFrom.Time,
+		ValidUntil: exc.Spec.ValidUntil.Time,
+		LeadTime:   leadTime,
+		Windows:    windows,
+	}, nil
 }
 
 // buildExecutionPlan creates an execution plan based on the strategy.

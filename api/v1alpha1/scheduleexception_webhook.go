@@ -11,6 +11,7 @@ import (
 	"regexp"
 	"time"
 
+	"github.com/ardikabs/hibernator/internal/wellknown"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/util/validation/field"
@@ -91,8 +92,8 @@ func (r *ScheduleException) validate(ctx context.Context, exception *ScheduleExc
 	windowErrs := r.validateWindows(exception)
 	allErrs = append(allErrs, windowErrs...)
 
-	// Check for single active exception constraint
-	activeErrs := r.validateSingleActiveException(ctx, exception)
+	// Check for overlapping exceptions constraint
+	activeErrs := r.validateNoOverlappingExceptions(ctx, exception)
 	allErrs = append(allErrs, activeErrs...)
 
 	if len(allErrs) > 0 {
@@ -273,8 +274,8 @@ func (r *ScheduleException) validateWindows(exception *ScheduleException) field.
 	return allErrs
 }
 
-// validateSingleActiveException ensures only one active exception per plan.
-func (r *ScheduleException) validateSingleActiveException(ctx context.Context, exception *ScheduleException) field.ErrorList {
+// validateNoOverlappingExceptions ensures only one active or pending exception per plan at any given time.
+func (r *ScheduleException) validateNoOverlappingExceptions(ctx context.Context, exception *ScheduleException) field.ErrorList {
 	var allErrs field.ErrorList
 
 	// Determine target namespace
@@ -283,12 +284,12 @@ func (r *ScheduleException) validateSingleActiveException(ctx context.Context, e
 		targetNamespace = exception.Namespace
 	}
 
-	// Query for existing active exceptions for this plan
+	// Query for existing exceptions referencing this plan
 	exceptionList := &ScheduleExceptionList{}
 	listOpts := []client.ListOption{
 		client.InNamespace(targetNamespace),
 		client.MatchingLabels{
-			"hibernator.ardikabs.com/plan": exception.Spec.PlanRef.Name,
+			wellknown.LabelPlan: exception.Spec.PlanRef.Name,
 		},
 	}
 
@@ -301,24 +302,41 @@ func (r *ScheduleException) validateSingleActiveException(ctx context.Context, e
 		return allErrs
 	}
 
-	// Check for active exceptions (excluding this one if it's an update)
+	// Check for overlaps with existing non-expired exceptions
 	for _, existing := range exceptionList.Items {
 		// Skip self
 		if existing.Namespace == exception.Namespace && existing.Name == exception.Name {
 			continue
 		}
 
-		// Check if existing exception is active
-		if existing.Status.State == ExceptionStateActive {
+		// Skip expired exceptions
+		if existing.Status.State == ExceptionStateExpired {
+			continue
+		}
+
+		// Check for time range overlap
+		// Two intervals [s1, e1] and [s2, e2] overlap if s1 < e2 AND s2 < e1
+		// (where s = start, e = end)
+		s1 := exception.Spec.ValidFrom.Time
+		e1 := exception.Spec.ValidUntil.Time
+
+		s2 := existing.Spec.ValidFrom.Time
+		e2 := existing.Spec.ValidUntil.Time
+		if s1.Before(e2) && s2.Before(e1) {
 			allErrs = append(allErrs, field.Forbidden(
 				field.NewPath("spec", "planRef", "name"),
-				fmt.Sprintf("plan %s already has active exception %s (expires at %s)",
-					exception.Spec.PlanRef.Name,
+				fmt.Sprintf("exception time range [%s, %s] overlaps with existing %s exception %s [%s, %s]",
+					s1.Format(time.RFC3339),
+					e1.Format(time.RFC3339),
+					existing.Status.State,
 					existing.Name,
-					existing.Spec.ValidUntil.Format(time.RFC3339),
+					s2.Format(time.RFC3339),
+					e2.Format(time.RFC3339),
 				),
 			))
-			break // Only report first conflict
+
+			// Only report first conflict
+			break
 		}
 	}
 

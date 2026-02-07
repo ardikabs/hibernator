@@ -19,6 +19,7 @@ import (
 
 	streamingv1alpha1 "github.com/ardikabs/hibernator/api/streaming/v1alpha1"
 	hibernatorv1alpha1 "github.com/ardikabs/hibernator/api/v1alpha1"
+	"github.com/ardikabs/hibernator/internal/wellknown"
 )
 
 func TestNewExecutionServiceServer(t *testing.T) {
@@ -193,9 +194,9 @@ func TestEmitLog(t *testing.T) {
 			Name:      "hibernate-runner-test-plan-test-target-abcd",
 			Namespace: "default",
 			Labels: map[string]string{
-				LabelExecutionID: "test-plan-test-target-1234567890",
-				LabelPlan:        "test-plan",
-				LabelTarget:      "test-target",
+				wellknown.LabelExecutionID: "test-plan-test-target-1234567890",
+				wellknown.LabelPlan:        "test-plan",
+				wellknown.LabelTarget:      "test-target",
 			},
 		},
 	}
@@ -263,9 +264,9 @@ func TestGetExecutionMetadata(t *testing.T) {
 			Name:      "hibernate-runner-my-plan-my-target-xyz",
 			Namespace: "test-namespace",
 			Labels: map[string]string{
-				LabelExecutionID: "my-plan-my-target-1234567890",
-				LabelPlan:        "my-plan",
-				LabelTarget:      "my-target",
+				wellknown.LabelExecutionID: "my-plan-my-target-1234567890",
+				wellknown.LabelPlan:        "my-plan",
+				wellknown.LabelTarget:      "my-target",
 			},
 		},
 	}
@@ -309,9 +310,9 @@ func TestGetExecutionMetadata_MissingPlanLabel(t *testing.T) {
 			Name:      "hibernate-runner-broken",
 			Namespace: "default",
 			Labels: map[string]string{
-				LabelExecutionID: "broken-execution",
+				wellknown.LabelExecutionID: "broken-execution",
 				// Missing LabelPlan
-				LabelTarget: "my-target",
+				wellknown.LabelTarget: "my-target",
 			},
 		},
 	}
@@ -337,9 +338,9 @@ func TestGetOrCacheExecutionMetadata(t *testing.T) {
 			Name:      "hibernate-runner-cached",
 			Namespace: "test-namespace",
 			Labels: map[string]string{
-				LabelExecutionID: "cached-exec-123",
-				LabelPlan:        "my-plan",
-				LabelTarget:      "my-target",
+				wellknown.LabelExecutionID: "cached-exec-123",
+				wellknown.LabelPlan:        "my-plan",
+				wellknown.LabelTarget:      "my-target",
 			},
 		},
 	}

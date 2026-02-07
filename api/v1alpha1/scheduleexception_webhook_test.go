@@ -10,6 +10,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/ardikabs/hibernator/internal/wellknown"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
@@ -334,7 +335,7 @@ func TestScheduleException_ValidateCreate(t *testing.T) {
 					ObjectMeta: metav1.ObjectMeta{
 						Name:      "existing-exception",
 						Namespace: "default",
-						Labels:    map[string]string{"hibernator.ardikabs.com/plan": "test-plan"},
+						Labels:    map[string]string{wellknown.LabelPlan: "test-plan"},
 					},
 					Spec: ScheduleExceptionSpec{
 						PlanRef:    PlanReference{Name: "test-plan", Namespace: "default"},
@@ -350,7 +351,39 @@ func TestScheduleException_ValidateCreate(t *testing.T) {
 				return setupTestClient(plan, existingException)
 			},
 			wantErr: true,
-			errMsg:  "already has active exception",
+			errMsg:  "overlaps with existing",
+		},
+		{
+			name: "overlapping_pending_exception",
+			exception: &ScheduleException{
+				ObjectMeta: metav1.ObjectMeta{Name: "new-exception", Namespace: "default"},
+				Spec: ScheduleExceptionSpec{
+					PlanRef:    PlanReference{Name: "test-plan"},
+					ValidFrom:  metav1.Time{Time: time.Now().Add(24 * time.Hour)},
+					ValidUntil: metav1.Time{Time: time.Now().Add(48 * time.Hour)},
+					Type:       "extend",
+					Windows:    []OffHourWindow{{Start: "06:00", End: "11:00", DaysOfWeek: []string{"SUN"}}},
+				},
+			},
+			setup: func() client.Client {
+				plan := &HibernatePlan{ObjectMeta: metav1.ObjectMeta{Name: "test-plan", Namespace: "default"}}
+				existingException := &ScheduleException{
+					ObjectMeta: metav1.ObjectMeta{Name: "pending-exception", Namespace: "default", Labels: map[string]string{wellknown.LabelPlan: "test-plan"}},
+					Spec: ScheduleExceptionSpec{
+						PlanRef:    PlanReference{Name: "test-plan"},
+						ValidFrom:  metav1.Time{Time: time.Now().Add(30 * time.Hour)},
+						ValidUntil: metav1.Time{Time: time.Now().Add(60 * time.Hour)},
+						Type:       "extend",
+						Windows:    []OffHourWindow{{Start: "06:00", End: "11:00", DaysOfWeek: []string{"SUN"}}},
+					},
+					Status: ScheduleExceptionStatus{
+						State: ExceptionStatePending,
+					},
+				}
+				return setupTestClient(plan, existingException)
+			},
+			wantErr: true,
+			errMsg:  "overlaps with existing",
 		},
 	}
 

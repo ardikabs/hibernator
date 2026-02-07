@@ -20,6 +20,7 @@ import (
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/types"
 	clientgoscheme "k8s.io/client-go/kubernetes/scheme"
+	"k8s.io/client-go/util/retry"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
@@ -482,6 +483,94 @@ func TestScheduleExceptionReconciler_HandlesDeletion(t *testing.T) {
 		t.Error("Expected exception to be deleted (not found), but Get() succeeded")
 	} else if !errors.IsNotFound(err) {
 		t.Errorf("Expected NotFound error, got: %v", err)
+	}
+}
+
+func TestScheduleExceptionReconciler_RevertsToPending(t *testing.T) {
+	ctx := context.Background()
+
+	plan := &hibernatorv1alpha1.HibernatePlan{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "test-plan",
+			Namespace: "default",
+		},
+		Spec: hibernatorv1alpha1.HibernatePlanSpec{
+			Schedule: hibernatorv1alpha1.Schedule{
+				Timezone: "UTC",
+				OffHours: []hibernatorv1alpha1.OffHourWindow{
+					{Start: "20:00", End: "06:00", DaysOfWeek: []string{"MON"}},
+				},
+			},
+			Execution: hibernatorv1alpha1.Execution{
+				Strategy: hibernatorv1alpha1.ExecutionStrategy{
+					Type: hibernatorv1alpha1.StrategySequential,
+				},
+			},
+			Targets: []hibernatorv1alpha1.Target{
+				{Name: "t1", Type: "eks", ConnectorRef: hibernatorv1alpha1.ConnectorRef{Kind: "K8SCluster", Name: "k"}},
+			},
+		},
+	}
+
+	// Active Exception
+	exception := &hibernatorv1alpha1.ScheduleException{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "reverting-exception",
+			Namespace: "default",
+			Labels:    map[string]string{wellknown.LabelPlan: "test-plan"},
+		},
+		Spec: hibernatorv1alpha1.ScheduleExceptionSpec{
+			PlanRef: hibernatorv1alpha1.PlanReference{
+				Name:      "test-plan",
+				Namespace: "default",
+			},
+			ValidFrom:  metav1.Time{Time: time.Now().Add(-1 * time.Hour)},
+			ValidUntil: metav1.Time{Time: time.Now().Add(1 * time.Hour)},
+			Type:       "extend",
+			Windows: []hibernatorv1alpha1.OffHourWindow{
+				{Start: "06:00", End: "11:00", DaysOfWeek: []string{"SAT"}},
+			},
+		},
+		Status: hibernatorv1alpha1.ScheduleExceptionStatus{
+			State:     hibernatorv1alpha1.ExceptionStateActive,
+			AppliedAt: &metav1.Time{Time: time.Now().Add(-1 * time.Hour)},
+		},
+	}
+
+	reconciler, fakeClient := newScheduleExceptionReconciler(plan, exception)
+
+	req := reconcile.Request{NamespacedName: types.NamespacedName{Name: "reverting-exception", Namespace: "default"}}
+
+	// Now move ValidFrom to the future
+	err := retry.RetryOnConflict(retry.DefaultBackoff, func() error {
+		var latest hibernatorv1alpha1.ScheduleException
+		if err := fakeClient.Get(ctx, req.NamespacedName, &latest); err != nil {
+			return err
+		}
+		latest.Spec.ValidFrom = metav1.Time{Time: time.Now().Add(1 * time.Hour)}
+		latest.Spec.ValidUntil = metav1.Time{Time: time.Now().Add(2 * time.Hour)}
+		return fakeClient.Update(ctx, &latest)
+	})
+	if err != nil {
+		t.Fatalf("Update() exception error = %v", err)
+	}
+
+	// Reconcile
+	for i := 0; i < 3; i++ {
+		_, err := reconciler.Reconcile(ctx, req)
+		if err != nil {
+			t.Fatalf("Reconcile() error = %v", err)
+		}
+	}
+
+	// Verify exception was reverted to Pending
+	var updated hibernatorv1alpha1.ScheduleException
+	if err := fakeClient.Get(ctx, req.NamespacedName, &updated); err != nil {
+		t.Fatalf("Get() error = %v", err)
+	}
+
+	if updated.Status.State != hibernatorv1alpha1.ExceptionStatePending {
+		t.Errorf("Status.State = %v, want %v", updated.Status.State, hibernatorv1alpha1.ExceptionStatePending)
 	}
 }
 

@@ -9,6 +9,7 @@ import (
 	"context"
 	"testing"
 
+	"github.com/ardikabs/hibernator/internal/wellknown"
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
@@ -368,7 +369,7 @@ func TestManager_MarkTargetRestored(t *testing.T) {
 		t.Fatalf("Get ConfigMap error = %v", err)
 	}
 
-	annotationKey := AnnotationRestoredPrefix + targetName
+	annotationKey := wellknown.AnnotationRestoredPrefix + targetName
 	if cm.Annotations[annotationKey] != "true" {
 		t.Errorf("Expected annotation %s=true, got %v", annotationKey, cm.Annotations[annotationKey])
 	}
@@ -525,7 +526,7 @@ func TestManager_UnlockRestoreData(t *testing.T) {
 	}
 
 	for _, target := range targetNames {
-		annotationKey := AnnotationRestoredPrefix + target
+		annotationKey := wellknown.AnnotationRestoredPrefix + target
 		if _, exists := cm.Annotations[annotationKey]; exists {
 			t.Errorf("Expected annotation %s to be removed, but it still exists", annotationKey)
 		}
