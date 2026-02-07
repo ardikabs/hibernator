@@ -1,10 +1,9 @@
-<!--
-RFC: 0002
-Title: User-Friendly Schedule Format Migration
-Author: Hibernator Team
-Status: Implemented
-Date: 2026-01-29
--->
+---
+rfc: RFC-0002
+title: User-Friendly Schedule Format Migration
+status: Implemented
+date: 2026-01-29
+---
 
 # RFC 0002 — User-Friendly Schedule Format Migration
 
@@ -141,7 +140,6 @@ func (r *HibernatePlanReconciler) evaluateSchedule(plan *HibernatePlan) (bool, t
 - [x] Conversion function implemented (`internal/scheduler/schedule.go`)
 - [x] Controller integration (`internal/controller/hibernateplan_controller.go`)
 - [x] README.md updated with new format
-- [x] WORKPLAN.md updated
 
 ### Pending 🔄
 

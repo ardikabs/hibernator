@@ -33,9 +33,10 @@
 
 ## When/Context
 
-- **Emergency response:** Incident detected → Need immediate wakeup
+- **Emergency response:** Incident detected → Need immediate wakeup or prevent upcoming hibernation
 - **Time-bound:** Exception automatically expires after incident resolved
 - **Minimal friction:** Create exception quickly without approvals (or with fast-track approval)
+- **Lead time buffer:** Prevent NEW hibernation starts just before a suspension window
 - **Audit trail:** All exceptions logged as separate CRs for compliance
 - **GitOps-friendly:** Exceptions are independent resources; base plan unchanged
 
@@ -86,19 +87,19 @@ spec:
     name: prod-offhours
 
   # Exception period
-  validFrom: "2026-02-01T22:00:00Z"
-  validUntil: "2026-02-01T23:30:00Z"
+  validFrom: "2026-02-01T21:30:00Z"   # Lead time starts 1h before window
+  validUntil: "2026-02-02T00:30:00Z"
 
   # Exception type: suspend (keep services awake)
   type: suspend
 
-  # Lead time: don't start hibernation 5 min before suspension
-  leadTime: "5m"
+  # Lead time: don't start hibernation 1h before suspension
+  leadTime: "1h"
 
   # Windows where hibernation is suspended
   windows:
-    - start: "22:00"
-      end: "23:30"
+    - start: "22:30"
+      end: "00:30"
       daysOfWeek: ["Monday"]
 ```
 
@@ -108,9 +109,23 @@ Apply the exception:
 kubectl apply -f scheduleexception-incident.yaml
 ```
 
-**Key Design:** Base HibernatePlan is NOT modified. Exception is a separate resource with its own lifecycle.
+### 3. **Lead time protection explained**
 
-### 3. **Verify exception is active**
+The `leadTime` parameter prevents race conditions where a hibernation cycle might start just as you're responding to an incident.
+
+```text
+Timeline Example:
+20:00 → Hibernation begins (base schedule)
+21:30 → Lead time window starts (22:30 - 1h)
+       → Controller prevents ANY new hibernation from starting
+       → If currently hibernating: remains hibernated
+22:30 → Suspension window starts (explicit carve-out)
+       → Resources are kept awake or restored if hibernated
+00:30 → Suspension ends
+06:00 → Normal wakeup (base schedule)
+```
+
+### 4. **Verify exception is active**
 
 ```bash
 # Check ScheduleException status
@@ -120,8 +135,14 @@ kubectl get scheduleexception incident-2026-02-01 -n hibernator-system
 kubectl describe scheduleexception incident-2026-02-01 -n hibernator-system
 ```
 
-Expected output:
+Expected status during lead time:
+```yaml
+status:
+  state: Active
+  message: "Exception active (in lead time window), suspension starts in 59 minutes"
+```
 
+Expected status during suspension:
 ```yaml
 status:
   state: Active
@@ -129,68 +150,47 @@ status:
   message: "Exception active, expires in 89 minutes"
 ```
 
-Check HibernatePlan status (exception history):
-
-```bash
-kubectl get hibernateplan prod-offhours -n hibernator-system -o jsonpath='{.status.activeExceptions}' | jq
-```
-
-```json
-[
-  {
-    "name": "incident-2026-02-01",
-    "type": "suspend",
-    "state": "Active",
-    "validFrom": "2026-02-01T22:00:00Z",
-    "validUntil": "2026-02-01T23:30:00Z",
-    "appliedAt": "2026-02-01T22:01:15Z"
-  }
-]
-```
-
-### 4. **Services remain awake during exception**
-
-With `type: suspend`:
-- Hibernation **will not** start if within lead time window (5 min before suspension)
-- Currently hibernated services **remain** hibernated (exception only prevents new hibernation)
-- Any new hibernation requests **are delayed** until exception expires
-
 ### 5. **Incident resolved → Exception expires automatically**
 
 When incident window ends:
 
 ```
-23:30 (exception expires) → Controller transitions state to Expired
+00:30 (exception expires) → Controller transitions state to Expired
       → Schedule reverts to normal (base hibernation resumes)
       → ScheduleException CR preserved for audit (state: Expired)
 ```
 
-Exception expires automatically; no manual cleanup needed. The CR remains for compliance.
-
-### 6. **If manual removal needed**
-
-For emergency early removal:
-
-```bash
-# Delete the exception CR
-kubectl delete scheduleexception incident-2026-02-01 -n hibernator-system
-
-# Verify removed from plan status
-kubectl get hibernateplan prod-offhours -n hibernator-system -o jsonpath='{.status.activeExceptions}'
-# Should be empty or no longer mention incident exception
-```
-
 ---
 
-## Advanced: Fast-Track Approval (Future)
+## Advanced: Multiple Suspensions
 
-Approval workflow is planned for future implementation (RFC-0003 Phase 4):
+For extended incident recovery, create sequential ScheduleExceptions. Note that the system prevents temporal overlaps, so you must define them sequentially:
 
-```bash
-# Future: On-call creates exception with approval required
-# Engineering Head receives Slack DM
-# Engineering Head approves via Slack button
-# Exception transitions to "Active"
+```yaml
+# Incident phase 1: Investigation (22:30-00:30)
+apiVersion: hibernator.ardikabs.com/v1alpha1
+kind: ScheduleException
+metadata:
+  name: incident-phase1
+spec:
+  planRef: { name: prod-offhours }
+  type: suspend
+  validFrom: "2026-02-01T21:30:00Z"
+  validUntil: "2026-02-02T00:30:00Z"
+  leadTime: "1h"
+  windows: [{ start: "22:30", end: "00:30", daysOfWeek: ["Monday"] }]
+---
+# Incident phase 2: Remediation (00:30-04:00)
+apiVersion: hibernator.ardikabs.com/v1alpha1
+kind: ScheduleException
+metadata:
+  name: incident-phase2
+spec:
+  planRef: { name: prod-offhours }
+  type: suspend
+  validFrom: "2026-02-02T00:30:00Z"
+  validUntil: "2026-02-02T04:00:00Z"
+  windows: [{ start: "00:30", end: "04:00", daysOfWeek: ["Tuesday"] }]
 ```
 
 ---
@@ -199,12 +199,12 @@ Approval workflow is planned for future implementation (RFC-0003 Phase 4):
 
 | Decision | Option | Notes |
 | --- | --- | --- |
-| **Exception type?** | suspend | Keep services awake (no hibernation start) |
-| | extend | Add hibernation windows (unusual for incidents) |
+| **Lead time?** | 1 hour (recommended) | Prevents race conditions |
+| | None (no buffer) | Only if manual hibernation control in place |
 | **Duration?** | 1-2 hours | Typical incident resolution time |
 | | Longer | Rare; for complex multi-system incidents |
 | **Require approval?** | No (instant) | On-call can create immediately |
-| | Yes (fast-track) | Manager approval in Slack (1-2 min) |
+| | Yes (fast-track) | Manager approval (Future Work) |
 
 ---
 
@@ -216,18 +216,17 @@ Approval workflow is planned for future implementation (RFC-0003 Phase 4):
 
 ## Related Journeys
 
-- [Approve Exception via Slack](approve-exception-via-slack.md) — Manager approval workflow
 - [Monitor Hibernation Execution](monitor-hibernation-execution.md) — Monitor status during incident
-- [Suspend Hibernation During Incident](suspend-hibernation-during-incident.md) — Similar use case with lead time
+- [Extend Hibernation for Event](extend-hibernation-for-event.md) — Add hibernation windows (opposite of suspend)
 
 ---
 
 ## Pain Points Solved
 
-**RFC-0003:** Time-bound exceptions eliminate need to recreate entire HibernationPlan; automatic expiration prevents forgotten manual cleanups.
+**RFC-0003:** Time-bound exceptions eliminate need to recreate entire HibernationPlan; lead time prevents race conditions where hibernation starts during response.
 
 ---
 
 ## RFC References
 
-- **RFC-0003:** Temporary Schedule Exceptions and Overrides (suspend type, time-bound, auto-expiration)
+- **RFC-0003:** Temporary Schedule Exceptions and Overrides (suspend type, lead time, auto-expiration)

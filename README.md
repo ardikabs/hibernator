@@ -11,6 +11,7 @@
 Hibernator is a Kubernetes operator that provides centralized, declarative management for suspending and restoring cloud resources during user-defined off-hours. It extends beyond Kubernetes to manage heterogeneous cloud infrastructure (EKS, RDS, EC2, and more) with dependency-aware orchestration and auditable execution.
 
 **Key capabilities:**
+
 - 🕐 **Timezone-aware scheduling** with start/end times and day-of-week patterns
 - ⏸️ **Schedule exceptions** with lead-time grace periods (extend, suspend, replace)
 - 🔗 **Dependency orchestration** using DAG, Staged, Parallel, or Sequential strategies
@@ -24,6 +25,7 @@ Hibernator is a Kubernetes operator that provides centralized, declarative manag
 **Problem:** Teams running non-production environments (DEV/STG) waste resources during off-hours. Ad-hoc scripts lack coordination, auditability, and safe restore semantics when dealing with dependencies across Kubernetes clusters, databases, and compute instances.
 
 **Solution:** Hibernator provides intent-driven infrastructure suspension with:
+
 - Declarative `HibernatePlan` CRDs defining *what* to suspend, not *how*
 - Controller-managed dependency resolution preventing race conditions (e.g., snapshot before cluster shutdown)
 - Central status ledger with execution history, logs, and restore artifact references
@@ -62,6 +64,7 @@ Hibernator is a Kubernetes operator that provides centralized, declarative manag
 ```
 
 The operator separates concerns:
+
 - **Control Plane**: Schedules executions, manages Jobs, aggregates status, serves streaming API
 - **Runner Jobs**: Isolated Kubernetes Jobs per target, using shared ServiceAccount (configured at controller level) with RBAC-scoped permissions
 - **Executors**: Pluggable implementations (EKS, RDS, EC2) handling resource-specific shutdown/wakeup logic
@@ -103,13 +106,16 @@ The operator separates concerns:
 Handle temporary deviations from base schedule using independent `ScheduleException` CRDs:
 
 **Key Features:**
+
 - **Independent CRD**: Exceptions reference HibernatePlan via `planRef` (not embedded in plan spec)
 - **GitOps-friendly**: Create/delete exceptions without modifying plan spec
-- **Single active exception per plan**: Simplifies merge semantics and ensures predictable behavior
+- **Temporal overlap prevention**: Blocks overlapping time ranges for all non-expired exceptions, ensuring only one intent is active at any time
 - **Automatic expiration**: Controller transitions to `Expired` state when `validUntil` passes
 - **Audit trail**: Exception history tracked in HibernatePlan status (max 10 entries)
+- **Deterministic Selection**: Newest active exception (Latest Intent) always wins if multiple exist
 
 **Exception Types:**
+
 - **extend**: Add hibernation windows (union with base schedule)
 - **suspend**: Prevent hibernation with optional lead-time buffer (carve-out from schedule)
 - **replace**: Completely override base schedule during exception period
@@ -136,7 +142,8 @@ spec:
 
 **Impact:** Multi-window schedules (e.g., different hibernation rules for weekdays vs weekends) require workarounds:
 
-**Workaround 1: Create Multiple HibernationPlans** (Recommended)
+##### **Workaround 1: Create Multiple HibernationPlans** (Recommended)
+
 ```yaml
 # Plan 1: Weekday hibernation
 apiVersion: hibernator.ardikabs.com/v1alpha1
@@ -165,7 +172,8 @@ spec:
   targets: []
 ```
 
-**Workaround 2: Use ScheduleException to Add Windows**
+##### **Workaround 2: Use ScheduleException to Add Windows**
+
 ```yaml
 # Base plan with primary window
 apiVersion: hibernator.ardikabs.com/v1alpha1
@@ -196,7 +204,7 @@ spec:
       daysOfWeek: ["SAT", "SUN"]
 ```
 
-**Future Enhancement:** Multi-window support is planned for Phase 4 (see [RFC-0002 Future Enhancements](enhancements/0002-schedule-format-migration.md#future-enhancements)). No breaking changes needed—existing single-window configs will continue working unchanged.
+**Future Enhancement:** Multi-window support is planned for Phase 4 (see [RFC-0002 Future Enhancements](enhancements/0002-schedule-format-migration.md#future-enhancements)). No breaking changes needed; existing single-window configs will continue working unchanged.
 
 ## Quick Start
 
@@ -297,6 +305,7 @@ spec:
 ```
 
 **What happens:**
+
 1. ScheduleException references `dev-offhours` plan via `planRef`
 2. Controller detects active exception and applies it to schedule evaluation
 3. During Feb 10-15, services hibernate Sat-Sun 06:00-11:00 (in addition to weekday nights)
@@ -381,7 +390,8 @@ spec:
   - [x] Three exception types: extend, suspend (with lead time), replace
   - [x] Automatic expiration and state management
   - [x] Exception history tracking in plan status
-  - [x] Single active exception per plan constraint
+  - [x] Temporal overlap prevention (Active & Pending)
+  - [x] Deterministic newest-wins selection
   - [x] DAG-aware dependency validation (failed target dependencies block execution)
   - [x] Lead-time prevention of new hibernation starts
   - [x] Behavior mode integration (Strict vs BestEffort) with bounded concurrency
@@ -409,13 +419,12 @@ See the following for detailed information:
 - **Core Principles**: [`.github/instructions/`](.github/instructions/) — Design principles, security, testing, concurrency, API design
 - **Architecture RFC**: [`enhancements/0001-hibernate-operator.md`](enhancements/0001-hibernate-operator.md) — Control Plane + Runner Model design
 - **Schedule Exceptions RFC**: [`enhancements/0003-schedule-exceptions.md`](enhancements/0003-schedule-exceptions.md) — Temporary schedule deviations and exception types
-- **Historical Workplan**: [`enhancements/archived/WORKPLAN.md`](enhancements/archived/WORKPLAN.md) — Original design decisions and milestones
 
 ## Development
 
 ### Installation Options
 
-**Option 1: Using Helm (Recommended for production)**
+#### **Option 1: Using Helm (Recommended for production)**
 
 ```bash
 # Add Hibernator chart repository
@@ -431,7 +440,7 @@ helm install hibernator hibernator/hibernator \
   -f values.yaml
 ```
 
-**Option 2: Using kubectl (For development)**
+#### **Option 2: Using kubectl (For development)**
 
 ```bash
 # Apply CRDs
