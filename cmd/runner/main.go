@@ -104,7 +104,7 @@ func main() {
 		fmt.Fprintf(os.Stderr, "failed to initialize logger: %v\n", err)
 		os.Exit(1)
 	}
-	log := zapr.NewLogger(zapLog)
+	log := zapr.NewLogger(zapLog).WithName("runner")
 
 	// Set up signal handling
 	ctx, cancel := context.WithTimeout(context.Background(), cfg.Timeout)

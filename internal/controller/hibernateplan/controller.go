@@ -68,7 +68,7 @@ type Reconciler struct {
 
 // Reconcile handles HibernatePlan reconciliation.
 func (r *Reconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
-	log := r.Log.WithValues("hibernateplan", req.NamespacedName.String())
+	log := r.Log.WithValues("plan", req.NamespacedName.String())
 
 	// Fetch the HibernatePlan
 	plan := &hibernatorv1alpha1.HibernatePlan{}

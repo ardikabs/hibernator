@@ -89,6 +89,7 @@ func (r *runner) close() {
 	if r.logSink != nil {
 		r.logSink.Stop()
 	}
+	// Then close streaming client
 	if r.streamClient != nil {
 		r.streamClient.Close()
 	}
@@ -650,6 +651,7 @@ func (r *runner) loadRestoreData(ctx context.Context) (*executor.RestoreData, er
 
 // initStreamingClient initializes the streaming client based on configuration.
 func initStreamingClient(ctx context.Context, log logr.Logger, cfg *Config) (streamclient.StreamingClient, error) {
+	log = log.WithName("streamingclient")
 	if cfg.GRPCEndpoint == "" && cfg.WebSocketEndpoint == "" && cfg.HTTPCallbackEndpoint == "" && cfg.ControlPlaneEndpoint == "" {
 		log.Info("no streaming endpoints configured, skipping streaming client")
 		return nil, nil
@@ -701,7 +703,8 @@ func (r *runner) reportProgress(ctx context.Context, phase string, percent int32
 	// Report progress separately via ReportProgress RPC
 	if r.streamClient != nil {
 		if err := r.streamClient.ReportProgress(ctx, phase, percent, message); err != nil {
-			r.log.Error(err, "failed to report progress")
+			r.log.Info("failed to report progress", "error", err.Error())
+
 		}
 	}
 }
@@ -719,7 +722,7 @@ func (r *runner) reportCompletion(ctx context.Context, success bool, errorMsg st
 	// Stream to control plane if available
 	if r.streamClient != nil {
 		if err := r.streamClient.ReportCompletion(ctx, success, errorMsg, durationMs); err != nil {
-			r.log.Error(err, "failed to report completion")
+			r.log.Info("failed to report completion", "error", err.Error())
 		}
 	}
 }

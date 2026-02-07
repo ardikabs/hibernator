@@ -26,10 +26,10 @@ metadata:
 spec:
   # Schedule for testing (every weeknight 8 PM to 6 AM)
   schedule:
-    timezone: UTC
+    timezone: Asia/Jakarta
     offHours:
       - start: "20:00"
-        end: "14:00"
+        end: "06:00"
         daysOfWeek: ["MON", "TUE", "WED", "THU", "FRI"]
 
   # Sequential execution with different delays to observe order
@@ -80,9 +80,29 @@ spec:
   planRef:
     name: workloadscaler-test
   type: suspend
+  validFrom: "2026-03-05T00:00:00Z"
+  validUntil: "2026-03-15T23:59:59Z"
+  windows:
+  # During 07:00 - 13:00 on Thursday to Sunday
+  # the hibernation must not run to allow for security patching
+    - start: "07:00"
+      end: "13:00"
+      daysOfWeek: ["THU","FRI", "SAT", "SUN"]
+---
+apiVersion: hibernator.ardikabs.com/v1alpha1
+kind: ScheduleException
+metadata:
+  name: for-early-morning-event
+  namespace: hibernator-system
+spec:
+  planRef:
+    name: workloadscaler-test
+  type: replace
   validFrom: "2026-02-05T00:00:00Z"
   validUntil: "2026-02-15T23:59:59Z"
   windows:
-    - start: "07:00"
-      end: "13:00"  # Hibernate entire day
-      daysOfWeek: ["THU","FRI", "SAT", "SUN"]
+  # On Weekend, schedule replaced to
+  # 23:00 - 05:00 to accommodate early morning event
+    - start: "23:00"
+      end: "05:00"
+      daysOfWeek: ["SAT", "SUN"]
