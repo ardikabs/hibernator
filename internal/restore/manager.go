@@ -10,6 +10,7 @@ import (
 	"encoding/json"
 	"fmt"
 
+	"github.com/ardikabs/hibernator/internal/wellknown"
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/errors"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
@@ -19,21 +20,6 @@ import (
 )
 
 const (
-	// LabelPlan is the label key for plan name.
-	LabelPlan = "hibernator.ardikabs.com/plan"
-
-	// LabelTarget is the label key for target name.
-	LabelTarget = "hibernator.ardikabs.com/target"
-
-	// LabelManagedBy is the label key for managed-by.
-	LabelManagedBy = "app.kubernetes.io/managed-by"
-
-	// AnnotationPreviousRestoreState is the annotation key for previous restore state snapshot.
-	AnnotationPreviousRestoreState = "hibernator.ardikabs.com/restore-previous-state"
-
-	// AnnotationRestoredPrefix is the prefix for per-target restoration tracking annotations.
-	AnnotationRestoredPrefix = "hibernator.ardikabs.com/restored-"
-
 	// DataKeyRestore is the ConfigMap data key for restore data.
 	DataKeyRestore = "restore.json"
 
@@ -100,7 +86,7 @@ func (m *Manager) PrepareRestorePoint(ctx context.Context, namespace, planName s
 				Name:      cmName,
 				Namespace: namespace,
 				Labels: map[string]string{
-					LabelPlan: planName,
+					wellknown.LabelPlan: planName,
 				},
 			},
 			Data: make(map[string]string),
@@ -123,7 +109,7 @@ func (m *Manager) PrepareRestorePoint(ctx context.Context, namespace, planName s
 		if len(previous) == 0 {
 			previous = []byte("n/a")
 		}
-		cm.Annotations[AnnotationPreviousRestoreState] = string(previous)
+		cm.Annotations[wellknown.AnnotationPreviousRestoreState] = string(previous)
 	}
 
 	for key, val := range cm.Data {
@@ -160,7 +146,7 @@ func (m *Manager) Save(ctx context.Context, namespace, planName, targetName stri
 				Name:      cmName,
 				Namespace: namespace,
 				Labels: map[string]string{
-					LabelPlan: planName,
+					wellknown.LabelPlan: planName,
 				},
 			},
 			Data: make(map[string]string),
@@ -317,7 +303,7 @@ func (m *Manager) MarkTargetRestored(ctx context.Context, namespace, planName, t
 	if cm.Annotations == nil {
 		cm.Annotations = make(map[string]string)
 	}
-	annotationKey := AnnotationRestoredPrefix + targetName
+	annotationKey := wellknown.AnnotationRestoredPrefix + targetName
 	cm.Annotations[annotationKey] = "true"
 
 	// Reset IsLive flag for this target's data after successful restore
@@ -357,7 +343,7 @@ func (m *Manager) MarkAllTargetsRestored(ctx context.Context, namespace, planNam
 
 	// Check if all targets have restored annotation
 	for _, targetName := range targetNames {
-		annotationKey := AnnotationRestoredPrefix + targetName
+		annotationKey := wellknown.AnnotationRestoredPrefix + targetName
 		if cm.Annotations[annotationKey] != "true" {
 			return false, nil
 		}
@@ -388,7 +374,7 @@ func (m *Manager) UnlockRestoreData(ctx context.Context, namespace, planName str
 	// Remove all restored-* annotations
 	if cm.Annotations != nil {
 		for key := range cm.Annotations {
-			if len(key) > len(AnnotationRestoredPrefix) && key[:len(AnnotationRestoredPrefix)] == AnnotationRestoredPrefix {
+			if len(key) > len(wellknown.AnnotationRestoredPrefix) && key[:len(wellknown.AnnotationRestoredPrefix)] == wellknown.AnnotationRestoredPrefix {
 				delete(cm.Annotations, key)
 			}
 		}

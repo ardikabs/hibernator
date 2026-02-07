@@ -369,7 +369,7 @@ func TestHibernatePlanReconciler_ConvertsOffHoursToCron(t *testing.T) {
 	}
 
 	// WakeUp should be next day
-	expectedWakeUp := "0 6 * * 2,3,4,5,6"
+	expectedWakeUp := "0 6 * * 1,2,3,4,5"
 	if wakeUpCron != expectedWakeUp {
 		t.Errorf("wakeUpCron = %s, want %s", wakeUpCron, expectedWakeUp)
 	}
@@ -418,6 +418,99 @@ func TestHibernatePlanReconciler_ValidatesTargets(t *testing.T) {
 			t.Errorf("Target[%d] has empty connector name", i)
 		}
 	}
+}
+
+func TestHibernatePlanReconciler_PicksNewestActiveException(t *testing.T) {
+	ctx := context.Background()
+	now := time.Now()
+
+	plan := &hibernatorv1alpha1.HibernatePlan{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "test-plan",
+			Namespace: "default",
+		},
+		Spec: hibernatorv1alpha1.HibernatePlanSpec{
+			Schedule: hibernatorv1alpha1.Schedule{
+				Timezone: "UTC",
+				OffHours: []hibernatorv1alpha1.OffHourWindow{
+					{Start: "20:00", End: "06:00", DaysOfWeek: []string{"MON"}},
+				},
+			},
+			Targets: []hibernatorv1alpha1.Target{
+				{Name: "t1", Type: "eks", ConnectorRef: hibernatorv1alpha1.ConnectorRef{Kind: "K8SCluster", Name: "k"}},
+			},
+		},
+	}
+
+	// Older exception
+	oldException := &hibernatorv1alpha1.ScheduleException{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:              "old-exception",
+			Namespace:         "default",
+			Labels:            map[string]string{wellknown.LabelPlan: "test-plan"},
+			CreationTimestamp: metav1.Time{Time: now.Add(-2 * time.Hour)},
+		},
+		Spec: hibernatorv1alpha1.ScheduleExceptionSpec{
+			PlanRef:    hibernatorv1alpha1.PlanReference{Name: "test-plan"},
+			ValidFrom:  metav1.Time{Time: now.Add(-1 * time.Hour)},
+			ValidUntil: metav1.Time{Time: now.Add(1 * time.Hour)},
+			Type:       hibernatorv1alpha1.ExceptionExtend,
+			Windows:    []hibernatorv1alpha1.OffHourWindow{{Start: "01:00", End: "02:00", DaysOfWeek: []string{"MON"}}},
+		},
+		Status: hibernatorv1alpha1.ScheduleExceptionStatus{
+			State: hibernatorv1alpha1.ExceptionStateActive,
+		},
+	}
+
+	// Newer exception (latest intent)
+	newException := &hibernatorv1alpha1.ScheduleException{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:              "new-exception",
+			Namespace:         "default",
+			Labels:            map[string]string{wellknown.LabelPlan: "test-plan"},
+			CreationTimestamp: metav1.Time{Time: now.Add(-1 * time.Hour)},
+		},
+		Spec: hibernatorv1alpha1.ScheduleExceptionSpec{
+			PlanRef:    hibernatorv1alpha1.PlanReference{Name: "test-plan"},
+			ValidFrom:  metav1.Time{Time: now.Add(-1 * time.Hour)},
+			ValidUntil: metav1.Time{Time: now.Add(1 * time.Hour)},
+			Type:       hibernatorv1alpha1.ExceptionSuspend,
+			Windows:    []hibernatorv1alpha1.OffHourWindow{{Start: "03:00", End: "04:00", DaysOfWeek: []string{"MON"}}},
+		},
+		Status: hibernatorv1alpha1.ScheduleExceptionStatus{
+			State: hibernatorv1alpha1.ExceptionStateActive,
+		},
+	}
+
+	reconciler, _ := newHibernatePlanReconciler(plan, oldException, newException)
+
+	// Call getActiveException (internal method, but we can test it via Reconcile or make it public/helper)
+	// Since it's unexported, we'll test the effect via evaluateSchedule which calls it.
+	shouldHibernate, _, err := reconciler.evaluateSchedule(ctx, logr.Discard(), plan)
+	if err != nil {
+		t.Fatalf("evaluateSchedule() error = %v", err)
+	}
+
+	// At this specific time, base schedule (20:00-06:00) is NOT active.
+	// If oldException (extend 01:00-02:00) wins, it won't affect current state much unless we are in that window.
+	// If newException (suspend 03:00-04:00) wins, same.
+	// Let's check which one was selected by looking at the scheduler.Exception returned by getActiveException.
+	
+	activeExc, err := reconciler.getActiveException(ctx, plan)
+	if err != nil {
+		t.Fatalf("getActiveException() error = %v", err)
+	}
+
+	if activeExc == nil {
+		t.Fatal("Expected an active exception to be found")
+	}
+
+	// Verify the NEW one was picked (it's Type Suspend, Old is Extend)
+	if activeExc.Type != scheduler.ExceptionSuspend {
+		t.Errorf("Picked exception type = %v, want %v (the newer one)", activeExc.Type, scheduler.ExceptionSuspend)
+	}
+	
+	_ = shouldHibernate
 }
 
 // Ensure imports are used

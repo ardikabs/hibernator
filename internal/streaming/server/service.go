@@ -15,15 +15,7 @@ import (
 
 	streamingv1alpha1 "github.com/ardikabs/hibernator/api/streaming/v1alpha1"
 	hibernatorv1alpha1 "github.com/ardikabs/hibernator/api/v1alpha1"
-)
-
-const (
-	// LabelPlan is the label key for the HibernatePlan name
-	LabelPlan = "hibernator.ardikabs.com/plan"
-	// LabelTarget is the label key for the target name
-	LabelTarget = "hibernator.ardikabs.com/target"
-	// LabelExecutionID is the label key for the execution ID
-	LabelExecutionID = "hibernator.ardikabs.com/execution-id"
+	"github.com/ardikabs/hibernator/internal/wellknown"
 )
 
 // ExecutionMetadata holds metadata about an execution extracted from the runner Job
@@ -383,7 +375,7 @@ func (s *ExecutionServiceServer) getExecutionMetadata(ctx context.Context, execu
 	// List Jobs with matching execution ID label
 	var jobList batchv1.JobList
 	if err := s.k8sClient.List(ctx, &jobList, client.MatchingLabels{
-		LabelExecutionID: executionID,
+		wellknown.LabelExecutionID: executionID,
 	}); err != nil {
 		return nil, fmt.Errorf("failed to list jobs for execution %s: %w", executionID, err)
 	}
@@ -398,8 +390,8 @@ func (s *ExecutionServiceServer) getExecutionMetadata(ctx context.Context, execu
 	// Extract metadata from job labels and namespace
 	meta := &ExecutionMetadata{
 		Namespace:   job.Namespace,
-		PlanName:    job.Labels[LabelPlan],
-		TargetName:  job.Labels[LabelTarget],
+		PlanName:    job.Labels[wellknown.LabelPlan],
+		TargetName:  job.Labels[wellknown.LabelTarget],
 		ExecutionID: executionID,
 	}
 

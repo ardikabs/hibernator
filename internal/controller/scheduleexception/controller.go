@@ -72,58 +72,52 @@ func (r *Reconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Resu
 
 	now := time.Now()
 
-	// Initialize status if needed
-	if exception.Status.State == "" {
-		// Determine initial state based on validFrom
-		if now.Before(exception.Spec.ValidFrom.Time) {
-			exception.Status.State = hibernatorv1alpha1.ExceptionStatePending
-		} else if now.After(exception.Spec.ValidUntil.Time) {
-			exception.Status.State = hibernatorv1alpha1.ExceptionStateExpired
-			exception.Status.ExpiredAt = &metav1.Time{Time: now}
+	// Determine desired state
+	desiredState := hibernatorv1alpha1.ExceptionStatePending
+	if !now.Before(exception.Spec.ValidFrom.Time) {
+		if !exception.Spec.ValidUntil.IsZero() && now.After(exception.Spec.ValidUntil.Time) {
+			desiredState = hibernatorv1alpha1.ExceptionStateExpired
 		} else {
-			exception.Status.State = hibernatorv1alpha1.ExceptionStateActive
+			desiredState = hibernatorv1alpha1.ExceptionStateActive
+		}
+	}
+
+	// Handle state transitions
+	if exception.Status.State != desiredState {
+		orig := exception.DeepCopy()
+		oldState := exception.Status.State
+		exception.Status.State = desiredState
+
+		switch desiredState {
+		case hibernatorv1alpha1.ExceptionStatePending:
+			exception.Status.AppliedAt = nil
+			exception.Status.ExpiredAt = nil
+			exception.Status.Message = "Exception pending"
+		case hibernatorv1alpha1.ExceptionStateActive:
 			exception.Status.AppliedAt = &metav1.Time{Time: now}
+			exception.Status.ExpiredAt = nil
+			exception.Status.Message = "Exception activated"
+		case hibernatorv1alpha1.ExceptionStateExpired:
+			exception.Status.ExpiredAt = &metav1.Time{Time: now}
+			exception.Status.Message = "Exception expired"
 		}
 
-		if err := r.Status().Update(ctx, exception); err != nil {
-			return ctrl.Result{}, err
+		if err := r.Status().Patch(ctx, exception, client.MergeFrom(orig)); err != nil {
+			return ctrl.Result{}, fmt.Errorf("transition exception state from %s to %s: %w", oldState, desiredState, err)
 		}
 
-		log.Info("initialized exception status", "state", exception.Status.State)
+		log.Info("transitioned exception state", "from", oldState, "to", desiredState)
+
+		// Trigger plan reconciliation
+		if err := r.triggerPlanReconciliation(ctx, log, exception); err != nil {
+			log.Error(err, "failed to trigger plan reconciliation after transition")
+		}
 	}
 
 	// Add plan label if missing (for efficient querying)
 	if err := r.ensurePlanLabel(ctx, log, exception); err != nil {
 		log.Error(err, "failed to add plan label")
 		return ctrl.Result{RequeueAfter: wellknown.RequeueIntervalForScheduleException}, nil
-	}
-
-	// Check if pending exception should activate
-	if exception.Status.State == hibernatorv1alpha1.ExceptionStatePending &&
-		!now.Before(exception.Spec.ValidFrom.Time) {
-
-		orig := exception.DeepCopy()
-		exception.Status.State = hibernatorv1alpha1.ExceptionStateActive
-		exception.Status.AppliedAt = &metav1.Time{Time: now}
-		exception.Status.Message = "Exception activated"
-
-		if err := r.Status().Patch(ctx, exception, client.MergeFrom(orig)); err != nil {
-			return ctrl.Result{}, fmt.Errorf("activate exception: %w", err)
-		}
-
-		log.Info("activated exception", "validFrom", exception.Spec.ValidFrom)
-
-		// Trigger plan reconciliation
-		if err := r.triggerPlanReconciliation(ctx, log, exception); err != nil {
-			log.Error(err, "failed to trigger plan reconciliation after activation")
-		}
-	}
-
-	// Check if exception should expire
-	if exception.Status.State == hibernatorv1alpha1.ExceptionStateActive &&
-		!exception.Spec.ValidUntil.IsZero() &&
-		now.After(exception.Spec.ValidUntil.Time) {
-		return r.expireException(ctx, log, exception)
 	}
 
 	// Update message with expiry info
@@ -191,30 +185,6 @@ func (r *Reconciler) ensurePlanLabel(ctx context.Context, log logr.Logger, excep
 
 	log.Info("added plan label to exception", "label", wellknown.LabelPlan, "value", planName)
 	return nil
-}
-
-// expireException transitions the exception from Active to Expired.
-func (r *Reconciler) expireException(ctx context.Context, log logr.Logger, exception *hibernatorv1alpha1.ScheduleException) (ctrl.Result, error) {
-	log.Info("expiring exception", "validUntil", exception.Spec.ValidUntil)
-
-	orig := exception.DeepCopy()
-
-	// Update state to Expired
-	exception.Status.State = hibernatorv1alpha1.ExceptionStateExpired
-	exception.Status.ExpiredAt = &metav1.Time{Time: time.Now()}
-	exception.Status.Message = "Exception expired"
-
-	if err := r.Status().Patch(ctx, exception, client.MergeFrom(orig)); err != nil {
-		return ctrl.Result{}, fmt.Errorf("update exception status to expired: %w", err)
-	}
-
-	// Trigger plan reconciliation to remove from active exceptions
-	if err := r.triggerPlanReconciliation(ctx, log, exception); err != nil {
-		log.Error(err, "failed to trigger plan reconciliation after expiration")
-	}
-
-	log.Info("exception expired successfully")
-	return ctrl.Result{}, nil
 }
 
 // updateExceptionMessage updates the status message with expiry information.

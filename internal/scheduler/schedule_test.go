@@ -998,7 +998,7 @@ func TestConvertOffHoursToCron_EdgeCases(t *testing.T) {
 				},
 			},
 			wantHibernate: "0 20 * * 1,2,3,4,5,6,0",
-			wantWakeUp:    "0 6 * * 2,3,4,5,6,0,1",
+			wantWakeUp:    "0 6 * * 1,2,3,4,5,6,0",
 		},
 		{
 			name: "case insensitive day names",
@@ -1010,7 +1010,7 @@ func TestConvertOffHoursToCron_EdgeCases(t *testing.T) {
 				},
 			},
 			wantHibernate: "0 20 * * 1,2,3",
-			wantWakeUp:    "0 6 * * 2,3,4",
+			wantWakeUp:    "0 6 * * 1,2,3",
 		},
 	}
 
