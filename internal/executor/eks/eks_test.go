@@ -181,17 +181,8 @@ func TestShutdown_WithSpecificNodeGroups(t *testing.T) {
 		},
 	}
 
-	restore, err := e.Shutdown(ctx, logr.Discard(), spec)
+	err := e.Shutdown(ctx, logr.Discard(), spec)
 	assert.NoError(t, err)
-	assert.Equal(t, "eks", restore.Type)
-
-	var state RestoreState
-	err = json.Unmarshal(restore.Data, &state)
-	assert.NoError(t, err)
-	assert.Equal(t, "my-cluster", state.ClusterName)
-	assert.Equal(t, 1, len(state.NodeGroups))
-	assert.Equal(t, int32(3), state.NodeGroups["ng-1"].DesiredSize)
-	assert.Equal(t, int32(1), state.NodeGroups["ng-1"].MinSize)
 
 	mockEKS.AssertExpectations(t)
 }
@@ -258,13 +249,8 @@ func TestShutdown_WithListAllNodeGroups(t *testing.T) {
 		},
 	}
 
-	restore, err := e.Shutdown(ctx, logr.Discard(), spec)
+	err := e.Shutdown(ctx, logr.Discard(), spec)
 	assert.NoError(t, err)
-
-	var state RestoreState
-	err = json.Unmarshal(restore.Data, &state)
-	assert.NoError(t, err)
-	assert.Equal(t, 2, len(state.NodeGroups))
 
 	mockEKS.AssertExpectations(t)
 }
@@ -309,7 +295,7 @@ func TestShutdown_DescribeNodegroupError(t *testing.T) {
 		},
 	}
 
-	_, err := e.Shutdown(ctx, logr.Discard(), spec)
+	err := e.Shutdown(ctx, logr.Discard(), spec)
 	assert.Error(t, err)
 	assert.Contains(t, err.Error(), "access denied")
 }
@@ -331,18 +317,13 @@ func TestWakeUp_RestoreNodeGroups(t *testing.T) {
 
 	e := NewWithClients(eksFactory, stsFactory, nil)
 
-	restoreState := RestoreState{
-		ClusterName: "my-cluster",
-		NodeGroups: map[string]NodeGroupState{
-			"ng-1": {DesiredSize: 3, MinSize: 1, MaxSize: 5},
-		},
-	}
-
-	restoreData, _ := json.Marshal(restoreState)
+	// Create per-nodegroup restore data (key = nodegroup name)
+	nodeGroupState, _ := json.Marshal(NodeGroupState{DesiredSize: 3, MinSize: 1, MaxSize: 5})
 
 	spec := executor.Spec{
 		TargetName: "test-cluster",
 		TargetType: "eks",
+		Parameters: json.RawMessage(`{"clusterName": "my-cluster"}`),
 		ConnectorConfig: executor.ConnectorConfig{
 			AWS: &executor.AWSConnectorConfig{Region: "us-east-1"},
 		},
@@ -350,7 +331,9 @@ func TestWakeUp_RestoreNodeGroups(t *testing.T) {
 
 	restore := executor.RestoreData{
 		Type: "eks",
-		Data: restoreData,
+		Data: map[string]json.RawMessage{
+			"ng-1": nodeGroupState,
+		},
 	}
 
 	err := e.WakeUp(ctx, logr.Discard(), spec, restore)
@@ -373,7 +356,9 @@ func TestWakeUp_InvalidRestoreData(t *testing.T) {
 
 	restore := executor.RestoreData{
 		Type: "eks",
-		Data: json.RawMessage(`{invalid json}`),
+		Data: map[string]json.RawMessage{
+			"invalid": json.RawMessage(`{invalid json}`),
+		},
 	}
 
 	err := e.WakeUp(ctx, logr.Discard(), spec, restore)
@@ -393,33 +378,8 @@ func TestShutdown_InvalidParameters(t *testing.T) {
 		},
 	}
 
-	_, err := e.Shutdown(ctx, logr.Discard(), spec)
+	err := e.Shutdown(ctx, logr.Discard(), spec)
 	assert.Error(t, err)
-}
-
-// ============================================================================
-// Data type tests
-// ============================================================================
-
-func TestRestoreState_JSON(t *testing.T) {
-	state := RestoreState{
-		ClusterName: "my-cluster",
-		NodeGroups: map[string]NodeGroupState{
-			"ng-1": {DesiredSize: 3, MinSize: 1, MaxSize: 5},
-			"ng-2": {DesiredSize: 5, MinSize: 2, MaxSize: 10},
-		},
-	}
-
-	data, err := json.Marshal(state)
-	assert.NoError(t, err)
-
-	var decoded RestoreState
-	err = json.Unmarshal(data, &decoded)
-	assert.NoError(t, err)
-	assert.Equal(t, "my-cluster", decoded.ClusterName)
-	assert.Equal(t, 2, len(decoded.NodeGroups))
-	assert.Equal(t, int32(3), decoded.NodeGroups["ng-1"].DesiredSize)
-	assert.Equal(t, int32(5), decoded.NodeGroups["ng-2"].DesiredSize)
 }
 
 // ============================================================================

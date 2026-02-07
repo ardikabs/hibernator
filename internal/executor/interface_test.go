@@ -26,9 +26,9 @@ func (m *MockExecutor) Type() string { return m.TypeValue }
 
 func (m *MockExecutor) Validate(spec Spec) error { return m.ValidateErr }
 
-func (m *MockExecutor) Shutdown(ctx context.Context, log logr.Logger, spec Spec) (RestoreData, error) {
+func (m *MockExecutor) Shutdown(ctx context.Context, log logr.Logger, spec Spec) error {
 	_ = log
-	return m.ShutdownData, m.ShutdownErr
+	return m.ShutdownErr
 }
 
 func (m *MockExecutor) WakeUp(ctx context.Context, log logr.Logger, spec Spec, restore RestoreData) error {
@@ -71,7 +71,7 @@ func TestRegistry_List(t *testing.T) {
 func TestRestoreData_Marshal(t *testing.T) {
 	restore := RestoreData{
 		Type: "eks",
-		Data: json.RawMessage(`{"key": "value"}`),
+		Data: map[string]json.RawMessage{"state": json.RawMessage(`{"key": "value"}`)},
 	}
 	data, err := json.Marshal(restore)
 	if err != nil {

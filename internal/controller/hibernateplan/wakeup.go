@@ -3,7 +3,7 @@ Copyright 2026 Ardika Saputro.
 Licensed under the Apache License, Version 2.0.
 */
 
-package controller
+package hibernateplan
 
 import (
 	"context"
@@ -16,8 +16,16 @@ import (
 )
 
 // startWakeUp initiates the wake-up (restoration) process.
-func (r *HibernatePlanReconciler) startWakeUp(ctx context.Context, log logr.Logger, plan *hibernatorv1alpha1.HibernatePlan) (ctrl.Result, error) {
+func (r *Reconciler) startWakeUp(ctx context.Context, log logr.Logger, plan *hibernatorv1alpha1.HibernatePlan) (ctrl.Result, error) {
 	log.V(1).Info("starting wake-up")
+
+	hasRestoreData, err := r.RestoreManager.HasRestoreData(ctx, plan.Namespace, plan.Name)
+	if err != nil {
+		return r.setError(ctx, plan, fmt.Errorf("check restore data: %w", err))
+	}
+	if !hasRestoreData {
+		return r.setError(ctx, plan, fmt.Errorf("cannot wake up: no restore point found"))
+	}
 
 	// Initialize wakeup operation
 	execPlan, err := r.initializeOperation(ctx, log, plan, "wakeup")
@@ -31,6 +39,6 @@ func (r *HibernatePlanReconciler) startWakeUp(ctx context.Context, log logr.Logg
 
 // reconcileWakeUp continues the wake-up (restoration) process.
 // It monitors job progress and advances through execution stages in reverse order.
-func (r *HibernatePlanReconciler) reconcileWakeUp(ctx context.Context, log logr.Logger, plan *hibernatorv1alpha1.HibernatePlan) (ctrl.Result, error) {
+func (r *Reconciler) reconcileWakeUp(ctx context.Context, log logr.Logger, plan *hibernatorv1alpha1.HibernatePlan) (ctrl.Result, error) {
 	return r.reconcileExecution(ctx, log, plan, "wakeup")
 }

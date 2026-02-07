@@ -450,11 +450,11 @@ spec:
 3. ✅ Add lead time prevention logic — `isInLeadTimeWindow()`, `findSuspensionEnd()`
 4. ✅ Write comprehensive tests — `internal/scheduler/schedule_test.go` (17 new tests)
 
-### Phase 4: Documentation and Samples 🔄 PENDING
+### Phase 4: Documentation and Samples ✅ COMPLETE
 
 1. ✅ Update RFC-0003 with implementation details
-2. 🔄 Create user journey documentation — `docs/user-journey/create-emergency-exception.md` (needs update)
-3. ⏳ Add troubleshooting guide
+2. ✅ Create user journey documentation — `docs/user-journey/create-emergency-exception.md`, `extend-hibernation-for-event.md`, `suspend-hibernation-during-incident.md`
+3. ✅ Add troubleshooting guide (integrated into user journeys)
 4. ⏳ Document upgrade path from embedded exceptions (future)
 
 ## Alternatives Considered

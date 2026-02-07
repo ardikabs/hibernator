@@ -14,6 +14,8 @@ Licensed under the Apache License, Version 2.0.
 //   - Pure Go types with no Kubernetes dependencies
 package executorparams
 
+import metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+
 // WaitConfig configures whether to wait for operations to complete and timeout settings.
 // When Enabled=true, executors will poll asynchronously until operations reach the desired state.
 // Progress is logged through streamlogs at regular intervals (15s) for observability.
@@ -165,7 +167,7 @@ type WorkloadScalerParameters struct {
 	Namespace NamespaceSelector `json:"namespace"`
 
 	// WorkloadSelector filters workloads by labels (optional).
-	WorkloadSelector *LabelSelector `json:"workloadSelector,omitempty"`
+	WorkloadSelector *metav1.LabelSelector `json:"workloadSelector,omitempty"`
 
 	// WaitConfig controls whether to wait for replica counts to match desired state.
 	WaitConfig WaitConfig `json:"waitConfig"`

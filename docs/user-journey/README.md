@@ -98,6 +98,7 @@ Advanced workflows for exception handling, governance, and multi-environment man
 | **Configure RBAC for Hibernation** | Set up Kubernetes RBAC to control who can create/manage hibernation plans | DevOps Engineer, Cluster Operator | ✅ Implemented | RFC-0001 | [Details](./configure-rbac-for-hibernation.md) |
 | **Approve Hibernation Exceptions** | Review and approve temporary schedule exceptions for compliance and governance | Engineering Manager, Engineering Head | 📋 Planned (Future) | RFC-0003 Phase 4 | [Details](./approve-hibernation-exceptions.md) |
 | **Scale Workloads in Cluster** | Downscale Kubernetes workloads (Deployments, StatefulSets) during hibernation | Platform Engineer, SRE | ✅ Implemented | RFC-0004 | [Details](./scale-workloads-in-cluster.md) |
+| **Restore Data Management** | Ensure reliable state preservation and prevent data loss during interruptions | Platform Engineer, SRE | ✅ Implemented | RFC-0001 | [Details](./restore-data-management.md) |
 | **Integrate with GitOps** | Add HibernatePlans to version-controlled infrastructure-as-code pipelines | DevOps Engineer, Platform Engineer | ✅ Implemented | RFC-0001, RFC-0002 | [Details](./integrate-with-gitops.md) |
 | **Manage Multi-Environment Schedules** | Create different hibernation policies for DEV, STG, and PROD environments | Platform Engineer, Team Lead | 🔧 Under Maintenance | RFC-0001, RFC-0002 | [Details](./manage-multi-environment-schedules.md) |
 

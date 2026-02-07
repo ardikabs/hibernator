@@ -10,6 +10,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
@@ -135,7 +136,7 @@ func (e *Executor) Validate(spec executor.Spec) error {
 }
 
 // Shutdown stops RDS instances/clusters with optional snapshot.
-func (e *Executor) Shutdown(ctx context.Context, log logr.Logger, spec executor.Spec) (executor.RestoreData, error) {
+func (e *Executor) Shutdown(ctx context.Context, log logr.Logger, spec executor.Spec) error {
 	log.Info("RDS executor starting shutdown",
 		"target", spec.TargetName,
 		"targetType", spec.TargetType,
@@ -144,7 +145,7 @@ func (e *Executor) Shutdown(ctx context.Context, log logr.Logger, spec executor.
 	params, err := e.parseParams(spec.Parameters)
 	if err != nil {
 		log.Error(err, "failed to parse parameters")
-		return executor.RestoreData{}, fmt.Errorf("parse parameters: %w", err)
+		return fmt.Errorf("parse parameters: %w", err)
 	}
 
 	log.Info("parameters parsed",
@@ -159,7 +160,7 @@ func (e *Executor) Shutdown(ctx context.Context, log logr.Logger, spec executor.
 	cfg, err := e.loadAWSConfig(ctx, spec)
 	if err != nil {
 		log.Error(err, "failed to load AWS config")
-		return executor.RestoreData{}, fmt.Errorf("load AWS config: %w", err)
+		return fmt.Errorf("load AWS config: %w", err)
 	}
 
 	client := e.rdsFactory(cfg)
@@ -188,7 +189,7 @@ func (e *Executor) Shutdown(ctx context.Context, log logr.Logger, spec executor.
 		instances, err = e.findDBInstances(ctx, log, client, params.Selector)
 		if err != nil {
 			log.Error(err, "failed to find DB instances")
-			return executor.RestoreData{}, fmt.Errorf("find DB instances: %w", err)
+			return fmt.Errorf("find DB instances: %w", err)
 		}
 		log.Info("DB instances discovered", "totalInstances", len(instances))
 	}
@@ -200,14 +201,9 @@ func (e *Executor) Shutdown(ctx context.Context, log logr.Logger, spec executor.
 		clusters, err = e.findDBClusters(ctx, log, client, params.Selector)
 		if err != nil {
 			log.Error(err, "failed to find DB clusters")
-			return executor.RestoreData{}, fmt.Errorf("find DB clusters: %w", err)
+			return fmt.Errorf("find DB clusters: %w", err)
 		}
 		log.Info("DB clusters discovered", "totalClusters", len(clusters))
-	}
-
-	restoreState := RestoreState{
-		Instances: make([]DBInstanceState, 0, len(instances)),
-		Clusters:  make([]DBClusterState, 0, len(clusters)),
 	}
 
 	// Stop DB instances
@@ -215,18 +211,10 @@ func (e *Executor) Shutdown(ctx context.Context, log logr.Logger, spec executor.
 		instanceID := aws.ToString(inst.DBInstanceIdentifier)
 		log.Info("processing DB instance", "instanceId", instanceID)
 
-		state, err := e.stopInstance(ctx, log, client, instanceID, params.SnapshotBeforeStop, params)
-		if err != nil {
+		if err := e.stopInstance(ctx, log, client, instanceID, params.SnapshotBeforeStop, params, spec.SaveRestoreData); err != nil {
 			log.Error(err, "failed to stop instance", "instanceId", instanceID)
-			return executor.RestoreData{}, fmt.Errorf("stop instance %s: %w", instanceID, err)
+			return fmt.Errorf("stop instance %s: %w", instanceID, err)
 		}
-
-		restoreState.Instances = append(restoreState.Instances, state)
-		log.Info("instance processed successfully",
-			"instanceId", instanceID,
-			"wasStopped", state.WasStopped,
-			"snapshotCreated", state.SnapshotID != "",
-		)
 	}
 
 	// Stop DB clusters
@@ -234,35 +222,18 @@ func (e *Executor) Shutdown(ctx context.Context, log logr.Logger, spec executor.
 		clusterID := aws.ToString(cluster.DBClusterIdentifier)
 		log.Info("processing DB cluster", "clusterId", clusterID)
 
-		state, err := e.stopCluster(ctx, log, client, clusterID, params.SnapshotBeforeStop, params)
-		if err != nil {
+		if err := e.stopCluster(ctx, log, client, clusterID, params.SnapshotBeforeStop, params, spec.SaveRestoreData); err != nil {
 			log.Error(err, "failed to stop cluster", "clusterId", clusterID)
-			return executor.RestoreData{}, fmt.Errorf("stop cluster %s: %w", clusterID, err)
+			return fmt.Errorf("stop cluster %s: %w", clusterID, err)
 		}
-
-		restoreState.Clusters = append(restoreState.Clusters, state)
-		log.Info("cluster processed successfully",
-			"clusterId", clusterID,
-			"wasStopped", state.WasStopped,
-			"snapshotCreated", state.SnapshotID != "",
-		)
-	}
-
-	restoreData, err := json.Marshal(restoreState)
-	if err != nil {
-		log.Error(err, "failed to marshal restore state")
-		return executor.RestoreData{}, fmt.Errorf("marshal restore state: %w", err)
 	}
 
 	log.Info("RDS shutdown completed successfully",
-		"totalInstances", len(restoreState.Instances),
-		"totalClusters", len(restoreState.Clusters),
+		"totalInstances", len(instances),
+		"totalClusters", len(clusters),
 	)
 
-	return executor.RestoreData{
-		Type: e.Type(),
-		Data: restoreData,
-	}, nil
+	return nil
 }
 
 // WakeUp starts RDS instances/clusters.
@@ -279,16 +250,7 @@ func (e *Executor) WakeUp(ctx context.Context, log logr.Logger, spec executor.Sp
 		return fmt.Errorf("parse parameters: %w", err)
 	}
 
-	var restoreState RestoreState
-	if err := json.Unmarshal(restore.Data, &restoreState); err != nil {
-		log.Error(err, "failed to unmarshal restore state")
-		return fmt.Errorf("unmarshal restore state: %w", err)
-	}
-
-	log.Info("restore state loaded",
-		"totalInstances", len(restoreState.Instances),
-		"totalClusters", len(restoreState.Clusters),
-	)
+	log.Info("restore state loaded", "totalResources", len(restore.Data))
 
 	cfg, err := e.loadAWSConfig(ctx, spec)
 	if err != nil {
@@ -298,31 +260,48 @@ func (e *Executor) WakeUp(ctx context.Context, log logr.Logger, spec executor.Sp
 
 	client := e.rdsFactory(cfg)
 
-	// Start DB instances
-	for _, inst := range restoreState.Instances {
-		if !inst.WasStopped {
-			log.Info("starting RDS instance", "instanceId", inst.InstanceID)
-			if err := e.startInstance(ctx, log, client, inst.InstanceID, params); err != nil {
-				log.Error(err, "failed to start instance", "instanceId", inst.InstanceID)
-				return fmt.Errorf("start instance %s: %w", inst.InstanceID, err)
+	// Iterate over all resources in restore data
+	for key, stateBytes := range restore.Data {
+		// Parse key to determine resource type
+		if strings.HasPrefix(key, "instance:") {
+			instanceID := strings.TrimPrefix(key, "instance:")
+			var state DBInstanceState
+			if err := json.Unmarshal(stateBytes, &state); err != nil {
+				log.Error(err, "failed to unmarshal instance state", "instanceId", instanceID)
+				return fmt.Errorf("unmarshal instance state %s: %w", instanceID, err)
 			}
-			log.Info("instance started successfully", "instanceId", inst.InstanceID)
-		} else {
-			log.Info("instance was already stopped, skipping start", "instanceId", inst.InstanceID)
-		}
-	}
 
-	// Start DB clusters
-	for _, cluster := range restoreState.Clusters {
-		if !cluster.WasStopped {
-			log.Info("starting RDS cluster", "clusterId", cluster.ClusterID)
-			if err := e.startCluster(ctx, log, client, cluster.ClusterID, params); err != nil {
-				log.Error(err, "failed to start cluster", "clusterId", cluster.ClusterID)
-				return fmt.Errorf("start cluster %s: %w", cluster.ClusterID, err)
+			if !state.WasStopped {
+				log.Info("starting RDS instance", "instanceId", state.InstanceID)
+				if err := e.startInstance(ctx, log, client, state.InstanceID, params); err != nil {
+					log.Error(err, "failed to start instance", "instanceId", state.InstanceID)
+					return fmt.Errorf("start instance %s: %w", state.InstanceID, err)
+				}
+				log.Info("instance started successfully", "instanceId", state.InstanceID)
+			} else {
+				log.Info("instance was already stopped, skipping start", "instanceId", state.InstanceID)
 			}
-			log.Info("cluster started successfully", "clusterId", cluster.ClusterID)
+
+		} else if strings.HasPrefix(key, "cluster:") {
+			clusterID := strings.TrimPrefix(key, "cluster:")
+			var state DBClusterState
+			if err := json.Unmarshal(stateBytes, &state); err != nil {
+				log.Error(err, "failed to unmarshal cluster state", "clusterId", clusterID)
+				return fmt.Errorf("unmarshal cluster state %s: %w", clusterID, err)
+			}
+
+			if !state.WasStopped {
+				log.Info("starting RDS cluster", "clusterId", state.ClusterID)
+				if err := e.startCluster(ctx, log, client, state.ClusterID, params); err != nil {
+					log.Error(err, "failed to start cluster", "clusterId", state.ClusterID)
+					return fmt.Errorf("start cluster %s: %w", state.ClusterID, err)
+				}
+				log.Info("cluster started successfully", "clusterId", state.ClusterID)
+			} else {
+				log.Info("cluster was already stopped, skipping start", "clusterId", state.ClusterID)
+			}
 		} else {
-			log.Info("cluster was already stopped, skipping start", "clusterId", cluster.ClusterID)
+			log.Info("unknown resource type in restore data, skipping", "key", key)
 		}
 	}
 
@@ -353,17 +332,17 @@ func (e *Executor) loadAWSConfig(ctx context.Context, spec executor.Spec) (aws.C
 	return awsutil.BuildAWSConfig(ctx, spec.ConnectorConfig.AWS)
 }
 
-func (e *Executor) stopInstance(ctx context.Context, log logr.Logger, client RDSClient, instanceID string, snapshotBeforeStop bool, params Parameters) (DBInstanceState, error) {
+func (e *Executor) stopInstance(ctx context.Context, log logr.Logger, client RDSClient, instanceID string, snapshotBeforeStop bool, params Parameters, callback executor.SaveRestoreDataFunc) error {
 	// Get instance info
 	desc, err := client.DescribeDBInstances(ctx, &rds.DescribeDBInstancesInput{
 		DBInstanceIdentifier: aws.String(instanceID),
 	})
 	if err != nil {
-		return DBInstanceState{}, err
+		return err
 	}
 
 	if len(desc.DBInstances) == 0 {
-		return DBInstanceState{}, fmt.Errorf("instance %s not found", instanceID)
+		return fmt.Errorf("instance %s not found", instanceID)
 	}
 
 	instance := desc.DBInstances[0]
@@ -375,7 +354,7 @@ func (e *Executor) stopInstance(ctx context.Context, log logr.Logger, client RDS
 	// Check if already stopped
 	if aws.ToString(instance.DBInstanceStatus) == "stopped" {
 		state.WasStopped = true
-		return state, nil
+		return nil
 	}
 
 	// Create snapshot if requested
@@ -387,7 +366,7 @@ func (e *Executor) stopInstance(ctx context.Context, log logr.Logger, client RDS
 			DBSnapshotIdentifier: aws.String(snapshotID),
 		})
 		if err != nil {
-			return DBInstanceState{}, fmt.Errorf("create snapshot: %w", err)
+			return fmt.Errorf("create snapshot: %w", err)
 		}
 		state.SnapshotID = snapshotID
 
@@ -397,41 +376,54 @@ func (e *Executor) stopInstance(ctx context.Context, log logr.Logger, client RDS
 		if err := waiter.Wait(ctx, &rds.DescribeDBSnapshotsInput{
 			DBSnapshotIdentifier: aws.String(snapshotID),
 		}, 30*time.Minute); err != nil {
-			return DBInstanceState{}, fmt.Errorf("wait for snapshot: %w", err)
+			return fmt.Errorf("wait for snapshot: %w", err)
 		}
 		log.Info("snapshot available", "snapshotId", snapshotID)
 	}
 
 	// Stop instance
 	log.Info("stopping DB instance", "instanceId", instanceID)
-	_, err = client.StopDBInstance(ctx, &rds.StopDBInstanceInput{
+	if _, err = client.StopDBInstance(ctx, &rds.StopDBInstanceInput{
 		DBInstanceIdentifier: aws.String(instanceID),
-	})
-	if err != nil {
-		return DBInstanceState{}, err
+	}); err != nil {
+		return err
+	}
+	log.Info("instance processed successfully",
+		"instanceId", instanceID,
+		"wasStopped", state.WasStopped,
+		"snapshotCreated", state.SnapshotID != "",
+	)
+
+	// Incremental save: persist this instance's restore data immediately
+	if callback != nil {
+		key := "instance:" + state.InstanceID
+		if err := callback(key, state, !state.WasStopped); err != nil {
+			log.Error(err, "failed to save restore data incrementally", "instanceId", instanceID)
+			// Continue processing - save at end as fallback
+		}
 	}
 
 	// Wait for instance to stop if configured
 	if params.WaitConfig.Enabled {
 		if err := e.waitForInstanceStopped(ctx, log, client, instanceID, params.WaitConfig.Timeout); err != nil {
-			return DBInstanceState{}, fmt.Errorf("wait for instance stopped: %w", err)
+			return fmt.Errorf("wait for instance stopped: %w", err)
 		}
 	}
 
-	return state, nil
+	return nil
 }
 
-func (e *Executor) stopCluster(ctx context.Context, log logr.Logger, client RDSClient, clusterID string, snapshotBeforeStop bool, params Parameters) (DBClusterState, error) {
+func (e *Executor) stopCluster(ctx context.Context, log logr.Logger, client RDSClient, clusterID string, snapshotBeforeStop bool, params Parameters, callback executor.SaveRestoreDataFunc) error {
 	// Get cluster info
 	desc, err := client.DescribeDBClusters(ctx, &rds.DescribeDBClustersInput{
 		DBClusterIdentifier: aws.String(clusterID),
 	})
 	if err != nil {
-		return DBClusterState{}, err
+		return err
 	}
 
 	if len(desc.DBClusters) == 0 {
-		return DBClusterState{}, fmt.Errorf("cluster %s not found", clusterID)
+		return fmt.Errorf("cluster %s not found", clusterID)
 	}
 
 	cluster := desc.DBClusters[0]
@@ -442,7 +434,7 @@ func (e *Executor) stopCluster(ctx context.Context, log logr.Logger, client RDSC
 	// Check if already stopped
 	if aws.ToString(cluster.Status) == "stopped" {
 		state.WasStopped = true
-		return state, nil
+		return nil
 	}
 
 	// Create snapshot if requested
@@ -454,7 +446,7 @@ func (e *Executor) stopCluster(ctx context.Context, log logr.Logger, client RDSC
 			DBClusterSnapshotIdentifier: aws.String(snapshotID),
 		})
 		if err != nil {
-			return DBClusterState{}, fmt.Errorf("create cluster snapshot: %w", err)
+			return fmt.Errorf("create cluster snapshot: %w", err)
 		}
 		state.SnapshotID = snapshotID
 
@@ -464,28 +456,42 @@ func (e *Executor) stopCluster(ctx context.Context, log logr.Logger, client RDSC
 		if err := waiter.Wait(ctx, &rds.DescribeDBClusterSnapshotsInput{
 			DBClusterSnapshotIdentifier: aws.String(snapshotID),
 		}, 30*time.Minute); err != nil {
-			return DBClusterState{}, fmt.Errorf("wait for cluster snapshot: %w", err)
+			return fmt.Errorf("wait for cluster snapshot: %w", err)
 		}
 		log.Info("cluster snapshot available", "snapshotId", snapshotID)
 	}
 
 	// Stop cluster
 	log.Info("stopping DB cluster", "clusterId", clusterID)
-	_, err = client.StopDBCluster(ctx, &rds.StopDBClusterInput{
+	if _, err = client.StopDBCluster(ctx, &rds.StopDBClusterInput{
 		DBClusterIdentifier: aws.String(clusterID),
-	})
-	if err != nil {
-		return DBClusterState{}, err
+	}); err != nil {
+		return err
+	}
+
+	log.Info("cluster processed successfully",
+		"clusterId", clusterID,
+		"wasStopped", state.WasStopped,
+		"snapshotCreated", state.SnapshotID != "",
+	)
+
+	// Incremental save: persist this cluster's restore data immediately
+	if callback != nil {
+		key := "cluster:" + state.ClusterID
+		if err := callback(key, state, !state.WasStopped); err != nil {
+			log.Error(err, "failed to save restore data incrementally", "clusterId", clusterID)
+			// Continue processing - save at end as fallback
+		}
 	}
 
 	// Wait for cluster to stop if configured
 	if params.WaitConfig.Enabled {
 		if err := e.waitForClusterStopped(ctx, log, client, clusterID, params.WaitConfig.Timeout); err != nil {
-			return DBClusterState{}, fmt.Errorf("wait for cluster stopped: %w", err)
+			return fmt.Errorf("wait for cluster stopped: %w", err)
 		}
 	}
 
-	return state, nil
+	return nil
 }
 
 func (e *Executor) startInstance(ctx context.Context, log logr.Logger, client RDSClient, instanceID string, params Parameters) error {

@@ -56,11 +56,11 @@ func (e *Executor) Validate(spec executor.Spec) error {
 }
 
 // Shutdown scales GKE node pools to zero.
-func (e *Executor) Shutdown(ctx context.Context, log logr.Logger, spec executor.Spec) (executor.RestoreData, error) {
+func (e *Executor) Shutdown(ctx context.Context, log logr.Logger, spec executor.Spec) error {
 	_ = log
 	var params executorparams.GKEParameters
 	if err := json.Unmarshal(spec.Parameters, &params); err != nil {
-		return executor.RestoreData{}, fmt.Errorf("parse parameters: %w", err)
+		return fmt.Errorf("parse parameters: %w", err)
 	}
 
 	// Store original state
@@ -77,16 +77,7 @@ func (e *Executor) Shutdown(ctx context.Context, log logr.Logger, spec executor.
 		}
 	}
 
-	// Build restore data
-	stateBytes, err := json.Marshal(nodePoolStates)
-	if err != nil {
-		return executor.RestoreData{}, fmt.Errorf("marshal restore data: %w", err)
-	}
-
-	return executor.RestoreData{
-		Type: e.Type(),
-		Data: stateBytes,
-	}, nil
+	return nil
 }
 
 // WakeUp restores GKE node pools from hibernation.
@@ -96,14 +87,17 @@ func (e *Executor) WakeUp(ctx context.Context, log logr.Logger, spec executor.Sp
 		return fmt.Errorf("restore data is required for wake-up")
 	}
 
-	var nodePoolStates map[string]NodePoolState
-	if err := json.Unmarshal(restore.Data, &nodePoolStates); err != nil {
-		return fmt.Errorf("unmarshal restore data: %w", err)
-	}
+	// Iterate over all node pools in restore data
+	for nodePoolName, stateBytes := range restore.Data {
+		var state NodePoolState
+		if err := json.Unmarshal(stateBytes, &state); err != nil {
+			return fmt.Errorf("unmarshal node pool state %s: %w", nodePoolName, err)
+		}
 
-	// TODO: Implement actual GKE API calls to restore node pools
-	// For now, this is a placeholder
-	_ = nodePoolStates
+		// TODO: Implement actual GKE API calls to restore node pools
+		// For now, this is a placeholder
+		_ = state
+	}
 
 	return nil
 }

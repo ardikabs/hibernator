@@ -42,7 +42,7 @@ type GRPCClient struct {
 	useTLS      bool
 	log         logr.Logger
 
-	// log streaming - keep stream open for reuse
+	// log streaming management
 	logStream  grpc.ClientStreamingClient[streamingv1alpha1.LogEntry, streamingv1alpha1.StreamLogsResponse]
 	logChannel chan *streamingv1alpha1.LogEntry
 
@@ -51,6 +51,7 @@ type GRPCClient struct {
 	heartbeatCancel context.CancelFunc
 	heartbeatWg     sync.WaitGroup
 
+	// mutex for connnection
 	mu sync.Mutex
 }
 
@@ -150,7 +151,8 @@ func (c *GRPCClient) openLogStream(ctx context.Context) error {
 		return nil // Already open
 	}
 
-	c.logChannel = make(chan *streamingv1alpha1.LogEntry)
+	// Use a buffered channel to handle bursts and prevent blocking
+	c.logChannel = make(chan *streamingv1alpha1.LogEntry, 100)
 
 	if c.client == nil {
 		return fmt.Errorf("client not initialized")
@@ -162,9 +164,28 @@ func (c *GRPCClient) openLogStream(ctx context.Context) error {
 	}
 
 	go func() {
-		for entry := range c.logChannel {
-			if err := stream.Send(entry); err != nil {
-				c.log.Info("streaming logs failing, ignoring", "error", err)
+		var streamFail bool
+		for {
+			select {
+			case entry, ok := <-c.logChannel:
+				if !ok {
+					// Channel closed, exit goroutine
+					return
+				}
+
+				if err := stream.Send(entry); err != nil {
+					// Log the first failure only to avoid log spam
+					if !streamFail {
+						c.log.Info("streaming logs failing, ignoring...", "error", err)
+						streamFail = true
+					}
+
+					// Ignore further errors and continue
+					continue
+				}
+
+				// Reset failure flag on successful send
+				streamFail = false
 			}
 		}
 	}()
@@ -179,17 +200,27 @@ func (c *GRPCClient) openLogStream(ctx context.Context) error {
 // Errors are logged silently - streaming failures don't interrupt execution.
 func (c *GRPCClient) Log(ctx context.Context, level, message string, fields map[string]string) error {
 	if c.logChannel == nil {
-		// Log streaming not initialized
+		// Log channel is not initialized, skip silently
 		return nil
 	}
 
-	// Send log entry asynchronously via channel
-	c.logChannel <- &streamingv1alpha1.LogEntry{
+	entry := &streamingv1alpha1.LogEntry{
 		ExecutionId: c.executionID,
 		Timestamp:   time.Now().Format(time.RFC3339),
 		Level:       level,
 		Message:     message,
 		Fields:      fields,
+	}
+
+	select {
+	case c.logChannel <- entry:
+		c.log.V(4).Info("sent log entry via gRPC stream", "entry", entry)
+	case <-ctx.Done():
+		// An intentional cancellation from caller if any
+		return fmt.Errorf("log sending cancelled: %w", ctx.Err())
+	default:
+		// Buffer full, drop log to ensure main execution never blocks
+		// Ideally we would increment a metric here
 	}
 
 	return nil
@@ -304,7 +335,7 @@ func (c *GRPCClient) ReportCompletion(ctx context.Context, success bool, errorMs
 func (c *GRPCClient) Close() error {
 	c.StopHeartbeat()
 
-	// Close log stream first
+	// Close log stream
 	if c.logStream != nil {
 		if _, err := c.logStream.CloseAndRecv(); err != nil {
 			c.log.V(1).Error(err, "failed to close log stream gracefully")

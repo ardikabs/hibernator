@@ -90,7 +90,7 @@ func (e *Executor) Validate(spec executor.Spec) error {
 }
 
 // Shutdown scales Karpenter NodePools to zero by setting disruption budgets and resource limits.
-func (e *Executor) Shutdown(ctx context.Context, log logr.Logger, spec executor.Spec) (executor.RestoreData, error) {
+func (e *Executor) Shutdown(ctx context.Context, log logr.Logger, spec executor.Spec) error {
 	log.Info("Karpenter executor starting shutdown",
 		"target", spec.TargetName,
 		"targetType", spec.TargetType,
@@ -100,7 +100,7 @@ func (e *Executor) Shutdown(ctx context.Context, log logr.Logger, spec executor.
 	if len(spec.Parameters) > 0 {
 		if err := json.Unmarshal(spec.Parameters, &params); err != nil {
 			log.Error(err, "failed to parse parameters")
-			return executor.RestoreData{}, fmt.Errorf("parse parameters: %w", err)
+			return fmt.Errorf("parse parameters: %w", err)
 		}
 	}
 
@@ -113,7 +113,7 @@ func (e *Executor) Shutdown(ctx context.Context, log logr.Logger, spec executor.
 	client, err := e.clientFactory(ctx, &spec)
 	if err != nil {
 		log.Error(err, "failed to build kubernetes client")
-		return executor.RestoreData{}, fmt.Errorf("build kubernetes client: %w", err)
+		return fmt.Errorf("build kubernetes client: %w", err)
 	}
 
 	// Determine target NodePools
@@ -124,7 +124,7 @@ func (e *Executor) Shutdown(ctx context.Context, log logr.Logger, spec executor.
 		discovered, err := e.listAllNodePools(ctx, client)
 		if err != nil {
 			log.Error(err, "failed to list all NodePools")
-			return executor.RestoreData{}, fmt.Errorf("list all NodePools: %w", err)
+			return fmt.Errorf("list all NodePools: %w", err)
 		}
 		targetNodePools = discovered
 	}
@@ -133,43 +133,23 @@ func (e *Executor) Shutdown(ctx context.Context, log logr.Logger, spec executor.
 
 	if len(targetNodePools) == 0 {
 		log.Error(nil, "no NodePools found in cluster")
-		return executor.RestoreData{}, fmt.Errorf("no NodePools found in cluster")
+		return fmt.Errorf("no NodePools found in cluster")
 	}
-
-	// Store original state
-	nodePoolStates := make(map[string]NodePoolState)
 
 	// Process each NodePool
 	for _, nodePoolName := range targetNodePools {
 		log.Info("scaling down NodePool", "nodePool", nodePoolName)
-		state, err := e.scaleDownNodePool(ctx, log, client, nodePoolName, params)
-		if err != nil {
+		if err := e.scaleDownNodePool(ctx, log, client, nodePoolName, params, spec.SaveRestoreData); err != nil {
 			log.Error(err, "failed to scale down NodePool", "nodePool", nodePoolName)
-			return executor.RestoreData{}, fmt.Errorf("scale down NodePool %s: %w", nodePoolName, err)
+			return fmt.Errorf("scale down NodePool %s: %w", nodePoolName, err)
 		}
-		nodePoolStates[nodePoolName] = state
-		log.Info("NodePool deleted successfully",
-			"nodePool", nodePoolName,
-			"hasSpec", state.Spec != nil,
-			"hasLabels", len(state.Labels) > 0,
-		)
-	}
-
-	// Build restore data
-	stateBytes, err := json.Marshal(nodePoolStates)
-	if err != nil {
-		log.Error(err, "failed to marshal restore data")
-		return executor.RestoreData{}, fmt.Errorf("marshal restore data: %w", err)
 	}
 
 	log.Info("Karpenter shutdown completed successfully",
-		"nodePoolCount", len(nodePoolStates),
+		"nodePoolCount", len(targetNodePools),
 	)
 
-	return executor.RestoreData{
-		Type: e.Type(),
-		Data: stateBytes,
-	}, nil
+	return nil
 }
 
 // WakeUp restores Karpenter NodePools from hibernation.
@@ -193,13 +173,7 @@ func (e *Executor) WakeUp(ctx context.Context, log logr.Logger, spec executor.Sp
 		return fmt.Errorf("restore data is required for wake-up")
 	}
 
-	var nodePoolStates map[string]NodePoolState
-	if err := json.Unmarshal(restore.Data, &nodePoolStates); err != nil {
-		log.Error(err, "failed to unmarshal restore data")
-		return fmt.Errorf("unmarshal restore data: %w", err)
-	}
-
-	log.Info("restore state loaded", "nodePoolCount", len(nodePoolStates))
+	log.Info("restore state loaded", "nodePoolCount", len(restore.Data))
 
 	// Build clients using injected factory
 	client, err := e.clientFactory(ctx, &spec)
@@ -209,7 +183,13 @@ func (e *Executor) WakeUp(ctx context.Context, log logr.Logger, spec executor.Sp
 	}
 
 	// Restore each NodePool
-	for nodePoolName, state := range nodePoolStates {
+	for nodePoolName, stateBytes := range restore.Data {
+		var state NodePoolState
+		if err := json.Unmarshal(stateBytes, &state); err != nil {
+			log.Error(err, "failed to unmarshal NodePool state", "nodePool", nodePoolName)
+			return fmt.Errorf("unmarshal NodePool state %s: %w", nodePoolName, err)
+		}
+
 		log.Info("restoring NodePool",
 			"nodePool", nodePoolName,
 			"hasSpec", state.Spec != nil,
@@ -223,7 +203,7 @@ func (e *Executor) WakeUp(ctx context.Context, log logr.Logger, spec executor.Sp
 	}
 
 	log.Info("Karpenter wakeup completed successfully",
-		"nodePoolCount", len(nodePoolStates),
+		"nodePoolCount", len(restore.Data),
 	)
 	return nil
 }
@@ -257,7 +237,9 @@ type NodePoolState struct {
 }
 
 // scaleDownNodePool deletes the NodePool to remove all managed nodes.
-func (e *Executor) scaleDownNodePool(ctx context.Context, log logr.Logger, client Client, nodePoolName string, params executorparams.KarpenterParameters) (NodePoolState, error) {
+// Returns: (state, existed, error)
+// - existed: true if NodePool was found and deleted, false if already NotFound
+func (e *Executor) scaleDownNodePool(ctx context.Context, log logr.Logger, client Client, nodePoolName string, params executorparams.KarpenterParameters, callback executor.SaveRestoreDataFunc) error {
 	nodePoolGVR := schema.GroupVersionResource{
 		Group:    "karpenter.sh",
 		Version:  "v1",
@@ -268,16 +250,16 @@ func (e *Executor) scaleDownNodePool(ctx context.Context, log logr.Logger, clien
 	nodePool, err := client.Resource(nodePoolGVR).Get(ctx, nodePoolName, metav1.GetOptions{})
 	if err != nil {
 		if apierrors.IsNotFound(err) {
-			return NodePoolState{}, nil
+			return nil
 		}
 
-		return NodePoolState{}, fmt.Errorf("get NodePool: %w", err)
+		return fmt.Errorf("get NodePool: %w", err)
 	}
 
 	// Save complete spec for recreation
 	spec, found, err := unstructured.NestedMap(nodePool.Object, "spec")
 	if err != nil || !found {
-		return NodePoolState{}, fmt.Errorf("get NodePool spec: %w", err)
+		return fmt.Errorf("get NodePool spec: %w", err)
 	}
 
 	// Save labels if present
@@ -293,7 +275,25 @@ func (e *Executor) scaleDownNodePool(ctx context.Context, log logr.Logger, clien
 
 	// Delete the NodePool - Karpenter will handle node cleanup
 	if err := client.Resource(nodePoolGVR).Delete(ctx, nodePoolName, metav1.DeleteOptions{}); err != nil {
-		return NodePoolState{}, fmt.Errorf("delete NodePool: %w", err)
+		if apierrors.IsNotFound(err) {
+			return nil
+		}
+
+		return fmt.Errorf("delete NodePool: %w", err)
+	}
+
+	log.Info("NodePool deleted successfully",
+		"nodePool", nodePoolName,
+		"hasSpec", state.Spec != nil,
+		"hasLabels", len(state.Labels) > 0,
+	)
+
+	// Incremental save: persist this NodePool's restore data immediately
+	if callback != nil {
+		if err := callback(nodePoolName, state, true); err != nil {
+			log.Error(err, "failed to save restore data incrementally", "nodePool", nodePoolName)
+			// Continue processing - save at end as fallback
+		}
 	}
 
 	// Wait for NodePool deletion if configured
@@ -303,11 +303,12 @@ func (e *Executor) scaleDownNodePool(ctx context.Context, log logr.Logger, clien
 			timeout = DefaultWaitTimeout
 		}
 		if err := e.waitForNodePoolDeleted(ctx, log, client, nodePoolName, timeout); err != nil {
-			return NodePoolState{}, fmt.Errorf("wait for NodePool deletion: %w", err)
+			return fmt.Errorf("wait for NodePool deletion: %w", err)
 		}
 	}
 
-	return state, nil
+	// NodePool existed and was deleted - existed=true
+	return nil
 }
 
 // restoreNodePool recreates the NodePool from saved state.

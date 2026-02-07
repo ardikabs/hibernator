@@ -11,6 +11,8 @@ import (
 	"os"
 	"time"
 
+	_ "time/tzdata"
+
 	"k8s.io/apimachinery/pkg/runtime"
 	utilruntime "k8s.io/apimachinery/pkg/util/runtime"
 	"k8s.io/client-go/kubernetes"
@@ -23,7 +25,9 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/webhook"
 
 	hibernatorv1alpha1 "github.com/ardikabs/hibernator/api/v1alpha1"
-	"github.com/ardikabs/hibernator/internal/controller"
+	"github.com/ardikabs/hibernator/internal/controller/hibernateplan"
+	"github.com/ardikabs/hibernator/internal/controller/scheduleexception"
+	"github.com/ardikabs/hibernator/internal/restore"
 	"github.com/ardikabs/hibernator/internal/scheduler"
 	"github.com/ardikabs/hibernator/internal/streaming/auth"
 	"github.com/ardikabs/hibernator/internal/streaming/server"
@@ -57,7 +61,7 @@ func main() {
 
 	flag.StringVar(&metricsAddr, "metrics-bind-address", ":8080", "The address the metric endpoint binds to.")
 	flag.StringVar(&probeAddr, "health-probe-bind-address", ":8081", "The address the probe endpoint binds to.")
-	flag.BoolVar(&enableLeaderElection, "leader-elect", envutil.GetBool("LEADER_ELECTION_ENABLED", false),
+	flag.BoolVar(&enableLeaderElection, "leader-elect", envutil.GetBool("LEADER_ELECTION_ENABLED", true),
 		"Enable leader election for controller manager. "+
 			"Enabling this will ensure there is only one active controller manager.")
 	flag.StringVar(&runnerImage, "runner-image", envutil.GetString("RUNNER_IMAGE", "ghcr.io/ardikabs/hibernator-runner:latest"),
@@ -112,13 +116,14 @@ func main() {
 	}
 
 	// Set up HibernatePlan controller
-	if err = (&controller.HibernatePlanReconciler{
+	if err = (&hibernateplan.Reconciler{
 		Client:               mgr.GetClient(),
 		APIReader:            mgr.GetAPIReader(),
 		Log:                  ctrl.Log.WithName("controllers").WithName("HibernatePlan"),
 		Scheme:               mgr.GetScheme(),
 		Planner:              scheduler.NewPlanner(),
 		ScheduleEvaluator:    scheduler.NewScheduleEvaluator(),
+		RestoreManager:       restore.NewManager(mgr.GetClient()),
 		ControlPlaneEndpoint: controlPlaneEndpoint,
 		RunnerImage:          runnerImage,
 		RunnerServiceAccount: runnerServiceAccount,
@@ -128,7 +133,7 @@ func main() {
 	}
 
 	// Set up ScheduleException controller
-	if err = (&controller.ScheduleExceptionReconciler{
+	if err = (&scheduleexception.Reconciler{
 		Client:    mgr.GetClient(),
 		APIReader: mgr.GetAPIReader(),
 		Log:       ctrl.Log.WithName("controllers").WithName("ScheduleException"),

@@ -151,7 +151,7 @@ func TestShutdown_InvalidParameters(t *testing.T) {
 		},
 	}
 
-	_, err := e.Shutdown(ctx, logr.Discard(), spec)
+	err := e.Shutdown(ctx, logr.Discard(), spec)
 	assert.Error(t, err)
 }
 
@@ -175,7 +175,7 @@ func TestShutdown_K8sFactoryError(t *testing.T) {
 		},
 	}
 
-	_, err := e.Shutdown(ctx, logr.Discard(), spec)
+	err := e.Shutdown(ctx, logr.Discard(), spec)
 	assert.Error(t, err)
 	assert.Contains(t, err.Error(), "build kubernetes client")
 }
@@ -197,7 +197,9 @@ func TestWakeUp_InvalidRestoreData(t *testing.T) {
 
 	restore := executor.RestoreData{
 		Type: "karpenter",
-		Data: json.RawMessage(`{invalid json}`),
+		Data: map[string]json.RawMessage{
+			"invalid": json.RawMessage(`{invalid json}`),
+		},
 	}
 
 	err := e.WakeUp(ctx, logr.Discard(), spec, restore)
@@ -226,7 +228,9 @@ func TestWakeUp_K8sFactoryError(t *testing.T) {
 	restoreData, _ := json.Marshal(map[string]NodePoolState{})
 	restore := executor.RestoreData{
 		Type: "karpenter",
-		Data: restoreData,
+		Data: map[string]json.RawMessage{
+			"state": restoreData,
+		},
 	}
 
 	err := e.WakeUp(ctx, logr.Discard(), spec, restore)
@@ -295,19 +299,8 @@ func TestShutdown_DeletesNodePools(t *testing.T) {
 		},
 	}
 
-	restoreData, err := e.Shutdown(ctx, logr.Discard(), spec)
+	err := e.Shutdown(ctx, logr.Discard(), spec)
 	assert.NoError(t, err)
-	assert.Equal(t, "karpenter", restoreData.Type)
-
-	// Verify restore data contains the NodePool state
-	var restoreState map[string]NodePoolState
-	err = json.Unmarshal(restoreData.Data, &restoreState)
-	assert.NoError(t, err)
-	assert.Len(t, restoreState, 1)
-	assert.Equal(t, "default", restoreState["default"].Name)
-	assert.NotNil(t, restoreState["default"].Spec)
-	assert.NotNil(t, restoreState["default"].Labels)
-	assert.Equal(t, "test", restoreState["default"].Labels["env"])
 }
 
 func TestShutdown_MultipleNodePools(t *testing.T) {
@@ -374,16 +367,8 @@ func TestShutdown_MultipleNodePools(t *testing.T) {
 		},
 	}
 
-	restoreData, err := e.Shutdown(ctx, logr.Discard(), spec)
+	err := e.Shutdown(ctx, logr.Discard(), spec)
 	assert.NoError(t, err)
-
-	// Verify restore data contains both NodePool states
-	var restoreState map[string]NodePoolState
-	err = json.Unmarshal(restoreData.Data, &restoreState)
-	assert.NoError(t, err)
-	assert.Len(t, restoreState, 2)
-	assert.Equal(t, "default", restoreState["default"].Name)
-	assert.Equal(t, "spot", restoreState["spot"].Name)
 }
 
 func TestWakeUp_RestoresNodePools(t *testing.T) {
@@ -425,28 +410,28 @@ func TestWakeUp_RestoresNodePools(t *testing.T) {
 		},
 	}
 
-	// Create restore data with NodePool state
-	restoreState := map[string]NodePoolState{
-		"default": {
-			Name: "default",
-			Spec: map[string]interface{}{
-				"disruption": map[string]interface{}{
-					"consolidateAfter": "30s",
-				},
-				"limits": map[string]interface{}{
-					"cpu":    "1000",
-					"memory": "1000Gi",
-				},
+	// Create per-nodepool restore data (key = nodepool name)
+	nodePoolState := NodePoolState{
+		Name: "default",
+		Spec: map[string]interface{}{
+			"disruption": map[string]interface{}{
+				"consolidateAfter": "30s",
 			},
-			Labels: map[string]string{
-				"env": "test",
+			"limits": map[string]interface{}{
+				"cpu":    "1000",
+				"memory": "1000Gi",
 			},
 		},
+		Labels: map[string]string{
+			"env": "test",
+		},
 	}
-	restoreDataBytes, _ := json.Marshal(restoreState)
+	nodePoolStateBytes, _ := json.Marshal(nodePoolState)
 	restoreData := executor.RestoreData{
 		Type: "karpenter",
-		Data: restoreDataBytes,
+		Data: map[string]json.RawMessage{
+			"default": nodePoolStateBytes,
+		},
 	}
 
 	err := e.WakeUp(ctx, logr.Discard(), spec, restoreData)
@@ -527,14 +512,8 @@ func TestShutdown_AllNodePools(t *testing.T) {
 		},
 	}
 
-	restoreData, err := e.Shutdown(ctx, logr.Discard(), spec)
+	err := e.Shutdown(ctx, logr.Discard(), spec)
 	assert.NoError(t, err)
-
-	// Verify restore data contains all NodePools
-	var restoreState map[string]NodePoolState
-	err = json.Unmarshal(restoreData.Data, &restoreState)
-	assert.NoError(t, err)
-	assert.Len(t, restoreState, 2)
 }
 
 func TestShutdown_WithoutWaitConfig(t *testing.T) {
@@ -589,15 +568,8 @@ func TestShutdown_WithoutWaitConfig(t *testing.T) {
 		},
 	}
 
-	restoreData, err := e.Shutdown(ctx, logr.Discard(), spec)
+	err := e.Shutdown(ctx, logr.Discard(), spec)
 	assert.NoError(t, err)
-
-	// Verify restore data contains the NodePool state
-	var restoreState map[string]NodePoolState
-	err = json.Unmarshal(restoreData.Data, &restoreState)
-	assert.NoError(t, err)
-	assert.Len(t, restoreState, 1)
-	assert.Equal(t, "default", restoreState["default"].Name)
 }
 
 // ============================================================================

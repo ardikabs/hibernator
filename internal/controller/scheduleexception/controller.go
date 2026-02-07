@@ -3,7 +3,7 @@ Copyright 2026 Ardika Saputro.
 Licensed under the Apache License, Version 2.0.
 */
 
-package controller
+package scheduleexception
 
 import (
 	"context"
@@ -24,25 +24,11 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
 
 	hibernatorv1alpha1 "github.com/ardikabs/hibernator/api/v1alpha1"
+	"github.com/ardikabs/hibernator/internal/wellknown"
 )
 
-const (
-	// ExceptionFinalizerName is the finalizer for ScheduleException resources.
-	ExceptionFinalizerName = "hibernator.ardikabs.com/exception-finalizer"
-
-	// LabelException is the label key for the exception name.
-	LabelException = "hibernator.ardikabs.com/exception"
-
-	// ExceptionRequeueInterval is the default requeue interval for exception reconciliation.
-	ExceptionRequeueInterval = 1 * time.Minute
-
-	// AnnotationExceptionTrigger is the annotation key used to trigger plan reconciliation
-	// when an exception changes. The value is the timestamp of the last exception change.
-	AnnotationExceptionTrigger = "hibernator.ardikabs.com/exception-trigger"
-)
-
-// ScheduleExceptionReconciler reconciles a ScheduleException object.
-type ScheduleExceptionReconciler struct {
+// Reconciler reconciles a ScheduleException object.
+type Reconciler struct {
 	client.Client
 	APIReader client.Reader
 
@@ -57,7 +43,7 @@ type ScheduleExceptionReconciler struct {
 // +kubebuilder:rbac:groups=hibernator.ardikabs.com,resources=hibernateplans/status,verbs=get;update;patch
 
 // Reconcile handles ScheduleException reconciliation.
-func (r *ScheduleExceptionReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
+func (r *Reconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
 	log := r.Log.WithValues("scheduleexception", req.NamespacedName)
 
 	// Fetch the ScheduleException
@@ -75,9 +61,9 @@ func (r *ScheduleExceptionReconciler) Reconcile(ctx context.Context, req ctrl.Re
 	}
 
 	// Ensure finalizer
-	if !controllerutil.ContainsFinalizer(exception, ExceptionFinalizerName) {
+	if !controllerutil.ContainsFinalizer(exception, wellknown.ExceptionFinalizerName) {
 		orig := exception.DeepCopy()
-		controllerutil.AddFinalizer(exception, ExceptionFinalizerName)
+		controllerutil.AddFinalizer(exception, wellknown.ExceptionFinalizerName)
 		if err := r.Patch(ctx, exception, client.MergeFrom(orig)); err != nil {
 			return ctrl.Result{}, fmt.Errorf("add finalizer to scheduleexception: %w", err)
 		}
@@ -109,7 +95,7 @@ func (r *ScheduleExceptionReconciler) Reconcile(ctx context.Context, req ctrl.Re
 	// Add plan label if missing (for efficient querying)
 	if err := r.ensurePlanLabel(ctx, log, exception); err != nil {
 		log.Error(err, "failed to add plan label")
-		return ctrl.Result{RequeueAfter: ExceptionRequeueInterval}, nil
+		return ctrl.Result{RequeueAfter: wellknown.RequeueIntervalForScheduleException}, nil
 	}
 
 	// Check if pending exception should activate
@@ -143,7 +129,7 @@ func (r *ScheduleExceptionReconciler) Reconcile(ctx context.Context, req ctrl.Re
 	// Update message with expiry info
 	if err := r.updateExceptionMessage(ctx, exception); err != nil {
 		log.Error(err, "failed to update exception message")
-		return ctrl.Result{RequeueAfter: ExceptionRequeueInterval}, nil
+		return ctrl.Result{RequeueAfter: wellknown.RequeueIntervalForScheduleException}, nil
 	}
 
 	// Trigger HibernatePlan reconciliation
@@ -172,21 +158,21 @@ func (r *ScheduleExceptionReconciler) Reconcile(ctx context.Context, req ctrl.Re
 			}
 			requeueAfter += 5 * time.Second
 		} else {
-			requeueAfter = ExceptionRequeueInterval
+			requeueAfter = wellknown.RequeueIntervalForScheduleException
 		}
 
 	default:
 		// Expired or unknown state
-		requeueAfter = ExceptionRequeueInterval
+		requeueAfter = wellknown.RequeueIntervalForScheduleException
 	}
 
 	return ctrl.Result{RequeueAfter: requeueAfter}, nil
 }
 
 // ensurePlanLabel adds the plan label if it's missing.
-func (r *ScheduleExceptionReconciler) ensurePlanLabel(ctx context.Context, log logr.Logger, exception *hibernatorv1alpha1.ScheduleException) error {
+func (r *Reconciler) ensurePlanLabel(ctx context.Context, log logr.Logger, exception *hibernatorv1alpha1.ScheduleException) error {
 	planName := exception.Spec.PlanRef.Name
-	labelValue := exception.Labels[LabelPlan]
+	labelValue := exception.Labels[wellknown.LabelPlan]
 
 	if labelValue == planName {
 		// Label already correct
@@ -198,17 +184,17 @@ func (r *ScheduleExceptionReconciler) ensurePlanLabel(ctx context.Context, log l
 		exception.Labels = make(map[string]string)
 	}
 	orig := exception.DeepCopy()
-	exception.Labels[LabelPlan] = planName
+	exception.Labels[wellknown.LabelPlan] = planName
 	if err := r.Patch(ctx, exception, client.MergeFrom(orig)); err != nil {
 		return fmt.Errorf("update exception labels: %w", err)
 	}
 
-	log.Info("added plan label to exception", "label", LabelPlan, "value", planName)
+	log.Info("added plan label to exception", "label", wellknown.LabelPlan, "value", planName)
 	return nil
 }
 
 // expireException transitions the exception from Active to Expired.
-func (r *ScheduleExceptionReconciler) expireException(ctx context.Context, log logr.Logger, exception *hibernatorv1alpha1.ScheduleException) (ctrl.Result, error) {
+func (r *Reconciler) expireException(ctx context.Context, log logr.Logger, exception *hibernatorv1alpha1.ScheduleException) (ctrl.Result, error) {
 	log.Info("expiring exception", "validUntil", exception.Spec.ValidUntil)
 
 	orig := exception.DeepCopy()
@@ -232,7 +218,7 @@ func (r *ScheduleExceptionReconciler) expireException(ctx context.Context, log l
 }
 
 // updateExceptionMessage updates the status message with expiry information.
-func (r *ScheduleExceptionReconciler) updateExceptionMessage(ctx context.Context, exception *hibernatorv1alpha1.ScheduleException) error {
+func (r *Reconciler) updateExceptionMessage(ctx context.Context, exception *hibernatorv1alpha1.ScheduleException) error {
 	var newMessage string
 	orig := exception.DeepCopy()
 
@@ -286,7 +272,7 @@ func (r *ScheduleExceptionReconciler) updateExceptionMessage(ctx context.Context
 // triggerPlanReconciliation enqueues the referenced HibernatePlan for reconciliation
 // by updating an annotation on the plan. This causes the controller-runtime to
 // detect a change and reconcile the plan.
-func (r *ScheduleExceptionReconciler) triggerPlanReconciliation(ctx context.Context, log logr.Logger, exception *hibernatorv1alpha1.ScheduleException) error {
+func (r *Reconciler) triggerPlanReconciliation(ctx context.Context, log logr.Logger, exception *hibernatorv1alpha1.ScheduleException) error {
 	plan := &hibernatorv1alpha1.HibernatePlan{}
 	planKey := types.NamespacedName{
 		Name:      exception.Spec.PlanRef.Name,
@@ -309,13 +295,13 @@ func (r *ScheduleExceptionReconciler) triggerPlanReconciliation(ctx context.Cont
 	}
 
 	triggerValue := fmt.Sprintf("%s/%s/%d", exception.Name, exception.Status.State, time.Now().Unix())
-	if plan.Annotations[AnnotationExceptionTrigger] == triggerValue {
+	if plan.Annotations[wellknown.AnnotationExceptionTrigger] == triggerValue {
 		// Already triggered with same value, skip to avoid infinite loop
 		return nil
 	}
 
 	orig := plan.DeepCopy()
-	plan.Annotations[AnnotationExceptionTrigger] = triggerValue
+	plan.Annotations[wellknown.AnnotationExceptionTrigger] = triggerValue
 	if err := r.Patch(ctx, plan, client.MergeFrom(orig)); err != nil {
 		return fmt.Errorf("update plan annotation to trigger reconciliation: %w", err)
 	}
@@ -328,7 +314,7 @@ func (r *ScheduleExceptionReconciler) triggerPlanReconciliation(ctx context.Cont
 }
 
 // reconcileDelete handles ScheduleException deletion.
-func (r *ScheduleExceptionReconciler) reconcileDelete(ctx context.Context, log logr.Logger, exception *hibernatorv1alpha1.ScheduleException) (ctrl.Result, error) {
+func (r *Reconciler) reconcileDelete(ctx context.Context, log logr.Logger, exception *hibernatorv1alpha1.ScheduleException) (ctrl.Result, error) {
 	log.V(1).Info("reconciling exception deletion")
 	orig := exception.DeepCopy()
 
@@ -339,8 +325,8 @@ func (r *ScheduleExceptionReconciler) reconcileDelete(ctx context.Context, log l
 	}
 
 	// Remove finalizer to allow deletion
-	if controllerutil.ContainsFinalizer(exception, ExceptionFinalizerName) {
-		controllerutil.RemoveFinalizer(exception, ExceptionFinalizerName)
+	if controllerutil.ContainsFinalizer(exception, wellknown.ExceptionFinalizerName) {
+		controllerutil.RemoveFinalizer(exception, wellknown.ExceptionFinalizerName)
 		if err := r.Patch(ctx, exception, client.MergeFrom(orig)); err != nil {
 			return ctrl.Result{}, client.IgnoreNotFound(err)
 		}
@@ -351,7 +337,7 @@ func (r *ScheduleExceptionReconciler) reconcileDelete(ctx context.Context, log l
 }
 
 // removeFromPlanStatus removes the exception from the HibernatePlan's active exceptions list.
-func (r *ScheduleExceptionReconciler) removeFromPlanStatus(ctx context.Context, log logr.Logger, exception *hibernatorv1alpha1.ScheduleException) error {
+func (r *Reconciler) removeFromPlanStatus(ctx context.Context, log logr.Logger, exception *hibernatorv1alpha1.ScheduleException) error {
 	plan := &hibernatorv1alpha1.HibernatePlan{}
 	planKey := types.NamespacedName{
 		Name:      exception.Spec.PlanRef.Name,
@@ -382,7 +368,7 @@ func (r *ScheduleExceptionReconciler) removeFromPlanStatus(ctx context.Context, 
 }
 
 // SetupWithManager sets up the controller with the Manager.
-func (r *ScheduleExceptionReconciler) SetupWithManager(mgr ctrl.Manager, workers int) error {
+func (r *Reconciler) SetupWithManager(mgr ctrl.Manager, workers int) error {
 	return ctrl.NewControllerManagedBy(mgr).
 		For(&hibernatorv1alpha1.ScheduleException{}).
 		Watches(
@@ -396,7 +382,7 @@ func (r *ScheduleExceptionReconciler) SetupWithManager(mgr ctrl.Manager, workers
 }
 
 // findExceptionsForPlan returns reconcile requests for ScheduleExceptions when a HibernatePlan changes.
-func (r *ScheduleExceptionReconciler) findExceptionsForPlan(ctx context.Context, obj client.Object) []reconcile.Request {
+func (r *Reconciler) findExceptionsForPlan(ctx context.Context, obj client.Object) []reconcile.Request {
 	plan, ok := obj.(*hibernatorv1alpha1.HibernatePlan)
 	if !ok {
 		return nil
@@ -406,7 +392,7 @@ func (r *ScheduleExceptionReconciler) findExceptionsForPlan(ctx context.Context,
 	var exceptions hibernatorv1alpha1.ScheduleExceptionList
 	if err := r.List(ctx, &exceptions,
 		client.InNamespace(plan.Namespace),
-		client.MatchingLabels{LabelPlan: plan.Name},
+		client.MatchingLabels{wellknown.LabelPlan: plan.Name},
 	); err != nil {
 		r.Log.Error(err, "failed to list exceptions for plan", "plan", plan.Name)
 		return nil

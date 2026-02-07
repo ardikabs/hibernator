@@ -105,18 +105,8 @@ func TestShutdown_ScalesMatchingWorkloads(t *testing.T) {
 		},
 	}
 
-	restoreData, err := e.Shutdown(ctx, logr.Discard(), spec)
+	err := e.Shutdown(ctx, logr.Discard(), spec)
 	assert.NoError(t, err)
-	assert.Equal(t, "workloadscaler", restoreData.Type)
-
-	// Verify restore data contains the workload state
-	var restoreState RestoreState
-	err = json.Unmarshal(restoreData.Data, &restoreState)
-	assert.NoError(t, err)
-	assert.Len(t, restoreState.Items, 1)
-	assert.Equal(t, "test-deployment", restoreState.Items[0].Name)
-	assert.Equal(t, "default", restoreState.Items[0].Namespace)
-	assert.Equal(t, int32(3), restoreState.Items[0].Replicas)
 }
 
 func TestShutdown_SelectorNamespaces(t *testing.T) {
@@ -156,9 +146,8 @@ func TestShutdown_SelectorNamespaces(t *testing.T) {
 		},
 	}
 
-	restoreData, err := e.Shutdown(ctx, logr.Discard(), spec)
+	err := e.Shutdown(ctx, logr.Discard(), spec)
 	assert.NoError(t, err)
-	assert.Equal(t, "workloadscaler", restoreData.Type)
 }
 
 func TestWakeUp_RestoresReplicas(t *testing.T) {
@@ -201,24 +190,22 @@ func TestWakeUp_RestoresReplicas(t *testing.T) {
 		},
 	}
 
-	// Create restore data
-	restoreState := RestoreState{
-		Items: []WorkloadState{
-			{
-				Group:     "apps",
-				Version:   "v1",
-				Resource:  "deployments",
-				Kind:      "Deployment",
-				Namespace: "default",
-				Name:      "test-deployment",
-				Replicas:  3,
-			},
-		},
+	// Create per-workload restore data (key = "<namespace>/<kind>/<name>")
+	workloadState := WorkloadState{
+		Group:     "apps",
+		Version:   "v1",
+		Resource:  "deployments",
+		Kind:      "Deployment",
+		Namespace: "default",
+		Name:      "test-deployment",
+		Replicas:  3,
 	}
-	restoreDataBytes, _ := json.Marshal(restoreState)
+	workloadStateBytes, _ := json.Marshal(workloadState)
 	restoreData := executor.RestoreData{
 		Type: "workloadscaler",
-		Data: restoreDataBytes,
+		Data: map[string]json.RawMessage{
+			"default/Deployment/test-deployment": workloadStateBytes,
+		},
 	}
 
 	err := e.WakeUp(ctx, logr.Discard(), spec, restoreData)
@@ -238,7 +225,7 @@ func TestShutdown_InvalidParameters(t *testing.T) {
 		},
 	}
 
-	_, err := e.Shutdown(ctx, logr.Discard(), spec)
+	err := e.Shutdown(ctx, logr.Discard(), spec)
 	assert.Error(t, err)
 }
 
@@ -262,7 +249,7 @@ func TestShutdown_K8sFactoryError(t *testing.T) {
 		},
 	}
 
-	_, err := e.Shutdown(ctx, logr.Discard(), spec)
+	err := e.Shutdown(ctx, logr.Discard(), spec)
 	assert.Error(t, err)
 	assert.Contains(t, err.Error(), "build kubernetes clients")
 }
@@ -281,7 +268,9 @@ func TestWakeUp_InvalidRestoreData(t *testing.T) {
 
 	restore := executor.RestoreData{
 		Type: "workloadscaler",
-		Data: json.RawMessage(`{invalid json}`),
+		Data: map[string]json.RawMessage{
+			"invalid": json.RawMessage(`{invalid json}`),
+		},
 	}
 
 	err := e.WakeUp(ctx, logr.Discard(), spec, restore)
@@ -311,7 +300,9 @@ func TestWakeUp_K8sFactoryError(t *testing.T) {
 	restoreData, _ := json.Marshal(RestoreState{Items: []WorkloadState{}})
 	restore := executor.RestoreData{
 		Type: "workloadscaler",
-		Data: restoreData,
+		Data: map[string]json.RawMessage{
+			"state": restoreData,
+		},
 	}
 
 	err := e.WakeUp(ctx, logr.Discard(), spec, restore)

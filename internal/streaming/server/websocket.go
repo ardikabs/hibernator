@@ -138,6 +138,11 @@ func (s *WebSocketServer) Start(ctx context.Context) error {
 	return server.Shutdown(shutdownCtx)
 }
 
+// NeedLeaderElection indicates whether the websocket server requires leader election.
+func (s *WebSocketServer) NeedLeaderElection() bool {
+	return false
+}
+
 // handleWebSocket handles WebSocket upgrade and streaming.
 func (s *WebSocketServer) handleWebSocket(w http.ResponseWriter, r *http.Request) {
 	// Extract execution ID from URL path

@@ -155,19 +155,13 @@ func TestExecutor_Shutdown(t *testing.T) {
 				},
 			}
 
-			restoreData, err := e.Shutdown(ctx, logr.Discard(), spec)
+			err = e.Shutdown(ctx, logr.Discard(), spec)
 
 			if tt.wantErr {
 				require.Error(t, err)
 				assert.Contains(t, err.Error(), tt.errMsg)
 			} else {
 				require.NoError(t, err)
-				assert.Equal(t, "noop", restoreData.Type)
-
-				var restoreState RestoreState
-				err = json.Unmarshal(restoreData.Data, &restoreState)
-				require.NoError(t, err)
-				assert.Equal(t, tt.targetName, restoreState.TargetName)
 			}
 		})
 	}
@@ -227,7 +221,9 @@ func TestExecutor_WakeUp(t *testing.T) {
 
 			restore := executor.RestoreData{
 				Type: "noop",
-				Data: restoreDataJSON,
+				Data: map[string]json.RawMessage{
+					"state": restoreDataJSON,
+				},
 			}
 
 			err = e.WakeUp(ctx, logr.Discard(), spec, restore)
@@ -255,7 +251,7 @@ func TestExecutor_Shutdown_ContextCancellation(t *testing.T) {
 		},
 	}
 
-	_, err := e.Shutdown(ctx, logr.Discard(), spec)
+	err := e.Shutdown(ctx, logr.Discard(), spec)
 	require.Error(t, err)
 	assert.Equal(t, context.Canceled, err)
 }

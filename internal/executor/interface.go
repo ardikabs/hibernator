@@ -21,9 +21,32 @@ import (
 type RestoreData struct {
 	// Type of the executor that produced this data.
 	Type string `json:"type"`
-	// Data is the executor-specific restore state.
-	Data json.RawMessage `json:"data"`
+
+	// Data is a unified map of resource key → resource state (as JSON).
+	// Keys are executor-specific:
+	// - EC2: instanceID (e.g., "i-1234567890abcdef0")
+	// - EKS: nodeGroupName (e.g., "ng-1")
+	// - Karpenter: nodePoolName (e.g., "default")
+	// - WorkloadScaler: namespace/kind/name (e.g., "team-a/Deployment/api")
+	// - RDS: instanceID or clusterID with prefix (e.g., "instance:my-db", "cluster:my-cluster")
+	// - Noop: operation ID (e.g., "noop-12345")
+	Data map[string]json.RawMessage `json:"data"`
+
+	// IsLive indicates whether data was captured from running resources (true)
+	// or from already-shutdown state (false). High-quality data (IsLive=true)
+	// is preserved over low-quality data (IsLive=false) during save operations.
+	IsLive bool `json:"isLive"`
 }
+
+// SaveRestoreDataFunc is a callback for incremental restore data persistence.
+// Executors can call this after each successful sub-resource operation to save
+// restore data incrementally, preventing data loss on partial failures.
+// Parameters:
+//
+//	key: Resource-specific key (e.g., instanceID, nodeGroupName)
+//	value: Resource state (will be JSON-marshaled by callback implementation)
+//	isLive: Whether data was captured from running resources (quality indicator)
+type SaveRestoreDataFunc func(key string, value interface{}, isLive bool) error
 
 // Spec holds target execution parameters.
 type Spec struct {
@@ -35,6 +58,10 @@ type Spec struct {
 	Parameters json.RawMessage
 	// ConnectorConfig holds resolved connector configuration.
 	ConnectorConfig ConnectorConfig
+	// SaveRestoreData is an optional callback for incremental persistence.
+	// If provided, executors should call this after each successful sub-resource
+	// operation to enable partial-success data preservation.
+	SaveRestoreData SaveRestoreDataFunc
 }
 
 // ConnectorConfig holds resolved connector settings.
@@ -59,8 +86,9 @@ type Executor interface {
 	// Validate validates the executor spec.
 	Validate(spec Spec) error
 
-	// Shutdown performs the hibernation operation and returns restore data.
-	Shutdown(ctx context.Context, log logr.Logger, spec Spec) (RestoreData, error)
+	// Shutdown performs the hibernation operation.
+	// Restore data should be saved incrementally via spec.SaveRestoreData callback.
+	Shutdown(ctx context.Context, log logr.Logger, spec Spec) error
 
 	// WakeUp performs the restore operation using saved restore data.
 	WakeUp(ctx context.Context, log logr.Logger, spec Spec, restore RestoreData) error

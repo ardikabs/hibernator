@@ -68,7 +68,7 @@ func (e *Executor) Validate(spec executor.Spec) error {
 }
 
 // Shutdown simulates hibernation with configurable delay and failure modes.
-func (e *Executor) Shutdown(ctx context.Context, log logr.Logger, spec executor.Spec) (executor.RestoreData, error) {
+func (e *Executor) Shutdown(ctx context.Context, log logr.Logger, spec executor.Spec) error {
 	log.Info("NoOp executor starting shutdown",
 		"target", spec.TargetName,
 		"targetType", spec.TargetType,
@@ -77,7 +77,7 @@ func (e *Executor) Shutdown(ctx context.Context, log logr.Logger, spec executor.
 	params, err := e.parseParams(spec.Parameters)
 	if err != nil {
 		log.Error(err, "failed to parse parameters")
-		return executor.RestoreData{}, fmt.Errorf("parse parameters: %w", err)
+		return fmt.Errorf("parse parameters: %w", err)
 	}
 
 	log.Info("parameters parsed and validated",
@@ -88,7 +88,7 @@ func (e *Executor) Shutdown(ctx context.Context, log logr.Logger, spec executor.
 	// Check for failure simulation
 	if params.FailureMode == "shutdown" || params.FailureMode == "both" {
 		log.Info("simulating shutdown failure", "failureMode", params.FailureMode)
-		return executor.RestoreData{}, fmt.Errorf("simulated shutdown failure (failureMode=%s)", params.FailureMode)
+		return fmt.Errorf("simulated shutdown failure (failureMode=%s)", params.FailureMode)
 	}
 
 	// Simulate work with delay
@@ -101,40 +101,33 @@ func (e *Executor) Shutdown(ctx context.Context, log logr.Logger, spec executor.
 	select {
 	case <-ctx.Done():
 		log.Info("operation cancelled by context")
-		return executor.RestoreData{}, ctx.Err()
+		return ctx.Err()
 	case <-time.After(delay):
 		log.Info("work simulation completed")
 	}
 
 	// Create restore state
-	restoreState := RestoreState{
+	state := RestoreState{
 		Parameters:    params,
 		OperationTime: time.Now().UTC(),
 		GeneratedID:   uuid.New().String(),
 		TargetName:    spec.TargetName,
 	}
 
-	log.Info("generating restore state",
-		"generatedID", restoreState.GeneratedID,
-		"operationTime", restoreState.OperationTime,
-	)
-
-	restoreData, err := json.Marshal(restoreState)
-	if err != nil {
-		log.Error(err, "failed to marshal restore state")
-		return executor.RestoreData{}, fmt.Errorf("marshal restore state: %w", err)
-	}
-
 	log.Info("NoOp shutdown completed successfully",
 		"target", spec.TargetName,
-		"generatedID", restoreState.GeneratedID,
-		"restoreDataSize", len(restoreData),
+		"generatedID", state.GeneratedID,
 	)
 
-	return executor.RestoreData{
-		Type: e.Type(),
-		Data: restoreData,
-	}, nil
+	// Incremental save: persist this instance's restore data immediately
+	if spec.SaveRestoreData != nil {
+		if err := spec.SaveRestoreData(spec.TargetName, state, true); err != nil {
+			log.Error(err, "failed to save restore data incrementally", "target", spec.TargetName)
+			// Continue processing - save at end as fallback
+		}
+	}
+
+	return nil
 }
 
 // WakeUp simulates restoration using saved restore data.
@@ -142,48 +135,50 @@ func (e *Executor) WakeUp(ctx context.Context, log logr.Logger, spec executor.Sp
 	log.Info("NoOp executor starting wakeup",
 		"target", spec.TargetName,
 		"targetType", spec.TargetType,
-		"restoreDataSize", len(restore.Data),
+		"restoreDataCount", len(restore.Data),
 	)
 
-	// Unmarshal restore state
-	var restoreState RestoreState
-	if err := json.Unmarshal(restore.Data, &restoreState); err != nil {
-		log.Error(err, "failed to unmarshal restore state")
-		return fmt.Errorf("unmarshal restore state: %w", err)
+	// Iterate over all operations in restore data (should be single operation for noop)
+	for id, stateBytes := range restore.Data {
+		var state RestoreState
+		if err := json.Unmarshal(stateBytes, &state); err != nil {
+			log.Error(err, "failed to unmarshal restore state", "operationId", id)
+			return fmt.Errorf("unmarshal restore state %s: %w", id, err)
+		}
+
+		log.Info("restore state loaded",
+			"generatedID", state.GeneratedID,
+			"shutdownTime", state.OperationTime,
+			"originalTarget", state.TargetName,
+			"failureMode", state.Parameters.FailureMode,
+		)
+
+		// Check for failure simulation
+		if state.Parameters.FailureMode == "wakeup" || state.Parameters.FailureMode == "both" {
+			log.Info("simulating wakeup failure", "failureMode", state.Parameters.FailureMode)
+			return fmt.Errorf("simulated wakeup failure (failureMode=%s)", state.Parameters.FailureMode)
+		}
+
+		// Simulate work with delay
+		delay := e.getDelay(state.Parameters.RandomDelaySeconds)
+		log.Info("simulating restoration work with random delay",
+			"maxDelaySeconds", state.Parameters.RandomDelaySeconds,
+			"actualDelay", delay,
+		)
+
+		select {
+		case <-ctx.Done():
+			log.Info("operation cancelled by context")
+			return ctx.Err()
+		case <-time.After(delay):
+			log.Info("restoration work simulation completed")
+		}
+
+		log.Info("NoOp wakeup completed for operation",
+			"target", spec.TargetName,
+			"generatedID", state.GeneratedID,
+		)
 	}
-
-	log.Info("restore state loaded",
-		"generatedID", restoreState.GeneratedID,
-		"shutdownTime", restoreState.OperationTime,
-		"originalTarget", restoreState.TargetName,
-		"failureMode", restoreState.Parameters.FailureMode,
-	)
-
-	// Check for failure simulation
-	if restoreState.Parameters.FailureMode == "wakeup" || restoreState.Parameters.FailureMode == "both" {
-		log.Info("simulating wakeup failure", "failureMode", restoreState.Parameters.FailureMode)
-		return fmt.Errorf("simulated wakeup failure (failureMode=%s)", restoreState.Parameters.FailureMode)
-	}
-
-	// Simulate work with delay
-	delay := e.getDelay(restoreState.Parameters.RandomDelaySeconds)
-	log.Info("simulating restoration work with random delay",
-		"maxDelaySeconds", restoreState.Parameters.RandomDelaySeconds,
-		"actualDelay", delay,
-	)
-
-	select {
-	case <-ctx.Done():
-		log.Info("operation cancelled by context")
-		return ctx.Err()
-	case <-time.After(delay):
-		log.Info("restoration work simulation completed")
-	}
-
-	log.Info("NoOp wakeup completed successfully",
-		"target", spec.TargetName,
-		"generatedID", restoreState.GeneratedID,
-	)
 
 	return nil
 }
