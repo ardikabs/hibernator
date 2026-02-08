@@ -16,6 +16,7 @@ import (
 	"k8s.io/utils/ptr"
 
 	hibernatorv1alpha1 "github.com/ardikabs/hibernator/api/v1alpha1"
+	"github.com/ardikabs/hibernator/internal/wellknown"
 )
 
 // ErrorClassification categorizes errors for recovery decisions.
@@ -112,7 +113,7 @@ func ClassifyError(err error) ErrorClassification {
 func DetermineRecoveryStrategy(plan *hibernatorv1alpha1.HibernatePlan, err error) ErrorRecoveryStrategy {
 	classification := ClassifyError(err)
 
-	maxRetries := int32(3)
+	maxRetries := wellknown.DefaultRecoveryMaxRetryAttempts
 	if plan.Spec.Behavior.Retries > 0 {
 		maxRetries = plan.Spec.Behavior.Retries
 	}
