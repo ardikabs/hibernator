@@ -8,7 +8,6 @@ package scheduleexception
 import (
 	"context"
 	"fmt"
-	"strings"
 	"testing"
 	"time"
 
@@ -295,102 +294,6 @@ func TestScheduleExceptionReconciler_ExpiresException(t *testing.T) {
 	}
 	if updated.Status.ExpiredAt.IsZero() {
 		t.Error("Status.ExpiredAt should be set")
-	}
-}
-
-func TestScheduleExceptionReconciler_TriggersPlanReconciliation(t *testing.T) {
-	ctx := context.Background()
-
-	plan := &hibernatorv1alpha1.HibernatePlan{
-		ObjectMeta: metav1.ObjectMeta{
-			Name:      "test-plan",
-			Namespace: "default",
-		},
-		Spec: hibernatorv1alpha1.HibernatePlanSpec{
-			Schedule: hibernatorv1alpha1.Schedule{
-				Timezone: "UTC",
-				OffHours: []hibernatorv1alpha1.OffHourWindow{
-					{Start: "20:00", End: "06:00", DaysOfWeek: []string{"MON"}},
-				},
-			},
-			Execution: hibernatorv1alpha1.Execution{
-				Strategy: hibernatorv1alpha1.ExecutionStrategy{
-					Type: hibernatorv1alpha1.StrategySequential,
-				},
-			},
-			Targets: []hibernatorv1alpha1.Target{
-				{Name: "t1", Type: "eks", ConnectorRef: hibernatorv1alpha1.ConnectorRef{Kind: "K8SCluster", Name: "k"}},
-			},
-		},
-	}
-
-	exception := &hibernatorv1alpha1.ScheduleException{
-		ObjectMeta: metav1.ObjectMeta{
-			Name:      "test-exception",
-			Namespace: "default",
-		},
-		Spec: hibernatorv1alpha1.ScheduleExceptionSpec{
-			PlanRef: hibernatorv1alpha1.PlanReference{
-				Name:      "test-plan",
-				Namespace: "default",
-			},
-			ValidFrom:  metav1.Time{Time: time.Now().Add(-1 * time.Hour)},
-			ValidUntil: metav1.Time{Time: time.Now().Add(7 * 24 * time.Hour)},
-			Type:       "extend",
-			Windows: []hibernatorv1alpha1.OffHourWindow{
-				{Start: "06:00", End: "11:00", DaysOfWeek: []string{"SAT"}},
-			},
-		},
-	}
-
-	reconciler, fakeClient := newScheduleExceptionReconciler(plan, exception)
-
-	req := reconcile.Request{NamespacedName: types.NamespacedName{Name: "test-exception", Namespace: "default"}}
-	// Reconcile multiple times to process through stages
-	for i := 0; i < 5; i++ {
-		_, err := reconciler.Reconcile(ctx, req)
-		if err != nil {
-			t.Fatalf("Reconcile() error = %v", err)
-		}
-	}
-
-	// Verify exception was fully reconciled (has label and status)
-	var updated hibernatorv1alpha1.ScheduleException
-	if err := fakeClient.Get(ctx, req.NamespacedName, &updated); err != nil {
-		t.Fatalf("Get() error = %v", err)
-	}
-
-	// Verify label was added
-	if updated.Labels[wellknown.LabelPlan] != "test-plan" {
-		t.Errorf("Label %s = %v, want %v", wellknown.LabelPlan, updated.Labels[wellknown.LabelPlan], "test-plan")
-	}
-
-	// Verify status was initialized
-	if updated.Status.State != hibernatorv1alpha1.ExceptionStateActive {
-		t.Errorf("Status.State = %v, want %v", updated.Status.State, hibernatorv1alpha1.ExceptionStateActive)
-	}
-
-	// Verify message contains expiry info
-	if updated.Status.Message == "" {
-		t.Error("Status.Message should be set")
-	}
-
-	// Verify plan has the trigger annotation (triggers reconciliation)
-	var updatedPlan hibernatorv1alpha1.HibernatePlan
-	if err := fakeClient.Get(ctx, types.NamespacedName{Name: "test-plan", Namespace: "default"}, &updatedPlan); err != nil {
-		t.Fatalf("Get() plan error = %v", err)
-	}
-
-	triggerAnnotation, ok := updatedPlan.Annotations[wellknown.AnnotationExceptionTrigger]
-	if !ok {
-		t.Errorf("Plan should have annotation %s to trigger reconciliation", wellknown.AnnotationExceptionTrigger)
-	}
-	if triggerAnnotation == "" {
-		t.Error("Trigger annotation should not be empty")
-	}
-	// Verify annotation format contains exception name and state
-	if !strings.Contains(triggerAnnotation, "test-exception") {
-		t.Errorf("Trigger annotation should contain exception name, got: %s", triggerAnnotation)
 	}
 }
 

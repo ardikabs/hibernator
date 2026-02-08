@@ -85,18 +85,23 @@ func (e *Executor) Shutdown(ctx context.Context, log logr.Logger, spec executor.
 		"failureMode", params.FailureMode,
 	)
 
-	// Check for failure simulation
-	if params.FailureMode == "shutdown" || params.FailureMode == "both" {
-		log.Info("simulating shutdown failure", "failureMode", params.FailureMode)
-		return fmt.Errorf("simulated shutdown failure (failureMode=%s)", params.FailureMode)
-	}
-
 	// Simulate work with delay
 	delay := e.getDelay(params.RandomDelaySeconds)
 	log.Info("simulating work with random delay",
 		"maxDelaySeconds", params.RandomDelaySeconds,
 		"actualDelay", delay,
 	)
+
+	// Check for failure simulation
+	if params.FailureMode == "shutdown" || params.FailureMode == "both" {
+		log.Info("simulating shutdown failure", "failureMode", params.FailureMode)
+
+		if params.FailureMessage != "" {
+			return fmt.Errorf("%s (failureMode=%s)", params.FailureMessage, params.FailureMode)
+		}
+
+		return fmt.Errorf("simulated shutdown failure (failureMode=%s)", params.FailureMode)
+	}
 
 	select {
 	case <-ctx.Done():
@@ -153,18 +158,23 @@ func (e *Executor) WakeUp(ctx context.Context, log logr.Logger, spec executor.Sp
 			"failureMode", state.Parameters.FailureMode,
 		)
 
-		// Check for failure simulation
-		if state.Parameters.FailureMode == "wakeup" || state.Parameters.FailureMode == "both" {
-			log.Info("simulating wakeup failure", "failureMode", state.Parameters.FailureMode)
-			return fmt.Errorf("simulated wakeup failure (failureMode=%s)", state.Parameters.FailureMode)
-		}
-
 		// Simulate work with delay
 		delay := e.getDelay(state.Parameters.RandomDelaySeconds)
 		log.Info("simulating restoration work with random delay",
 			"maxDelaySeconds", state.Parameters.RandomDelaySeconds,
 			"actualDelay", delay,
 		)
+
+		// Check for failure simulation
+		if state.Parameters.FailureMode == "wakeup" || state.Parameters.FailureMode == "both" {
+			log.Info("simulating wakeup failure", "failureMode", state.Parameters.FailureMode)
+
+			if state.Parameters.FailureMessage != "" {
+				return fmt.Errorf("%s (failureMode=%s)", state.Parameters.FailureMessage, state.Parameters.FailureMode)
+			}
+
+			return fmt.Errorf("simulated wakeup failure (failureMode=%s)", state.Parameters.FailureMode)
+		}
 
 		select {
 		case <-ctx.Done():
