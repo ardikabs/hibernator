@@ -20,8 +20,6 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/controller"
 	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
-	"sigs.k8s.io/controller-runtime/pkg/handler"
-	"sigs.k8s.io/controller-runtime/pkg/reconcile"
 
 	hibernatorv1alpha1 "github.com/ardikabs/hibernator/api/v1alpha1"
 	"github.com/ardikabs/hibernator/internal/wellknown"
@@ -86,6 +84,10 @@ func (r *Reconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Resu
 	if exception.Status.State != desiredState {
 		orig := exception.DeepCopy()
 		oldState := exception.Status.State
+		if oldState == "" {
+			oldState = "<unset>"
+		}
+
 		exception.Status.State = desiredState
 
 		switch desiredState {
@@ -102,16 +104,12 @@ func (r *Reconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Resu
 			exception.Status.Message = "Exception expired"
 		}
 
+		log.Info("transitioned exception state", "from", oldState, "to", desiredState)
 		if err := r.Status().Patch(ctx, exception, client.MergeFrom(orig)); err != nil {
 			return ctrl.Result{}, fmt.Errorf("transition exception state from %s to %s: %w", oldState, desiredState, err)
 		}
 
-		log.Info("transitioned exception state", "from", oldState, "to", desiredState)
-
-		// Trigger plan reconciliation
-		if err := r.triggerPlanReconciliation(ctx, log, exception); err != nil {
-			log.Error(err, "failed to trigger plan reconciliation after transition")
-		}
+		return ctrl.Result{Requeue: true}, nil
 	}
 
 	// Add plan label if missing (for efficient querying)
@@ -124,12 +122,6 @@ func (r *Reconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Resu
 	if err := r.updateExceptionMessage(ctx, exception); err != nil {
 		log.Error(err, "failed to update exception message")
 		return ctrl.Result{RequeueAfter: wellknown.RequeueIntervalForScheduleException}, nil
-	}
-
-	// Trigger HibernatePlan reconciliation
-	if err := r.triggerPlanReconciliation(ctx, log, exception); err != nil {
-		log.Error(err, "failed to trigger plan reconciliation")
-		// Don't fail reconciliation if trigger fails - plan will eventually reconcile
 	}
 
 	// Calculate next requeue time based on state
@@ -239,50 +231,6 @@ func (r *Reconciler) updateExceptionMessage(ctx context.Context, exception *hibe
 	return nil
 }
 
-// triggerPlanReconciliation enqueues the referenced HibernatePlan for reconciliation
-// by updating an annotation on the plan. This causes the controller-runtime to
-// detect a change and reconcile the plan.
-func (r *Reconciler) triggerPlanReconciliation(ctx context.Context, log logr.Logger, exception *hibernatorv1alpha1.ScheduleException) error {
-	plan := &hibernatorv1alpha1.HibernatePlan{}
-	planKey := types.NamespacedName{
-		Name:      exception.Spec.PlanRef.Name,
-		Namespace: exception.Namespace, // Same namespace constraint enforced by webhook
-	}
-
-	if err := r.Get(ctx, planKey, plan); err != nil {
-		if errors.IsNotFound(err) {
-			log.Info("referenced plan not found, skipping reconciliation trigger",
-				"plan", planKey.Name)
-			return nil
-		}
-		return fmt.Errorf("get referenced plan: %w", err)
-	}
-
-	// Update annotation to trigger reconciliation
-	// This is a common pattern to force controller-runtime to detect a change
-	if plan.Annotations == nil {
-		plan.Annotations = make(map[string]string)
-	}
-
-	triggerValue := fmt.Sprintf("%s/%s/%d", exception.Name, exception.Status.State, time.Now().Unix())
-	if plan.Annotations[wellknown.AnnotationExceptionTrigger] == triggerValue {
-		// Already triggered with same value, skip to avoid infinite loop
-		return nil
-	}
-
-	orig := plan.DeepCopy()
-	plan.Annotations[wellknown.AnnotationExceptionTrigger] = triggerValue
-	if err := r.Patch(ctx, plan, client.MergeFrom(orig)); err != nil {
-		return fmt.Errorf("update plan annotation to trigger reconciliation: %w", err)
-	}
-
-	log.Info("triggered plan reconciliation via annotation update",
-		"plan", planKey.Name,
-		"trigger", triggerValue)
-
-	return nil
-}
-
 // reconcileDelete handles ScheduleException deletion.
 func (r *Reconciler) reconcileDelete(ctx context.Context, log logr.Logger, exception *hibernatorv1alpha1.ScheduleException) (ctrl.Result, error) {
 	log.V(1).Info("reconciling exception deletion")
@@ -341,43 +289,8 @@ func (r *Reconciler) removeFromPlanStatus(ctx context.Context, log logr.Logger, 
 func (r *Reconciler) SetupWithManager(mgr ctrl.Manager, workers int) error {
 	return ctrl.NewControllerManagedBy(mgr).
 		For(&hibernatorv1alpha1.ScheduleException{}).
-		Watches(
-			&hibernatorv1alpha1.HibernatePlan{},
-			handler.EnqueueRequestsFromMapFunc(r.findExceptionsForPlan),
-		).
 		WithOptions(controller.Options{
 			MaxConcurrentReconciles: workers,
 		}).
 		Complete(r)
-}
-
-// findExceptionsForPlan returns reconcile requests for ScheduleExceptions when a HibernatePlan changes.
-func (r *Reconciler) findExceptionsForPlan(ctx context.Context, obj client.Object) []reconcile.Request {
-	plan, ok := obj.(*hibernatorv1alpha1.HibernatePlan)
-	if !ok {
-		return nil
-	}
-
-	// List all exceptions in the same namespace with matching plan label
-	var exceptions hibernatorv1alpha1.ScheduleExceptionList
-	if err := r.List(ctx, &exceptions,
-		client.InNamespace(plan.Namespace),
-		client.MatchingLabels{wellknown.LabelPlan: plan.Name},
-	); err != nil {
-		r.Log.Error(err, "failed to list exceptions for plan", "plan", plan.Name)
-		return nil
-	}
-
-	// Enqueue reconcile requests for each exception
-	requests := make([]reconcile.Request, len(exceptions.Items))
-	for i, exception := range exceptions.Items {
-		requests[i] = reconcile.Request{
-			NamespacedName: types.NamespacedName{
-				Name:      exception.Name,
-				Namespace: exception.Namespace,
-			},
-		}
-	}
-
-	return requests
 }

@@ -21,4 +21,7 @@ const (
 
 	// DefaultJobBackoffLimit is the maximum retries for runner jobs.
 	DefaultJobBackoffLimit = 3
+
+	// DefaultRecoveryMaxRetryAttempts is the default max retry attempts for recovery.
+	DefaultRecoveryMaxRetryAttempts = int32(3)
 )

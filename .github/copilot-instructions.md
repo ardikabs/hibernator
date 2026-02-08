@@ -93,6 +93,10 @@ Each executor:
 
 ### 🔄 In Progress
 
+- **Stateless Error Reporting (Phase 4)**: Implementation of platform-native error propagation via Kubernetes Termination Messages.
+  - Runner writes to `/dev/termination-log`.
+  - Controller extracts detailed errors for informed recovery.
+  - Manual recovery signal via `hibernator.ardikabs.com/retry-now` annotation.
 - **E2E Tests**: Full hibernation cycle integration tests
   - Test framework created (`test/e2e/`)
   - Hibernation, wakeup, schedule, recovery test suites
@@ -548,6 +552,31 @@ When creating a new user journey:
 - **⏳ Proposed**: Feature concept exists but not yet approved; journey is speculative
 - **🔧 Under Maintenance**: Feature exists but documentation needs updates for recent changes
 - **❌ Obsolete**: Feature is deprecated or removed; journey is for historical reference only
+
+## Findings Documentation Standards
+
+**When an operational issue, architectural flaw, or significant technical debt is identified, a "Findings" document must be created.**
+
+### Purpose: The Root Cause & Resolution Trail
+
+Findings documents provide an auditable trail of technical investigations and their outcomes. They are essential for tracking complex bugs or design decisions that require investigation before implementation.
+
+### Findings Structure & Template
+
+All findings are located in `docs/findings/` and **MUST** follow the template at `docs/findings/TEMPLATE.md`.
+
+**Required Statuses**:
+- **`investigated`**: Problem explored, options proposed, but no decision or fix yet.
+- **`resolved`**: Solution chosen and implemented.
+- **`acked`**: Risk accepted with a known workaround; no immediate fix planned.
+- **`deferred`**: Investigation or fix postponed to a later date.
+
+**Document Requirements**:
+- **Frontmatter**: Must include `date` (format: February 8, 2026), `status`, and `component`.
+- **Problem Description**: Detailed impact and conditions under which the issue occurs.
+- **Root Cause Analysis**: Technical depth with code/logic traces and snippets.
+- **Resolution/Proposed Solutions**: Clear path forward or documentation of the fix.
+- **Appendix**: Move historical or rejected options here upon resolution to preserve context.
 
 ## RFC Registry & Keyword Index
 

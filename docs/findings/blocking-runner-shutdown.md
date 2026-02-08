@@ -1,6 +1,6 @@
 ---
 date: February 7, 2026
-status: Investigated
+status: resolved
 component: Runner, Logging, gRPC Streaming
 ---
 
@@ -8,42 +8,50 @@ component: Runner, Logging, gRPC Streaming
 
 ## Problem Description
 
-The Hibernator runner (`cmd/runner`) may hang indefinitely (or until TCP timeout) during shutdown if the gRPC streaming connection to the control plane is unresponsive, broken, or if the server is down. This occurs even after the main logic has completed successfully (after "execution completed successfully" log).
-
-As a result, the Kubernetes Job pod remains in a `Running` or `Terminating` state longer than necessary, delaying cleanup and potentially causing confusion about the actual execution state.
+The Hibernator runner (`cmd/runner`) was found to hang indefinitely (or until TCP timeout) during shutdown if the gRPC streaming connection to the control plane was unresponsive. This occurred even after the main logic completed successfully.
 
 ## Root Cause Analysis
 
-The blocking behavior is caused by a chain of synchronous dependencies in the shutdown sequence:
+The blocking behavior was caused by a synchronous chain where `DualWriteSink.Stop()` waited for a background `streamLoop` to drain. This loop called `GRPCClient.Log()`, which was blocking on an unbuffered channel when the gRPC stream consumer was stalled due to network issues.
 
-1.  **Main Exit Trigger**: `main()` finishes and calls `defer r.close()`.
-2.  **Sink Shutdown**: `r.close()` calls `r.logSink.Stop()` to ensure all logs are flushed.
-3.  **Drain Wait**: `r.logSink.Stop()` calls `s.shared.wg.Wait()`, waiting for the background `streamLoop` to finish.
-4.  **Drain Execution**: The `streamLoop` calls `s.drainChannel()`, which attempts to send remaining buffered logs via `s.sender.Log()`.
-5.  **Sender Implementation**: The `streamingLogSender` delegates to `GRPCClient.Log()`.
-6.  **Channel Blocking**: `GRPCClient.Log()` attempts to write to `c.logChannel`:
-    ```go
-    c.logChannel <- &streamingv1alpha1.LogEntry{...}
-    ```
-    **Critical Issue**: `c.logChannel` is **unbuffered** (`make(chan ...)`).
-7.  **Consumer Stalled**: The consumer of `c.logChannel` (in `openLogStream`) calls `stream.Send(entry)`.
-    ```go
-    if err := stream.Send(entry); err != nil { ... }
-    ```
-    If the gRPC connection is stuck (e.g., network partition, server unresponsive but TCP connection open), `stream.Send()` blocks.
-8.  **Deadlock/Block**: Because the consumer is blocked on `stream.Send()`, it cannot read from `c.logChannel`. The producer (`drainChannel` -> `Log`) blocks trying to write to `c.logChannel`. The `Stop()` method blocks waiting for `drainChannel` to finish.
+## Resolution: Option B (Implemented)
 
-## Impact
+The issue was addressed by implementing a **Buffered Channel + Non-blocking Send** strategy in the gRPC streaming client.
 
--   **Stuck Pods**: Runner pods do not terminate immediately after work is done.
--   **Resource Waste**: Pods consume resources while waiting for timeouts.
--   **Operational Noise**: Alerts might fire for long-running jobs that have actually finished their logic.
+### Implementation Details
 
-## Proposed Solutions
+1.  **Buffered Channel**: The `logChannel` in `GRPCClient` was updated to be buffered with a capacity of 100 entries. This handles bursts of logs without immediate dropping.
+2.  **Non-blocking Send**: The `Log()` method now uses a `select` statement with a `default` case. If the buffer is full (indicating a stalled consumer/network), the log entry is dropped instead of blocking the caller.
+3.  **Graceful Loop Exit**: The background sender goroutine now correctly handles channel closure and avoids log spam by only reporting the first streaming failure in a series.
 
-To align with the "best effort" philosophy of the streaming logs (archival/monitoring should not block core operations), we propose the following solutions.
+```go
+// internal/streaming/client/grpc.go
 
-### Option A: Non-blocking Log Sending (Recommended)
+func (c *GRPCClient) Log(ctx context.Context, level, message string, fields map[string]string) error {
+    // ...
+    select {
+    case c.logChannel <- entry:
+        // Sent successfully to buffer
+    default:
+        // Buffer full, drop log to ensure runner never blocks
+    }
+    return nil
+}
+```
+
+## Impact of Fix
+
+-   **Deterministic Shutdown**: Runner pods now terminate immediately after completing their core tasks, regardless of the log streaming state.
+-   **Resource Efficiency**: Prevents runner pods from lingering in `Running` state and consuming resources during network partitions.
+-   **Robustness**: The "best effort" nature of remote logging is now enforced at the code level, prioritizing the workload lifecycle over log delivery.
+
+This fix ensures that while we attempt to stream logs for observability, we never allow network instability in the monitoring path to interfere with the primary infrastructure operations.
+
+## Appendix: Historical Proposed Solutions
+
+To align with the "best effort" philosophy of the streaming logs (archival/monitoring should not block core operations), the following solutions were originally proposed during the investigation.
+
+### Option A: Non-blocking Log Sending
 
 Modify `GRPCClient.Log` to drop log entries if the consumer is not ready. This treats the streaming channel as a "best effort" pipe.
 
@@ -63,7 +71,6 @@ func (c *GRPCClient) Log(ctx context.Context, level, message string, fields map[
         // Sent successfully
     default:
         // Channel full or consumer blocked - drop log to prevent caller blocking
-        // Optional: Bump a dropped_logs metric
     }
     return nil
 }
@@ -77,7 +84,7 @@ func (c *GRPCClient) Log(ctx context.Context, level, message string, fields map[
 **Cons**:
 -   **Log Loss**: Logs will be dropped immediately if the network is slightly slow, even if we could have waited a few milliseconds. (Can be mitigated by buffering the channel, see Option B).
 
-### Option B: Buffered Channel + Non-blocking Send
+### Option B: Buffered Channel + Non-blocking Send (Selected)
 
 Combine Option A with a buffered channel in `GRPCClient`.
 
@@ -117,12 +124,3 @@ This is difficult because `stream.Send` doesn't accept a context directly (it us
 
 **Cons**:
 -   **Implementation Complexity**: gRPC streaming API doesn't make per-message timeouts easy.
-
-## Recommendation
-
-**Implement Option B (Buffered Channel + Non-blocking Send)**.
-
-1.  **Buffer `c.logChannel`** with a size of ~100. This handles high-volume logging bursts typical in loops.
-2.  **Use `select/default`** when writing to `c.logChannel`. If the buffer is full (meaning the network is stuck), drop the log entry. This ensures the Runner *never* blocks on logging.
-
-This aligns perfectly with the "best effort" dual-write requirement: local logs (stdout) are preserved (Kubernetes handles them), while remote streaming logs are sent if possible but sacrificed if they endanger the workload's lifecycle.

@@ -1,0 +1,51 @@
+# This manifest demonstrates the "Visibility Gap" and the "Dead End" in recovery
+# logic when a target fails during shutdown.
+#
+# Path:
+# 1. Apply this plan.
+# 2. Schedule triggers hibernation.
+# 3. 'noop-fail' target fails with error: "simulated shutdown failure (failureMode=shutdown)"
+# 4. Controller retries 3 times (default).
+# 5. Plan transitions to PhaseError.
+# 6. Status shows generic "one or more targets in stage 0 failed" message.
+---
+apiVersion: hibernator.ardikabs.com/v1alpha1
+kind: HibernatePlan
+metadata:
+  name: noop-failure-demo
+  namespace: hibernator-system
+spec:
+  # Adjust timezone/schedule to trigger NOW if testing locally
+  schedule:
+    timezone: Asia/Jakarta
+    offHours:
+      - start: "00:00" # Force trigger for demonstration
+        end: "20:00"
+        daysOfWeek: ["MON", "TUE", "WED", "THU", "FRI", "SAT", "SUN"]
+
+  execution:
+    strategy:
+      type: Sequential
+
+  behavior:
+    mode: Strict      # Must succeed or fail entirely
+    failFast: true    # Stop immediately on failure
+    retries: 1        # Total 3 attempts (initial + 2 retries)
+
+  targets:
+    - name: noop-success
+      type: noop
+      connectorRef:
+        kind: CloudProvider
+        name: noop-aws
+      parameters:
+        randomDelaySeconds: 1
+
+    - name: noop-fail
+      type: noop
+      connectorRef:
+        kind: CloudProvider
+        name: noop-aws
+      parameters:
+        randomDelaySeconds: 10
+        failureMode: "shutdown" # Trigger failure here

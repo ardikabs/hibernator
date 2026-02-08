@@ -219,4 +219,8 @@ type NoOpParameters struct {
 	// FailureMode specifies when to simulate failures. Valid values: "none", "shutdown", "wakeup", "both".
 	// Defaults to "none".
 	FailureMode string `json:"failureMode,omitempty"`
+
+	// FailureMessage allows customizing the error message for simulated failures.
+	// If empty, a default message will be used.
+	FailureMessage string `json:"failureMessage,omitempty"`
 }
