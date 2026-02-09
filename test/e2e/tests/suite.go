@@ -15,7 +15,9 @@ import (
 	"k8s.io/client-go/kubernetes/scheme"
 	"k8s.io/client-go/rest"
 	clocktesting "k8s.io/utils/clock/testing"
+	"k8s.io/utils/ptr"
 	ctrl "sigs.k8s.io/controller-runtime"
+	"sigs.k8s.io/controller-runtime/pkg/cache"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/envtest"
 	logf "sigs.k8s.io/controller-runtime/pkg/log"
@@ -80,6 +82,9 @@ var _ = BeforeSuite(func() {
 		Scheme:         scheme.Scheme,
 		Metrics:        metricsserver.Options{BindAddress: "0"},
 		LeaderElection: false,
+		Cache: cache.Options{
+			SyncPeriod: ptr.To(time.Second),
+		},
 	})
 	Expect(err).NotTo(HaveOccurred())
 
@@ -90,10 +95,10 @@ var _ = BeforeSuite(func() {
 	restoreManager = restore.NewManager(mgr.GetClient())
 
 	hibernateplanReconciler = &hibernateplan.Reconciler{
-		Client:               mgr.GetClient(),
-		APIReader:            mgr.GetAPIReader(),
-		Clock:                fakeClock,
-		Log:                  ctrl.Log.WithName("controllers").WithName("HibernatePlan"),
+		Client:    mgr.GetClient(),
+		APIReader: mgr.GetAPIReader(),
+		Clock:     fakeClock,
+		// Log:                  ctrl.Log.WithName("controllers").WithName("HibernatePlan").V(0),
 		Scheme:               mgr.GetScheme(),
 		Planner:              planner,
 		ScheduleEvaluator:    evaluator,
