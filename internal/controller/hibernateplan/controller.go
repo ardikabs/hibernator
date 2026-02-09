@@ -930,8 +930,8 @@ func (r *Reconciler) updatePlanExecutionStatuses(ctx context.Context, log logr.L
 			}
 
 			targetLabel := job.Labels[wellknown.LabelTarget]
-			expectedTarget := fmt.Sprintf("%s/%s", r.findTargetType(plan, targetLabel), targetLabel)
-			if exec.Target != expectedTarget {
+			executorLabel := job.Labels[wellknown.LabelExecutor]
+			if exec.Target != targetLabel || exec.Executor != executorLabel {
 				continue
 			}
 

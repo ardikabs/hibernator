@@ -80,7 +80,7 @@ Streaming is orthogonal to the default flow; the control plane must still create
 
 Status ledger (`status.executions[]`) fields (per target):
 
-- `target` (type/name)
+- `target` (name)
 - `state` (Pending|Running|Completed|Failed)
 - `attempts`, `startedAt`, `finishedAt`
 - `jobRef` — namespace/name of Kubernetes Job
@@ -200,9 +200,9 @@ Last updated: 2026-02-07
 | CRD types | `api/v1alpha1/*.go` | HibernatePlan, CloudProvider, K8SCluster with kubebuilder markers |
 | Scheduler/planner | `internal/scheduler/planner.go` | All 4 strategies: Sequential, Parallel, DAG (Kahn's algorithm), Staged |
 | Scheduler tests | `internal/scheduler/planner_test.go` | Cycle detection, unknown target validation, diamond DAG |
-| EKS executor | `internal/executor/eks/eks.go` | ManagedNodeGroups scale to zero, restore state tracking, Karpenter placeholder |
-| RDS executor | `internal/executor/rds/rds.go` | Instance/cluster stop, optional snapshot before stop, start logic |
-| EC2 executor | `internal/executor/ec2/ec2.go` | Tag-based selector, instance ID support, stop/start running instances |
+| EKS executor | `internal/executor/eks/` | ManagedNodeGroups scale to zero, restore state tracking, Karpenter placeholder |
+| RDS executor | `internal/executor/rds/` | Instance/cluster stop, optional snapshot before stop, start logic |
+| EC2 executor | `internal/executor/ec2/` | Tag-based selector, instance ID support, stop/start running instances |
 | HibernatePlan controller | `internal/controller/hibernateplan_controller.go` | Phase state machine, Job dispatch, status ledger, finalizer cleanup |
 | Runner binary | `cmd/runner/main.go` | Fat runner, projected SA token auth, connector loading |
 | Controller main | `cmd/controller/main.go` | Manager setup, leader election, health probes |
@@ -244,7 +244,7 @@ Last updated: 2026-02-07
 | Component | File(s) | Notes |
 |-----------|---------|-------|
 | Schedule Migration | `internal/scheduler/schedule.go` | RFC-0002 implemented: start/end/daysOfWeek format with cron conversion |
-| Karpenter executor | `internal/executor/karpenter/karpenter.go` | NodePool scaling with disruption budget and resource limit management |
+| Karpenter executor | `internal/executor/karpenter/` | NodePool scaling with disruption budget and resource limit management |
 | Workload Scaler | `internal/executor/workloadscaler/` | RFC-0004 implemented: Generic scale subresource downscaler for Deployments/StatefulSets/CRDs |
 | Restore data quality | `internal/executor/*`, `internal/restore/` | RFC-0001 implemented: IsLive flag, quality-aware preservation, annotation-based locking |
 | Prometheus metrics | `internal/metrics/metrics.go` | Execution duration, success/failure counters, reconcile metrics, restore data size |

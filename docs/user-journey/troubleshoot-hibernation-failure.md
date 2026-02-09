@@ -57,7 +57,7 @@ Look at `status.executions[]` ledger:
 ```bash
 # Example: RDS target failed
 # status.executions:
-#   - target: rds/database
+#   - target: database
 #     state: Failed
 #     message: "Failed to stop instance: timeout"
 #     retryCount: 3

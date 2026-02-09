@@ -7,6 +7,9 @@ const (
 	// LabelTarget is the label key for the target name.
 	LabelTarget = "hibernator.ardikabs.com/target"
 
+	// LabelExecutor is the label key for the executor type.
+	LabelExecutor = "hibernator.ardikabs.com/executor"
+
 	// LabelExecutionID is the label key for the execution ID.
 	LabelExecutionID = "hibernator.ardikabs.com/execution-id"
 

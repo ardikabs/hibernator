@@ -1,8 +1,6 @@
 package hibernateplan
 
 import (
-	"fmt"
-
 	hibernatorv1alpha1 "github.com/ardikabs/hibernator/api/v1alpha1"
 	"github.com/ardikabs/hibernator/internal/scheduler"
 	"github.com/go-logr/logr"
@@ -29,12 +27,10 @@ func (r *Reconciler) getStageStatus(log logr.Logger, plan *hibernatorv1alpha1.Hi
 
 	for _, targetName := range stage.Targets {
 		// Find the execution status for this target
-		targetType := r.findTargetType(plan, targetName)
-		targetID := fmt.Sprintf("%s/%s", targetType, targetName)
 
 		found := false
 		for _, exec := range plan.Status.Executions {
-			if exec.Target == targetID {
+			if exec.Target == targetName {
 				found = true
 				switch exec.State {
 				case hibernatorv1alpha1.StateCompleted:
@@ -53,7 +49,7 @@ func (r *Reconciler) getStageStatus(log logr.Logger, plan *hibernatorv1alpha1.Hi
 		}
 		if !found {
 			// Target not yet in execution list - treat as pending
-			log.V(1).Info("target not found in execution list", "target", targetID, "stageTargets", stage.Targets)
+			log.V(1).Info("target not found in execution list", "target", targetName, "stageTargets", stage.Targets)
 			status.HasPending = true
 		}
 	}

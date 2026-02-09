@@ -133,7 +133,7 @@ kubectl get hibernateplan prod-offhours -o yaml | grep -A 10 "ec2:"
 ```bash
 kubectl describe hibernateplan prod-offhours
 # status.executions:
-#   - target: ec2/worker-instances
+#   - target: worker-instances
 #     state: Running
 #     message: "Stopping 5 instances"
 

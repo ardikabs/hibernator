@@ -75,7 +75,7 @@ kubectl describe hibernateplan prod-offhours
 # Status:
 #   Phase:       Hibernating
 #   Executions:
-#     - Target:      rds/database
+#     - Target:      database
 #       Executor:    rds
 #       State:       Completed
 #       StartedAt:   2026-02-01T20:05:00Z
@@ -83,14 +83,14 @@ kubectl describe hibernateplan prod-offhours
 #       Attempts:    1
 #       Message:     "Snapshot and stop completed"
 #
-#     - Target:      eks/compute-cluster
+#     - Target:      compute-cluster
 #       Executor:    eks
 #       State:       InProgress
 #       StartedAt:   2026-02-01T20:15:30Z
 #       Attempts:    1
 #       Message:     "Scaling EKS node groups"
 #
-#     - Target:      ec2/worker-instances
+#     - Target:      worker-instances
 #       Executor:    ec2
 #       State:       Pending
 #       Message:     "Waiting for EKS to complete"

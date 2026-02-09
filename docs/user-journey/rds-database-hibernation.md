@@ -201,7 +201,7 @@ Ensure CloudProvider has appropriate permissions based on selection pattern:
 ```bash
 kubectl describe hibernateplan prod-offhours
 # status.executions:
-#   - target: rds/stg-db
+#   - target: stg-db
 #     state: Pending
 #     message: "Waiting for hibernation window"
 ```
@@ -211,7 +211,7 @@ kubectl describe hibernateplan prod-offhours
 ```bash
 kubectl describe hibernateplan prod-offhours
 # status.executions:
-#   - target: rds/stg-db
+#   - target: stg-db
 #     state: Running
 #     message: "Creating snapshot + stopping instances"
 
@@ -225,7 +225,7 @@ aws rds describe-db-instances --query 'DBInstances[0].DBInstanceStatus'
 ```bash
 kubectl describe hibernateplan prod-offhours
 # status.executions:
-#   - target: rds/stg-db
+#   - target: stg-db
 #     state: Completed
 #     message: "Instances restarted successfully"
 

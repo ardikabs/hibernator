@@ -111,17 +111,17 @@ kubectl describe hibernateplan prod-offhours
 # During wakeup:
 # status.phase: WakingUp
 # status.executions:
-#   - target: rds/database
+#   - target: database
 #     state: Running
 #     message: "Starting RDS instances"
-#   - target: eks/compute-cluster
+#   - target: compute-cluster
 #     state: Pending
 #     message: "Waiting for RDS to complete"
 #
 # After wakeup:
 # status.phase: Active
 # status.executions:
-#   - target: rds/database
+#   - target: database
 #     state: Completed
 #     message: "Instances restored to available state"
 ```
@@ -156,7 +156,7 @@ kubectl describe hibernateplan prod-offhours
 
 # Example failure:
 # status.executions:
-#   - target: rds/database
+#   - target: database
 #     state: Failed
 #     message: "Start-DBInstance failed: InvalidDBInstanceState"
 #     retryCount: 2

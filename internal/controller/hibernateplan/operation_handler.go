@@ -47,7 +47,7 @@ func (r *Reconciler) initializeOperation(ctx context.Context, log logr.Logger, p
 		p.Status.Executions = make([]hibernatorv1alpha1.ExecutionStatus, len(p.Spec.Targets))
 		for i, target := range plan.Spec.Targets {
 			p.Status.Executions[i] = hibernatorv1alpha1.ExecutionStatus{
-				Target:   fmt.Sprintf("%s/%s", target.Type, target.Name),
+				Target:   target.Name,
 				Executor: target.Type,
 				State:    hibernatorv1alpha1.StatePending,
 			}
