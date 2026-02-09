@@ -209,21 +209,21 @@ kubectl get hibernateplan prod-offhours-migration -o jsonpath='{.status.executio
 # Output:
 # [
 #   {
-#     "target": "eks/prod-eks-nodegroups",
+#     "target": "prod-eks-nodegroups",
 #     "state": "Completed",
 #     "startedAt": "2026-02-01T20:00:00Z",
 #     "finishedAt": "2026-02-01T20:05:30Z",
 #     "message": "Successfully scaled EKS managed node groups to 0"
 #   },
 #   {
-#     "target": "rds/prod-rds-instances",
+#     "target": "prod-rds-instances",
 #     "state": "Completed",
 #     "startedAt": "2026-02-01T20:05:30Z",
 #     "finishedAt": "2026-02-01T20:08:00Z",
 #     "message": "Snapshot created; database stopped"
 #   },
 #   {
-#     "target": "ec2/prod-ec2-instances",
+#     "target": "prod-ec2-instances",
 #     "state": "Completed",
 #     "startedAt": "2026-02-01T20:08:00Z",
 #     "finishedAt": "2026-02-01T20:10:00Z",

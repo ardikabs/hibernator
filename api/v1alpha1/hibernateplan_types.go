@@ -451,7 +451,29 @@ func ExceptionReferencesEqual(a, b []ExceptionReference) bool {
 		return false
 	}
 	for i := range a {
-		if a[i].Name != b[i].Name || a[i].State != b[i].State {
+		// Fast check: compare Name first
+		if a[i].Name != b[i].Name {
+			return false
+		}
+		// Only compare other fields if name matches
+		if a[i].Type != b[i].Type ||
+			a[i].State != b[i].State ||
+			!a[i].ValidFrom.Equal(&b[i].ValidFrom) ||
+			!a[i].ValidUntil.Equal(&b[i].ValidUntil) {
+			return false
+		}
+		// Compare AppliedAt
+		if (a[i].AppliedAt == nil) != (b[i].AppliedAt == nil) {
+			return false
+		}
+		if a[i].AppliedAt != nil && !a[i].AppliedAt.Equal(b[i].AppliedAt) {
+			return false
+		}
+		// Compare ExpiredAt
+		if (a[i].ExpiredAt == nil) != (b[i].ExpiredAt == nil) {
+			return false
+		}
+		if a[i].ExpiredAt != nil && !a[i].ExpiredAt.Equal(b[i].ExpiredAt) {
 			return false
 		}
 	}

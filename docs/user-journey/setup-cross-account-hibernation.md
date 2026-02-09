@@ -38,9 +38,9 @@ Enable centralized hibernation management from production account with cross-acc
 ```
 PRODUCTION ACCOUNT                  DEV ACCOUNT
 ┌─────────────────────┐            ┌──────────────────┐
-│ Hibernator         │            │ EC2/RDS         │
-│ (control plane)     │            │ (target resources)│
-│ EKS cluster        │────────────▶ │                 │
+│ Hibernator         │            │ Target          │
+│ (control plane)     │            │ resources       │
+│ EKS cluster        │────────────▶ │ (EC2, RDS, etc) │
 │ IRSA role:         │  AssumeRole  │ IAM Role:       │
 │  hibernator-op     │   (STS)      │  hibernate-tgt  │
 └─────────────────────┘            └──────────────────┘
@@ -227,10 +227,10 @@ kubectl describe hibernateplan cross-account-hibernation
 # Status:
 #   Phase: Active
 #   Executions:
-#     - Target: rds/dev-database
+#     - Target: dev-database
 #       State: Completed
 #       Message: "Stopped in DEV account (cross-account assumed)"
-#     - Target: ec2/dev-instances
+#     - Target: dev-instances
 #       State: Completed
 #       Message: "Stopped in DEV account (cross-account assumed)"
 ```

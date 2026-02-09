@@ -16,6 +16,7 @@ import (
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/client-go/util/retry"
+	"k8s.io/utils/clock"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/controller"
@@ -29,6 +30,7 @@ import (
 type Reconciler struct {
 	client.Client
 	APIReader client.Reader
+	Clock     clock.Clock
 
 	Log    logr.Logger
 	Scheme *runtime.Scheme
@@ -68,7 +70,7 @@ func (r *Reconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Resu
 		return ctrl.Result{Requeue: true}, nil
 	}
 
-	now := time.Now()
+	now := r.Clock.Now()
 
 	// Determine desired state
 	desiredState := hibernatorv1alpha1.ExceptionStatePending

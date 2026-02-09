@@ -3,7 +3,6 @@ package hibernateplan
 import (
 	"context"
 	"fmt"
-	"time"
 
 	batchv1 "k8s.io/api/batch/v1"
 	corev1 "k8s.io/api/core/v1"
@@ -21,7 +20,7 @@ import (
 
 // createRunnerJob creates a Kubernetes Job for executing a target.
 func (r *Reconciler) createRunnerJob(ctx context.Context, log logr.Logger, plan *hibernatorv1alpha1.HibernatePlan, target *hibernatorv1alpha1.Target, operation string) error {
-	executionID := fmt.Sprintf("%s-%s-%d", plan.Name, target.Name, time.Now().Unix())
+	executionID := fmt.Sprintf("%s-%s-%d", plan.Name, target.Name, r.Clock.Now().Unix())
 
 	// Serialize target parameters
 	var paramsJSON []byte
@@ -43,11 +42,12 @@ func (r *Reconciler) createRunnerJob(ctx context.Context, log logr.Logger, plan 
 			GenerateName: fmt.Sprintf("runner-%s-%s-", plan.Name, target.Name),
 			Namespace:    plan.Namespace,
 			Labels: map[string]string{
-				wellknown.LabelPlan:        plan.Name,
-				wellknown.LabelTarget:      target.Name,
-				wellknown.LabelExecutionID: executionID,
-				wellknown.LabelOperation:   operation,
 				wellknown.LabelCycleID:     plan.Status.CurrentCycleID,
+				wellknown.LabelOperation:   operation,
+				wellknown.LabelPlan:        plan.Name,
+				wellknown.LabelExecutionID: executionID,
+				wellknown.LabelExecutor:    target.Type,
+				wellknown.LabelTarget:      target.Name,
 			},
 			Annotations: map[string]string{
 				wellknown.AnnotationPlan:   plan.Name,
@@ -60,11 +60,12 @@ func (r *Reconciler) createRunnerJob(ctx context.Context, log logr.Logger, plan 
 			Template: corev1.PodTemplateSpec{
 				ObjectMeta: metav1.ObjectMeta{
 					Labels: map[string]string{
-						wellknown.LabelPlan:        plan.Name,
-						wellknown.LabelTarget:      target.Name,
-						wellknown.LabelExecutionID: executionID,
-						wellknown.LabelOperation:   operation,
 						wellknown.LabelCycleID:     plan.Status.CurrentCycleID,
+						wellknown.LabelOperation:   operation,
+						wellknown.LabelPlan:        plan.Name,
+						wellknown.LabelExecutionID: executionID,
+						wellknown.LabelExecutor:    target.Type,
+						wellknown.LabelTarget:      target.Name,
 					},
 					Annotations: map[string]string{
 						wellknown.AnnotationPlan:   plan.Name,
@@ -230,9 +231,12 @@ func (r *Reconciler) countRunningJobsInStage(plan *hibernatorv1alpha1.HibernateP
 
 // findExecutionStatus finds the execution status for a given target type and name.
 func (r *Reconciler) findExecutionStatus(plan *hibernatorv1alpha1.HibernatePlan, targetType, targetName string) *hibernatorv1alpha1.ExecutionStatus {
-	targetID := fmt.Sprintf("%s/%s", targetType, targetName)
 	for i := range plan.Status.Executions {
-		if plan.Status.Executions[i].Target == targetID {
+		if plan.Status.Executions[i].Target == targetName &&
+			plan.Status.Executions[i].Executor == targetType {
+			return &plan.Status.Executions[i]
+		} else if plan.Status.Executions[i].Target == fmt.Sprintf("%s/%s", targetType, targetName) {
+			// Support old format
 			return &plan.Status.Executions[i]
 		}
 	}
@@ -282,4 +286,26 @@ func (r *Reconciler) findPlansForException(ctx context.Context, obj client.Objec
 			},
 		},
 	}
+}
+
+// findPlansForRunnerJob returns reconcile requests for HibernatePlans when a Runner Job changes.
+func (r *Reconciler) findPlansForRunnerJob(ctx context.Context, obj client.Object) []reconcile.Request {
+	job, ok := obj.(*batchv1.Job)
+	if !ok {
+		return nil
+	}
+
+	if planName, ok := job.Labels[wellknown.LabelPlan]; ok {
+		// Enqueue the referenced plan
+		return []reconcile.Request{
+			{
+				NamespacedName: types.NamespacedName{
+					Name:      planName,
+					Namespace: job.Namespace,
+				},
+			},
+		}
+	}
+
+	return nil
 }

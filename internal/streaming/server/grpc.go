@@ -18,96 +18,26 @@ import (
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 	"k8s.io/client-go/kubernetes"
-	"k8s.io/client-go/tools/record"
-	"sigs.k8s.io/controller-runtime/pkg/client"
 
 	streamingv1alpha1 "github.com/ardikabs/hibernator/api/streaming/v1alpha1"
 	"github.com/ardikabs/hibernator/internal/streaming/auth"
 )
 
-// StreamLogs receives a stream of log entries from a runner via gRPC.
-// This is a transport-layer method that delegates to ExecutionServiceServer.
-func (s *ExecutionServiceServer) StreamLogs(stream grpc.ClientStreamingServer[streamingv1alpha1.LogEntry, streamingv1alpha1.StreamLogsResponse]) error {
-	ctx := stream.Context()
-	var count int64
-	var executionID string
-	var lastLogLevel string
-	startTime := time.Now()
-
-	// Cleanup tracking on stream exit
-	defer func() {
-		duration := time.Since(startTime)
-		s.log.V(1).Info("stream closed",
-			"executionId", executionID,
-			"count", count,
-			"duration", duration,
-		)
-	}()
-
-	for {
-		entry, err := stream.Recv()
-		if err == io.EOF {
-			s.log.V(1).Info("log stream completed", "executionId", executionID, "count", count)
-			return stream.SendAndClose(&streamingv1alpha1.StreamLogsResponse{
-				ReceivedCount: count,
-			})
-		}
-		if err != nil {
-			// Check if this is a graceful stream closure
-			if isGracefulStreamClosure(err) {
-				// Detect if runner failed (last log was ERROR)
-				if lastLogLevel == "ERROR" {
-					s.log.Info("runner closed stream after error",
-						"executionId", executionID,
-						"count", count,
-						"reason", err.Error(),
-					)
-				} else {
-					s.log.Info("runner closed stream normally",
-						"executionId", executionID,
-						"count", count,
-						"reason", err.Error(),
-					)
-				}
-				return nil
-			}
-
-			// Log unexpected errors at ERROR level
-			s.log.Error(err, "unexpected stream error",
-				"executionId", executionID,
-				"count", count,
-			)
-			return status.Errorf(codes.Internal, "receive error: %v", err)
-		}
-
-		executionID = entry.ExecutionId
-		lastLogLevel = entry.Level
-		count++
-
-		// Delegate to business logic layer (EmitLog pipes logs with full context)
-		if err := s.EmitLog(ctx, entry); err != nil {
-			s.log.Error(err, "failed to process log entry")
-			return status.Errorf(codes.Internal, "process error: %v", err)
-		}
-	}
-}
-
-// Server wraps the gRPC server with lifecycle management.
-type Server struct {
-	grpcServer       *grpc.Server
-	executionService *ExecutionServiceServer
-	log              logr.Logger
-	address          string
+// GRPCServer wraps the gRPC server with lifecycle management.
+type GRPCServer struct {
+	grpcServer  *grpc.Server
+	execService *ExecutionServiceServer
+	log         logr.Logger
+	address     string
 }
 
 // NewServer creates a new streaming server.
 func NewServer(
 	address string,
 	clientset *kubernetes.Clientset,
-	k8sClient client.Client,
-	eventRecorder record.EventRecorder,
+	execService *ExecutionServiceServer,
 	log logr.Logger,
-) *Server {
+) *GRPCServer {
 	// Create token validator
 	validator := auth.NewTokenValidator(clientset, log)
 
@@ -117,17 +47,14 @@ func NewServer(
 		grpc.StreamInterceptor(auth.GRPCStreamInterceptor(validator, log)),
 	)
 
-	// Create and register execution service
-	executionService := NewExecutionServiceServer(k8sClient, eventRecorder)
-
 	// Register gRPC services
-	streamingv1alpha1.RegisterExecutionServiceServer(grpcServer, executionService)
+	streamingv1alpha1.RegisterExecutionServiceServer(grpcServer, execService)
 
-	return &Server{
-		grpcServer:       grpcServer,
-		executionService: executionService,
-		log:              log.WithName("streaming-server"),
-		address:          address,
+	return &GRPCServer{
+		grpcServer:  grpcServer,
+		execService: execService,
+		log:         log.WithName("streaming-server"),
+		address:     address,
 	}
 }
 
@@ -136,7 +63,7 @@ func NewServer(
 const DefaultStaleExecutionDuration = 1 * time.Hour
 
 // Start starts the gRPC server and background cleanup routine.
-func (s *Server) Start(ctx context.Context) error {
+func (s *GRPCServer) Start(ctx context.Context) error {
 	listener, err := net.Listen("tcp", s.address)
 	if err != nil {
 		return fmt.Errorf("failed to listen on %s: %w", s.address, err)
@@ -145,7 +72,7 @@ func (s *Server) Start(ctx context.Context) error {
 	s.log.Info("starting gRPC server", "address", s.address)
 
 	// Start execution cleanup routine to handle stale executions (e.g., crashed runners)
-	go s.executionService.StartCleanupRoutine(ctx, DefaultStaleExecutionDuration)
+	go s.execService.StartCleanupRoutine(ctx, DefaultStaleExecutionDuration)
 
 	// Handle graceful shutdown
 	go func() {
@@ -162,13 +89,8 @@ func (s *Server) Start(ctx context.Context) error {
 }
 
 // NeedLeaderElection indicates whether the server requires leader election.
-func (s *Server) NeedLeaderElection() bool {
+func (s *GRPCServer) NeedLeaderElection() bool {
 	return false
-}
-
-// ExecutionService returns the execution service for direct access.
-func (s *Server) ExecutionService() *ExecutionServiceServer {
-	return s.executionService
 }
 
 // isGracefulStreamClosure checks if the error represents a normal stream closure.

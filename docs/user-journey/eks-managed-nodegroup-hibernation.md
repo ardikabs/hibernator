@@ -141,7 +141,7 @@ kubectl describe hibernateplan prod-offhours
 # Status output:
 # status.phase: Hibernating
 # status.executions:
-#   - target: eks/compute-cluster
+#   - target: compute-cluster
 #     state: InProgress
 #     message: "Scaling managed node groups to 0"
 ```
@@ -155,7 +155,7 @@ kubectl describe hibernateplan prod-offhours
 # Status output:
 # status.phase: WakingUp
 # status.executions:
-#   - target: eks/compute-cluster
+#   - target: compute-cluster
 #     state: Completed
 #     message: "Restored managed node groups to DesiredSize=3"
 

@@ -26,25 +26,25 @@ import (
 
 // WebhookServer handles HTTP webhook callbacks from runners.
 type WebhookServer struct {
-	server           *http.Server
-	executionService *ExecutionServiceServer
-	validator        *auth.TokenValidator
-	log              logr.Logger
+	server      *http.Server
+	execService *ExecutionServiceServer
+	validator   *auth.TokenValidator
+	log         logr.Logger
 }
 
 // NewWebhookServer creates a new webhook server.
 func NewWebhookServer(
 	address string,
 	clientset *kubernetes.Clientset,
-	executionService *ExecutionServiceServer,
+	execService *ExecutionServiceServer,
 	log logr.Logger,
 ) *WebhookServer {
 	validator := auth.NewTokenValidator(clientset, log)
 
 	ws := &WebhookServer{
-		executionService: executionService,
-		validator:        validator,
-		log:              log.WithName("webhook-server"),
+		execService: execService,
+		validator:   validator,
+		log:         log.WithName("webhook-server"),
 	}
 
 	mux := http.NewServeMux()
@@ -165,7 +165,7 @@ func (ws *WebhookServer) handleCallback(w http.ResponseWriter, r *http.Request) 
 		}
 	case "progress":
 		if payload.Progress != nil {
-			resp, err := ws.executionService.ReportProgress(r.Context(), payload.Progress.ToProto())
+			resp, err := ws.execService.ReportProgress(r.Context(), payload.Progress.ToProto())
 			if err != nil {
 				ws.log.Error(err, "failed to process progress")
 				http.Error(w, "Internal error", http.StatusInternalServerError)
@@ -175,7 +175,7 @@ func (ws *WebhookServer) handleCallback(w http.ResponseWriter, r *http.Request) 
 		}
 	case "completion":
 		if payload.Completion != nil {
-			resp, err := ws.executionService.ReportCompletion(r.Context(), payload.Completion.ToProto())
+			resp, err := ws.execService.ReportCompletion(r.Context(), payload.Completion.ToProto())
 			if err != nil {
 				ws.log.Error(err, "failed to process completion")
 				http.Error(w, "Internal error", http.StatusInternalServerError)
@@ -185,7 +185,7 @@ func (ws *WebhookServer) handleCallback(w http.ResponseWriter, r *http.Request) 
 		}
 	case "heartbeat":
 		if payload.Heartbeat != nil {
-			resp, err := ws.executionService.Heartbeat(r.Context(), payload.Heartbeat.ToProto())
+			resp, err := ws.execService.Heartbeat(r.Context(), payload.Heartbeat.ToProto())
 			if err != nil {
 				ws.log.Error(err, "failed to process heartbeat")
 				http.Error(w, "Internal error", http.StatusInternalServerError)
@@ -252,7 +252,7 @@ func (ws *WebhookServer) handleProgress(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 
-	resp, err := ws.executionService.ReportProgress(r.Context(), &report)
+	resp, err := ws.execService.ReportProgress(r.Context(), &report)
 	if err != nil {
 		http.Error(w, "Internal error", http.StatusInternalServerError)
 		return
@@ -281,7 +281,7 @@ func (ws *WebhookServer) handleCompletion(w http.ResponseWriter, r *http.Request
 		return
 	}
 
-	resp, err := ws.executionService.ReportCompletion(r.Context(), &report)
+	resp, err := ws.execService.ReportCompletion(r.Context(), &report)
 	if err != nil {
 		http.Error(w, "Internal error", http.StatusInternalServerError)
 		return
@@ -310,7 +310,7 @@ func (ws *WebhookServer) handleHeartbeat(w http.ResponseWriter, r *http.Request)
 		return
 	}
 
-	resp, err := ws.executionService.Heartbeat(r.Context(), &req)
+	resp, err := ws.execService.Heartbeat(r.Context(), &req)
 	if err != nil {
 		http.Error(w, "Internal error", http.StatusInternalServerError)
 		return
@@ -340,7 +340,7 @@ func (ws *WebhookServer) validateExecutionAccess(ctx context.Context, result *au
 	}
 
 	// Get execution metadata to determine the expected namespace
-	meta, err := ws.executionService.getOrCacheExecutionMetadata(ctx, executionID)
+	meta, err := ws.execService.getOrCacheExecutionMetadata(ctx, executionID)
 	if err != nil {
 		// If we can't determine the execution metadata, allow the request but log a warning.
 		// This handles the case where the execution hasn't been registered yet (first heartbeat).
@@ -397,7 +397,7 @@ func (ws *WebhookServer) validateRequest(r *http.Request) (*auth.ValidationResul
 // processLog processes a single log entry.
 func (ws *WebhookServer) processLog(ctx context.Context, log *streamingv1alpha1.LogEntry) {
 	// Delegate to business logic layer (EmitLog pipes logs with full context)
-	if err := ws.executionService.EmitLog(ctx, log); err != nil {
+	if err := ws.execService.EmitLog(ctx, log); err != nil {
 		ws.log.Error(err, "failed to process log entry")
 		return
 	}

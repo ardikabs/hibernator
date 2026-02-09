@@ -165,8 +165,7 @@ test-all: test-unit test-e2e ## Run all tests (unit + e2e).
 .PHONY: test-e2e
 test-e2e: envtest ## Run E2E tests.
 	@echo "$(CYAN)Running E2E tests...$(RESET)"
-	KUBEBUILDER_ASSETS="$(shell $(ENVTEST) use -p path)" \
-		$(GOCMD) test ./test/e2e/... -v -ginkgo.v
+	$(GOCMD) test ./test/e2e/... -v -tags=e2e -ginkgo.v
 
 .PHONY: test-pkg
 test-pkg: ## Run tests for a specific package. Usage: make test-pkg PKG=./internal/scheduler/...

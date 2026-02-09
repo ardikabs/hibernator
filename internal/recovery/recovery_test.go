@@ -11,6 +11,7 @@ import (
 	"time"
 
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/utils/clock"
 
 	hibernatorv1alpha1 "github.com/ardikabs/hibernator/api/v1alpha1"
 )
@@ -190,7 +191,7 @@ func TestRecordRetryAttempt(t *testing.T) {
 		},
 	}
 
-	RecordRetryAttempt(plan, errors.New("test error"))
+	RecordRetryAttempt(plan, clock.RealClock{}, errors.New("test error"))
 
 	if plan.Status.RetryCount != 3 {
 		t.Errorf("RetryCount = %d, want 3", plan.Status.RetryCount)

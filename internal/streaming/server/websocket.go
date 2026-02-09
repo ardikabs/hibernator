@@ -18,6 +18,7 @@ import (
 	authenticationv1 "k8s.io/api/authentication/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/client-go/kubernetes"
+	"k8s.io/utils/clock"
 
 	streamingv1alpha1 "github.com/ardikabs/hibernator/api/streaming/v1alpha1"
 	"github.com/ardikabs/hibernator/internal/streaming/auth"
@@ -45,6 +46,7 @@ type WebSocketMessage struct {
 
 // WebSocketServer provides WebSocket streaming endpoints for runner communication.
 type WebSocketServer struct {
+	clock          clock.Clock
 	addr           string
 	execService    *ExecutionServiceServer
 	validator      *auth.TokenValidator
@@ -62,6 +64,7 @@ type WebSocketServer struct {
 // WebSocketServerOptions configures the WebSocket server.
 type WebSocketServerOptions struct {
 	Addr           string
+	Clock          clock.Clock
 	ExecService    *ExecutionServiceServer
 	Validator      *auth.TokenValidator
 	K8sClientset   kubernetes.Interface
@@ -87,8 +90,9 @@ func NewWebSocketServer(opts WebSocketServerOptions) *WebSocketServer {
 		opts.MaxMessageSize = DefaultWebSocketMaxMessageSize
 	}
 
-	return &WebSocketServer{
+	srv := &WebSocketServer{
 		addr:         opts.Addr,
+		clock:        clock.RealClock{},
 		execService:  opts.ExecService,
 		validator:    opts.Validator,
 		k8sClientset: opts.K8sClientset,
@@ -106,6 +110,12 @@ func NewWebSocketServer(opts WebSocketServerOptions) *WebSocketServer {
 		readTimeout:    opts.ReadTimeout,
 		maxMessageSize: opts.MaxMessageSize,
 	}
+
+	if opts.Clock != nil {
+		srv.clock = opts.Clock
+	}
+
+	return srv
 }
 
 // Start starts the WebSocket server.
@@ -197,9 +207,9 @@ func (s *WebSocketServer) handleWebSocket(w http.ResponseWriter, r *http.Request
 
 	// Configure connection
 	conn.SetReadLimit(s.maxMessageSize)
-	conn.SetReadDeadline(time.Now().Add(s.readTimeout))
+	conn.SetReadDeadline(s.clock.Now().Add(s.readTimeout))
 	conn.SetPongHandler(func(string) error {
-		conn.SetReadDeadline(time.Now().Add(s.readTimeout))
+		conn.SetReadDeadline(s.clock.Now().Add(s.readTimeout))
 		return nil
 	})
 
@@ -312,7 +322,7 @@ func (s *WebSocketServer) handleLog(ctx context.Context, entry *streamingv1alpha
 
 // sendPing sends a ping to keep the connection alive.
 func (s *WebSocketServer) sendPing(conn *websocket.Conn) error {
-	if err := conn.SetWriteDeadline(time.Now().Add(s.writeTimeout)); err != nil {
+	if err := conn.SetWriteDeadline(s.clock.Now().Add(s.writeTimeout)); err != nil {
 		return err
 	}
 	return conn.WriteMessage(websocket.PingMessage, nil)

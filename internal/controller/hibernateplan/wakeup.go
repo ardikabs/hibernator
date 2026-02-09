@@ -40,5 +40,11 @@ func (r *Reconciler) startWakeUp(ctx context.Context, log logr.Logger, plan *hib
 // reconcileWakeUp continues the wake-up (restoration) process.
 // It monitors job progress and advances through execution stages in reverse order.
 func (r *Reconciler) reconcileWakeUp(ctx context.Context, log logr.Logger, plan *hibernatorv1alpha1.HibernatePlan) (ctrl.Result, error) {
+	// a safeguard to ensure we are in the correct operation
+	if plan.Status.CurrentOperation != "wakeup" {
+		log.Info("starting wakeup (mismatched operation in status)", "currentOperation", plan.Status.CurrentOperation)
+		return r.startWakeUp(ctx, log, plan)
+	}
+
 	return r.reconcileExecution(ctx, log, plan, "wakeup")
 }

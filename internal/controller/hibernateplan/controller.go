@@ -17,6 +17,7 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/types"
+	"k8s.io/utils/clock"
 	"k8s.io/utils/ptr"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
@@ -36,6 +37,7 @@ import (
 type Reconciler struct {
 	client.Client
 	APIReader client.Reader
+	Clock     clock.Clock
 
 	Log               logr.Logger
 	Scheme            *runtime.Scheme
@@ -209,6 +211,10 @@ func (r *Reconciler) SetupWithManager(mgr ctrl.Manager, workers int) error {
 			&hibernatorv1alpha1.ScheduleException{},
 			handler.EnqueueRequestsFromMapFunc(r.findPlansForException),
 		).
+		Watches(
+			&batchv1.Job{},
+			handler.EnqueueRequestsFromMapFunc(r.findPlansForRunnerJob),
+		).
 		WithOptions(controller.Options{
 			MaxConcurrentReconciles: workers,
 		}).
@@ -315,8 +321,7 @@ func (r *Reconciler) evaluateSchedule(ctx context.Context, log logr.Logger, plan
 	}
 
 	// Evaluate schedule with exception (if any)
-	now := time.Now()
-	result, err := r.ScheduleEvaluator.EvaluateWithException(baseWindows, plan.Spec.Schedule.Timezone, exception, now)
+	result, err := r.ScheduleEvaluator.EvaluateWithException(baseWindows, plan.Spec.Schedule.Timezone, exception)
 	if err != nil {
 		return false, time.Minute, err
 	}
@@ -328,7 +333,7 @@ func (r *Reconciler) evaluateSchedule(ctx context.Context, log logr.Logger, plan
 		"shouldHibernate", result.ShouldHibernate,
 	)
 
-	requeueAfter := r.ScheduleEvaluator.NextRequeueTime(result, now)
+	requeueAfter := r.ScheduleEvaluator.NextRequeueTime(result)
 	return result.ShouldHibernate, requeueAfter, nil
 }
 
@@ -345,7 +350,7 @@ func (r *Reconciler) getActiveException(ctx context.Context, plan *hibernatorv1a
 	}
 
 	var activeExceptions []hibernatorv1alpha1.ScheduleException
-	now := time.Now()
+	now := r.Clock.Now()
 
 	// Filter for active exceptions
 	for _, exc := range exceptions.Items {
@@ -497,7 +502,7 @@ func (r *Reconciler) executeStage(ctx context.Context, log logr.Logger, plan *hi
 			} else {
 				p.Status.Phase = hibernatorv1alpha1.PhaseActive
 			}
-			now := metav1.Now()
+			now := metav1.NewTime(r.Clock.Now())
 			p.Status.LastTransitionTime = &now
 
 			return p
@@ -610,93 +615,18 @@ func (r *Reconciler) executeStage(ctx context.Context, log logr.Logger, plan *hi
 
 // reconcileExecution checks job statuses and progresses through stages.
 func (r *Reconciler) reconcileExecution(ctx context.Context, log logr.Logger, plan *hibernatorv1alpha1.HibernatePlan, operation string) (ctrl.Result, error) {
-	orig := plan.DeepCopy()
 	log.Info("reconciling execution", "operation", operation, "currentPhase", plan.Status.Phase, "currentStageIndex", plan.Status.CurrentStageIndex)
 
-	// List all jobs for this plan, operation, and cycle
-	var jobList batchv1.JobList
-	if err := r.APIReader.List(ctx, &jobList, client.InNamespace(plan.Namespace), client.MatchingLabels{
-		wellknown.LabelPlan:      plan.Name,
-		wellknown.LabelOperation: operation,
-		wellknown.LabelCycleID:   plan.Status.CurrentCycleID,
-	}); err != nil {
+	if err := r.updatePlanExecutionStatuses(ctx, log, plan, operation); err != nil {
+		log.Error(err, "failed to update plan execution statuses")
 		return ctrl.Result{}, err
 	}
-	log.V(1).Info("job list fetched", "operation", operation, "jobCount", len(jobList.Items))
 
 	// Rebuild execution plan to access stage structure
 	execPlan, err := r.buildExecutionPlan(plan, operation == "wakeup")
 	if err != nil {
 		log.Error(err, "failed to rebuild execution plan")
 		return r.setError(ctx, plan, err)
-	}
-
-	// Update execution statuses
-	log.V(1).Info("updating execution statuses", "totalExecutions", len(plan.Status.Executions))
-
-	for i := range plan.Status.Executions {
-		exec := &plan.Status.Executions[i]
-		log.V(1).Info("processing execution status", "target", exec.Target, "currentState", exec.State, "index", i)
-
-		// Find matching job
-		found := false
-		for _, job := range jobList.Items {
-			if _, ok := job.Labels[wellknown.LabelStaleRunnerJob]; ok {
-				continue
-			}
-
-			targetLabel := job.Labels[wellknown.LabelTarget]
-			expectedTarget := fmt.Sprintf("%s/%s", r.findTargetType(plan, targetLabel), targetLabel)
-			if exec.Target != expectedTarget {
-				continue
-			}
-
-			isJobComplete := false
-			isJobFailed := false
-			for _, cond := range job.Status.Conditions {
-				if cond.Type == batchv1.JobComplete && cond.Status == corev1.ConditionTrue {
-					isJobComplete = true
-					exec.FinishedAt = cond.LastTransitionTime.DeepCopy()
-				}
-				if cond.Type == batchv1.JobFailed && cond.Status == corev1.ConditionTrue {
-					isJobFailed = true
-					exec.FinishedAt = cond.LastTransitionTime.DeepCopy()
-				}
-			}
-
-			found = true
-			log.V(1).Info("found matching job for target", "target", exec.Target, "jobName", job.Name, "succeeded", job.Status.Succeeded, "failed", job.Status.Failed, "active", job.Status.Active)
-
-			// Update status based on job
-			if isJobComplete {
-				exec.State = hibernatorv1alpha1.StateCompleted
-			} else if isJobFailed {
-				exec.State = hibernatorv1alpha1.StateFailed
-			} else if job.Status.Active > 0 {
-				exec.State = hibernatorv1alpha1.StateRunning
-				exec.StartedAt = job.Status.StartTime
-			}
-
-			exec.JobRef = fmt.Sprintf("%s/%s", job.Namespace, job.Name)
-			exec.Attempts = job.Status.Failed + job.Status.Succeeded
-			break
-		}
-
-		// If no job found but finishedAt is set, infer final state
-		// This handles the case where job was completed and then garbage collected
-		if !found && exec.FinishedAt != nil && exec.State == hibernatorv1alpha1.StateRunning {
-			// Job has finished (finishedAt set) but state wasn't updated
-			// Infer as Completed (assume successful completion)
-			// If there was an error message, it would have been set during execution
-			exec.State = hibernatorv1alpha1.StateCompleted
-			log.V(1).Info("inferred completed state for execution (job not found)", "target", exec.Target)
-		} else if !found {
-			log.V(1).Info("no job found for execution", "target", exec.Target, "currentState", exec.State)
-		}
-	}
-
-	if err := r.Status().Patch(ctx, plan, client.MergeFrom(orig)); err != nil {
-		return ctrl.Result{}, err
 	}
 
 	// Get detailed stage status
@@ -916,7 +846,7 @@ func (r *Reconciler) handleErrorRecovery(ctx context.Context, log logr.Logger, p
 			lastErr = fmt.Errorf("unknown error (no error message in status)")
 		}
 
-		recovery.RecordRetryAttempt(p, lastErr)
+		recovery.RecordRetryAttempt(p, r.Clock, lastErr)
 
 		currentStage := execPlan.Stages[p.Status.CurrentStageIndex]
 		for _, target := range currentStage.Targets {
@@ -954,7 +884,7 @@ func (r *Reconciler) setError(ctx context.Context, plan *hibernatorv1alpha1.Hibe
 	if err := r.statusUpdater.Update(ctx, plan, status.MutatorFunc(func(obj client.Object) client.Object {
 		p := obj.(*hibernatorv1alpha1.HibernatePlan)
 		p.Status.Phase = hibernatorv1alpha1.PhaseError
-		p.Status.LastTransitionTime = ptr.To(metav1.Now())
+		p.Status.LastTransitionTime = ptr.To(metav1.NewTime(r.Clock.Now()))
 
 		if phaseErr != nil {
 			p.Status.ErrorMessage = phaseErr.Error()
@@ -968,4 +898,95 @@ func (r *Reconciler) setError(ctx context.Context, plan *hibernatorv1alpha1.Hibe
 	}
 
 	return ctrl.Result{RequeueAfter: wellknown.RequeueIntervalOnScheduleError}, nil
+}
+
+// updatePlanExecutionStatuses updates the execution statuses based on job states.
+func (r *Reconciler) updatePlanExecutionStatuses(ctx context.Context, log logr.Logger, plan *hibernatorv1alpha1.HibernatePlan, operation string) error {
+	orig := plan.DeepCopy()
+
+	// List all jobs for this plan, operation, and cycle
+	var jobList batchv1.JobList
+	if err := r.APIReader.List(ctx, &jobList, client.InNamespace(plan.Namespace), client.MatchingLabels{
+		wellknown.LabelPlan:      plan.Name,
+		wellknown.LabelOperation: operation,
+		wellknown.LabelCycleID:   plan.Status.CurrentCycleID,
+	}); err != nil {
+		return err
+	}
+	log.V(1).Info("job list fetched", "operation", operation, "jobCount", len(jobList.Items))
+
+	// Update execution statuses
+	log.V(1).Info("updating execution statuses", "totalExecutions", len(plan.Status.Executions))
+
+	for i := range plan.Status.Executions {
+		exec := &plan.Status.Executions[i]
+		log.V(1).Info("processing execution status", "target", exec.Target, "currentState", exec.State, "index", i)
+
+		// Find matching job
+		found := false
+		for _, job := range jobList.Items {
+			if _, ok := job.Labels[wellknown.LabelStaleRunnerJob]; ok {
+				continue
+			}
+
+			targetLabel := job.Labels[wellknown.LabelTarget]
+			executorLabel := job.Labels[wellknown.LabelExecutor]
+			if exec.Target != targetLabel || exec.Executor != executorLabel {
+				continue
+			}
+
+			isJobComplete := false
+			isJobFailed := false
+			for _, cond := range job.Status.Conditions {
+				if cond.Type == batchv1.JobComplete && cond.Status == corev1.ConditionTrue {
+					isJobComplete = true
+					exec.FinishedAt = cond.LastTransitionTime.DeepCopy()
+				}
+				if cond.Type == batchv1.JobFailed && cond.Status == corev1.ConditionTrue {
+					isJobFailed = true
+					exec.FinishedAt = cond.LastTransitionTime.DeepCopy()
+				}
+			}
+
+			found = true
+			log.V(1).Info("found matching job for target", "target", exec.Target, "jobName", job.Name, "succeeded", job.Status.Succeeded, "failed", job.Status.Failed, "active", job.Status.Active)
+
+			// Update status based on job
+			if isJobComplete {
+				exec.State = hibernatorv1alpha1.StateCompleted
+			} else if isJobFailed {
+				exec.State = hibernatorv1alpha1.StateFailed
+			} else if job.Status.Active > 0 {
+				exec.State = hibernatorv1alpha1.StateRunning
+				exec.StartedAt = job.Status.StartTime
+			}
+
+			if execId, ok := job.Labels[wellknown.LabelExecutionID]; ok {
+				exec.LogsRef = fmt.Sprintf("execution-id:%s", execId)
+			}
+
+			exec.RestoreConfigMapRef = fmt.Sprintf("%s/%s", job.Namespace, restore.GetRestoreConfigMap(plan.Name))
+			exec.JobRef = fmt.Sprintf("%s/%s", job.Namespace, job.Name)
+			exec.Attempts = job.Status.Failed + job.Status.Succeeded
+			break
+		}
+
+		// If no job found but finishedAt is set, infer final state
+		// This handles the case where job was completed and then garbage collected
+		if !found && exec.FinishedAt != nil && exec.State == hibernatorv1alpha1.StateRunning {
+			// Job has finished (finishedAt set) but state wasn't updated
+			// Infer as Completed (assume successful completion)
+			// If there was an error message, it would have been set during execution
+			exec.State = hibernatorv1alpha1.StateCompleted
+			log.V(1).Info("inferred completed state for execution (job not found)", "target", exec.Target)
+		} else if !found {
+			log.V(1).Info("no job found for execution", "target", exec.Target, "currentState", exec.State)
+		}
+	}
+
+	if err := r.Status().Patch(ctx, plan, client.MergeFrom(orig)); err != nil {
+		return err
+	}
+
+	return nil
 }

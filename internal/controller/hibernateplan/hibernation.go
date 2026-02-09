@@ -32,6 +32,12 @@ func (r *Reconciler) startHibernation(ctx context.Context, log logr.Logger, plan
 // reconcileHibernation continues the hibernation (shutdown) process.
 // It monitors job progress and advances through execution stages.
 func (r *Reconciler) reconcileHibernation(ctx context.Context, log logr.Logger, plan *hibernatorv1alpha1.HibernatePlan) (ctrl.Result, error) {
+	// a safeguard to ensure we are in the correct operation
+	if plan.Status.CurrentOperation != "shutdown" {
+		log.Info("starting hibernation (mismatched operation in status)", "currentOperation", plan.Status.CurrentOperation)
+		return r.startHibernation(ctx, log, plan)
+	}
+
 	// Check job statuses and progress through stages
 	return r.reconcileExecution(ctx, log, plan, "shutdown")
 }
