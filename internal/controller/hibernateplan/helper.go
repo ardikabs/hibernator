@@ -15,12 +15,20 @@ import (
 	hibernatorv1alpha1 "github.com/ardikabs/hibernator/api/v1alpha1"
 	"github.com/ardikabs/hibernator/internal/scheduler"
 	"github.com/ardikabs/hibernator/internal/wellknown"
+	"github.com/ardikabs/hibernator/pkg/k8sutil"
 	"github.com/go-logr/logr"
 )
 
 // createRunnerJob creates a Kubernetes Job for executing a target.
 func (r *Reconciler) createRunnerJob(ctx context.Context, log logr.Logger, plan *hibernatorv1alpha1.HibernatePlan, target *hibernatorv1alpha1.Target, operation string) error {
-	executionID := fmt.Sprintf("%s-%s-%d", plan.Name, target.Name, r.Clock.Now().Unix())
+	// Calculate execution ID
+	// Format: <plan>-<target>-<timestamp>
+	// Max length for label value is 63 characters.
+	ts := fmt.Sprintf("%d", r.Clock.Now().Unix())
+	baseID := fmt.Sprintf("%s-%s", plan.Name, target.Name)
+	// Reserve space for timestamp and hyphen (e.g., -1678900000) -> approx 11 chars
+	maxBaseLen := 63 - len(ts) - 1
+	executionID := fmt.Sprintf("%s-%s", k8sutil.ShortenName(baseID, maxBaseLen), ts)
 
 	// Serialize target parameters
 	var paramsJSON []byte
@@ -37,9 +45,16 @@ func (r *Reconciler) createRunnerJob(ctx context.Context, log logr.Logger, plan 
 		runnerServiceAccount = "hibernator-runner"
 	}
 
+	// Reconstruct name with ShortenName
+	// Format: runner-<plan>-<target>-
+	// Max length for GenerateName is 63, but K8s appends random suffix (5 chars), so safe limit is 58.
+	// Hence, we exclude "runner-" (7 chars) as well as the trailing hyphen (1 char), leaving 50 chars for plan and target.
+	generateNameBase := fmt.Sprintf("%s-%s", plan.Name, target.Name)
+	generateName := fmt.Sprintf("runner-%s-", k8sutil.ShortenName(generateNameBase, 50))
+
 	job := &batchv1.Job{
 		ObjectMeta: metav1.ObjectMeta{
-			GenerateName: fmt.Sprintf("runner-%s-%s-", plan.Name, target.Name),
+			GenerateName: generateName,
 			Namespace:    plan.Namespace,
 			Labels: map[string]string{
 				wellknown.LabelCycleID:     plan.Status.CurrentCycleID,
@@ -168,7 +183,7 @@ func (r *Reconciler) createRunnerJob(ctx context.Context, log logr.Logger, plan 
 		return err
 	}
 
-	log.V(1).Info("creating runner job", "target", target.Name, "operation", operation)
+	log.V(1).Info("creating runner job", "target", target.Name, "operation", operation, "jobName", generateName)
 	return r.Create(ctx, job)
 }
 

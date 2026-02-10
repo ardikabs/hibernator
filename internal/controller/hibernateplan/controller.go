@@ -755,7 +755,7 @@ func (r *Reconciler) handleErrorRecovery(ctx context.Context, log logr.Logger, p
 
 	if !strategy.ShouldRetry {
 		// Max retries exceeded or permanent error
-		log.Error(lastErr, "error recovery aborted", "reason", strategy.Reason)
+		log.Info("error recovery aborted", "reason", strategy.Reason, "classification", recovery.ClassifyError(lastErr))
 
 		// Stay in error state, requiring manual intervention
 		return ctrl.Result{}, nil
@@ -850,12 +850,10 @@ func (r *Reconciler) handleErrorRecovery(ctx context.Context, log logr.Logger, p
 
 		currentStage := execPlan.Stages[p.Status.CurrentStageIndex]
 		for _, target := range currentStage.Targets {
-			targetType := r.findTargetType(p, target)
-			targetID := fmt.Sprintf("%s/%s", targetType, target)
 			for i, exec := range p.Status.Executions {
-				if exec.Target == targetID {
+				if exec.Target == target {
 					if exec.State == hibernatorv1alpha1.StateFailed {
-						p.Status.Executions[i].Message = "On retry after error recovery"
+						p.Status.Executions[i].Message = "State reset for retry (on error recovery)"
 						p.Status.Executions[i].State = hibernatorv1alpha1.StatePending
 					}
 				}
