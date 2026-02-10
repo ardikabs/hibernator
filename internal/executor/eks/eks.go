@@ -13,6 +13,7 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
+	"sync"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/service/eks"
@@ -51,6 +52,9 @@ type Executor struct {
 	stsFactory      STSClientFactory
 	k8sFactory      K8SClientFactory
 	awsConfigLoader AWSConfigLoader
+
+	waitinglist []string
+	wg          sync.WaitGroup
 }
 
 // EKSClientFactory is a function type for creating EKS clients.
@@ -182,6 +186,27 @@ func (e *Executor) Shutdown(ctx context.Context, log logr.Logger, spec executor.
 		}
 	}
 
+	// Wait for all node groups to complete scaling down if configured
+	if params.AwaitCompletion.Enabled {
+		timeout := params.AwaitCompletion.Timeout
+		if timeout == "" {
+			timeout = DefaultWaitTimeout
+		}
+
+		for _, ngName := range e.waitinglist {
+			e.wg.Add(1)
+
+			go func(nodegroup string) {
+				defer e.wg.Done()
+				if err := e.waitForNodesDeleted(ctx, log, k8sClient, clusterName, nodegroup, timeout); err != nil {
+					log.Error(err, "error while waiting for nodes to be deleted", "nodeGroup", ngName)
+				}
+			}(ngName)
+		}
+
+		e.wg.Wait()
+	}
+
 	log.Info("EKS shutdown completed successfully",
 		"clusterName", clusterName,
 		"nodeGroupCount", len(targetNodeGroups),
@@ -230,6 +255,7 @@ func (e *Executor) WakeUp(ctx context.Context, log logr.Logger, spec executor.Sp
 			"minSize", state.MinSize,
 			"maxSize", state.MaxSize,
 		)
+
 		if err := e.restoreNodeGroup(ctx, log, eksClient, clusterName, ngName, state, params); err != nil {
 			log.Error(err, "failed to restore node group",
 				"clusterName", clusterName,
@@ -237,7 +263,27 @@ func (e *Executor) WakeUp(ctx context.Context, log logr.Logger, spec executor.Sp
 			)
 			return fmt.Errorf("restore node group %s: %w", ngName, err)
 		}
-		log.Info("node group restored successfully", "nodeGroup", ngName)
+	}
+
+	// Wait for all node groups to become active if configured
+	if params.AwaitCompletion.Enabled {
+		timeout := params.AwaitCompletion.Timeout
+		if timeout == "" {
+			timeout = DefaultWaitTimeout
+		}
+
+		for _, ngName := range e.waitinglist {
+			e.wg.Add(1)
+
+			go func(nodegroup string) {
+				defer e.wg.Done()
+				if err := e.waitForNodeGroupActive(ctx, log, eksClient, clusterName, nodegroup, timeout); err != nil {
+					log.Error(err, "error while waiting for node group to become active", "nodeGroup", ngName)
+				}
+			}(ngName)
+		}
+
+		e.wg.Wait()
 	}
 
 	log.Info("EKS wakeup completed successfully",
@@ -309,6 +355,10 @@ func (e *Executor) scaleNodeGroupToZero(ctx context.Context, log logr.Logger, ek
 		return err
 	}
 
+	// Add to waiting list for awaiting completion if configured
+	if params.AwaitCompletion.Enabled {
+		e.waitinglist = append(e.waitinglist, ngName)
+	}
 	log.Info("node group scaled successfully",
 		"nodeGroup", ngName,
 		"previousDesired", state.DesiredSize,
@@ -321,17 +371,6 @@ func (e *Executor) scaleNodeGroupToZero(ctx context.Context, log logr.Logger, ek
 		if err := callback(ngName, state, state.DesiredSize > 0); err != nil {
 			log.Error(err, "failed to save restore data incrementally", "nodeGroup", ngName)
 			// Continue processing - save at end as fallback
-		}
-	}
-
-	// Wait for Node Group scale down is complete if configured
-	if params.AwaitCompletion.Enabled {
-		timeout := params.AwaitCompletion.Timeout
-		if timeout == "" {
-			timeout = DefaultWaitTimeout
-		}
-		if err := e.waitForNodesDeleted(ctx, log, k8sClient, clusterName, ngName, timeout); err != nil {
-			return fmt.Errorf("wait for node group active: %w", err)
 		}
 	}
 
@@ -352,16 +391,17 @@ func (e *Executor) restoreNodeGroup(ctx context.Context, log logr.Logger, client
 		return err
 	}
 
-	// Wait for node group to reach ACTIVE state if configured
+	// Add to waiting list for awaiting completion if configured
 	if params.AwaitCompletion.Enabled {
-		timeout := params.AwaitCompletion.Timeout
-		if timeout == "" {
-			timeout = DefaultWaitTimeout
-		}
-		if err := e.waitForNodeGroupActive(ctx, log, client, clusterName, ngName, timeout); err != nil {
-			return fmt.Errorf("wait for node group active: %w", err)
-		}
+		e.waitinglist = append(e.waitinglist, ngName)
 	}
+
+	log.Info("node group restored successfully",
+		"nodeGroup", ngName,
+		"desiredSize", state.DesiredSize,
+		"minSize", state.MinSize,
+		"maxSize", state.MaxSize,
+	)
 
 	return nil
 }
@@ -369,6 +409,7 @@ func (e *Executor) restoreNodeGroup(ctx context.Context, log logr.Logger, client
 // waitForNodesDeleted waits for all Nodes managed by the ManagedNodeGroup to be deleted.
 func (e *Executor) waitForNodesDeleted(ctx context.Context, log logr.Logger, client K8SClient, clusterName, ngName, timeout string) error {
 	log.Info("waiting for ManagedNodeGroup nodes to be deleted",
+		"clusterName", clusterName,
 		"managedNodeGroup", ngName,
 		"timeout", timeout,
 	)
@@ -404,6 +445,12 @@ func (e *Executor) waitForNodesDeleted(ctx context.Context, log logr.Logger, cli
 
 // waitForNodeGroupActive polls the node group status until it reaches ACTIVE state.
 func (e *Executor) waitForNodeGroupActive(ctx context.Context, log logr.Logger, eksClient EKSClient, clusterName, ngName, timeout string) error {
+	log.Info("waiting for ManagedNodeGroup to be active",
+		"clusterName", clusterName,
+		"managedNodeGroup", ngName,
+		"timeout", timeout,
+	)
+
 	w, err := waiter.NewWaiter(ctx, log, timeout)
 	if err != nil {
 		return err

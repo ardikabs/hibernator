@@ -104,11 +104,11 @@ type RDSSelector struct {
 
 	// Explicit DB instance IDs to target.
 	// Can be combined with ClusterIDs, but mutually exclusive with tag-based selection or IncludeAll.
-	InstanceIDs []string `json:"instanceIds,omitempty"`
+	InstanceIds []string `json:"instanceIds,omitempty"`
 
 	// Explicit DB cluster IDs to target.
 	// Can be combined with InstanceIDs, but mutually exclusive with tag-based selection or IncludeAll.
-	ClusterIDs []string `json:"clusterIds,omitempty"`
+	ClusterIds []string `json:"clusterIds,omitempty"`
 
 	// IncludeAll discovers all DB instances and clusters in the account/region.
 	// Mutually exclusive with all other selection methods.

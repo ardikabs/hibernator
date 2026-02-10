@@ -214,8 +214,8 @@ func validateRDSParams(params []byte) *Result {
 	// Validate selector - at least one selection method required
 	hasSelection := len(p.Selector.Tags) > 0 ||
 		len(p.Selector.ExcludeTags) > 0 ||
-		len(p.Selector.InstanceIDs) > 0 ||
-		len(p.Selector.ClusterIDs) > 0 ||
+		len(p.Selector.InstanceIds) > 0 ||
+		len(p.Selector.ClusterIds) > 0 ||
 		p.Selector.IncludeAll
 
 	if !hasSelection {
@@ -227,7 +227,7 @@ func validateRDSParams(params []byte) *Result {
 	if len(p.Selector.Tags) > 0 || len(p.Selector.ExcludeTags) > 0 {
 		methodCount++
 	}
-	if len(p.Selector.InstanceIDs) > 0 || len(p.Selector.ClusterIDs) > 0 {
+	if len(p.Selector.InstanceIds) > 0 || len(p.Selector.ClusterIds) > 0 {
 		methodCount++
 	}
 	if p.Selector.IncludeAll {
@@ -246,7 +246,7 @@ func validateRDSParams(params []byte) *Result {
 
 	// Validate DiscoverInstances and DiscoverClusters are only used with dynamic discovery
 	isDynamicDiscovery := len(p.Selector.Tags) > 0 || len(p.Selector.ExcludeTags) > 0 || p.Selector.IncludeAll
-	isIntentBased := len(p.Selector.InstanceIDs) > 0 || len(p.Selector.ClusterIDs) > 0
+	isIntentBased := len(p.Selector.InstanceIds) > 0 || len(p.Selector.ClusterIds) > 0
 
 	if isIntentBased && (p.Selector.DiscoverInstances || p.Selector.DiscoverClusters) {
 		result.AddWarning("discoverInstances and discoverClusters are ignored when using explicit instanceIds or clusterIds")

@@ -87,7 +87,7 @@ func (w *Waiter) Poll(description string, checkFunc CheckFunc) error {
 		w.log.Info("operation completed", "description", description)
 		return nil
 	}
-	w.log.Info("polling operation", "description", description, "status", status)
+	w.log.Info("polling operation (initial)", "description", description, "status", status)
 
 	for {
 		select {
@@ -104,11 +104,12 @@ func (w *Waiter) Poll(description string, checkFunc CheckFunc) error {
 			if err != nil {
 				return fmt.Errorf("check failed: %w", err)
 			}
+			w.log.Info("polling operation", "description", description, "status", status)
+
 			if done {
 				w.log.Info("operation completed", "description", description)
 				return nil
 			}
-			w.log.Info("polling operation", "description", description, "status", status)
 		}
 	}
 }

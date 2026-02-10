@@ -9,6 +9,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"sync"
 
 	"github.com/go-logr/logr"
 
@@ -31,6 +32,9 @@ const (
 // Executor implements hibernation for Karpenter NodePools.
 type Executor struct {
 	clientFactory ClientFactory
+
+	waitinglist  []string
+	completionWg sync.WaitGroup
 }
 
 // ClientFactory is a function type for creating Kubernetes clients.
@@ -145,6 +149,27 @@ func (e *Executor) Shutdown(ctx context.Context, log logr.Logger, spec executor.
 		}
 	}
 
+	// Wait for all nodes corresponding to deleted NodePools to be removed if configured
+	if params.AwaitCompletion.Enabled {
+		timeout := params.AwaitCompletion.Timeout
+		if timeout == "" {
+			timeout = DefaultWaitTimeout
+		}
+
+		for _, nodePoolName := range e.waitinglist {
+			e.completionWg.Add(1)
+
+			go func(npName string) {
+				defer e.completionWg.Done()
+				if err := e.waitForNodePoolDeleted(ctx, log, client, npName, timeout); err != nil {
+					log.Error(err, "failed to wait for NodePool deletion", "nodePool", npName)
+				}
+			}(nodePoolName)
+		}
+
+		e.completionWg.Wait()
+	}
+
 	log.Info("Karpenter shutdown completed successfully",
 		"nodePoolCount", len(targetNodePools),
 	)
@@ -199,7 +224,27 @@ func (e *Executor) WakeUp(ctx context.Context, log logr.Logger, spec executor.Sp
 			log.Error(err, "failed to restore NodePool", "nodePool", nodePoolName)
 			return fmt.Errorf("restore NodePool %s: %w", nodePoolName, err)
 		}
-		log.Info("NodePool restored successfully", "nodePool", nodePoolName)
+	}
+
+	// Wait for all restored NodePools to be ready if configured
+	if params.AwaitCompletion.Enabled {
+		timeout := params.AwaitCompletion.Timeout
+		if timeout == "" {
+			timeout = DefaultWaitTimeout
+		}
+		for _, nodePoolName := range e.waitinglist {
+			e.completionWg.Add(1)
+			go func(npName string) {
+				defer e.completionWg.Done()
+
+				if err := e.waitForNodePoolReady(ctx, log, client, npName, timeout); err != nil {
+					log.Error(err, "failed to wait for NodePool ready", "nodePool", npName)
+				}
+			}(nodePoolName)
+
+		}
+
+		e.completionWg.Wait()
 	}
 
 	log.Info("Karpenter wakeup completed successfully",
@@ -282,6 +327,11 @@ func (e *Executor) scaleDownNodePool(ctx context.Context, log logr.Logger, clien
 		return fmt.Errorf("delete NodePool: %w", err)
 	}
 
+	// Add to waiting list for awaiting completion if configured
+	if params.AwaitCompletion.Enabled {
+		e.waitinglist = append(e.waitinglist, nodePoolName)
+	}
+
 	log.Info("NodePool deleted successfully",
 		"nodePool", nodePoolName,
 		"hasSpec", state.Spec != nil,
@@ -296,18 +346,6 @@ func (e *Executor) scaleDownNodePool(ctx context.Context, log logr.Logger, clien
 		}
 	}
 
-	// Wait for NodePool deletion if configured
-	if params.AwaitCompletion.Enabled {
-		timeout := params.AwaitCompletion.Timeout
-		if timeout == "" {
-			timeout = DefaultWaitTimeout
-		}
-		if err := e.waitForNodePoolDeleted(ctx, log, client, nodePoolName, timeout); err != nil {
-			return fmt.Errorf("wait for NodePool deletion: %w", err)
-		}
-	}
-
-	// NodePool existed and was deleted - existed=true
 	return nil
 }
 
@@ -343,22 +381,18 @@ func (e *Executor) restoreNodePool(ctx context.Context, log logr.Logger, client 
 		return fmt.Errorf("create NodePool: %w", err)
 	}
 
-	// Wait for NodePool to be ready if configured
+	log.Info("NodePool restored successfully", "nodePool", nodePoolName)
+
+	// Add to waiting list for awaiting completion if configured
 	if params.AwaitCompletion.Enabled {
-		timeout := params.AwaitCompletion.Timeout
-		if timeout == "" {
-			timeout = DefaultWaitTimeout
-		}
-		if err := e.waitForNodePoolReady(ctx, log, client, nodePoolName, timeout); err != nil {
-			return fmt.Errorf("wait for NodePool ready: %w", err)
-		}
+		e.waitinglist = append(e.waitinglist, nodePoolName)
 	}
 
 	return nil
 }
 
 // waitForNodePoolReady waits for a NodePool to reach ready status.
-func (e *Executor) waitForNodePoolReady(ctx context.Context, log logr.Logger, client Client, nodePoolName string, timeoutStr string) error {
+func (e *Executor) waitForNodePoolReady(ctx context.Context, log logr.Logger, client Client, nodePoolName string, timeout string) error {
 	nodePoolGVR := schema.GroupVersionResource{
 		Group:    "karpenter.sh",
 		Version:  "v1",
@@ -367,10 +401,10 @@ func (e *Executor) waitForNodePoolReady(ctx context.Context, log logr.Logger, cl
 
 	log.Info("waiting for NodePool to be ready",
 		"nodePool", nodePoolName,
-		"timeout", timeoutStr,
+		"timeout", timeout,
 	)
 
-	w, err := waiter.NewWaiter(ctx, log, timeoutStr)
+	w, err := waiter.NewWaiter(ctx, log, timeout)
 	if err != nil {
 		return fmt.Errorf("create waiter: %w", err)
 	}
@@ -410,7 +444,7 @@ func (e *Executor) waitForNodePoolReady(ctx context.Context, log logr.Logger, cl
 			return false, fmt.Sprintf("not ready: %s - %s", reason, message), nil
 		}
 
-		return false, "Ready condition not found", nil
+		return false, "Ready condition not yet found", nil
 	}
 
 	if err := w.Poll(fmt.Sprintf("NodePool %s to be ready", nodePoolName), checkFn); err != nil {
@@ -422,13 +456,13 @@ func (e *Executor) waitForNodePoolReady(ctx context.Context, log logr.Logger, cl
 }
 
 // waitForNodePoolDeleted waits for all Nodes managed by the NodePool to be deleted.
-func (e *Executor) waitForNodePoolDeleted(ctx context.Context, log logr.Logger, client Client, nodePoolName string, timeoutStr string) error {
+func (e *Executor) waitForNodePoolDeleted(ctx context.Context, log logr.Logger, client Client, nodePoolName string, timeout string) error {
 	log.Info("waiting for NodePool nodes to be deleted",
 		"nodePool", nodePoolName,
-		"timeout", timeoutStr,
+		"timeout", timeout,
 	)
 
-	w, err := waiter.NewWaiter(ctx, log, timeoutStr)
+	w, err := waiter.NewWaiter(ctx, log, timeout)
 	if err != nil {
 		return fmt.Errorf("create waiter: %w", err)
 	}

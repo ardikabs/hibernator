@@ -276,7 +276,7 @@ func (e *Executor) WakeUp(ctx context.Context, log logr.Logger, spec executor.Sp
 }
 
 // waitForInstancesStopped waits for all instances to reach stopped state.
-func (e *Executor) waitForInstancesStopped(ctx context.Context, log logr.Logger, client EC2Client, instanceIDs []string, timeout string) error {
+func (e *Executor) waitForInstancesStopped(ctx context.Context, log logr.Logger, client EC2Client, instanceIds []string, timeout string) error {
 	w, err := waiter.NewWaiter(ctx, log, timeout)
 	if err != nil {
 		return fmt.Errorf("create waiter: %w", err)
@@ -284,7 +284,7 @@ func (e *Executor) waitForInstancesStopped(ctx context.Context, log logr.Logger,
 
 	checkFunc := func() (bool, string, error) {
 		resp, err := client.DescribeInstances(ctx, &ec2.DescribeInstancesInput{
-			InstanceIds: instanceIDs,
+			InstanceIds: instanceIds,
 		})
 		if err != nil {
 			return false, "", fmt.Errorf("describe instances: %w", err)
@@ -307,7 +307,7 @@ func (e *Executor) waitForInstancesStopped(ctx context.Context, log logr.Logger,
 		}
 
 		status := fmt.Sprintf("stopped=%d, stopping=%d, other=%d", stopped, stopping, other)
-		done := stopped == len(instanceIDs)
+		done := stopped == len(instanceIds)
 		return done, status, nil
 	}
 
@@ -315,7 +315,7 @@ func (e *Executor) waitForInstancesStopped(ctx context.Context, log logr.Logger,
 }
 
 // waitForInstancesRunning waits for all instances to reach running state.
-func (e *Executor) waitForInstancesRunning(ctx context.Context, log logr.Logger, client EC2Client, instanceIDs []string, timeout string) error {
+func (e *Executor) waitForInstancesRunning(ctx context.Context, log logr.Logger, client EC2Client, instanceIds []string, timeout string) error {
 	w, err := waiter.NewWaiter(ctx, log, timeout)
 	if err != nil {
 		return fmt.Errorf("create waiter: %w", err)
@@ -323,7 +323,7 @@ func (e *Executor) waitForInstancesRunning(ctx context.Context, log logr.Logger,
 
 	checkFunc := func() (bool, string, error) {
 		resp, err := client.DescribeInstances(ctx, &ec2.DescribeInstancesInput{
-			InstanceIds: instanceIDs,
+			InstanceIds: instanceIds,
 		})
 		if err != nil {
 			return false, "", fmt.Errorf("describe instances: %w", err)
@@ -346,7 +346,7 @@ func (e *Executor) waitForInstancesRunning(ctx context.Context, log logr.Logger,
 		}
 
 		status := fmt.Sprintf("running=%d, pending=%d, other=%d", running, pending, other)
-		done := running == len(instanceIDs)
+		done := running == len(instanceIds)
 		return done, status, nil
 	}
 
@@ -428,5 +428,6 @@ func (e *Executor) findInstances(ctx context.Context, client EC2Client, selector
 		instances = append(instances, reservation.Instances...)
 	}
 
-	return instances, nil
+	// apply exclusions for ASG and Karpenter managed instances
+	return awsutil.ApplyExclusions(instances, awsutil.ExcludeByASGManaged, awsutil.ExcludeByKarpenterManaged), nil
 }
