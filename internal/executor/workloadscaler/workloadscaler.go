@@ -10,6 +10,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"strings"
+	"sync"
 
 	"github.com/go-logr/logr"
 
@@ -31,6 +32,9 @@ const (
 // Executor implements workload downscaling using the scale subresource.
 type Executor struct {
 	clientFactory ClientFactory
+
+	waitinglist  []WorkloadState
+	completionWg sync.WaitGroup
 }
 
 // ClientFactory is a function type for creating Kubernetes clients.
@@ -103,6 +107,18 @@ type WorkloadState struct {
 	Replicas  int32  `json:"replicas"`
 }
 
+func (s WorkloadState) GetGVR() schema.GroupVersionResource {
+	return schema.GroupVersionResource{
+		Group:    s.Group,
+		Version:  s.Version,
+		Resource: s.Resource,
+	}
+}
+
+func (s WorkloadState) String() string {
+	return fmt.Sprintf("%s/%s/%s", s.Namespace, s.Kind, s.Name)
+}
+
 // RestoreState holds all workload states for restoration.
 type RestoreState struct {
 	Items []WorkloadState `json:"items"`
@@ -159,6 +175,27 @@ func (e *Executor) Shutdown(ctx context.Context, log logr.Logger, spec executor.
 		}
 	}
 
+	// Wait for all workloads to scale if configured
+	if params.AwaitCompletion.Enabled {
+		timeout := params.AwaitCompletion.Timeout
+		if timeout == "" {
+			timeout = DefaultWaitTimeout
+		}
+
+		for _, state := range e.waitinglist {
+			e.completionWg.Add(1)
+			go func(state WorkloadState) {
+				defer e.completionWg.Done()
+				if err := e.waitForReplicasScaled(ctx, log, client, state.GetGVR(), state.Namespace, state.Name, 0, timeout); err != nil {
+					log.Error(err, "wait for workload to scale", "workload", state.String())
+				}
+
+			}(state)
+		}
+
+		e.completionWg.Wait()
+	}
+
 	log.Info("hibernation completed", "numberOfWorkloadsScaled", totalWorkloadscaled)
 
 	return nil
@@ -191,15 +228,30 @@ func (e *Executor) WakeUp(ctx context.Context, log logr.Logger, spec executor.Sp
 			return fmt.Errorf("unmarshal workload state %s: %w", workloadKey, err)
 		}
 
-		gvr := schema.GroupVersionResource{
-			Group:    state.Group,
-			Version:  state.Version,
-			Resource: state.Resource,
-		}
-
-		if err := e.restoreWorkload(ctx, log, client, state, gvr, params); err != nil {
+		if err := e.restoreWorkload(ctx, log, client, state, params); err != nil {
 			return fmt.Errorf("restore %s/%s in namespace %s: %w", state.Kind, state.Name, state.Namespace, err)
 		}
+	}
+
+	// Wait for all workloads to scale if configured
+	if params.AwaitCompletion.Enabled {
+		timeout := params.AwaitCompletion.Timeout
+		if timeout == "" {
+			timeout = DefaultWaitTimeout
+		}
+
+		for _, state := range e.waitinglist {
+			e.completionWg.Add(1)
+			go func(state WorkloadState) {
+				defer e.completionWg.Done()
+				if err := e.waitForReplicasScaled(ctx, log, client, state.GetGVR(), state.Namespace, state.Name, int64(state.Replicas), timeout); err != nil {
+					log.Error(err, "wait for workload to scale", "workload", state.String())
+				}
+
+			}(state)
+		}
+
+		e.completionWg.Wait()
 	}
 
 	return nil
@@ -246,6 +298,12 @@ func (e *Executor) scaleDownWorkloads(ctx context.Context,
 	if err != nil {
 		return 0, fmt.Errorf("invalid label selector: %w", err)
 	}
+
+	log.Info("scaling down workloads",
+		"namespace", namespace,
+		"resource", gvr.Resource,
+		"selector", selector.String(),
+	)
 
 	// List all resources of this type in the namespace
 	list, err := client.ListWorkloads(ctx, gvr, namespace, selector.String())
@@ -307,22 +365,16 @@ func (e *Executor) scaleDownWorkloads(ctx context.Context,
 			return 0, fmt.Errorf("update scale for %s/%s: %w", item.GetKind(), item.GetName(), err)
 		}
 
+		// Add to waiting list if awaitCompletion is configured
+		if params.AwaitCompletion.Enabled {
+			e.waitinglist = append(e.waitinglist, state)
+		}
+
 		// Incremental save: persist this workload's restore data immediately
 		if callback != nil {
 			if err := callback(key, state, replicas > 0); err != nil {
 				log.Error(err, "failed to save restore data incrementally", "workload", key)
 				// Continue processing - save at end as fallback
-			}
-		}
-
-		// Wait for replicas to scale if configured
-		if params.AwaitCompletion.Enabled {
-			timeout := params.AwaitCompletion.Timeout
-			if timeout == "" {
-				timeout = DefaultWaitTimeout
-			}
-			if err := e.waitForReplicasScaled(ctx, log, client, gvr, item.GetNamespace(), item.GetName(), 0, timeout); err != nil {
-				return 0, fmt.Errorf("wait for %s/%s to scale: %w", item.GetKind(), item.GetName(), err)
 			}
 		}
 	}
@@ -331,7 +383,16 @@ func (e *Executor) scaleDownWorkloads(ctx context.Context,
 }
 
 // restoreWorkload restores a single workload to its previous replica count.
-func (e *Executor) restoreWorkload(ctx context.Context, log logr.Logger, client Client, state WorkloadState, gvr schema.GroupVersionResource, params executorparams.WorkloadScalerParameters) error {
+func (e *Executor) restoreWorkload(ctx context.Context, log logr.Logger, client Client, state WorkloadState, params executorparams.WorkloadScalerParameters) error {
+	gvr := state.GetGVR()
+
+	log.Info("scaling up workloads",
+		"name", state.Name,
+		"kind", state.Kind,
+		"namespace", state.Namespace,
+		"replicas", state.Replicas,
+	)
+
 	// Get the scale subresource
 	scaleObj, err := client.GetScale(ctx, gvr, state.Namespace, state.Name)
 	if err != nil {
@@ -349,15 +410,9 @@ func (e *Executor) restoreWorkload(ctx context.Context, log logr.Logger, client 
 		return fmt.Errorf("update scale subresource: %w", err)
 	}
 
-	// Wait for replicas to scale if configured
+	// Add to waiting list if awaitCompletion is configured
 	if params.AwaitCompletion.Enabled {
-		timeout := params.AwaitCompletion.Timeout
-		if timeout == "" {
-			timeout = DefaultWaitTimeout
-		}
-		if err := e.waitForReplicasScaled(ctx, log, client, gvr, state.Namespace, state.Name, int64(state.Replicas), timeout); err != nil {
-			return fmt.Errorf("wait for %s/%s to scale: %w", state.Kind, state.Name, err)
-		}
+		e.waitinglist = append(e.waitinglist, state)
 	}
 
 	return nil
@@ -426,15 +481,15 @@ func parseCRDFormat(spec string) (schema.GroupVersionResource, error) {
 }
 
 // waitForReplicasScaled waits for a workload's replica count to match the desired count.
-func (e *Executor) waitForReplicasScaled(ctx context.Context, log logr.Logger, client Client, gvr schema.GroupVersionResource, namespace, name string, desiredReplicas int64, timeoutStr string) error {
+func (e *Executor) waitForReplicasScaled(ctx context.Context, log logr.Logger, client Client, gvr schema.GroupVersionResource, namespace, name string, desiredReplicas int64, timeout string) error {
 	log.Info("waiting for workload replicas to scale",
 		"namespace", namespace,
 		"name", name,
 		"desiredReplicas", desiredReplicas,
-		"timeout", timeoutStr,
+		"timeout", timeout,
 	)
 
-	w, err := waiter.NewWaiter(ctx, log, timeoutStr)
+	w, err := waiter.NewWaiter(ctx, log, timeout)
 	if err != nil {
 		return fmt.Errorf("create waiter: %w", err)
 	}

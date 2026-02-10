@@ -232,7 +232,7 @@ func (r *runner) executeOperation(ctx context.Context, exec executor.Executor, s
 		}
 
 		if !rd.IsLive {
-			r.log.Info("warning: restore data is from non-live source; restore point may be outdated. WIP")
+			r.log.Info("warning: restore data is from non-live source; restore point may be outdated.")
 		}
 
 		operationErr = exec.WakeUp(ctx, r.log, *spec, *rd)

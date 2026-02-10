@@ -54,7 +54,7 @@ func TestValidate_MissingAWSConfig(t *testing.T) {
 	spec := executor.Spec{
 		TargetName: "test-db",
 		TargetType: "rds",
-		Parameters: json.RawMessage(`{"selector": {"instanceIds": ["db-1"]}}`),
+		Parameters: json.RawMessage(`{"selector": {"InstanceIds": ["db-1"]}}`),
 	}
 	err := e.Validate(spec)
 	assert.Error(t, err)
@@ -65,7 +65,7 @@ func TestValidate_WithAWSConfig(t *testing.T) {
 	spec := executor.Spec{
 		TargetName: "test-db",
 		TargetType: "rds",
-		Parameters: json.RawMessage(`{"selector": {"instanceIds": ["db-1"]}}`),
+		Parameters: json.RawMessage(`{"selector": {"InstanceIds": ["db-1"]}}`),
 		ConnectorConfig: executor.ConnectorConfig{
 			AWS: &executor.AWSConnectorConfig{
 				Region: "us-east-1",
@@ -96,7 +96,7 @@ func TestShutdown_StopInstance(t *testing.T) {
 	mockRDS := &mocks.RDSClient{}
 	mockSTS := &mocks.STSClient{}
 
-	// Mock for finding instances (clusters not queried since selector only has instanceIds)
+	// Mock for finding instances (clusters not queried since selector only has InstanceIds)
 	mockRDS.On("DescribeDBInstances", mock.Anything, mock.Anything).Return(&rds.DescribeDBInstancesOutput{
 		DBInstances: []types.DBInstance{
 			{
@@ -118,7 +118,7 @@ func TestShutdown_StopInstance(t *testing.T) {
 	spec := executor.Spec{
 		TargetName: "test-db",
 		TargetType: "rds",
-		Parameters: json.RawMessage(`{"selector": {"instanceIds": ["db-instance-1"]}}`),
+		Parameters: json.RawMessage(`{"selector": {"InstanceIds": ["db-instance-1"]}}`),
 		ConnectorConfig: executor.ConnectorConfig{
 			AWS: &executor.AWSConnectorConfig{Region: "us-east-1"},
 		},
@@ -135,7 +135,7 @@ func TestShutdown_StopInstanceAlreadyStopped(t *testing.T) {
 	mockRDS := &mocks.RDSClient{}
 	mockSTS := &mocks.STSClient{}
 
-	// Only instances queried since selector only has instanceIds
+	// Only instances queried since selector only has InstanceIds
 	mockRDS.On("DescribeDBInstances", mock.Anything, mock.Anything).Return(&rds.DescribeDBInstancesOutput{
 		DBInstances: []types.DBInstance{
 			{
@@ -156,7 +156,7 @@ func TestShutdown_StopInstanceAlreadyStopped(t *testing.T) {
 	spec := executor.Spec{
 		TargetName: "test-db",
 		TargetType: "rds",
-		Parameters: json.RawMessage(`{"selector": {"instanceIds": ["db-instance-1"]}}`),
+		Parameters: json.RawMessage(`{"selector": {"InstanceIds": ["db-instance-1"]}}`),
 		ConnectorConfig: executor.ConnectorConfig{
 			AWS: &executor.AWSConnectorConfig{Region: "us-east-1"},
 		},
@@ -173,7 +173,7 @@ func TestShutdown_StopCluster(t *testing.T) {
 	mockRDS := &mocks.RDSClient{}
 	mockSTS := &mocks.STSClient{}
 
-	// Only clusters queried since selector only has clusterIds
+	// Only clusters queried since selector only has ClusterIds
 	mockRDS.On("DescribeDBClusters", mock.Anything, mock.Anything).Return(&rds.DescribeDBClustersOutput{
 		DBClusters: []types.DBCluster{
 			{
@@ -194,7 +194,7 @@ func TestShutdown_StopCluster(t *testing.T) {
 	spec := executor.Spec{
 		TargetName: "test-cluster",
 		TargetType: "rds",
-		Parameters: json.RawMessage(`{"selector": {"clusterIds": ["cluster-1"]}}`),
+		Parameters: json.RawMessage(`{"selector": {"ClusterIds": ["cluster-1"]}}`),
 		ConnectorConfig: executor.ConnectorConfig{
 			AWS: &executor.AWSConnectorConfig{Region: "us-east-1"},
 		},
@@ -211,7 +211,7 @@ func TestShutdown_StopClusterAlreadyStopped(t *testing.T) {
 	mockRDS := &mocks.RDSClient{}
 	mockSTS := &mocks.STSClient{}
 
-	// Only clusters queried since selector only has clusterIds
+	// Only clusters queried since selector only has ClusterIds
 	mockRDS.On("DescribeDBClusters", mock.Anything, mock.Anything).Return(&rds.DescribeDBClustersOutput{
 		DBClusters: []types.DBCluster{
 			{
@@ -231,7 +231,7 @@ func TestShutdown_StopClusterAlreadyStopped(t *testing.T) {
 	spec := executor.Spec{
 		TargetName: "test-cluster",
 		TargetType: "rds",
-		Parameters: json.RawMessage(`{"selector": {"clusterIds": ["cluster-1"]}}`),
+		Parameters: json.RawMessage(`{"selector": {"ClusterIds": ["cluster-1"]}}`),
 		ConnectorConfig: executor.ConnectorConfig{
 			AWS: &executor.AWSConnectorConfig{Region: "us-east-1"},
 		},
@@ -266,12 +266,12 @@ func TestWakeUp_StartInstance(t *testing.T) {
 	)
 
 	// Create per-instance restore data (key = "instance:<id>")
-	instanceState, _ := json.Marshal(DBInstanceState{InstanceID: "db-instance-1", WasStopped: false})
+	instanceState, _ := json.Marshal(DBInstanceState{InstanceId: "db-instance-1", WasStopped: false})
 
 	spec := executor.Spec{
 		TargetName: "test-db",
 		TargetType: "rds",
-		Parameters: json.RawMessage(`{"selector": {"instanceIds": ["db-instance-1"]}}`),
+		Parameters: json.RawMessage(`{"selector": {"InstanceIds": ["db-instance-1"]}}`),
 		ConnectorConfig: executor.ConnectorConfig{
 			AWS: &executor.AWSConnectorConfig{Region: "us-east-1"},
 		},
@@ -299,12 +299,12 @@ func TestWakeUp_InstanceAlreadyRunning(t *testing.T) {
 	)
 
 	// Create per-instance restore data with WasStopped=true (already stopped)
-	instanceState, _ := json.Marshal(DBInstanceState{InstanceID: "db-instance-1", WasStopped: true})
+	instanceState, _ := json.Marshal(DBInstanceState{InstanceId: "db-instance-1", WasStopped: true})
 
 	spec := executor.Spec{
 		TargetName: "test-db",
 		TargetType: "rds",
-		Parameters: json.RawMessage(`{"selector": {"instanceIds": ["db-instance-1"]}}`),
+		Parameters: json.RawMessage(`{"selector": {"InstanceIds": ["db-instance-1"]}}`),
 		ConnectorConfig: executor.ConnectorConfig{
 			AWS: &executor.AWSConnectorConfig{Region: "us-east-1"},
 		},
@@ -341,12 +341,12 @@ func TestWakeUp_StartCluster(t *testing.T) {
 	)
 
 	// Create per-cluster restore data (key = "cluster:<id>")
-	clusterState, _ := json.Marshal(DBClusterState{ClusterID: "cluster-1", WasStopped: false})
+	clusterState, _ := json.Marshal(DBClusterState{ClusterId: "cluster-1", WasStopped: false})
 
 	spec := executor.Spec{
 		TargetName: "test-cluster",
 		TargetType: "rds",
-		Parameters: json.RawMessage(`{"selector": {"clusterIds": ["cluster-1"]}}`),
+		Parameters: json.RawMessage(`{"selector": {"ClusterIds": ["cluster-1"]}}`),
 		ConnectorConfig: executor.ConnectorConfig{
 			AWS: &executor.AWSConnectorConfig{Region: "us-east-1"},
 		},
@@ -374,12 +374,12 @@ func TestWakeUp_ClusterAlreadyRunning(t *testing.T) {
 	)
 
 	// Create per-cluster restore data with WasStopped=true (already stopped)
-	clusterState, _ := json.Marshal(DBClusterState{ClusterID: "cluster-1", WasStopped: true})
+	clusterState, _ := json.Marshal(DBClusterState{ClusterId: "cluster-1", WasStopped: true})
 
 	spec := executor.Spec{
 		TargetName: "test-cluster",
 		TargetType: "rds",
-		Parameters: json.RawMessage(`{"selector": {"clusterIds": ["cluster-1"]}}`),
+		Parameters: json.RawMessage(`{"selector": {"ClusterIds": ["cluster-1"]}}`),
 		ConnectorConfig: executor.ConnectorConfig{
 			AWS: &executor.AWSConnectorConfig{Region: "us-east-1"},
 		},
@@ -407,7 +407,7 @@ func TestWakeUp_InvalidRestoreData(t *testing.T) {
 	spec := executor.Spec{
 		TargetName: "test-db",
 		TargetType: "rds",
-		Parameters: json.RawMessage(`{"selector": {"instanceIds": ["db-1"]}}`),
+		Parameters: json.RawMessage(`{"selector": {"InstanceIds": ["db-1"]}}`),
 		ConnectorConfig: executor.ConnectorConfig{
 			AWS: &executor.AWSConnectorConfig{Region: "us-east-1"},
 		},
@@ -817,8 +817,8 @@ func TestRestoreState_JSON(t *testing.T) {
 	state := RestoreState{
 		Instances: []DBInstanceState{
 			{
-				InstanceID:   "db-instance-1",
-				SnapshotID:   "snap-123",
+				InstanceId:   "db-instance-1",
+				SnapshotId:   "snap-123",
 				WasStopped:   false,
 				InstanceType: "db.t3.medium",
 			},
@@ -832,15 +832,15 @@ func TestRestoreState_JSON(t *testing.T) {
 	err = json.Unmarshal(data, &decoded)
 	assert.NoError(t, err)
 	assert.Len(t, decoded.Instances, 1)
-	assert.Equal(t, "db-instance-1", decoded.Instances[0].InstanceID)
-	assert.Equal(t, "snap-123", decoded.Instances[0].SnapshotID)
+	assert.Equal(t, "db-instance-1", decoded.Instances[0].InstanceId)
+	assert.Equal(t, "snap-123", decoded.Instances[0].SnapshotId)
 	assert.False(t, decoded.Instances[0].WasStopped)
 	assert.Equal(t, "db.t3.medium", decoded.Instances[0].InstanceType)
 
 	clusterState := RestoreState{
 		Clusters: []DBClusterState{
 			{
-				ClusterID:  "aurora-cluster-1",
+				ClusterId:  "aurora-cluster-1",
 				WasStopped: false,
 			},
 		},
@@ -852,15 +852,15 @@ func TestRestoreState_JSON(t *testing.T) {
 	err = json.Unmarshal(data, &decoded)
 	assert.NoError(t, err)
 	assert.Len(t, decoded.Clusters, 1)
-	assert.Equal(t, "aurora-cluster-1", decoded.Clusters[0].ClusterID)
+	assert.Equal(t, "aurora-cluster-1", decoded.Clusters[0].ClusterId)
 }
 
 func TestParameters_JSON(t *testing.T) {
 	params := Parameters{
 		SnapshotBeforeStop: true,
 		Selector: executorparams.RDSSelector{
-			InstanceIDs: []string{"db-1"},
-			ClusterIDs:  []string{"cluster-1"},
+			InstanceIds: []string{"db-1"},
+			ClusterIds:  []string{"cluster-1"},
 		},
 	}
 
@@ -871,10 +871,10 @@ func TestParameters_JSON(t *testing.T) {
 	err = json.Unmarshal(data, &decoded)
 	assert.NoError(t, err)
 	assert.True(t, decoded.SnapshotBeforeStop)
-	assert.Len(t, decoded.Selector.InstanceIDs, 1)
-	assert.Equal(t, "db-1", decoded.Selector.InstanceIDs[0])
-	assert.Len(t, decoded.Selector.ClusterIDs, 1)
-	assert.Equal(t, "cluster-1", decoded.Selector.ClusterIDs[0])
+	assert.Len(t, decoded.Selector.InstanceIds, 1)
+	assert.Equal(t, "db-1", decoded.Selector.InstanceIds[0])
+	assert.Len(t, decoded.Selector.ClusterIds, 1)
+	assert.Equal(t, "cluster-1", decoded.Selector.ClusterIds[0])
 }
 
 func TestExecutorType_Constant(t *testing.T) {
