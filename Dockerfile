@@ -1,6 +1,6 @@
 # syntax=docker/dockerfile:1
 
-FROM golang:1.24-alpine AS builder
+FROM --platform=$BUILDPLATFORM golang:1.24-alpine AS builder
 WORKDIR /workspace
 
 # Cache deps
@@ -12,11 +12,15 @@ COPY . .
 
 # Build controller
 FROM builder AS build-controller
-RUN CGO_ENABLED=0 GOOS=linux go build -ldflags="-s -w" -o /controller ./cmd/controller
+ARG TARGETOS
+ARG TARGETARCH
+RUN CGO_ENABLED=0 GOOS=${TARGETOS} GOARCH=${TARGETARCH} go build -ldflags="-s -w" -o /controller ./cmd/controller
 
 # Build runner
 FROM builder AS build-runner
-RUN CGO_ENABLED=0 GOOS=linux go build -ldflags="-s -w" -o /runner ./cmd/runner
+ARG TARGETOS
+ARG TARGETARCH
+RUN CGO_ENABLED=0 GOOS=${TARGETOS} GOARCH=${TARGETARCH} go build -ldflags="-s -w" -o /runner ./cmd/runner
 
 # Controller image
 FROM gcr.io/distroless/static:nonroot AS controller
