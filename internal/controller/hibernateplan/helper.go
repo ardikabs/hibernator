@@ -3,6 +3,7 @@ package hibernateplan
 import (
 	"context"
 	"fmt"
+	"sort"
 
 	batchv1 "k8s.io/api/batch/v1"
 	corev1 "k8s.io/api/core/v1"
@@ -323,4 +324,37 @@ func (r *Reconciler) findPlansForRunnerJob(ctx context.Context, obj client.Objec
 	}
 
 	return nil
+}
+
+// getDetailedErrorFromPod fetches the termination message from the failed pod of a job.
+func (r *Reconciler) getDetailedErrorFromPod(ctx context.Context, job *batchv1.Job) string {
+	// List pods belonging to the job
+	// We use the labels that we know we put on the pods
+	var podList corev1.PodList
+	if err := r.List(ctx, &podList,
+		client.InNamespace(job.Namespace),
+		client.MatchingLabels(job.Spec.Template.Labels),
+	); err != nil {
+		return ""
+	}
+
+	pods := podList.Items
+
+	sort.Slice(pods, func(i, j int) bool {
+		return pods[j].CreationTimestamp.Before(&pods[i].CreationTimestamp)
+	})
+
+	for _, pod := range pods {
+		// Check current container statuses
+		for _, status := range pod.Status.ContainerStatuses {
+			if status.State.Terminated != nil && status.State.Terminated.Message != "" {
+				return status.State.Terminated.Message
+			}
+			if status.LastTerminationState.Terminated != nil && status.LastTerminationState.Terminated.Message != "" {
+				return status.LastTerminationState.Terminated.Message
+			}
+		}
+	}
+
+	return ""
 }

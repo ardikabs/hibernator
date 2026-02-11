@@ -24,9 +24,10 @@ import (
 type ErrorClassification string
 
 const (
-	ErrorTransient ErrorClassification = "Transient"
-	ErrorPermanent ErrorClassification = "Permanent"
-	ErrorUnknown   ErrorClassification = "Unknown"
+	ErrorTransient       ErrorClassification = "Transient"
+	ErrorPermanent       ErrorClassification = "Permanent"
+	ErrorExecutionFailed ErrorClassification = "ExecutionFailed"
+	ErrorUnknown         ErrorClassification = "Unknown"
 )
 
 // ErrorRecoveryStrategy determines how to handle errors.
@@ -78,6 +79,19 @@ func ClassifyError(err error) ErrorClassification {
 
 	// Fallback to string matching for non-AWS errors
 	errMsg := strings.ToLower(err.Error())
+
+	executionFailedPatterns := []string{
+		"one or more targets in stage",
+		"failed to rebuild execution plan",
+		"failed to create job",
+		"cannot execute stage",
+	}
+
+	for _, pattern := range executionFailedPatterns {
+		if strings.Contains(errMsg, pattern) {
+			return ErrorExecutionFailed
+		}
+	}
 
 	transientPatterns := []string{
 		"timeout",
