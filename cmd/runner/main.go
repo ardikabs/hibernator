@@ -21,6 +21,7 @@ import (
 	clientgoscheme "k8s.io/client-go/kubernetes/scheme"
 
 	hibernatorv1alpha1 "github.com/ardikabs/hibernator/api/v1alpha1"
+	"github.com/ardikabs/hibernator/internal/wellknown"
 )
 
 var scheme = runtime.NewScheme()
@@ -127,6 +128,12 @@ func main() {
 	defer r.close()
 
 	if err := r.run(ctx); err != nil {
+		// Write the error message to the termination log path
+		// This allows the controller to read the specific error message from the failed pod
+		if errWrite := os.WriteFile(wellknown.TerminationLogPath, []byte(err.Error()), 0644); errWrite != nil {
+			log.Error(errWrite, "failed to write termination log")
+		}
+
 		log.Error(err, "execution failed")
 		os.Exit(1)
 	}

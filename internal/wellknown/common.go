@@ -24,4 +24,8 @@ const (
 
 	// DefaultRecoveryMaxRetryAttempts is the default max retry attempts for recovery.
 	DefaultRecoveryMaxRetryAttempts = int32(3)
+
+	// TerminationLogPath is the path where the runner writes its termination message.
+	// Ref: https://kubernetes.io/docs/tasks/debug/debug-application/determine-reason-pod-failure/#customizing-the-termination-message
+	TerminationLogPath = "/dev/termination-log"
 )

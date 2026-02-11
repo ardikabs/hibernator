@@ -601,7 +601,7 @@ func (r *Reconciler) executeStage(ctx context.Context, log logr.Logger, plan *hi
 			log.Error(err, "failed to create job", "target", targetName)
 			// Continue with other targets in best-effort mode
 			if plan.Spec.Behavior.Mode == hibernatorv1alpha1.BehaviorStrict && plan.Spec.Behavior.FailFast {
-				return r.setError(ctx, plan, err)
+				return r.setError(ctx, plan, fmt.Errorf("failed to create job for target %s: %w", targetName, err))
 			}
 		}
 
@@ -624,7 +624,7 @@ func (r *Reconciler) reconcileExecution(ctx context.Context, log logr.Logger, pl
 	execPlan, err := r.buildExecutionPlan(plan, operation == "wakeup")
 	if err != nil {
 		log.Error(err, "failed to rebuild execution plan")
-		return r.setError(ctx, plan, err)
+		return r.setError(ctx, plan, fmt.Errorf("failed to rebuild execution plan: %w", err))
 	}
 
 	// Get detailed stage status
@@ -634,8 +634,10 @@ func (r *Reconciler) reconcileExecution(ctx context.Context, log logr.Logger, pl
 
 	// Handle stage completion
 	if stageStatus.AllTerminal {
-		log.Info("current stage is complete", "stageIndex", plan.Status.CurrentStageIndex,
-			"completedCount", stageStatus.CompletedCount, "failedCount", stageStatus.FailedCount)
+		log.Info("current stage either complete or failed",
+			"stageIndex", plan.Status.CurrentStageIndex,
+			"completedCount", stageStatus.CompletedCount,
+			"failedCount", stageStatus.FailedCount)
 
 		// Check for failures in strict mode
 		if stageStatus.FailedCount > 0 && plan.Spec.Behavior.Mode == hibernatorv1alpha1.BehaviorStrict {
@@ -784,13 +786,16 @@ func (r *Reconciler) updatePlanExecutionStatuses(ctx context.Context, log logr.L
 				exec.State = hibernatorv1alpha1.StateCompleted
 			} else if isJobFailed {
 				exec.State = hibernatorv1alpha1.StateFailed
+				if msg := r.getDetailedErrorFromPod(ctx, &job); msg != "" {
+					exec.Message = msg
+				}
 			} else if job.Status.Active > 0 {
 				exec.State = hibernatorv1alpha1.StateRunning
 				exec.StartedAt = job.Status.StartTime
 			}
 
 			if execId, ok := job.Labels[wellknown.LabelExecutionID]; ok {
-				exec.LogsRef = fmt.Sprintf("execution-id:%s", execId)
+				exec.LogsRef = fmt.Sprintf("execution-id://%s", execId)
 			}
 
 			exec.RestoreConfigMapRef = fmt.Sprintf("%s/%s", job.Namespace, restore.GetRestoreConfigMap(plan.Name))

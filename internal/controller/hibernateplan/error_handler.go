@@ -46,6 +46,20 @@ func (r *Reconciler) handleErrorRecovery(ctx context.Context, log logr.Logger, p
 	)
 
 	if !strategy.ShouldRetry {
+		// Check for manual retry signal
+		if plan.Annotations[wellknown.AnnotationRetryNow] == "true" {
+			log.Info("manual retry triggered via annotation")
+
+			r.statusUpdater.Update(ctx, plan, status.MutatorFunc(func(obj client.Object) client.Object {
+				p := obj.(*hibernatorv1alpha1.HibernatePlan)
+				delete(p.Annotations, wellknown.AnnotationRetryNow)
+				recovery.ResetRetryState(p)
+				return p
+			}))
+
+			return ctrl.Result{Requeue: true}, nil
+		}
+
 		// Max retries exceeded or permanent error
 		log.Info("error recovery aborted", "reason", strategy.Reason, "classification", recovery.ClassifyError(lastErr))
 
