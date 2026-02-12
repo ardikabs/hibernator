@@ -1,6 +1,6 @@
 # Hibernator Operator Helm Chart
 
-![Version: 1.0.2](https://img.shields.io/badge/Version-1.0.2-informational?style=flat-square) ![Type: application](https://img.shields.io/badge/Type-application-informational?style=flat-square) ![AppVersion: 1.0.0](https://img.shields.io/badge/AppVersion-1.0.0-informational?style=flat-square)
+![Version: 1.1.0](https://img.shields.io/badge/Version-1.1.0-informational?style=flat-square) ![Type: application](https://img.shields.io/badge/Type-application-informational?style=flat-square) ![AppVersion: 1.0.0](https://img.shields.io/badge/AppVersion-1.0.0-informational?style=flat-square)
 
 A Helm chart for Hibernator Operator - Kubernetes-native time-based infrastructure hibernation.
 
@@ -105,6 +105,8 @@ helm install hibernator hibernator/hibernator \
 | serviceAccount.create | bool | `true` |  |
 | serviceAccount.name | string | `""` |  |
 | tolerations | list | `[]` |  |
+| webhook.certGen.annotations."helm.sh/hook" | string | `"pre-install,pre-upgrade"` |  |
+| webhook.certGen.annotations."helm.sh/hook-delete-policy" | string | `"before-hook-creation,hook-succeeded"` |  |
 | webhook.certGen.duration | int | `87600` |  |
 | webhook.certGen.image.pullPolicy | string | `"IfNotPresent"` |  |
 | webhook.certGen.image.repository | string | `"registry.k8s.io/ingress-nginx/kube-webhook-certgen"` |  |
@@ -113,6 +115,7 @@ helm install hibernator hibernator/hibernator \
 | webhook.certGen.resources.limits.memory | string | `"128Mi"` |  |
 | webhook.certGen.resources.requests.cpu | string | `"50m"` |  |
 | webhook.certGen.resources.requests.memory | string | `"64Mi"` |  |
+| webhook.certGen.ttlSecondsAfterFinished | int | `300` |  |
 | webhook.certGen.useJob | bool | `true` |  |
 | webhook.certManager.enabled | bool | `false` |  |
 | webhook.certManager.issuer | string | `"selfsigned-issuer"` |  |
