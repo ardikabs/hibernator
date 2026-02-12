@@ -131,5 +131,5 @@ jobs:
       - name: Package and Push Helm Chart
         if: steps.semantic-chart.outputs.new_release_published == 'true'
         run: |
-          helm package charts/hibernator --version ${{ steps.semantic-chart.outputs.new_release_version }} --app-version $(git describe --tags --abbrev=0 --match "v*")
+          helm package charts/hibernator --version ${{ steps.semantic-chart.outputs.new_release_version }}
           helm push hibernator-${{ steps.semantic-chart.outputs.new_release_version }}.tgz oci://ghcr.io/${{ github.repository_owner }}/charts
