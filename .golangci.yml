@@ -1,0 +1,21 @@
+version: "2"
+run:
+  tests: true
+  timeout: 5m
+  go: "1.24"
+
+issues:
+  fix: true
+
+linters:
+  exclusions:
+    warn-unused: true
+    rules:
+      # Exclude some linters from running on tests files.
+      - path: _test\.go
+        linters:
+          - gocyclo
+          - errcheck
+          - dupl
+          - gosec
+          - staticcheck
