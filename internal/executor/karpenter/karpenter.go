@@ -448,7 +448,7 @@ func (e *Executor) waitForNodePoolReady(ctx context.Context, log logr.Logger, cl
 	}
 
 	if err := w.Poll(fmt.Sprintf("NodePool %s to be ready", nodePoolName), checkFn); err != nil {
-		return fmt.Errorf("NodePool %s: %w", nodePoolName, err)
+		return err
 	}
 
 	log.Info("NodePool is ready", "nodePool", nodePoolName)
@@ -484,7 +484,7 @@ func (e *Executor) waitForNodePoolDeleted(ctx context.Context, log logr.Logger, 
 
 		return false, fmt.Sprintf("%d node(s) still exist, waiting for deletion", nodeCount), nil
 	}); err != nil {
-		return fmt.Errorf("NodePool %s: %w", nodePoolName, err)
+		return err
 	}
 
 	log.Info("All NodePool nodes deleted successfully", "nodePool", nodePoolName)

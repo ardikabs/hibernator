@@ -53,7 +53,6 @@ type WebSocketClient struct {
 
 	// connection management
 	writeMu sync.Mutex
-	readMu  sync.Mutex
 	mu      sync.Mutex
 }
 
@@ -120,7 +119,9 @@ func (c *WebSocketClient) Connect(ctx context.Context) error {
 	}
 	defer func() {
 		if resp != nil && resp.Body != nil {
-			resp.Body.Close()
+			if err := resp.Body.Close(); err != nil {
+				c.log.Error(err, "failed to close response body")
+			}
 		}
 	}()
 

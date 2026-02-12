@@ -415,8 +415,8 @@ func TestHibernatePlan_TypeMeta(t *testing.T) {
 		},
 	}
 
-	if plan.TypeMeta.Kind != "HibernatePlan" {
-		t.Errorf("Kind: got %q, want %q", plan.TypeMeta.Kind, "HibernatePlan")
+	if plan.Kind != "HibernatePlan" {
+		t.Errorf("Kind: got %q, want %q", plan.Kind, "HibernatePlan")
 	}
 	if plan.Name != "test-plan" {
 		t.Errorf("Name: got %q, want %q", plan.Name, "test-plan")
@@ -673,8 +673,8 @@ func TestCloudProvider_TypeMeta(t *testing.T) {
 		},
 	}
 
-	if cp.TypeMeta.Kind != "CloudProvider" {
-		t.Errorf("Kind: got %q, want %q", cp.TypeMeta.Kind, "CloudProvider")
+	if cp.Kind != "CloudProvider" {
+		t.Errorf("Kind: got %q, want %q", cp.Kind, "CloudProvider")
 	}
 	if cp.Name != "aws-prod" {
 		t.Errorf("Name: got %q, want %q", cp.Name, "aws-prod")
@@ -898,8 +898,8 @@ func TestK8SCluster_TypeMeta(t *testing.T) {
 		},
 	}
 
-	if cluster.TypeMeta.Kind != "K8SCluster" {
-		t.Errorf("Kind: got %q, want %q", cluster.TypeMeta.Kind, "K8SCluster")
+	if cluster.Kind != "K8SCluster" {
+		t.Errorf("Kind: got %q, want %q", cluster.Kind, "K8SCluster")
 	}
 	if cluster.Name != "prod-eks" {
 		t.Errorf("Name: got %q, want %q", cluster.Name, "prod-eks")

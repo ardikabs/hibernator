@@ -91,7 +91,9 @@ func (r *runner) close() {
 	}
 	// Then close streaming client
 	if r.streamClient != nil {
-		r.streamClient.Close()
+		if err := r.streamClient.Close(); err != nil {
+			r.log.Error(err, "failed to close streaming client")
+		}
 	}
 }
 

@@ -201,16 +201,20 @@ func (s *WebSocketServer) handleWebSocket(w http.ResponseWriter, r *http.Request
 		s.connectionsMu.Lock()
 		delete(s.connections, executionID)
 		s.connectionsMu.Unlock()
-		conn.Close()
+		if err := conn.Close(); err != nil {
+			s.log.Error(err, "failed to close WebSocket connection", "executionId", executionID)
+		}
 		s.log.Info("WebSocket connection closed", "executionId", executionID)
 	}()
 
 	// Configure connection
 	conn.SetReadLimit(s.maxMessageSize)
-	conn.SetReadDeadline(s.clock.Now().Add(s.readTimeout))
+	if err := conn.SetReadDeadline(s.clock.Now().Add(s.readTimeout)); err != nil {
+		s.log.Error(err, "failed to set read deadline", "executionId", executionID)
+		return
+	}
 	conn.SetPongHandler(func(string) error {
-		conn.SetReadDeadline(s.clock.Now().Add(s.readTimeout))
-		return nil
+		return conn.SetReadDeadline(s.clock.Now().Add(s.readTimeout))
 	})
 
 	// Start ping ticker

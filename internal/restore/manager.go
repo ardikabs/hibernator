@@ -12,7 +12,6 @@ import (
 
 	"github.com/ardikabs/hibernator/internal/wellknown"
 	corev1 "k8s.io/api/core/v1"
-	"k8s.io/apimachinery/pkg/api/errors"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
@@ -143,7 +142,7 @@ func (m *Manager) Save(ctx context.Context, namespace, planName, targetName stri
 		Name:      cmName,
 	}, cm)
 
-	if errors.IsNotFound(err) {
+	if apierrors.IsNotFound(err) {
 		// Create new ConfigMap
 		cm = &corev1.ConfigMap{
 			ObjectMeta: metav1.ObjectMeta{
@@ -196,7 +195,7 @@ func (m *Manager) Load(ctx context.Context, namespace, planName, targetName stri
 		Name:      cmName,
 	}, &cm)
 
-	if errors.IsNotFound(err) {
+	if apierrors.IsNotFound(err) {
 		return nil, nil // No restore data
 	}
 	if err != nil {
@@ -295,7 +294,7 @@ func (m *Manager) MarkTargetRestored(ctx context.Context, namespace, planName, t
 		Name:      cmName,
 	}, &cm)
 
-	if errors.IsNotFound(err) {
+	if apierrors.IsNotFound(err) {
 		// ConfigMap doesn't exist - nothing to mark
 		return nil
 	}
@@ -337,7 +336,7 @@ func (m *Manager) MarkAllTargetsRestored(ctx context.Context, namespace, planNam
 		Name:      cmName,
 	}, &cm)
 
-	if errors.IsNotFound(err) {
+	if apierrors.IsNotFound(err) {
 		// No ConfigMap means no restore data, consider all restored
 		return true, nil
 	}
@@ -367,7 +366,7 @@ func (m *Manager) UnlockRestoreData(ctx context.Context, namespace, planName str
 		Name:      cmName,
 	}, cm)
 
-	if errors.IsNotFound(err) {
+	if apierrors.IsNotFound(err) {
 		// No ConfigMap to unlock
 		return nil
 	}
@@ -398,7 +397,7 @@ func (m *Manager) HasRestoreData(ctx context.Context, namespace, planName string
 		Name:      cmName,
 	}, &cm)
 
-	if errors.IsNotFound(err) {
+	if apierrors.IsNotFound(err) {
 		return false, nil
 	}
 	if err != nil {
