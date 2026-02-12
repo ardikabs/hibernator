@@ -121,3 +121,4 @@ helm install hibernator hibernator/hibernator \
 | webhook.certs.secretName | string | `"webhook-server-cert"` |  |
 | webhook.enabled | bool | `true` |  |
 | webhook.port | int | `9443` |  |
+
