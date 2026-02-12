@@ -2,7 +2,7 @@
 apiVersion: batch/v1
 kind: Job
 metadata:
-  name: {{ include "hibernator.fullname" . }}-webhook-cert-create
+  name: {{ include "hibernator.fullname" . }}-webhook-certgen
   namespace: {{ .Release.Namespace }}
   labels:
     {{- include "hibernator.labels" . | nindent 4 }}
@@ -24,6 +24,25 @@ spec:
         runAsUser: 2000
         fsGroup: 2000
       containers:
+      - name: patch
+        image: {{ .Values.webhook.certGen.image.repository }}:{{ .Values.webhook.certGen.image.tag }}
+        imagePullPolicy: {{ .Values.webhook.certGen.image.pullPolicy }}
+        args:
+        - patch
+        - --namespace={{ .Release.Namespace }}
+        - --secret-name={{ .Values.webhook.certs.secretName }}
+        - --patch-validating
+        - --patch-mutating=false
+        - --webhook-name={{ include "hibernator.fullname" . }}-validating-webhook
+        securityContext:
+          allowPrivilegeEscalation: false
+          capabilities:
+            drop:
+            - ALL
+          readOnlyRootFilesystem: true
+        resources:
+          {{- toYaml .Values.webhook.certGen.resources | nindent 10 }}
+      initContainers:
       - name: create
         image: {{ .Values.webhook.certGen.image.repository }}:{{ .Values.webhook.certGen.image.tag }}
         imagePullPolicy: {{ .Values.webhook.certGen.image.pullPolicy }}

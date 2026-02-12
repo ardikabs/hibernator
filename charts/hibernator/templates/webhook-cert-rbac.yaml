@@ -11,7 +11,7 @@ metadata:
     "helm.sh/hook-delete-policy": before-hook-creation,hook-succeeded
 ---
 apiVersion: rbac.authorization.k8s.io/v1
-kind: Role
+kind: ClusterRole
 metadata:
   name: {{ include "hibernator.fullname" . }}-webhook-cert
   namespace: {{ .Release.Namespace }}
@@ -23,10 +23,15 @@ metadata:
 rules:
   - apiGroups: [""]
     resources: ["secrets"]
+    resourceNames: ["{{ .Values.webhook.certs.secretName }}"]
     verbs: ["create", "get", "patch", "update"]
+  - apiGroups: ["admissionregistration.k8s.io"]
+    resources: ["validatingwebhookconfigurations"]
+    resourceNames: ["{{ include "hibernator.fullname" . }}-validating-webhook"]
+    verbs: ["get", "update", "patch"]
 ---
 apiVersion: rbac.authorization.k8s.io/v1
-kind: RoleBinding
+kind: ClusterRoleBinding
 metadata:
   name: {{ include "hibernator.fullname" . }}-webhook-cert
   namespace: {{ .Release.Namespace }}
@@ -37,7 +42,7 @@ metadata:
     "helm.sh/hook-delete-policy": before-hook-creation,hook-succeeded
 roleRef:
   apiGroup: rbac.authorization.k8s.io
-  kind: Role
+  kind: ClusterRole
   name: {{ include "hibernator.fullname" . }}-webhook-cert
 subjects:
   - kind: ServiceAccount

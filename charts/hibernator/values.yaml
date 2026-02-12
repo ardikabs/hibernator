@@ -5,7 +5,7 @@ replicaCount: 2
 image:
   controller:
     repository: ghcr.io/ardikabs/hibernator
-    pullPolicy: Always
+    pullPolicy: IfNotPresent
     tag: "latest"
 
   runner:
@@ -97,7 +97,7 @@ webhook:
     duration: 87600  # Certificate duration in hours (10 years for Helm-generated certs)
 
     # Set useJob: true to use Job-based generation (doesn't work with helm template/Kustomize)
-    useJob: false
+    useJob: true
     # Image used for automatic certificate generation via Job (when certManager.enabled=false, certGen.useJob=true)
     image:
       repository: registry.k8s.io/ingress-nginx/kube-webhook-certgen
