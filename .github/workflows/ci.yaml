@@ -5,12 +5,13 @@ on:
     branches:
       - main
       - "release/v*"
-    paths-ignore:
-      - README.md
-      - docs/**
-      - charts/**
-      - enhancements/**
-      - hack/CHART_README.md.gotmpl
+    paths:
+      - api/**
+      - cmd/**
+      - internal/**
+      - pkg/**
+      - test/**
+      - go.mod
 
   pull_request:
     branches:
