@@ -27,6 +27,11 @@ jobs:
         with:
           node-version: 20
 
+      - name: Install Helm Docs
+        uses: gabe565/setup-helm-docs-action@v1
+        with:
+          version: v1.14.2
+
       - name: Setup Semantic Release Config for App
         run: cp .github/releaserc/app.releaserc.yml .releaserc.yml
 
