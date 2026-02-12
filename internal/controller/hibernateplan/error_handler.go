@@ -50,12 +50,14 @@ func (r *Reconciler) handleErrorRecovery(ctx context.Context, log logr.Logger, p
 		if plan.Annotations[wellknown.AnnotationRetryNow] == "true" {
 			log.Info("manual retry triggered via annotation")
 
-			r.statusUpdater.Update(ctx, plan, status.MutatorFunc(func(obj client.Object) client.Object {
+			if err := r.statusUpdater.Update(ctx, plan, status.MutatorFunc(func(obj client.Object) client.Object {
 				p := obj.(*hibernatorv1alpha1.HibernatePlan)
 				delete(p.Annotations, wellknown.AnnotationRetryNow)
 				recovery.ResetRetryState(p)
 				return p
-			}))
+			})); err != nil {
+				log.Error(err, "during status update")
+			}
 
 			return ctrl.Result{Requeue: true}, nil
 		}

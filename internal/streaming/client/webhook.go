@@ -79,6 +79,7 @@ func (c *WebhookClient) Connect(ctx context.Context) error {
 	if err != nil {
 		return fmt.Errorf("health check failed: %w", err)
 	}
+	// nolint:errcheck
 	defer resp.Body.Close()
 
 	if resp.StatusCode != http.StatusOK {
@@ -152,6 +153,7 @@ func (c *WebhookClient) Log(ctx context.Context, level, message string, fields m
 		c.log.V(2).Error(err, "failed to send log")
 		return err
 	}
+	// nolint:errcheck
 	defer resp.Body.Close()
 
 	return nil
@@ -176,6 +178,7 @@ func (c *WebhookClient) ReportProgress(ctx context.Context, phase string, percen
 	if err != nil {
 		return err
 	}
+	// nolint:errcheck
 	defer resp.Body.Close()
 
 	var response streamingv1alpha1.ProgressResponse
@@ -210,6 +213,7 @@ func (c *WebhookClient) ReportCompletion(ctx context.Context, success bool, erro
 	if err != nil {
 		return err
 	}
+	// nolint:errcheck
 	defer resp.Body.Close()
 
 	var response streamingv1alpha1.CompletionResponse
@@ -248,6 +252,7 @@ func (c *WebhookClient) sendHeartbeat(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
+	// nolint:errcheck
 	defer resp.Body.Close()
 
 	c.log.V(2).Info("heartbeat sent")
@@ -274,20 +279,19 @@ func (c *WebhookClient) doRequest(ctx context.Context, method, path string, body
 	if err != nil {
 		return nil, fmt.Errorf("request failed: %w", err)
 	}
+	// nolint:errcheck
+	defer resp.Body.Close()
 
 	if resp.StatusCode == http.StatusUnauthorized {
-		resp.Body.Close()
 		return nil, fmt.Errorf("authentication failed")
 	}
 
 	if resp.StatusCode == http.StatusForbidden {
-		resp.Body.Close()
 		return nil, fmt.Errorf("access denied")
 	}
 
 	if resp.StatusCode >= 400 {
 		bodyBytes, _ := io.ReadAll(resp.Body)
-		resp.Body.Close()
 		return nil, fmt.Errorf("request failed with status %d: %s", resp.StatusCode, string(bodyBytes))
 	}
 

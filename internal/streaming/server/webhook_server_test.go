@@ -20,20 +20,6 @@ import (
 	"github.com/ardikabs/hibernator/internal/streaming/types"
 )
 
-// mockValidator is a test double for the auth validator
-type mockValidator struct {
-	shouldSucceed bool
-	result        *mockValidationResult
-}
-
-type mockValidationResult struct {
-	valid          bool
-	username       string
-	namespace      string
-	serviceAccount string
-	err            error
-}
-
 func TestWebhookServer_HandleHealthz(t *testing.T) {
 	log := logr.Discard()
 	execService := NewExecutionServiceServer(nil, nil, clk)

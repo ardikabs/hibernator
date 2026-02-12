@@ -9,6 +9,7 @@
 IMG ?= ghcr.io/ardikabs/hibernator:latest
 RUNNER_IMG ?= ghcr.io/ardikabs/hibernator-runner:latest
 PLATFORMS ?= linux/amd64,linux/arm64
+GOLANGCI_VERSION ?= 2.8.0
 
 # Go configuration
 GOBIN ?= $(shell go env GOPATH)/bin
@@ -87,10 +88,18 @@ fmt: ## Run go fmt.
 vet: ## Run go vet.
 	$(GOCMD) vet ./...
 
+bin/golangci-lint: bin/golangci-lint-${GOLANGCI_VERSION}
+	@ln -sf golangci-lint-${GOLANGCI_VERSION} bin/golangci-lint
+
+bin/golangci-lint-${GOLANGCI_VERSION}:
+	@mkdir -p bin
+	curl -sSfL https://raw.githubusercontent.com/golangci/golangci-lint/master/install.sh | sh -s -- -b bin v$(GOLANGCI_VERSION)
+	@mv bin/golangci-lint "$@"
+
 .PHONY: lint
-lint: ## Run golangci-lint (requires golangci-lint installed).
-	@command -v golangci-lint >/dev/null 2>&1 || { echo "golangci-lint not installed. Run: go install github.com/golangci/golangci-lint/cmd/golangci-lint@latest"; exit 1; }
-	golangci-lint run ./...
+lint: bin/golangci-lint ## Run golangci-lint (requires golangci-lint installed).
+	@echo 'Linting code...'
+	@bin/golangci-lint run
 
 .PHONY: tidy
 tidy: ## Run go mod tidy.

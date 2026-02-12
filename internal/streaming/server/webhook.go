@@ -200,7 +200,9 @@ func (ws *WebhookServer) handleCallback(w http.ResponseWriter, r *http.Request) 
 	}
 
 	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(response)
+	if err := json.NewEncoder(w).Encode(response); err != nil {
+		ws.log.Error(err, "failed to encode response")
+	}
 }
 
 // handleLogs handles log-specific endpoint.
@@ -228,9 +230,11 @@ func (ws *WebhookServer) handleLogs(w http.ResponseWriter, r *http.Request) {
 	}
 
 	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(types.WebhookResponse{
+	if err := json.NewEncoder(w).Encode(types.WebhookResponse{
 		Acknowledged: true,
-	})
+	}); err != nil {
+		ws.log.Error(err, "failed to encode response")
+	}
 }
 
 // handleProgress handles progress-specific endpoint.
@@ -259,7 +263,9 @@ func (ws *WebhookServer) handleProgress(w http.ResponseWriter, r *http.Request) 
 	}
 
 	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(resp)
+	if err := json.NewEncoder(w).Encode(resp); err != nil {
+		ws.log.Error(err, "failed to encode response")
+	}
 }
 
 // handleCompletion handles completion-specific endpoint.
@@ -288,7 +294,9 @@ func (ws *WebhookServer) handleCompletion(w http.ResponseWriter, r *http.Request
 	}
 
 	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(resp)
+	if err := json.NewEncoder(w).Encode(resp); err != nil {
+		ws.log.Error(err, "failed to encode response")
+	}
 }
 
 // handleHeartbeat handles heartbeat-specific endpoint.
@@ -317,13 +325,17 @@ func (ws *WebhookServer) handleHeartbeat(w http.ResponseWriter, r *http.Request)
 	}
 
 	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(resp)
+	if err := json.NewEncoder(w).Encode(resp); err != nil {
+		ws.log.Error(err, "failed to encode response")
+	}
 }
 
 // handleHealthz handles health check requests.
 func (ws *WebhookServer) handleHealthz(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusOK)
-	w.Write([]byte("ok"))
+	if _, err := w.Write([]byte("ok")); err != nil {
+		ws.log.Error(err, "failed to write healthz response")
+	}
 }
 
 // validateExecutionAccess verifies the runner is authorized for the specified execution.

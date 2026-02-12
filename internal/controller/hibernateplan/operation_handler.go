@@ -179,12 +179,13 @@ func (r *Reconciler) finalizeOperation(ctx context.Context, log logr.Logger, pla
 			cycleIndex = len(p.Status.ExecutionHistory) - 1
 		}
 
-		if operation == "shutdown" {
+		switch operation {
+		case "shutdown":
 			p.Status.Phase = hibernatorv1alpha1.PhaseHibernated
 			if p.Status.ExecutionHistory[cycleIndex].ShutdownExecution == nil {
 				p.Status.ExecutionHistory[cycleIndex].ShutdownExecution = summary
 			}
-		} else if operation == "wakeup" {
+		case "wakeup":
 			p.Status.Phase = hibernatorv1alpha1.PhaseActive
 			if p.Status.ExecutionHistory[cycleIndex].WakeupExecution == nil {
 				p.Status.ExecutionHistory[cycleIndex].WakeupExecution = summary

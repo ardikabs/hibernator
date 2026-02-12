@@ -436,7 +436,7 @@ func (e *Executor) waitForNodesDeleted(ctx context.Context, log logr.Logger, cli
 
 		return false, fmt.Sprintf("%d node(s) still exist, waiting for deletion", nodeCount), nil
 	}); err != nil {
-		return fmt.Errorf("Node Group %s: %w", ngName, err)
+		return err
 	}
 
 	log.Info("All ManagedNodeGroup nodes deleted successfully", "nodeGroup", ngName)
@@ -456,7 +456,7 @@ func (e *Executor) waitForNodeGroupActive(ctx context.Context, log logr.Logger, 
 		return err
 	}
 
-	return w.Poll(fmt.Sprintf("node group %s/%s to become active", clusterName, ngName), func() (bool, string, error) {
+	if err := w.Poll(fmt.Sprintf("node group %s/%s to become active", clusterName, ngName), func() (bool, string, error) {
 		desc, err := eksClient.DescribeNodegroup(ctx, &eks.DescribeNodegroupInput{
 			ClusterName:   aws.String(clusterName),
 			NodegroupName: aws.String(ngName),
@@ -476,7 +476,12 @@ func (e *Executor) waitForNodeGroupActive(ctx context.Context, log logr.Logger, 
 		}
 
 		return false, statusStr, nil
-	})
+	}); err != nil {
+		return err
+	}
+
+	log.Info("Node group is now active", "nodeGroup", ngName)
+	return nil
 }
 
 // setupK8SClient retrieves cluster information from EKS and creates a Kubernetes client.

@@ -132,6 +132,7 @@ func TestHibernatePlan_ValidateCreate(t *testing.T) {
 					Targets: []Target{
 						{Name: "target1", Type: "ec2", ConnectorRef: ConnectorRef{Kind: "CloudProvider", Name: "aws"}, Parameters: ec2Params()},
 						{Name: "target1", Type: "rds", ConnectorRef: ConnectorRef{Kind: "CloudProvider", Name: "aws"}, Parameters: rdsParams()},
+						{Name: "target2", Type: "eks", ConnectorRef: ConnectorRef{Kind: "CloudProvider", Name: "aws"}, Parameters: eksParams()},
 					},
 				},
 			},

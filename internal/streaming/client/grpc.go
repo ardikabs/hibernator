@@ -165,6 +165,8 @@ func (c *GRPCClient) openLogStream(ctx context.Context) error {
 
 	go func() {
 		var streamFail bool
+
+		// nolint:staticcheck
 		for {
 			select {
 			case entry, ok := <-c.logChannel:

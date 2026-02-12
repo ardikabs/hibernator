@@ -3,7 +3,6 @@ package status
 import (
 	"context"
 
-	"github.com/go-logr/logr"
 	"k8s.io/client-go/util/retry"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 )
@@ -27,7 +26,6 @@ func (m MutatorFunc) Mutate(old client.Object) client.Object {
 
 // Synchronous handler - direct calls, no channels
 type SyncStatusUpdater struct {
-	log    logr.Logger
 	client client.Client
 }
 
