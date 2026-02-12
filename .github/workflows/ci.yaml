@@ -17,6 +17,7 @@ on:
       - main
       - "release/v*"
     paths:
+      - .github/workflows/ci.yaml
       - api/**
       - cmd/**
       - internal/**
@@ -35,33 +36,13 @@ jobs:
           go-version: '1.24'
           cache: true
       - name: golangci-lint
-        uses: golangci/golangci-lint-action@v4
+        uses: golangci/golangci-lint-action@v9
         with:
-          version: v1.63.4
-      - name: Install Helm
-        uses: azure/setup-helm@v4
-        with:
-          version: v3.14.0
-      - name: Helm Lint
-        run: helm lint charts/hibernator
-
-  build:
-    name: Build
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-go@v5
-        with:
-          go-version: '1.24'
-          cache: true
-      - name: Build Controller
-        run: make build-controller
-      - name: Build Runner
-        run: make build-runner
+          version: v2.8.0
 
   tests:
     name: Tests
-    needs: [lint, build]
+    needs: [lint]
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4

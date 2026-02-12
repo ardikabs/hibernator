@@ -85,14 +85,10 @@ jobs:
           fetch-depth: 0
           token: ${{ secrets.GITHUB_TOKEN }}
 
-      # IMPORTANT: Pull latest changes to get the commit from release-app if it ran
-      - name: Pull latest changes
-        run: git pull origin ${GITHUB_REF#refs/heads/} || true
-
       - name: Install Helm
         uses: azure/setup-helm@v4
         with:
-          version: v3.14.0
+          version: v4.1.1
 
       - name: Install Helm Docs
         uses: gabe565/setup-helm-docs-action@v1
