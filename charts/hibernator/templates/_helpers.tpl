@@ -85,8 +85,8 @@ Get webhook CA bundle from Secret or use provided value
 {{- else -}}
 {{- $secret := lookup "v1" "Secret" .Release.Namespace .Values.webhook.certs.secretName -}}
 {{- if $secret -}}
-{{- /* Use ca.crt from the generated Secret */ -}}
-{{- index $secret.data "ca.crt" | default "" -}}
+{{- /* Use ca from the generated Secret */ -}}
+{{- index $secret.data "ca" | default "" -}}
 {{- else -}}
 {{- /* Fallback to manually provided CA bundle (if any) */ -}}
 {{- .Values.webhook.certs.caBundle | default "" | b64enc -}}

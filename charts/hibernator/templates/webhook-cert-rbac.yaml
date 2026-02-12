@@ -6,9 +6,7 @@ metadata:
   namespace: {{ .Release.Namespace }}
   labels:
     {{- include "hibernator.labels" . | nindent 4 }}
-  annotations:
-    "helm.sh/hook": pre-install,pre-upgrade
-    "helm.sh/hook-delete-policy": before-hook-creation,hook-succeeded
+  annotations: {{- toYaml .Values.webhook.certGen.annotations | nindent 4 }}
 ---
 apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRole
@@ -17,9 +15,7 @@ metadata:
   namespace: {{ .Release.Namespace }}
   labels:
     {{- include "hibernator.labels" . | nindent 4 }}
-  annotations:
-    "helm.sh/hook": pre-install,pre-upgrade
-    "helm.sh/hook-delete-policy": before-hook-creation,hook-succeeded
+  annotations: {{- toYaml .Values.webhook.certGen.annotations | nindent 4 }}
 rules:
   - apiGroups: [""]
     resources: ["secrets"]
@@ -37,9 +33,7 @@ metadata:
   namespace: {{ .Release.Namespace }}
   labels:
     {{- include "hibernator.labels" . | nindent 4 }}
-  annotations:
-    "helm.sh/hook": pre-install,pre-upgrade
-    "helm.sh/hook-delete-policy": before-hook-creation,hook-succeeded
+  annotations: {{- toYaml .Values.webhook.certGen.annotations | nindent 4 }}
 roleRef:
   apiGroup: rbac.authorization.k8s.io
   kind: ClusterRole
