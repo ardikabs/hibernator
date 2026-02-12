@@ -1,0 +1,149 @@
+name: CI
+
+on:
+  push:
+    branches:
+      - main
+      - "release/v*"
+    paths-ignore:
+      - README.md
+      - docs/**
+      - charts/**
+      - enhancements/**
+      - hack/CHART_README.md.gotmpl
+
+  pull_request:
+    branches:
+      - main
+      - "release/v*"
+    paths:
+      - api/**
+      - cmd/**
+      - internal/**
+      - pkg/**
+      - test/**
+      - go.mod
+
+jobs:
+  lint:
+    name: Lint
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.24'
+          cache: true
+      - name: golangci-lint
+        uses: golangci/golangci-lint-action@v4
+        with:
+          version: v1.63.4
+      - name: Install Helm
+        uses: azure/setup-helm@v4
+        with:
+          version: v3.14.0
+      - name: Helm Lint
+        run: helm lint charts/hibernator
+
+  build:
+    name: Build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.24'
+          cache: true
+      - name: Build Controller
+        run: make build-controller
+      - name: Build Runner
+        run: make build-runner
+
+  tests:
+    name: Tests
+    needs: [lint, build]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.24'
+          cache: true
+
+      - name: Setting up Test Dependencies
+        run: make envtest
+
+      - name: Run Unit Tests
+        run: make test-unit
+
+      - name: Run E2E Tests
+        run: make test-e2e
+
+  push-latest:
+    name: Push Latest Images
+    needs: [tests]
+    if: github.ref == 'refs/heads/main' && github.event_name == 'push'
+    runs-on: ubuntu-latest
+    permissions:
+      packages: write
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up QEMU
+        uses: docker/setup-qemu-action@v3
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Login to GitHub Container Registry
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      # --- Metadata & Caching Improvements ---
+      - name: Metadata (Controller)
+        id: meta-controller
+        uses: docker/metadata-action@v5
+        with:
+          images: ghcr.io/${{ github.repository }}
+          tags: |
+            type=raw,value=latest
+
+      - name: Build Controller
+        uses: docker/build-push-action@v5
+        with:
+          context: .
+          file: Dockerfile
+          target: controller
+          platforms: linux/amd64,linux/arm64
+          push: true
+          tags: ${{ steps.meta-controller.outputs.tags }}
+          labels: ${{ steps.meta-controller.outputs.labels }}
+          annotations: ${{ steps.meta-controller.outputs.annotations }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      - name: Metadata (Controller)
+        id: meta-runner
+        uses: docker/metadata-action@v5
+        with:
+          images: ghcr.io/${{ github.repository }}-runner
+          tags: |
+            type=raw,value=latest
+
+      - name: Build Runner
+        uses: docker/build-push-action@v5
+        with:
+          context: .
+          file: Dockerfile
+          target: runner
+          platforms: linux/amd64,linux/arm64
+          push: true
+          tags: ${{ steps.meta-runner.outputs.tags }}
+          labels: ${{ steps.meta-runner.outputs.labels }}
+          annotations: ${{ steps.meta-runner.outputs.annotations }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max

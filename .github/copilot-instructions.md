@@ -599,8 +599,7 @@ All findings are located in `docs/findings/` and **MUST** follow the template at
 ## References
 
 - **RFCs Directory**: [All RFCs](../enhancements/) — Complete list of design documents
-- **User Journey Hub**: [User Journeys](./user-journey/README.md) — Index of all user journey documents
-- **WORKPLAN.md**: [Historical workplan](../enhancements/archived/WORKPLAN.md) — Archived document from early design phase. Contains outdated API examples but preserved for historical context. Refer to current RFCs for accurate specifications.
+- **User Journey Hub**: [User Journeys](../docs/user-journey/README.md) — Index of all user journey documents
 
 ---
 

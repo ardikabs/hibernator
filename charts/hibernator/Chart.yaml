@@ -1,6 +1,6 @@
 apiVersion: v2
 name: hibernator
-description: A Helm chart for Hibernator Operator - Kubernetes-native time-based infrastructure hibernation
+description: A Helm chart for Hibernator Operator - Kubernetes-native time-based infrastructure hibernation.
 type: application
 version: 0.1.0
 appVersion: "0.1.0"
@@ -16,5 +16,6 @@ home: https://github.com/ardikabs/hibernator
 sources:
   - https://github.com/ardikabs/hibernator
 maintainers:
-  - name: Ardika Saputro
-    email: ardika@example.com
+  - name: ardikabs
+    email: me@ardikabs.com
+    url: https://github.com/ardikabs

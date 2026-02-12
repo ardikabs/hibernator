@@ -1,0 +1,140 @@
+name: Helm Chart
+
+on:
+  push:
+    branches:
+      - main
+      - "release/v*"
+    paths:
+      - charts/**
+      - hack/CHART_README.md.gotmpl
+
+  pull_request:
+    branches:
+      - main
+      - "release/v*"
+    paths:
+      - charts/**
+      - hack/CHART_README.md.gotmpl
+
+jobs:
+  chart-test:
+    name: Helm Chart Test
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: read
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Install Helm
+        uses: azure/setup-helm@v4
+        with:
+          version: v4.1.1
+
+      - name: Install Helm Docs
+        uses: gabe565/setup-helm-docs-action@v1
+        with:
+          version: v1.14.2
+
+      - name: Setup Chart Linting
+        id: lint
+        uses: helm/chart-testing-action@v2.8.0
+        with:
+          # Note: Also update in scripts/lint.sh
+          version: 3.14.0
+
+      - name: Run chart-testing (lint)
+        run: ct lint --debug --config ./.github/configs/ct-lint.yaml --lint-conf ./.github/configs/lintconf.yaml
+
+      - name: Run docs-testing (helm-docs)
+        id: helm-docs
+        run: |
+          helm-docs -t hack/CHART_README.md.gotmpl -c charts
+          if [[ $(git diff --stat) != '' ]]; then
+            echo -e '\033[0;31mDocumentation outdated!\033[0m ❌'
+            git diff --color
+          else
+            echo -e '\033[0;32mDocumentation up to date\033[0m ✔'
+          fi
+
+      - name: Run helm-unittest
+        id: helm-unittest
+        run: |
+          helm plugin install https://github.com/helm-unittest/helm-unittest.git --version v1.0.3 --verify=false
+          helm unittest charts/hibernator
+
+  chart-release:
+    name: Release Helm Chart
+    needs: [chart-test]
+    if: github.ref == 'refs/heads/main' && github.event_name == 'push'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      packages: write
+      issues: write
+      pull-requests: write
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      # IMPORTANT: Pull latest changes to get the commit from release-app if it ran
+      - name: Pull latest changes
+        run: git pull origin ${GITHUB_REF#refs/heads/} || true
+
+      - name: Install Helm
+        uses: azure/setup-helm@v4
+        with:
+          version: v3.14.0
+
+      - name: Install Helm Docs
+        uses: gabe565/setup-helm-docs-action@v1
+        with:
+          version: v1.14.2
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      - name: Setup Semantic Release Config for Helm Chart
+        run: cp .github/releaserc/chart.releaserc.yml .releaserc.yml
+
+      - name: Fetch Latest Tags
+        run: |
+          git fetch --tags
+
+      - name: Semantic Release (Chart)
+        id: semantic-chart
+        uses: cycjimmy/semantic-release-action@v4
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          semantic_version: 23
+          extra_plugins: |
+            @semantic-release/changelog
+            @semantic-release/git
+            @semantic-release/exec
+            conventional-changelog-conventionalcommits
+          config_file: .releaserc.chart.json
+
+      - name: Login to GitHub Container Registry (Helm OCI)
+        if: steps.semantic-chart.outputs.new_release_published == 'true'
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Package and Push Helm Chart
+        if: steps.semantic-chart.outputs.new_release_published == 'true'
+        run: |
+          helm package charts/hibernator --version ${{ steps.semantic-chart.outputs.new_release_version }} --app-version $(git describe --tags --abbrev=0 --match "v*")
+          helm push hibernator-${{ steps.semantic-chart.outputs.new_release_version }}.tgz oci://ghcr.io/${{ github.repository_owner }}/charts

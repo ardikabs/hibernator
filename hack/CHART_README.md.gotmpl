@@ -1,0 +1,52 @@
+# Hibernator Operator Helm Chart
+
+{{ template "chart.versionBadge" . }}{{ template "chart.typeBadge" . }}{{ template "chart.appVersionBadge" . }}
+
+{{ template "chart.description" . }}
+
+{{ template "chart.homepageLine" . }}
+
+{{ template "chart.maintainersSection" . }}
+
+## Prerequisites
+
+- Kubernetes 1.24+
+- Helm 3.0+
+- (Optional) cert-manager 1.7+ for automatic webhook certificate management
+
+## Installation
+
+### Basic Installation
+
+```bash
+helm install oci://ghcr.io/ardikabs/charts/hibernator \
+  --namespace hibernator-system \
+  --create-namespace
+```
+
+### Installation with cert-manager
+
+If you have cert-manager installed, the webhook certificates will be automatically managed:
+
+```bash
+helm install hibernator hibernator/hibernator \
+  --namespace hibernator-system \
+  --create-namespace \
+  --set webhook.certManager.enabled=true
+```
+
+### Installation with Custom Image
+
+```bash
+helm install hibernator hibernator/hibernator \
+  --namespace hibernator-system \
+  --create-namespace \
+  --set image.controller.repository=my-registry/hibernator \
+  --set image.controller.tag=v0.2.0 \
+  --set image.runner.repository=my-registry/hibernator-runner \
+  --set image.runner.tag=v0.2.0
+```
+
+{{ template "chart.requirementsSection" . }}
+
+{{ template "chart.valuesSection" . }}
