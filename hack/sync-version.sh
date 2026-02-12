@@ -31,7 +31,8 @@ if [ "$TYPE" == "app" ]; then
   fi
 elif [ "$TYPE" == "chart" ]; then
   echo "Updating chart version to $VERSION in $CHART_FILE..."
-  APP_VERSION=$(git describe --tags --abbrev=0 --match "v*" || echo "latest")
+  VERSION_RAW=$(git describe --tags --abbrev=0 --match "v*" || echo "latest")
+  APP_VERSION=${VERSION_RAW#v}
 
   if [[ "$OSTYPE" == "darwin"* ]]; then
     sed -i '' "s/^version: .*/version: $VERSION/" "$CHART_FILE"
