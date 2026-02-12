@@ -6,9 +6,7 @@ metadata:
   namespace: {{ .Release.Namespace }}
   labels:
     {{- include "hibernator.labels" . | nindent 4 }}
-  annotations:
-    "helm.sh/hook": pre-install,pre-upgrade
-    "helm.sh/hook-delete-policy": before-hook-creation,hook-succeeded
+  annotations: {{- toYaml .Values.webhook.certGen.annotations | nindent 4 }}
 spec:
   backoffLimit: 3
   template:

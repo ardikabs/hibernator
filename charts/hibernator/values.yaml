@@ -94,10 +94,19 @@ webhook:
     certDir: /tmp/k8s-webhook-server/serving-certs
     caBundle: ""  # Optional: Manually provided CA bundle (base64 encoded)
   certGen:
+    # Additional annotations for the certificate generation Job/Pod
+    annotations:
+      "helm.sh/hook": pre-install,pre-upgrade
+      "helm.sh/hook-delete-policy": before-hook-creation,hook-succeeded
+
     duration: 87600  # Certificate duration in hours (10 years for Helm-generated certs)
 
     # Set useJob: true to use Job-based generation (doesn't work with helm template/Kustomize)
     useJob: true
+
+    # TTL for the Job to be cleaned up after finishing (in seconds). Defaults to 300 seconds (5 minutes)
+    ttlSecondsAfterFinished: 300
+
     # Image used for automatic certificate generation via Job (when certManager.enabled=false, certGen.useJob=true)
     image:
       repository: registry.k8s.io/ingress-nginx/kube-webhook-certgen
