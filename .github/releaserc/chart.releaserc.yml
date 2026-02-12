@@ -1,0 +1,34 @@
+branches:
+- "main"
+
+tagFormat: "chart-v${version}"
+
+plugins:
+- [
+    "@semantic-release/commit-analyzer",
+    {
+      "preset": "conventionalcommits",
+      "releaseRules": [
+        {"scope": "charts", "type": "feat", "release": "minor"},
+        {"scope": "charts", "type": "fix", "release": "patch"},
+        {"scope": "!charts", "release": false},
+      ]
+    }
+  ]
+- [
+    "@semantic-release/exec",
+    {
+      "generateNotesCmd": "./hack/sync-version.sh ${nextRelease.version} chart"
+    }
+  ]
+- [
+    "@semantic-release/git",
+    {
+      "assets": [
+        "charts/hibernator/Chart.yaml",
+        "charts/hibernator/README.md"
+      ],
+      "message": "chore(charts): ${nextRelease.version} [skip ci]\n${nextRelease.notes}"
+    }
+  ]
+- "@semantic-release/github"

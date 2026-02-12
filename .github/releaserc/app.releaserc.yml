@@ -1,0 +1,51 @@
+branches:
+- "main"
+- {
+    "name": "release/v+([0-9]).+([0-9])",
+    "range": "1.x",
+    "channel": "1.x"
+  }
+
+tagFormat: "v${version}"
+
+plugins:
+- [
+    "@semantic-release/commit-analyzer",
+    {
+      "preset": "conventionalcommits",
+      "releaseRules": [
+        {"scope": "charts", "release": false},
+        {"type": "feat", "release": "minor"},
+        {"type": "fix", "release": "patch"},
+        {"type": "perf", "release": "patch"}
+      ]
+    }
+  ]
+- [
+    "@semantic-release/release-notes-generator",
+    "presetConfig": {
+      "types": [
+        { "type": "feat", "section": "✨ Features", "hidden": false },
+        { "type": "fix", "section": "🐛 Bug Fixes", "hidden": false },
+        { "type": "perf", "section": "🚀 Performance Improvements", "hidden": false },
+        { "type": "chore", "section": "🧹 Miscellaneous", "hidden": false }
+      ]
+    }
+  ]
+- [
+    "@semantic-release/exec",
+    {
+      "generateNotesCmd": "./hack/sync-version.sh ${nextRelease.version} app"
+    }
+  ]
+- [
+    "@semantic-release/git",
+    {
+      "assets": [
+        "charts/hibernator/Chart.yaml",
+        "charts/hibernator/README.md"
+      ],
+      "message": "chore(release): ${nextRelease.version} [skip ci]\n${nextRelease.notes}"
+    }
+  ]
+- "@semantic-release/github"
