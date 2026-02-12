@@ -6,12 +6,12 @@ image:
   controller:
     repository: ghcr.io/ardikabs/hibernator
     pullPolicy: IfNotPresent
-    tag: "latest"
+    tag: ""
 
   runner:
     repository: ghcr.io/ardikabs/hibernator-runner
     pullPolicy: Always
-    tag: "latest"
+    tag: ""
 
 imagePullSecrets: []
 nameOverride: ""

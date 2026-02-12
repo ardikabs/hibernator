@@ -9,9 +9,8 @@ keywords:
   - operator
   - hibernation
   - infrastructure
-  - eks
-  - rds
-  - ec2
+  - cloud
+  - cost-optimization
 home: https://github.com/ardikabs/hibernator
 sources:
   - https://github.com/ardikabs/hibernator
