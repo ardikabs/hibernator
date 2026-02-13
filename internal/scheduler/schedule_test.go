@@ -755,6 +755,89 @@ func TestIsInLeadTimeWindow(t *testing.T) {
 	}
 }
 
+func TestIsInLateWindow(t *testing.T) {
+	tests := []struct {
+		name         string
+		windows      []OffHourWindow
+		now          time.Time
+		lateDuration time.Duration
+		want         bool
+	}{
+		{
+			name: "in late window after start",
+			windows: []OffHourWindow{
+				{Start: "20:00", End: "06:00", DaysOfWeek: []string{"WED"}},
+			},
+			now:          time.Date(2026, 1, 28, 20, 30, 0, 0, time.UTC), // 30 min after 20:00
+			lateDuration: 1 * time.Hour,
+			want:         true,
+		},
+		{
+			name: "outside late window - late has expired",
+			windows: []OffHourWindow{
+				{Start: "20:00", End: "06:00", DaysOfWeek: []string{"WED"}},
+			},
+			now:          time.Date(2026, 1, 28, 21, 30, 0, 0, time.UTC), // 1.5 hours after 20:00
+			lateDuration: 1 * time.Hour,
+			want:         false,
+		},
+		{
+			name: "at exact start time - in late period",
+			windows: []OffHourWindow{
+				{Start: "20:00", End: "06:00", DaysOfWeek: []string{"WED"}},
+			},
+			now:          time.Date(2026, 1, 28, 20, 0, 0, 0, time.UTC), // Exactly at 20:00
+			lateDuration: 1 * time.Hour,
+			want:         true,
+		},
+		{
+			name: "wrong day - not in late window",
+			windows: []OffHourWindow{
+				{Start: "20:00", End: "06:00", DaysOfWeek: []string{"WED"}},
+			},
+			now:          time.Date(2026, 1, 29, 20, 30, 0, 0, time.UTC), // Thursday (not Wednesday)
+			lateDuration: 1 * time.Hour,
+			want:         false,
+		},
+		{
+			name: "late window with small buffer - seconds precision",
+			windows: []OffHourWindow{
+				{Start: "23:59", End: "00:00", DaysOfWeek: []string{"SUN"}},
+			},
+			now:          time.Date(2026, 2, 1, 23, 59, 30, 0, time.UTC), // 30 seconds after 23:59
+			lateDuration: 1 * time.Minute,
+			want:         true,
+		},
+		{
+			name: "late window expires at boundary",
+			windows: []OffHourWindow{
+				{Start: "23:59", End: "00:00", DaysOfWeek: []string{"SUN"}},
+			},
+			now:          time.Date(2026, 2, 1, 0, 0, 1, 0, time.UTC), // 61 seconds after 23:59
+			lateDuration: 1 * time.Minute,
+			want:         false,
+		},
+		{
+			name: "late window crossing midnight",
+			windows: []OffHourWindow{
+				{Start: "23:30", End: "00:00", DaysOfWeek: []string{"SUN"}},
+			},
+			now:          time.Date(2026, 2, 1, 23, 45, 0, 0, time.UTC), // 15 min after 23:30 on Sunday
+			lateDuration: 30 * time.Minute,
+			want:         true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := isInLateWindow(tt.windows, tt.now, tt.lateDuration)
+			if got != tt.want {
+				t.Errorf("isInLateWindow() = %v, want %v", got, tt.want)
+			}
+		})
+	}
+}
+
 func TestIsInGraceTimeWindow(t *testing.T) {
 	tests := []struct {
 		name      string
