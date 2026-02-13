@@ -107,7 +107,7 @@ jobs:
           cache-from: type=gha
           cache-to: type=gha,mode=max
 
-      - name: Metadata (Controller)
+      - name: Metadata (Runner)
         id: meta-runner
         uses: docker/metadata-action@v5
         with:
