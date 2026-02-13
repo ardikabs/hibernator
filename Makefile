@@ -29,7 +29,7 @@ COVERAGE_HTML ?= $(COVERAGE_DIR)/coverage.html
 COVERAGE_THRESHOLD ?= 50
 
 # Unit test packages (exclude e2e, cmd, and generated files)
-UNIT_TEST_PKGS ?= ./api/... ./internal/...
+UNIT_TEST_PKGS ?= $(shell go list ./... | grep -vE '(/cmd/|/mocks)')
 
 # Colors for output
 CYAN := \033[36m
@@ -128,12 +128,17 @@ test-unit: $(COVERAGE_DIR) ## Run unit tests with coverage.
 		-cover \
 		-coverprofile=$(COVERAGE_PROFILE) \
 		-covermode=atomic \
-		-v 2>&1 | grep -E '(^=== RUN|^--- PASS|^--- FAIL|^PASS|^FAIL|coverage:)'
-	@echo ""
-	@echo "$(CYAN)Coverage Summary:$(RESET)"
-	@$(GOCMD) tool cover -func=$(COVERAGE_PROFILE) | tail -1
-	@echo ""
-	@echo "$(GREEN)Coverage report saved to: $(COVERAGE_PROFILE)$(RESET)"
+		-v 2>&1; \
+	test_exit=$${PIPESTATUS[0]}; \
+	if [ $$test_exit -ne 0 ]; then \
+		echo "$(RED)Unit tests failed$(RESET)"; \
+		exit 1; \
+	fi; \
+	echo ""; \
+	echo "$(CYAN)Coverage Summary:$(RESET)"; \
+	$(GOCMD) tool cover -func=$(COVERAGE_PROFILE) | tail -1; \
+	echo ""; \
+	echo "$(GREEN)Coverage report saved to: $(COVERAGE_PROFILE)$(RESET)"
 
 .PHONY: test-unit-verbose
 test-unit-verbose: $(COVERAGE_DIR) ## Run unit tests with verbose output.
