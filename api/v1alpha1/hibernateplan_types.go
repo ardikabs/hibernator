@@ -327,6 +327,12 @@ type TargetExecutionResult struct {
 	// ExecutionID is the unique identifier for this target execution.
 	// +optional
 	ExecutionID string `json:"executionId,omitempty"`
+	// StartedAt is when execution started.
+	// +optional
+	StartedAt *metav1.Time `json:"startedAt,omitempty"`
+	// FinishedAt is when execution finished.
+	// +optional
+	FinishedAt *metav1.Time `json:"finishedAt,omitempty"`
 }
 
 // ExecutionCycle groups a shutdown and corresponding wakeup operation.
