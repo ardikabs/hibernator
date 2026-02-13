@@ -1,5 +1,7 @@
 name: Release
 
+run-name: Release - ${{ format('{0}',github.event.repository.updated_at) }}
+
 on:
   push:
     branches:
