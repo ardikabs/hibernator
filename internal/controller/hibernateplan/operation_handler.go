@@ -3,10 +3,10 @@ package hibernateplan
 import (
 	"context"
 	"fmt"
+	"strings"
 
 	"github.com/go-logr/logr"
 	"github.com/google/uuid"
-	batchv1 "k8s.io/api/batch/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/utils/ptr"
 	"sigs.k8s.io/controller-runtime/pkg/client"
@@ -16,7 +16,6 @@ import (
 	"github.com/ardikabs/hibernator/internal/recovery"
 	"github.com/ardikabs/hibernator/internal/scheduler"
 	"github.com/ardikabs/hibernator/internal/wellknown"
-	"github.com/ardikabs/hibernator/pkg/k8sutil"
 )
 
 // initializeOperation prepares a plan for a new operation (shutdown or wakeup).
@@ -74,11 +73,12 @@ func (r *Reconciler) initializeOperation(ctx context.Context, log logr.Logger, p
 }
 
 // buildOperationSummary creates a summary of the current operation from execution statuses.
+// StartTime is measured from the earliest exec.StartedAt, and EndTime from the latest exec.FinalizedAt.
 func (r *Reconciler) buildOperationSummary(ctx context.Context, plan *hibernatorv1alpha1.HibernatePlan, operation string) *hibernatorv1alpha1.ExecutionOperationSummary {
 	summary := &hibernatorv1alpha1.ExecutionOperationSummary{
 		Operation: operation,
-		StartTime: metav1.NewTime(r.Clock.Now()),
 		Success:   true,
+		StartTime: metav1.NewTime(r.Clock.Now()),
 	}
 
 	// Build target results from execution statuses
@@ -87,13 +87,17 @@ func (r *Reconciler) buildOperationSummary(ctx context.Context, plan *hibernator
 			summary.Success = false
 		}
 
-		executionID := exec.JobRef
-		job := &batchv1.Job{}
-		if jobName, err := k8sutil.ObjectKeyFromString(exec.JobRef); err == nil {
-			if err := r.Get(ctx, jobName, job); err == nil {
-				if id, ok := job.Labels[wellknown.LabelExecutionID]; ok {
-					executionID = id
-				}
+		// Track earliest start time
+		if exec.StartedAt != nil {
+			if summary.StartTime.IsZero() || exec.StartedAt.Before(&summary.StartTime) {
+				summary.StartTime = *exec.StartedAt.DeepCopy()
+			}
+		}
+
+		// Track latest finalize time
+		if exec.FinishedAt != nil {
+			if summary.EndTime.IsZero() || exec.FinishedAt.After(summary.EndTime.Time) {
+				summary.EndTime = exec.FinishedAt
 			}
 		}
 
@@ -101,13 +105,11 @@ func (r *Reconciler) buildOperationSummary(ctx context.Context, plan *hibernator
 			Target:      exec.Target,
 			State:       exec.State,
 			Attempts:    exec.Attempts,
-			ExecutionID: executionID,
+			ExecutionID: strings.TrimPrefix(exec.LogsRef, wellknown.ExecutionIDLogPrefix),
+			StartedAt:   exec.StartedAt,
+			FinishedAt:  exec.FinishedAt,
 		})
 	}
-
-	now := metav1.NewTime(r.Clock.Now())
-	summary.EndTime = &now
-
 	return summary
 }
 

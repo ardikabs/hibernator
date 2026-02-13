@@ -367,6 +367,14 @@ spec:
                                 description: ExecutionID is the unique identifier
                                   for this target execution.
                                 type: string
+                              finishedAt:
+                                description: FinishedAt is when execution finished.
+                                format: date-time
+                                type: string
+                              startedAt:
+                                description: StartedAt is when execution started.
+                                format: date-time
+                                type: string
                               state:
                                 description: State is the final execution state (Completed
                                   or Failed).
@@ -427,6 +435,14 @@ spec:
                               executionId:
                                 description: ExecutionID is the unique identifier
                                   for this target execution.
+                                type: string
+                              finishedAt:
+                                description: FinishedAt is when execution finished.
+                                format: date-time
+                                type: string
+                              startedAt:
+                                description: StartedAt is when execution started.
+                                format: date-time
                                 type: string
                               state:
                                 description: State is the final execution state (Completed

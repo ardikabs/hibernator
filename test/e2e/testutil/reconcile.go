@@ -8,6 +8,12 @@ import (
 
 	. "github.com/onsi/gomega"
 	"sigs.k8s.io/controller-runtime/pkg/client"
+
+	hibernatorv1alpha1 "github.com/ardikabs/hibernator/api/v1alpha1"
+)
+
+const (
+	triggerAnnotationKey = "hibernator.ardikabs.com/trigger-test"
 )
 
 // TriggerReconcile forces the controller to reconcile by updating an annotation on the object.
@@ -25,10 +31,29 @@ func TriggerReconcile(ctx context.Context, k8sClient client.Client, obj client.O
 		if annotations == nil {
 			annotations = make(map[string]string)
 		}
-		annotations["hibernator.ardikabs.com/trigger-test"] = time.Now().String()
+		annotations[triggerAnnotationKey] = time.Now().String()
 		obj.SetAnnotations(annotations)
 
 		// 3. Push the update back to the server
 		return k8sClient.Update(ctx, obj)
 	}, DefaultTimeout, DefaultInterval).Should(Succeed())
+}
+
+// ReconcileUntilReady triggers reconciliation on a HibernatePlan and waits for it to be processed.
+// timeout specifies the maximum time to wait for the plan to reach a stable state.
+func ReconcileUntilReady(ctx context.Context, k8sClient client.Client, plan *hibernatorv1alpha1.HibernatePlan, timeout time.Duration) {
+	triggerId := plan.Annotations[triggerAnnotationKey]
+
+	TriggerReconcile(ctx, k8sClient, plan)
+	Eventually(func() bool {
+		if triggerId != plan.Annotations[triggerAnnotationKey] {
+			return true
+		}
+
+		if err := k8sClient.Get(ctx, client.ObjectKeyFromObject(plan), plan); err != nil {
+			return false
+		}
+
+		return false
+	}, timeout, DefaultInterval).Should(BeTrue())
 }

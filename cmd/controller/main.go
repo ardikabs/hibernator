@@ -56,6 +56,7 @@ func main() {
 	var workers int
 	var syncPeriod time.Duration
 	var leaderElectionNamespace string
+	var scheduleBufferDuration string
 
 	flag.StringVar(&metricsAddr, "metrics-bind-address", ":8080", "The address the metric endpoint binds to.")
 	flag.StringVar(&probeAddr, "health-probe-bind-address", ":8081", "The address the probe endpoint binds to.")
@@ -82,6 +83,8 @@ func main() {
 		"The minimum interval at which watched resources are reconciled. Default is 10 hours.")
 	flag.StringVar(&leaderElectionNamespace, "leader-election-namespace", envutil.GetString("LEADER_ELECTION_NAMESPACE", "hibernator-system"),
 		"The namespace in which the leader election resource will be created.")
+	flag.StringVar(&scheduleBufferDuration, "schedule-buffer-duration", envutil.GetString("SCHEDULE_BUFFER_DURATION", "1m"),
+		"The buffer duration added to schedule evaluation windows. Defaults to 1m (1-minute) buffer duration to allow full-day operation both for shutdown and wakeup.")
 
 	opts := zap.Options{
 		Development: true,
@@ -123,7 +126,7 @@ func main() {
 		Log:                  ctrl.Log.WithName("controllers").WithName("HibernatePlan"),
 		Scheme:               mgr.GetScheme(),
 		Planner:              scheduler.NewPlanner(),
-		ScheduleEvaluator:    scheduler.NewScheduleEvaluator(clk),
+		ScheduleEvaluator:    scheduler.NewScheduleEvaluator(clk, scheduler.WithScheduleBuffer(scheduleBufferDuration)),
 		RestoreManager:       restore.NewManager(mgr.GetClient()),
 		ControlPlaneEndpoint: controlPlaneEndpoint,
 		RunnerImage:          runnerImage,

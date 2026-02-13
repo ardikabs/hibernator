@@ -28,4 +28,7 @@ const (
 	// TerminationLogPath is the path where the runner writes its termination message.
 	// Ref: https://kubernetes.io/docs/tasks/debug/debug-application/determine-reason-pod-failure/#customizing-the-termination-message
 	TerminationLogPath = "/dev/termination-log"
+
+	// ExecutionIDLogPrefix is the prefix used in runner logs to indicate the execution ID.
+	ExecutionIDLogPrefix = "execution-id://"
 )

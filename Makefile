@@ -29,7 +29,7 @@ COVERAGE_HTML ?= $(COVERAGE_DIR)/coverage.html
 COVERAGE_THRESHOLD ?= 50
 
 # Unit test packages (exclude e2e, cmd, and generated files)
-UNIT_TEST_PKGS ?= ./api/... ./internal/...
+UNIT_TEST_PKGS ?= $(shell go list ./... | grep -vE '(/cmd/|/mocks|/test/e2e)')
 
 # Colors for output
 CYAN := \033[36m
@@ -118,49 +118,14 @@ verify: generate fmt vet ## Verify code is properly formatted and generated.
 # ============================================================================
 
 .PHONY: test
-test: test-unit ## Alias for test-unit.
-
-.PHONY: test-unit
-test-unit: $(COVERAGE_DIR) ## Run unit tests with coverage.
-	@echo "$(CYAN)Running unit tests...$(RESET)"
-	@$(GOCMD) test $(UNIT_TEST_PKGS) \
-		-race \
-		-cover \
-		-coverprofile=$(COVERAGE_PROFILE) \
-		-covermode=atomic \
-		-v 2>&1 | grep -E '(^=== RUN|^--- PASS|^--- FAIL|^PASS|^FAIL|coverage:)'
+test: test-unit ## Run unit tests with coverage
 	@echo ""
 	@echo "$(CYAN)Coverage Summary:$(RESET)"
 	@$(GOCMD) tool cover -func=$(COVERAGE_PROFILE) | tail -1
 	@echo ""
 	@echo "$(GREEN)Coverage report saved to: $(COVERAGE_PROFILE)$(RESET)"
-
-.PHONY: test-unit-verbose
-test-unit-verbose: $(COVERAGE_DIR) ## Run unit tests with verbose output.
-	@echo "$(CYAN)Running unit tests (verbose)...$(RESET)"
-	@$(GOCMD) test $(UNIT_TEST_PKGS) \
-		-race \
-		-coverprofile=$(COVERAGE_PROFILE) \
-		-covermode=atomic \
-		-v
-
-.PHONY: test-coverage
-test-coverage: test-unit ## Run unit tests and generate HTML coverage report.
-	@echo "$(CYAN)Generating HTML coverage report...$(RESET)"
-	@$(GOCMD) tool cover -html=$(COVERAGE_PROFILE) -o $(COVERAGE_HTML)
-	@echo "$(GREEN)HTML coverage report: $(COVERAGE_HTML)$(RESET)"
-	@open $(COVERAGE_HTML) 2>/dev/null || xdg-open $(COVERAGE_HTML) 2>/dev/null || echo "Open $(COVERAGE_HTML) in your browser"
-
-.PHONY: test-coverage-func
-test-coverage-func: test-unit ## Run unit tests and show per-function coverage.
-	@echo ""
-	@echo "$(CYAN)Per-function coverage:$(RESET)"
-	@$(GOCMD) tool cover -func=$(COVERAGE_PROFILE)
-
-.PHONY: test-coverage-check
-test-coverage-check: test-unit ## Check if coverage meets threshold (default: 50%).
-	@echo ""
 	@echo "$(CYAN)Checking coverage threshold ($(COVERAGE_THRESHOLD)%)...$(RESET)"
+	@echo ""
 	@COVERAGE=$$($(GOCMD) tool cover -func=$(COVERAGE_PROFILE) | tail -1 | awk '{print $$3}' | sed 's/%//'); \
 	if [ $$(echo "$$COVERAGE < $(COVERAGE_THRESHOLD)" | bc -l) -eq 1 ]; then \
 		echo "$(RED)Coverage $$COVERAGE% is below threshold $(COVERAGE_THRESHOLD)%$(RESET)"; \
@@ -169,8 +134,18 @@ test-coverage-check: test-unit ## Check if coverage meets threshold (default: 50
 		echo "$(GREEN)Coverage $$COVERAGE% meets threshold $(COVERAGE_THRESHOLD)%$(RESET)"; \
 	fi
 
+.PHONY: test-unit
+test-unit: $(COVERAGE_DIR) ## Run unit tests.
+	@echo "$(CYAN)Running unit tests...$(RESET)"
+	@$(GOCMD) test $(UNIT_TEST_PKGS) \
+		-race \
+		-cover \
+		-coverprofile=$(COVERAGE_PROFILE) \
+		-covermode=atomic \
+		-v 2>&1
+
 .PHONY: test-all
-test-all: test-unit test-e2e ## Run all tests (unit + e2e).
+test-all: test test-e2e ## Run all tests (unit + e2e).
 
 .PHONY: test-e2e
 test-e2e: envtest ## Run E2E tests.

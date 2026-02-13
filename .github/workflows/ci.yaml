@@ -54,8 +54,8 @@ jobs:
       - name: Setting up Test Dependencies
         run: make envtest
 
-      - name: Run Unit Tests
-        run: make test-unit
+      - name: Run Coverage Tests
+        run: make test
 
       - name: Run E2E Tests
         run: make test-e2e

@@ -22,6 +22,14 @@ const (
 	DefaultInterval = 250 * time.Millisecond
 )
 
+// ConsistentllyAtPhase asserts that the HibernatePlan remains at the expected phase for the specified duration.
+func ConsistentllyAtPhase(ctx context.Context, k8sClient client.Client, plan *hibernatorv1alpha1.HibernatePlan, phase hibernatorv1alpha1.PlanPhase, duration time.Duration) {
+	Consistently(func() hibernatorv1alpha1.PlanPhase {
+		_ = k8sClient.Get(ctx, client.ObjectKeyFromObject(plan), plan)
+		return plan.Status.Phase
+	}, duration, DefaultInterval).Should(Equal(phase))
+}
+
 // EventuallyPhase waits until the HibernatePlan reaches the expected phase.
 func EventuallyPhase(ctx context.Context, k8sClient client.Client, plan *hibernatorv1alpha1.HibernatePlan, phase hibernatorv1alpha1.PlanPhase) {
 	Eventually(func() hibernatorv1alpha1.PlanPhase {

@@ -319,7 +319,7 @@ func (r *Reconciler) evaluateSchedule(ctx context.Context, log logr.Logger, plan
 	}
 
 	// Evaluate schedule with exception (if any)
-	result, err := r.ScheduleEvaluator.EvaluateWithException(baseWindows, plan.Spec.Schedule.Timezone, exception)
+	result, err := r.ScheduleEvaluator.Evaluate(baseWindows, plan.Spec.Schedule.Timezone, exception)
 	if err != nil {
 		return false, time.Minute, err
 	}
@@ -634,7 +634,7 @@ func (r *Reconciler) reconcileExecution(ctx context.Context, log logr.Logger, pl
 
 	// Handle stage completion
 	if stageStatus.AllTerminal {
-		log.Info("current stage either complete or failed",
+		log.Info("stage reached terminal state",
 			"stageIndex", plan.Status.CurrentStageIndex,
 			"completedCount", stageStatus.CompletedCount,
 			"failedCount", stageStatus.FailedCount)
@@ -669,8 +669,8 @@ func (r *Reconciler) reconcileExecution(ctx context.Context, log logr.Logger, pl
 			return ctrl.Result{RequeueAfter: wellknown.RequeueIntervalOnExecution}, nil
 		}
 
-		// All stages and all targets complete - finalize the operation
-		log.V(1).Info("all stages complete", "operation", operation)
+		// All stages and all targets completed - finalize the operation
+		log.V(1).Info("all stages are completed, finalizing operation ...", "operation", operation)
 
 		if err := r.finalizeOperation(ctx, log, plan, operation); err != nil {
 			return ctrl.Result{}, err
@@ -795,7 +795,7 @@ func (r *Reconciler) updatePlanExecutionStatuses(ctx context.Context, log logr.L
 			}
 
 			if execId, ok := job.Labels[wellknown.LabelExecutionID]; ok {
-				exec.LogsRef = fmt.Sprintf("execution-id://%s", execId)
+				exec.LogsRef = fmt.Sprintf("%s%s", wellknown.ExecutionIDLogPrefix, execId)
 			}
 
 			exec.RestoreConfigMapRef = fmt.Sprintf("%s/%s", job.Namespace, restore.GetRestoreConfigMap(plan.Name))
