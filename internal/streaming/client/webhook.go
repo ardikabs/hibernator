@@ -279,8 +279,6 @@ func (c *WebhookClient) doRequest(ctx context.Context, method, path string, body
 	if err != nil {
 		return nil, fmt.Errorf("request failed: %w", err)
 	}
-	// nolint:errcheck
-	defer resp.Body.Close()
 
 	if resp.StatusCode == http.StatusUnauthorized {
 		return nil, fmt.Errorf("authentication failed")
@@ -291,7 +289,14 @@ func (c *WebhookClient) doRequest(ctx context.Context, method, path string, body
 	}
 
 	if resp.StatusCode >= 400 {
-		bodyBytes, _ := io.ReadAll(resp.Body)
+		bodyBytes, err := io.ReadAll(resp.Body)
+		if err != nil {
+			return nil, fmt.Errorf("request failed with status %d and unreadable body", resp.StatusCode)
+		}
+
+		// nolint:errcheck
+		resp.Body.Close()
+
 		return nil, fmt.Errorf("request failed with status %d: %s", resp.StatusCode, string(bodyBytes))
 	}
 

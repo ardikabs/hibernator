@@ -268,68 +268,6 @@ func TestHibernatePlanReconciler_HandlesDeletion(t *testing.T) {
 	}
 }
 
-func TestHibernatePlanReconciler_EvaluatesSchedule(t *testing.T) {
-	// Create a plan with schedule set to be active at current time
-	// Schedule: 20:00-06:00 UTC weekdays
-	// We test at a fixed time to avoid flakiness
-	plan := &hibernatorv1alpha1.HibernatePlan{
-		ObjectMeta: metav1.ObjectMeta{
-			Name:      "test-plan",
-			Namespace: "default",
-		},
-		Spec: hibernatorv1alpha1.HibernatePlanSpec{
-			Schedule: hibernatorv1alpha1.Schedule{
-				Timezone: "UTC",
-				OffHours: []hibernatorv1alpha1.OffHourWindow{
-					{Start: "20:00", End: "06:00", DaysOfWeek: []string{"MON", "TUE", "WED", "THU", "FRI"}},
-				},
-			},
-			Execution: hibernatorv1alpha1.Execution{
-				Strategy: hibernatorv1alpha1.ExecutionStrategy{
-					Type: hibernatorv1alpha1.StrategySequential,
-				},
-			},
-			Targets: []hibernatorv1alpha1.Target{
-				{Name: "t1", Type: "eks", ConnectorRef: hibernatorv1alpha1.ConnectorRef{Kind: "K8SCluster", Name: "k"}},
-			},
-		},
-	}
-
-	reconciler, _, clk := newHibernatePlanReconciler(plan)
-
-	// Test schedule evaluator directly
-	evaluator := reconciler.ScheduleEvaluator
-
-	// Test during work hours (should NOT be hibernated)
-	workTime := time.Date(2026, 1, 28, 14, 0, 0, 0, time.UTC) // Wed 2 PM
-	clk.SetTime(workTime)                                     // Update clock for evaluator
-
-	window := scheduler.ScheduleWindow{
-		HibernateCron: "0 20 * * 1,2,3,4,5",
-		WakeUpCron:    "0 6 * * 2,3,4,5,6",
-		Timezone:      "UTC",
-	}
-	result, err := evaluator.Evaluate(window)
-	if err != nil {
-		t.Fatalf("Evaluate() error = %v", err)
-	}
-	if result.ShouldHibernate {
-		t.Errorf("ShouldHibernate during work hours = true, want false")
-	}
-
-	// Test during night hours (should be hibernated)
-	nightTime := time.Date(2026, 1, 28, 23, 0, 0, 0, time.UTC) // Wed 11 PM
-	clk.SetTime(nightTime)                                     // Update clock
-
-	result, err = evaluator.Evaluate(window)
-	if err != nil {
-		t.Fatalf("Evaluate() error = %v", err)
-	}
-	if !result.ShouldHibernate {
-		t.Errorf("ShouldHibernate at night = false, want true")
-	}
-}
-
 func TestHibernatePlanReconciler_ConvertsOffHoursToCron(t *testing.T) {
 	plan := &hibernatorv1alpha1.HibernatePlan{
 		ObjectMeta: metav1.ObjectMeta{

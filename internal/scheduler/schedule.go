@@ -7,7 +7,6 @@ package scheduler
 
 import (
 	"fmt"
-	"strconv"
 	"strings"
 	"time"
 
@@ -47,29 +46,38 @@ type Exception struct {
 
 // ScheduleEvaluator evaluates cron-based schedules to determine hibernation state.
 type ScheduleEvaluator struct {
-	Clock  clock.Clock
-	parser cron.Parser
+	Clock clock.Clock
+
+	parser         cron.Parser
+	scheduleBuffer time.Duration
 }
 
+type ScheduleEvaluatorOption func(*ScheduleEvaluator)
+
 // NewScheduleEvaluator creates a new schedule evaluator.
-func NewScheduleEvaluator(clk clock.Clock) *ScheduleEvaluator {
-	return &ScheduleEvaluator{
+func NewScheduleEvaluator(clk clock.Clock, opts ...ScheduleEvaluatorOption) *ScheduleEvaluator {
+	se := &ScheduleEvaluator{
 		Clock: clk,
 		// Use standard cron format with optional seconds
 		parser: cron.NewParser(cron.Minute | cron.Hour | cron.Dom | cron.Month | cron.Dow),
 	}
+
+	for _, o := range opts {
+		o(se)
+	}
+
+	return se
 }
 
-// ScheduleWindow represents a hibernation window.
-type ScheduleWindow struct {
-	// HibernateCron is the cron expression for when to start hibernation.
-	HibernateCron string
+func WithScheduleBuffer(duration string) ScheduleEvaluatorOption {
+	return func(se *ScheduleEvaluator) {
+		d, err := time.ParseDuration(duration)
+		if err != nil {
+			return
+		}
 
-	// WakeUpCron is the cron expression for when to wake up.
-	WakeUpCron string
-
-	// Timezone is the timezone for schedule evaluation.
-	Timezone string
+		se.scheduleBuffer = d
+	}
 }
 
 // EvaluationResult contains the result of schedule evaluation.
@@ -87,9 +95,12 @@ type EvaluationResult struct {
 	CurrentState string
 }
 
-// Evaluate determines if we should be in hibernation based on the schedule.
+// eval determines if we should be in hibernation based on the schedule.
 // It compares the last hibernate and wake-up times to determine current state.
-func (e *ScheduleEvaluator) Evaluate(window ScheduleWindow) (*EvaluationResult, error) {
+//
+// The function also applies grace periods (lead time buffer) to prevent unnecessary
+// phase transitions at window boundaries for minimal windows (e.g., 23:59-00:00).
+func (e *ScheduleEvaluator) eval(window ScheduleWindow) (*EvaluationResult, error) {
 	now := e.Clock.Now()
 	loc, err := time.LoadLocation(window.Timezone)
 	if err != nil {
@@ -116,14 +127,22 @@ func (e *ScheduleEvaluator) Evaluate(window ScheduleWindow) (*EvaluationResult, 
 	// Determine current state by comparing which event happened more recently
 	shouldHibernate := lastHibernate.After(lastWakeUp)
 
-	// Calculate next occurrences
-	nextHibernate := hibernateSched.Next(localNow)
-	nextWakeUp := wakeUpSched.Next(localNow)
+	if e.scheduleBuffer > 0 {
+		if !shouldHibernate && isInGraceTimeWindow(window.Windows, localNow, e.scheduleBuffer) {
+			shouldHibernate = true
+		} else if shouldHibernate && isInLateWindow(window.Windows, localNow, e.scheduleBuffer) {
+			shouldHibernate = false
+		}
+	}
 
 	state := "active"
 	if shouldHibernate {
 		state = "hibernated"
 	}
+
+	// Calculate next occurrences
+	nextHibernate := hibernateSched.Next(localNow)
+	nextWakeUp := wakeUpSched.Next(localNow)
 
 	return &EvaluationResult{
 		ShouldHibernate:   shouldHibernate,
@@ -184,13 +203,12 @@ func (e *ScheduleEvaluator) NextRequeueTime(result *EvaluationResult) time.Durat
 	return duration + 10*time.Second
 }
 
-// EvaluateWithException evaluates the schedule with an optional exception applied.
-// If exception is nil, this behaves identically to Evaluate().
+// Evaluate evaluates the schedule with an optional exception applied.
 // Exception semantics:
 // - extend: Union of base schedule + exception windows (more hibernation time)
 // - suspend: Carve-out from base schedule (keep awake during exception windows)
 // - replace: Use only exception windows, ignore base schedule entirely
-func (e *ScheduleEvaluator) EvaluateWithException(baseWindows []OffHourWindow, timezone string, exception *Exception) (*EvaluationResult, error) {
+func (e *ScheduleEvaluator) Evaluate(baseWindows []OffHourWindow, timezone string, exception *Exception) (*EvaluationResult, error) {
 	// If no exception or exception is not active, evaluate base schedule only
 	if exception == nil || !e.isExceptionActive(exception) {
 		return e.evaluateWindows(baseWindows, timezone)
@@ -231,12 +249,13 @@ func (e *ScheduleEvaluator) evaluateWindows(windows []OffHourWindow, timezone st
 	}
 
 	window := ScheduleWindow{
+		Windows:       windows,
 		HibernateCron: hibernateCron,
 		WakeUpCron:    wakeUpCron,
 		Timezone:      timezone,
 	}
 
-	return e.Evaluate(window)
+	return e.eval(window)
 }
 
 // evaluateExtend combines base windows with exception windows (union).
@@ -247,6 +266,7 @@ func (e *ScheduleEvaluator) evaluateExtend(baseWindows, exceptionWindows []OffHo
 	if err != nil {
 		return nil, fmt.Errorf("evaluate base windows: %w", err)
 	}
+	fmt.Println(baseResult)
 
 	// Evaluate exception windows
 	exceptionResult, err := e.evaluateWindows(exceptionWindows, timezone)
@@ -293,12 +313,12 @@ func (e *ScheduleEvaluator) evaluateSuspend(baseWindows []OffHourWindow, excepti
 	}
 
 	// Check if we're currently in a suspension window
-	inSuspensionWindow := e.isInTimeWindows(exception.Windows, localNow)
+	inSuspensionWindow := isInTimeWindows(exception.Windows, localNow)
 
 	// Check if we're in lead time window (before suspension starts)
 	inLeadTimeWindow := false
 	if exception.LeadTime > 0 {
-		inLeadTimeWindow = e.isInLeadTimeWindow(exception.Windows, localNow, exception.LeadTime)
+		inLeadTimeWindow = isInLeadTimeWindow(exception.Windows, localNow, exception.LeadTime)
 	}
 
 	// Determine final hibernation state
@@ -349,109 +369,6 @@ func (e *ScheduleEvaluator) evaluateSuspend(baseWindows []OffHourWindow, excepti
 		NextWakeUpTime:    nextWakeUp,
 		CurrentState:      state,
 	}, nil
-}
-
-// isInTimeWindows checks if the current time falls within any of the time windows.
-func (e *ScheduleEvaluator) isInTimeWindows(windows []OffHourWindow, now time.Time) bool {
-	currentDay := strings.ToUpper(now.Weekday().String()[:3])
-	currentHour := now.Hour()
-	currentMin := now.Minute()
-	currentTimeMinutes := currentHour*60 + currentMin
-
-	for _, w := range windows {
-		// Check if today is in the window's days
-		dayMatch := false
-		for _, day := range w.DaysOfWeek {
-			if strings.EqualFold(day, currentDay) {
-				dayMatch = true
-				break
-			}
-		}
-		if !dayMatch {
-			continue
-		}
-
-		// Parse window times
-		startHour, startMin, err := parseTime(w.Start)
-		if err != nil {
-			continue
-		}
-		endHour, endMin, err := parseTime(w.End)
-		if err != nil {
-			continue
-		}
-
-		startMinutes := startHour*60 + startMin
-		endMinutes := endHour*60 + endMin
-
-		// Check if current time is within the window
-		if endMinutes > startMinutes {
-			// Same-day window (e.g., 09:00 to 17:00)
-			if currentTimeMinutes >= startMinutes && currentTimeMinutes < endMinutes {
-				return true
-			}
-		} else {
-			// Overnight window (e.g., 20:00 to 06:00)
-			// Current time is in window if: after start OR before end
-			if currentTimeMinutes >= startMinutes || currentTimeMinutes < endMinutes {
-				return true
-			}
-		}
-	}
-
-	return false
-}
-
-// isInLeadTimeWindow checks if we're within lead time before any suspension window.
-func (e *ScheduleEvaluator) isInLeadTimeWindow(windows []OffHourWindow, now time.Time, leadTime time.Duration) bool {
-	currentDay := strings.ToUpper(now.Weekday().String()[:3])
-	currentHour := now.Hour()
-	currentMin := now.Minute()
-	currentTimeMinutes := currentHour*60 + currentMin
-	leadTimeMinutes := int(leadTime.Minutes())
-
-	for _, w := range windows {
-		// Check if today is in the window's days
-		dayMatch := false
-		for _, day := range w.DaysOfWeek {
-			if strings.EqualFold(day, currentDay) {
-				dayMatch = true
-				break
-			}
-		}
-		if !dayMatch {
-			continue
-		}
-
-		// Parse window start time
-		startHour, startMin, err := parseTime(w.Start)
-		if err != nil {
-			continue
-		}
-
-		startMinutes := startHour*60 + startMin
-		leadStartMinutes := startMinutes - leadTimeMinutes
-
-		// Handle wrap-around for lead time crossing midnight
-		if leadStartMinutes < 0 {
-			leadStartMinutes += 24 * 60
-		}
-
-		// Check if current time is in lead time window (before start, within lead time)
-		if leadStartMinutes < startMinutes {
-			// Normal case: lead time window doesn't cross midnight
-			if currentTimeMinutes >= leadStartMinutes && currentTimeMinutes < startMinutes {
-				return true
-			}
-		} else {
-			// Lead time crosses midnight
-			if currentTimeMinutes >= leadStartMinutes || currentTimeMinutes < startMinutes {
-				return true
-			}
-		}
-	}
-
-	return false
 }
 
 // findSuspensionEnd finds when the current or upcoming suspension window ends.
@@ -511,6 +428,15 @@ func (e *ScheduleEvaluator) findSuspensionEnd(windows []OffHourWindow, now time.
 	return time.Time{}
 }
 
+// ValidateCron validates a cron expression.
+func (e *ScheduleEvaluator) ValidateCron(expr string) error {
+	_, err := e.parser.Parse(expr)
+	if err != nil {
+		return fmt.Errorf("invalid cron expression %q: %w", expr, err)
+	}
+	return nil
+}
+
 // earlierTime returns the earlier of two times, ignoring zero times.
 func earlierTime(a, b time.Time) time.Time {
 	if a.IsZero() {
@@ -523,117 +449,4 @@ func earlierTime(a, b time.Time) time.Time {
 		return a
 	}
 	return b
-}
-
-// ValidateCron validates a cron expression.
-func (e *ScheduleEvaluator) ValidateCron(expr string) error {
-	_, err := e.parser.Parse(expr)
-	if err != nil {
-		return fmt.Errorf("invalid cron expression %q: %w", expr, err)
-	}
-	return nil
-}
-
-// OffHourWindow represents a user-friendly time window for hibernation.
-type OffHourWindow struct {
-	Start      string   // HH:MM format (e.g., "20:00")
-	End        string   // HH:MM format (e.g., "06:00")
-	DaysOfWeek []string // MON, TUE, WED, THU, FRI, SAT, SUN
-}
-
-// ConvertOffHoursToCron converts OffHourWindow format to cron expressions.
-// Returns hibernateCron and wakeUpCron.
-// For overnight windows (where end time is before start time, e.g., 20:00 to 06:00),
-// the wake-up cron uses the next day's schedule.
-func ConvertOffHoursToCron(windows []OffHourWindow) (string, string, error) {
-	if len(windows) == 0 {
-		return "", "", fmt.Errorf("at least one off-hour window is required")
-	}
-
-	// For simplicity, we'll use the first window
-	// TODO: Support multiple windows by generating multiple cron expressions or finding common patterns
-	window := windows[0]
-
-	// Parse start time (HH:MM)
-	startHour, startMin, err := parseTime(window.Start)
-	if err != nil {
-		return "", "", fmt.Errorf("invalid start time: %w", err)
-	}
-
-	// Parse end time (HH:MM)
-	endHour, endMin, err := parseTime(window.End)
-	if err != nil {
-		return "", "", fmt.Errorf("invalid end time: %w", err)
-	}
-
-	// Convert day names to cron dow format (0-6, SUN=0)
-	cronDays, err := convertDaysToCron(window.DaysOfWeek)
-	if err != nil {
-		return "", "", err
-	}
-
-	// Check if this is an overnight window (end time is before start time)
-	// This is used for logic validation if needed, but cron generation now uses same days
-	// isOvernight := endHour < startHour || (endHour == startHour && endMin < startMin)
-
-	// Build cron expressions
-	// Format: MIN HOUR DAY MONTH DOW
-	hibernateCron := fmt.Sprintf("%d %d * * %s", startMin, startHour, cronDays)
-	wakeUpCron := fmt.Sprintf("%d %d * * %s", endMin, endHour, cronDays)
-
-	return hibernateCron, wakeUpCron, nil
-}
-
-// parseTime parses HH:MM format into hour and minute.
-func parseTime(timeStr string) (hour, min int, err error) {
-	parts := strings.Split(timeStr, ":")
-	if len(parts) != 2 {
-		return 0, 0, fmt.Errorf("invalid time format %q, expected HH:MM", timeStr)
-	}
-
-	hour, err = strconv.Atoi(parts[0])
-	if err != nil {
-		return 0, 0, fmt.Errorf("invalid hour in %q: %w", timeStr, err)
-	}
-	min, err = strconv.Atoi(parts[1])
-	if err != nil {
-		return 0, 0, fmt.Errorf("invalid minute in %q: %w", timeStr, err)
-	}
-	if hour < 0 || hour > 23 {
-		return 0, 0, fmt.Errorf("hour %d out of range (0-23)", hour)
-	}
-	if min < 0 || min > 59 {
-		return 0, 0, fmt.Errorf("minute %d out of range (0-59)", min)
-	}
-	return hour, min, nil
-}
-
-// convertDaysToCron converts day names (MON, TUE, etc.) to cron day-of-week format.
-// Returns a comma-separated string like "1,2,3,4,5" for MON-FRI.
-func convertDaysToCron(days []string) (string, error) {
-	if len(days) == 0 {
-		return "", fmt.Errorf("at least one day of week is required")
-	}
-
-	dayMap := map[string]int{
-		"SUN": 0,
-		"MON": 1,
-		"TUE": 2,
-		"WED": 3,
-		"THU": 4,
-		"FRI": 5,
-		"SAT": 6,
-	}
-
-	var cronDays []string
-	for _, day := range days {
-		dayUpper := strings.ToUpper(day)
-		cronDay, ok := dayMap[dayUpper]
-		if !ok {
-			return "", fmt.Errorf("invalid day %q, expected MON, TUE, WED, THU, FRI, SAT, or SUN", day)
-		}
-		cronDays = append(cronDays, fmt.Sprintf("%d", cronDay))
-	}
-
-	return strings.Join(cronDays, ","), nil
 }
