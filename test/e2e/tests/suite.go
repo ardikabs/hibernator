@@ -91,14 +91,14 @@ var _ = BeforeSuite(func() {
 	// Initialize scheduler components
 	planner := scheduler.NewPlanner()
 	fakeClock = clocktesting.NewFakeClock(time.Now())
-	evaluator := scheduler.NewScheduleEvaluator(fakeClock)
+	evaluator := scheduler.NewScheduleEvaluator(fakeClock, scheduler.WithScheduleBuffer("1m"))
 	restoreManager = restore.NewManager(mgr.GetClient())
 
 	hibernateplanReconciler = &hibernateplan.Reconciler{
-		Client:    mgr.GetClient(),
-		APIReader: mgr.GetAPIReader(),
-		Clock:     fakeClock,
-		// Log:                  ctrl.Log.WithName("controllers").WithName("HibernatePlan").V(0),
+		Client:               mgr.GetClient(),
+		APIReader:            mgr.GetAPIReader(),
+		Clock:                fakeClock,
+		Log:                  ctrl.Log.WithName("controllers").WithName("HibernatePlan").V(0),
 		Scheme:               mgr.GetScheme(),
 		Planner:              planner,
 		ScheduleEvaluator:    evaluator,
