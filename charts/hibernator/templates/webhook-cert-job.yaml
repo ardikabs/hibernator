@@ -9,13 +9,13 @@ metadata:
   annotations: {{- toYaml .Values.webhook.certGen.annotations | nindent 4 }}
 spec:
   backoffLimit: 3
+  ttlSecondsAfterFinished: {{ .Values.webhook.certGen.ttlSecondsAfterFinished | default 60 }}
   template:
     metadata:
       labels:
         {{- include "hibernator.selectorLabels" . | nindent 8 }}
         app.kubernetes.io/component: webhook-cert-gen
     spec:
-      ttlSecondsAfterFinished: {{ .Values.webhook.certGen.ttlSecondsAfterFinished | default 60 }}
       serviceAccountName: {{ include "hibernator.fullname" . }}-webhook-cert
       restartPolicy: OnFailure
       securityContext:
