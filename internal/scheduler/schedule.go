@@ -200,7 +200,7 @@ func (e *ScheduleEvaluator) NextRequeueTime(result *EvaluationResult) time.Durat
 	}
 
 	// Add a small buffer to ensure we're past the scheduled time
-	return duration + 10*time.Second
+	return duration + e.scheduleBuffer + 10*time.Second
 }
 
 // Evaluate evaluates the schedule with an optional exception applied.
@@ -266,7 +266,6 @@ func (e *ScheduleEvaluator) evaluateExtend(baseWindows, exceptionWindows []OffHo
 	if err != nil {
 		return nil, fmt.Errorf("evaluate base windows: %w", err)
 	}
-	fmt.Println(baseResult)
 
 	// Evaluate exception windows
 	exceptionResult, err := e.evaluateWindows(exceptionWindows, timezone)
