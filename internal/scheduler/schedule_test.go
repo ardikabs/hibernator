@@ -1165,7 +1165,7 @@ func TestConvertOffHoursToCron_EdgeCases(t *testing.T) {
 			wantErr: true,
 		},
 		{
-			name: "midnight to midnight",
+			name: "midnight to midnight - same start and end (invalid per webhook validation)",
 			windows: []OffHourWindow{
 				{
 					Start:      "00:00",
@@ -1173,8 +1173,7 @@ func TestConvertOffHoursToCron_EdgeCases(t *testing.T) {
 					DaysOfWeek: []string{"MON"},
 				},
 			},
-			wantHibernate: "0 0 * * 1",
-			wantWakeUp:    "0 0 * * 1",
+			wantErr: true,
 		},
 		{
 			name: "all days of week",

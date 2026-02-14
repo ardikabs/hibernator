@@ -162,6 +162,17 @@ func (r *HibernatePlan) validateSchedule(plan *HibernatePlan) field.ErrorList {
 			))
 		}
 
+		// Validate that start and end times are different
+		// When both times are equal, it creates ambiguity about hibernation intent
+		// A hibernation window must define a clear shutdown period (start) and wakeup period (end)
+		if window.Start != "" && window.End != "" && window.Start == window.End {
+			errs = append(errs, field.Invalid(
+				windowPath.Child("start"),
+				window.Start,
+				"start and end times must be different; a hibernation window requires a clear shutdown (start) and wakeup (end) schedule",
+			))
+		}
+
 		// Validate daysOfWeek
 		if len(window.DaysOfWeek) == 0 {
 			errs = append(errs, field.Required(
