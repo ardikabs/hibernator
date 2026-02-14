@@ -66,10 +66,12 @@ spec:
               value: "{{ .Values.image.runner.repository }}:{{ .Values.image.runner.tag | default .Chart.AppVersion }}"
             - name: CONTROL_PLANE_ENDPOINT
               value: {{ .Values.controlPlane.endpoint }}
+            - name: SCHEDULE_BUFFER_DURATION
+              value: {{ .Values.controlPlane.scheduleBufferDuration | default "1m"}}
             - name: LEADER_ELECTION_ENABLED
-              value: "{{ .Values.leaderElection.enabled }}"
+              value: "{{ .Values.operator.leaderElection.enabled }}"
             - name: LEADER_ELECTION_NAMESPACE
-              value: {{ .Values.leaderElection.namespace | default .Release.Namespace }}
+              value: {{ .Values.operator.leaderElection.namespace | default .Release.Namespace }}
             - name: WORKERS
               value: "{{ .Values.operator.workers }}"
             - name: SYNC_PERIOD

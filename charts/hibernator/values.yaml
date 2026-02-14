@@ -1,6 +1,6 @@
 # Default values for Hibernator Operator
 
-replicaCount: 2
+replicaCount: 3
 
 image:
   controller:
@@ -19,13 +19,16 @@ fullnameOverride: ""
 
 serviceAccount:
   create: true
-  annotations:
-    # IRSA annotations for AWS (uncomment and fill if using AWS)
-    # eks.amazonaws.com/role-arn: arn:aws:iam::ACCOUNT_ID:role/hibernator-controller
+  # serviceAccount.annotation -- IRSA annotations for AWS (uncomment and fill if using AWS)
+  # eks.amazonaws.com/role-arn: arn:aws:iam::ACCOUNT_ID:role/hibernator-controller
+  annotations: {}
   name: ""
 
 runnerServiceAccount:
   create: true
+  # runnerServiceAccount.annotation -- An extras annotations for the runner Service Account
+  # For example, if you want to use IRSA for the runner, you can add the following annotation:
+  #   eks.amazonaws.com/role-arn: arn:aws:iam::ACCOUNT_ID:role/hibernator-runner
   annotations: {}
   name: "hibernator-runner"
 
@@ -76,11 +79,6 @@ tolerations: []
 
 affinity: {}
 
-# Leader election configuration
-leaderElection:
-  enabled: true
-  namespace: ""
-
 # Webhook configuration
 webhook:
   enabled: true
@@ -124,6 +122,9 @@ webhook:
 controlPlane:
   endpoint: "hibernator.hibernator-system.svc"
 
+  # Buffer duration to add to scheduled times to account for scheduling delays (e.g., 1m for 1 minute)
+  scheduleBufferDuration: "1m"
+
 # Operator configuration
 operator:
   # Number of concurrent reconciliations
@@ -131,6 +132,11 @@ operator:
 
   # Sync period for reconciliation
   syncPeriod: 10h
+
+  # Leader election configuration
+  leaderElection:
+    enabled: true
+    namespace: ""
 
 # CRD configuration
 crds:
