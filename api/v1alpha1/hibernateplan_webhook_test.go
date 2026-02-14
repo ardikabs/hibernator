@@ -121,6 +121,31 @@ func TestHibernatePlan_ValidateCreate(t *testing.T) {
 			wantErr: true,
 		},
 		{
+			name: "same start and end time",
+			plan: &HibernatePlan{
+				ObjectMeta: metav1.ObjectMeta{Name: "test"},
+				Spec: HibernatePlanSpec{
+					Schedule: Schedule{
+						Timezone: "UTC",
+						OffHours: []OffHourWindow{
+							{
+								Start:      "20:00",
+								End:        "20:00", // Same as start - invalid
+								DaysOfWeek: []string{"MON"},
+							},
+						},
+					},
+					Execution: Execution{
+						Strategy: ExecutionStrategy{Type: StrategySequential},
+					},
+					Targets: []Target{
+						{Name: "target1", Type: "ec2", ConnectorRef: ConnectorRef{Kind: "CloudProvider", Name: "aws"}, Parameters: ec2Params()},
+					},
+				},
+			},
+			wantErr: true,
+		},
+		{
 			name: "duplicate target names",
 			plan: &HibernatePlan{
 				ObjectMeta: metav1.ObjectMeta{Name: "test"},
