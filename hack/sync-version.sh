@@ -34,7 +34,7 @@ if [ "$TYPE" == "app" ]; then
   fi
 elif [ "$TYPE" == "chart" ]; then
   msg "Updating chart version to $VERSION in $CHART_FILE..."
-  VERSION_RAW=$(git describe --tags --abbrev=0 --match "v*" || echo "latest")
+  VERSION_RAW=$(git tag -l "v*" --sort=-v:refname | head -n 1 || echo "latest")
   APP_VERSION=${VERSION_RAW#v}
 
   if [[ "$OSTYPE" == "darwin"* ]]; then
