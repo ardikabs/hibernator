@@ -1,6 +1,6 @@
 # Hibernator Operator Helm Chart
 
-![Version: 1.1.2](https://img.shields.io/badge/Version-1.1.2-informational?style=flat-square) ![Type: application](https://img.shields.io/badge/Type-application-informational?style=flat-square) ![AppVersion: 1.1.0](https://img.shields.io/badge/AppVersion-1.1.0-informational?style=flat-square)
+![Version: 1.1.3](https://img.shields.io/badge/Version-1.1.3-informational?style=flat-square) ![Type: application](https://img.shields.io/badge/Type-application-informational?style=flat-square) ![AppVersion: 1.1.1](https://img.shields.io/badge/AppVersion-1.1.1-informational?style=flat-square)
 
 A Helm chart for Hibernator Operator - Kubernetes-native time-based infrastructure hibernation.
 
@@ -63,6 +63,7 @@ helm install hibernator hibernator/hibernator \
 | autoscaling.targetCPUUtilizationPercentage | int | `80` |  |
 | autoscaling.targetMemoryUtilizationPercentage | int | `80` |  |
 | controlPlane.endpoint | string | `"hibernator.hibernator-system.svc"` |  |
+| controlPlane.scheduleBufferDuration | string | `"1m"` |  |
 | crds.create | bool | `true` |  |
 | crds.upgrade | bool | `true` |  |
 | fullnameOverride | string | `""` |  |
@@ -74,11 +75,11 @@ helm install hibernator hibernator/hibernator \
 | image.runner.tag | string | `""` |  |
 | imagePullSecrets | list | `[]` |  |
 | labels | object | `{}` |  |
-| leaderElection.enabled | bool | `true` |  |
-| leaderElection.namespace | string | `""` |  |
 | nameOverride | string | `""` |  |
 | namespace | string | `"hibernator-system"` |  |
 | nodeSelector | object | `{}` |  |
+| operator.leaderElection.enabled | bool | `true` |  |
+| operator.leaderElection.namespace | string | `""` |  |
 | operator.syncPeriod | string | `"10h"` |  |
 | operator.workers | int | `1` |  |
 | podAnnotations | object | `{}` |  |
@@ -86,7 +87,7 @@ helm install hibernator hibernator/hibernator \
 | podSecurityContext.runAsNonRoot | bool | `true` |  |
 | podSecurityContext.runAsUser | int | `65532` |  |
 | rbac.create | bool | `true` |  |
-| replicaCount | int | `2` |  |
+| replicaCount | int | `3` |  |
 | resources.controller.limits.cpu | string | `"500m"` |  |
 | resources.controller.limits.memory | string | `"512Mi"` |  |
 | resources.controller.requests.cpu | string | `"250m"` |  |
@@ -101,7 +102,7 @@ helm install hibernator hibernator/hibernator \
 | securityContext.allowPrivilegeEscalation | bool | `false` |  |
 | securityContext.capabilities.drop[0] | string | `"ALL"` |  |
 | securityContext.readOnlyRootFilesystem | bool | `true` |  |
-| serviceAccount.annotations | string | `nil` |  |
+| serviceAccount.annotations | object | `{}` |  |
 | serviceAccount.create | bool | `true` |  |
 | serviceAccount.name | string | `""` |  |
 | tolerations | list | `[]` |  |
