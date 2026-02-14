@@ -8,21 +8,24 @@ set -e
 VERSION=$1
 TYPE=$2
 
+msg () {
+  echo >&2 "[$(date +'%I:%M:%S %p')] [sync-version] $*"
+}
 if [ -z "$VERSION" ] || [ -z "$TYPE" ]; then
-  echo "Usage: $0 <version> <type>"
-  echo "  <type>: 'app' (updates appVersion) or 'chart' (updates version)"
+  msg "Usage: $0 <version> <type>"
+  msg "  <type>: 'app' (updates appVersion) or 'chart' (updates version)"
   exit 1
 fi
 
 CHART_FILE="charts/hibernator/Chart.yaml"
 
 if [ ! -f "$CHART_FILE" ]; then
-  echo "Error: $CHART_FILE not found"
+  msg "Error: $CHART_FILE not found"
   exit 1
 fi
 
 if [ "$TYPE" == "app" ]; then
-  echo "Updating appVersion to $VERSION in $CHART_FILE..."
+  msg "Updating appVersion to $VERSION in $CHART_FILE..."
   # Use sed to update appVersion (works on Linux and macOS)
   if [[ "$OSTYPE" == "darwin"* ]]; then
     sed -i '' "s/^appVersion: .*/appVersion: \"$VERSION\"/" "$CHART_FILE"
@@ -30,8 +33,9 @@ if [ "$TYPE" == "app" ]; then
     sed -i "s/^appVersion: .*/appVersion: \"$VERSION\"/" "$CHART_FILE"
   fi
 elif [ "$TYPE" == "chart" ]; then
-  echo "Updating chart version to $VERSION in $CHART_FILE..."
-  APP_VERSION=$(git describe --tags --abbrev=0 --match "v*" || echo "latest")
+  msg "Updating chart version to $VERSION in $CHART_FILE..."
+  VERSION_RAW=$(git describe --tags --abbrev=0 --match "v*" || echo "latest")
+  APP_VERSION=${VERSION_RAW#v}
 
   if [[ "$OSTYPE" == "darwin"* ]]; then
     sed -i '' "s/^version: .*/version: $VERSION/" "$CHART_FILE"
@@ -41,12 +45,12 @@ elif [ "$TYPE" == "chart" ]; then
     sed -i "s/^appVersion: .*/appVersion: ${APP_VERSION}/" "$CHART_FILE"
   fi
 else
-  echo "Error: Unknown type '$TYPE'. Use 'app' or 'chart'."
+  msg "Error: Unknown type '$TYPE'. Use 'app' or 'chart'."
   exit 1
 fi
 
-echo "Successfully updated $CHART_FILE"
+msg "Successfully updated $CHART_FILE"
 
-echo >&2 "Updating Helm Chart README.md..."
+msg "Updating Helm Chart README.md..."
 
 helm-docs -t hack/CHART_README.md.gotmpl -c charts
