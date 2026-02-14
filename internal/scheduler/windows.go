@@ -302,6 +302,12 @@ func ConvertOffHoursToCron(windows []OffHourWindow) (string, string, error) {
 		return "", "", fmt.Errorf("invalid end time: %w", err)
 	}
 
+	// Validate that start and end times are different
+	// A hibernation window must define a clear shutdown (start) and wakeup (end) period
+	if startHour == endHour && startMin == endMin {
+		return "", "", fmt.Errorf("start and end times must be different; start=%s, end=%s", window.Start, window.End)
+	}
+
 	// Convert day names to cron dow format (0-6, SUN=0)
 	cronDays, err := convertDaysToCron(window.DaysOfWeek)
 	if err != nil {
