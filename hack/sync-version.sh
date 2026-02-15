@@ -9,7 +9,7 @@ VERSION=$1
 TYPE=$2
 
 msg () {
-  echo >&2 "[$(date +'%I:%M:%S %p')] [sync-version] $*"
+  echo >&2 "[$(date +'%-I:%M:%S %p')] [sync-version] $*"
 }
 if [ -z "$VERSION" ] || [ -z "$TYPE" ]; then
   msg "Usage: $0 <version> <type>"
