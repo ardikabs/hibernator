@@ -1,8 +1,15 @@
 branches:
-- "main"
-- "release/v+([0-9]).+([0-9])"
+- name: "${GITHUB_REF_NAME}"
+- name: "release/v+([0-9]).+([0-9])"
+  range: "${name.replace('release/v', '') + '.x'}"
+  channel: "${name.replace('release/v', '')}"
 
-tagFormat: "v${version}"
+# Default tagFormat is "v${version}". Note for reference https://semantic-release.gitbook.io/semantic-release/usage/configuration#tagformat
+# Do not make a change here cause this releaserc configuration is used to parse with envsubst
+# explicitly specify tagFormat with `v${version}` will omit the `${version}`.
+# Until the https://github.com/semantic-release/semantic-release/issues/1487 is resolved, we workaround this by templating with envsubst.
+#
+# tagFormat: "v${version}"
 
 plugins:
 - [
@@ -31,7 +38,8 @@ plugins:
 - [
     "@semantic-release/exec",
     {
-      "generateNotesCmd": "./hack/sync-version.sh ${nextRelease.version} app"
+      "generateNotesCmd": "./hack/sync-version.sh ${nextRelease.version} app",
+      "publishCmd": "./hack/auto-release-branch.sh ${nextRelease.version} ${nextRelease.gitTag}"
     }
   ]
 - [
