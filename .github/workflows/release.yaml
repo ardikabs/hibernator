@@ -9,6 +9,9 @@ on:
 jobs:
   release:
     name: Release
+    if: |
+      (github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main') ||
+      (github.event_name == 'push' && startsWith(github.ref, 'refs/heads/release/v'))
     runs-on: ubuntu-latest
     permissions:
       contents: write
@@ -33,7 +36,7 @@ jobs:
           version: v1.14.2
 
       - name: Setup Semantic Release Config for App
-        run: cp .github/releaserc/app.releaserc.yml .releaserc.yml
+        run: envsubst < .github/releaserc/app.releaserc.yml > .releaserc.yml
 
       - name: Semantic Release (App)
         id: semantic
