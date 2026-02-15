@@ -133,3 +133,24 @@ jobs:
         run: |
           helm package charts/hibernator --version ${{ steps.semantic-chart.outputs.new_release_version }}
           helm push hibernator-${{ steps.semantic-chart.outputs.new_release_version }}.tgz oci://ghcr.io/${{ github.repository_owner }}/charts
+
+      - name: Chart Release
+        uses: softprops/action-gh-release@v2.4.2
+        if: steps.semantic-chart.outputs.new_release_published == 'true'
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+          name: "Helm Chart v${{ steps.semantic-chart.outputs.new_release_version }}"
+          tag_name: "chart-v${{ steps.semantic-chart.outputs.new_release_version }}"
+          body: |
+            ${{ steps.semantic-chart.outputs.new_release_notes }}
+
+            ## 📦 Get the Chart
+            The Dummy chart is now available as an OCI artifact via GHCR. Install it with a single command:
+
+            ```bash
+            helm install hibernator oci://ghcr.io/${{ github.repository_owner }}/charts/hibernator --version ${{ steps.semantic-chart.outputs.new_release_version }}
+            ```
+
+          prerelease: false
+          draft: false
+          make_latest: "false"
