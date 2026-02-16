@@ -80,16 +80,17 @@ Each executor:
 
 ## Current Implementation Status
 
-### ✅ Completed (MVP Phase 1-3)
+### ✅ Completed (v1.x Shipped)
 
-- **Core Infrastructure**: CRDs, controller, scheduler/planner with DAG support
-- **AWS Executors**: EKS (node groups + Karpenter), RDS, EC2
-- **Streaming Infrastructure**: gRPC + webhook fallback for runner logs/progress (status only, no restore data)
-- **Authentication**: Projected ServiceAccount tokens with TokenReview validation
-- **Restore System**: ConfigMap-based persistence (runner saves/loads directly via RestoreManager)
-- **Error Recovery**: Automatic retry with exponential backoff
-- **Validation Webhook**: Schedule format, DAG cycle detection
-- **Schedule Migration**: Start/End/DaysOfWeek format with cron conversion
+- **Core Infrastructure**: CRDs, controller, scheduler/planner with DAG support.
+- **First-Cycle Failure Resolution**: Manual intervention protocol established with `hibernator.io/retry-now` annotation.
+- **AWS Executors**: EKS (node groups + Karpenter), RDS, EC2.
+- **Streaming Infrastructure**: gRPC + webhook fallback for runner logs/progress.
+- **Authentication**: Projected ServiceAccount tokens with TokenReview validation.
+- **Restore System**: ConfigMap-based persistence.
+- **Error Recovery**: Automatic retry with exponential backoff.
+- **Validation Webhook**: Schedule format, DAG cycle detection.
+- **Schedule Migration**: Start/End/DaysOfWeek format with cron conversion.
 
 ### 🔄 In Progress
 
@@ -584,7 +585,7 @@ All findings are located in `docs/findings/` and **MUST** follow the template at
 
 | RFC | Status | Keywords | Use When |
 |-----|--------|----------|----------|
-| [RFC-0001](../enhancements/0001-hibernate-operator.md) | In Progress 🚀 (See RFC for completion criteria: hibernation schedule works, executors shutdown/wakeup services, monitoring/logs/metrics, E2E tests pass) | Architecture, Control-Plane, Executors, Streaming, Security, Scheduling, Dependency-Resolution, Job-Lifecycle, RBAC, Restore-Metadata | User asks about operator architecture, execution model, streaming auth, security, or job lifecycle |
+| [RFC-0001](../enhancements/0001-hibernate-operator.md) | Implemented ✅ | Architecture, Control-Plane, Executors, Streaming, Security, Scheduling, Dependency-Resolution, Job-Lifecycle, RBAC, Restore-Metadata | User asks about operator architecture, execution model, streaming auth, security, or job lifecycle |
 | [RFC-0002](../enhancements/0002-schedule-format-migration.md) | Implemented ✅ | Schedule-Format, Time-Windows, Cron-Conversion, API-Design, Timezone-Aware, Validation, User-Experience, Migration, OffHourWindow, Conversion | User asks about schedule validation, time windows, cron conversion, timezone handling, or API changes |
 | [RFC-0003](../enhancements/0003-schedule-exceptions.md) | Implemented ✅ (Core Implementation) | Schedule-Exceptions, Maintenance-Windows, Lead-Time, Time-Bound, Extend, Suspend, Replace, Emergency-Events, Validation, Status-Tracking, Independent-CRD, GitOps | User asks about schedule exceptions, emergency overrides, maintenance windows, time-bound deviations, or temporary schedule changes |
 | [RFC-0004](../enhancements/0004-scale-subresource-executor.md) | Implemented ✅ | Executors, Kubernetes, Scale-Subresource, Downscale, Restore-Metadata, RBAC, WorkloadScaler | User asks about workload downscaling, scale subresource usage, workloadscaler executor, or RBAC for scaling |
