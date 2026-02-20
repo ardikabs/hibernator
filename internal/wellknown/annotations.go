@@ -18,4 +18,11 @@ const (
 
 	// AnnotationRetryNow is the annotation key used to trigger a manual retry of a failed plan.
 	AnnotationRetryNow = "hibernator.ardikabs.com/retry-now"
+
+	// AnnotationSuspendUntil is the annotation key for the deadline when auto-resume should occur.
+	// Value format: RFC3339 timestamp (e.g., "2026-01-15T06:00:00Z").
+	AnnotationSuspendUntil = "hibernator.ardikabs.com/suspend-until"
+
+	// AnnotationSuspendReason is the annotation key for recording the reason for suspension.
+	AnnotationSuspendReason = "hibernator.ardikabs.com/suspend-reason"
 )
