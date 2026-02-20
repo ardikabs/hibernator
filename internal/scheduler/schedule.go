@@ -93,6 +93,12 @@ type EvaluationResult struct {
 
 	// CurrentState describes the current state based on schedule.
 	CurrentState string
+
+	// InGracePeriod indicates if the result was influenced by a grace period buffer.
+	InGracePeriod bool
+
+	// GracePeriodEnd is when the current grace period ends.
+	GracePeriodEnd time.Time
 }
 
 // eval determines if we should be in hibernation based on the schedule.
@@ -127,11 +133,45 @@ func (e *ScheduleEvaluator) eval(window ScheduleWindow) (*EvaluationResult, erro
 	// Determine current state by comparing which event happened more recently
 	shouldHibernate := lastHibernate.After(lastWakeUp)
 
+	// Calculate next occurrences
+	nextHibernate := hibernateSched.Next(localNow)
+	nextWakeUp := wakeUpSched.Next(localNow)
+
+	var (
+		inGracePeriod  bool
+		gracePeriodEnd time.Time
+	)
+
 	if e.scheduleBuffer > 0 {
-		if !shouldHibernate && isInGraceTimeWindow(window.Windows, localNow, e.scheduleBuffer) {
-			shouldHibernate = true
-		} else if shouldHibernate && isInLateWindow(window.Windows, localNow, e.scheduleBuffer) {
+		// Check for Start Boundary Grace Period
+		// We only apply this if we are NOT in a continuous hibernation scenario.
+		// If the previous window's end grace period overlaps with or touches the current window's start,
+		// we should remain hibernated instead of forcing a wake-up for the grace period.
+		prevWindowEndGrace := lastWakeUp.Add(e.scheduleBuffer)
+		isContinuous := !prevWindowEndGrace.Before(lastHibernate)
+
+		if shouldHibernate && !isContinuous && isInGraceTimeWindow(StartBoundary, window.Windows, localNow, e.scheduleBuffer) {
 			shouldHibernate = false
+			inGracePeriod = true
+			gracePeriodEnd = lastHibernate.Add(e.scheduleBuffer)
+
+			// Adjust nextHibernate to ensure composition functions (like evaluateExtend)
+			// pick up the correct next event time even if InGracePeriod flag is lost.
+			if gracePeriodEnd.Before(nextHibernate) {
+				nextHibernate = gracePeriodEnd
+			}
+
+		} else if !shouldHibernate && isInGraceTimeWindow(EndBoundary, window.Windows, localNow, e.scheduleBuffer) {
+			shouldHibernate = true
+			inGracePeriod = true
+			gracePeriodEnd = lastWakeUp.Add(e.scheduleBuffer)
+
+			// Adjust nextWakeUp to ensure composition functions (like evaluateExtend)
+			// pick up the correct next event time even if InGracePeriod flag is lost.
+			if gracePeriodEnd.Before(nextWakeUp) {
+				nextWakeUp = gracePeriodEnd
+			}
+
 		}
 	}
 
@@ -140,15 +180,13 @@ func (e *ScheduleEvaluator) eval(window ScheduleWindow) (*EvaluationResult, erro
 		state = "hibernated"
 	}
 
-	// Calculate next occurrences
-	nextHibernate := hibernateSched.Next(localNow)
-	nextWakeUp := wakeUpSched.Next(localNow)
-
 	return &EvaluationResult{
 		ShouldHibernate:   shouldHibernate,
 		NextHibernateTime: nextHibernate,
 		NextWakeUpTime:    nextWakeUp,
 		CurrentState:      state,
+		InGracePeriod:     inGracePeriod,
+		GracePeriodEnd:    gracePeriodEnd,
 	}, nil
 }
 
@@ -184,8 +222,20 @@ func (e *ScheduleEvaluator) findLastOccurrence(sched cron.Schedule, now time.Tim
 // Returns the earlier of: next hibernate time or next wake-up time.
 func (e *ScheduleEvaluator) NextRequeueTime(result *EvaluationResult) time.Duration {
 	now := e.Clock.Now()
-	var nextEvent time.Time
+	safetyBuffer := 10 * time.Second
 
+	if result.InGracePeriod {
+		duration := result.GracePeriodEnd.Sub(now)
+		if duration < 0 {
+			duration = 0
+		}
+
+		// When in grace period, the next event is the end of the buffer.
+		// Since we are already in the buffer, we just need the remaining time + safety.
+		return duration + safetyBuffer
+	}
+
+	var nextEvent time.Time
 	if result.ShouldHibernate {
 		// Currently hibernated, next event is wake-up
 		nextEvent = result.NextWakeUpTime
@@ -200,7 +250,7 @@ func (e *ScheduleEvaluator) NextRequeueTime(result *EvaluationResult) time.Durat
 	}
 
 	// Add a small buffer to ensure we're past the scheduled time
-	return duration + e.scheduleBuffer + 10*time.Second
+	return duration + e.scheduleBuffer + safetyBuffer
 }
 
 // Evaluate evaluates the schedule with an optional exception applied.
@@ -273,7 +323,7 @@ func (e *ScheduleEvaluator) evaluateExtend(baseWindows, exceptionWindows []OffHo
 		return nil, fmt.Errorf("evaluate exception windows: %w", err)
 	}
 
-	// Hibernate when both schedule says hibernate
+	// Hibernate when either schedule says hibernate
 	shouldHibernate := baseResult.ShouldHibernate && exceptionResult.ShouldHibernate
 
 	// Calculate next events (take the earlier of the two for each)
@@ -285,17 +335,34 @@ func (e *ScheduleEvaluator) evaluateExtend(baseWindows, exceptionWindows []OffHo
 		state = "hibernated"
 	}
 
+	// Propagate grace period if the resulting state is influenced by one.
+	// For simplicity, we use the earlier grace period end if both are present.
+	inGracePeriod := baseResult.InGracePeriod || exceptionResult.InGracePeriod
+	var gracePeriodEnd time.Time
+	if baseResult.InGracePeriod && exceptionResult.InGracePeriod {
+		gracePeriodEnd = earlierTime(baseResult.GracePeriodEnd, exceptionResult.GracePeriodEnd)
+	} else if baseResult.InGracePeriod {
+		gracePeriodEnd = baseResult.GracePeriodEnd
+	} else if exceptionResult.InGracePeriod {
+		gracePeriodEnd = exceptionResult.GracePeriodEnd
+	}
+
 	return &EvaluationResult{
 		ShouldHibernate:   shouldHibernate,
 		NextHibernateTime: nextHibernate,
 		NextWakeUpTime:    nextWakeUp,
 		CurrentState:      state,
+		InGracePeriod:     inGracePeriod,
+		GracePeriodEnd:    gracePeriodEnd,
 	}, nil
 }
 
 // evaluateSuspend evaluates schedule with suspension windows.
 // Suspension PREVENTS hibernation during exception windows, even if base schedule says hibernate.
 // Lead time prevents NEW hibernation starts within the buffer before suspension.
+//
+// NOTE: Suspend exceptions must have forward time windows (start < end).
+// Backward windows (e.g., start=23:59, end=00:00) are not supported and will be logged as errors then ignored.
 func (e *ScheduleEvaluator) evaluateSuspend(baseWindows []OffHourWindow, exception *Exception, timezone string) (*EvaluationResult, error) {
 	now := e.Clock.Now()
 	loc, err := time.LoadLocation(timezone)
@@ -311,8 +378,20 @@ func (e *ScheduleEvaluator) evaluateSuspend(baseWindows []OffHourWindow, excepti
 		return nil, fmt.Errorf("evaluate base windows: %w", err)
 	}
 
+	// No special window validation needed - both forward and backward (overnight) windows are supported
+	if len(exception.Windows) == 0 {
+		return baseResult, nil
+	}
+
 	// Check if we're currently in a suspension window
 	inSuspensionWindow := isInTimeWindows(exception.Windows, localNow)
+
+	// Check if we're in grace period at end of suspension window
+	// This fixes the boundary gap at 23:59:00 where exclusive end boundary causes suspension to be considered inactive
+	inSuspensionGrace := false
+	if !inSuspensionWindow && e.scheduleBuffer > 0 {
+		inSuspensionGrace = isInGraceTimeWindow(EndBoundary, exception.Windows, localNow, e.scheduleBuffer)
+	}
 
 	// Check if we're in lead time window (before suspension starts)
 	inLeadTimeWindow := false
@@ -321,13 +400,13 @@ func (e *ScheduleEvaluator) evaluateSuspend(baseWindows []OffHourWindow, excepti
 	}
 
 	// Determine final hibernation state
-	// - If in suspension window: DON'T hibernate (override base)
+	// - If in suspension window or grace period: DON'T hibernate (override base)
 	// - If in lead time window AND base says start hibernating: DON'T start (but ongoing hibernation continues)
 	// - Otherwise: follow base schedule
 	shouldHibernate := baseResult.ShouldHibernate
 
-	if inSuspensionWindow {
-		// Suspension active - keep awake regardless of base schedule
+	if inSuspensionWindow || inSuspensionGrace {
+		// Suspension active (or in grace period) - keep awake regardless of base schedule
 		shouldHibernate = false
 	} else if inLeadTimeWindow && !baseResult.ShouldHibernate {
 		// In lead time window but not currently hibernated
@@ -350,8 +429,8 @@ func (e *ScheduleEvaluator) evaluateSuspend(baseWindows []OffHourWindow, excepti
 	nextHibernate := baseResult.NextHibernateTime
 	nextWakeUp := baseResult.NextWakeUpTime
 
-	// If in suspension or lead time, we may need to adjust next hibernate time
-	if inSuspensionWindow || inLeadTimeWindow {
+	// If in suspension, lead time, or grace period, we may need to adjust next hibernate time
+	if inSuspensionWindow || inLeadTimeWindow || inSuspensionGrace {
 		// Find when suspension ends to recalculate
 		suspensionEnd := e.findSuspensionEnd(exception.Windows, localNow)
 		if !suspensionEnd.IsZero() && suspensionEnd.After(localNow) {
@@ -367,6 +446,8 @@ func (e *ScheduleEvaluator) evaluateSuspend(baseWindows []OffHourWindow, excepti
 		NextHibernateTime: nextHibernate,
 		NextWakeUpTime:    nextWakeUp,
 		CurrentState:      state,
+		InGracePeriod:     inSuspensionGrace,
+		GracePeriodEnd:    baseResult.GracePeriodEnd, // Use base result's grace period if applicable
 	}, nil
 }
 
@@ -436,7 +517,9 @@ func (e *ScheduleEvaluator) ValidateCron(expr string) error {
 	return nil
 }
 
-// earlierTime returns the earlier of two times, ignoring zero times.
+// earlierTime returns the earlier of two times, handling zero values.
+// If one time is zero, the non-zero time is returned.
+// If both are zero, zero time is returned.
 func earlierTime(a, b time.Time) time.Time {
 	if a.IsZero() {
 		return b
