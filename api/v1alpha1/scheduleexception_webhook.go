@@ -252,6 +252,10 @@ func (r *ScheduleException) validateWindows(exception *ScheduleException) field.
 			))
 		}
 
+		// Note: Suspend exceptions support both forward and overnight (backward) windows.
+		// Overnight windows like 21:00-02:00 are valid for suspending base hibernation windows.
+		// The grace period logic in the scheduler handles boundary edge cases correctly.
+
 		// Validate daysOfWeek
 		if len(window.DaysOfWeek) == 0 {
 			allErrs = append(allErrs, field.Required(
