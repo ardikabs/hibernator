@@ -1,7 +1,7 @@
 ---
 rfc: RFC-0001
 title: Hibernator Operator - Control Plane & Runner Model
-status: In Progress
+status: Implemented
 date: 2026-01-29
 ---
 
@@ -9,7 +9,7 @@ date: 2026-01-29
 
 **Keywords:** Architecture, Control-Plane, Executors, Streaming, Security, Scheduling, Dependency-Resolution, Job-Lifecycle, RBAC, Restore-Metadata
 
-**Status:** Implemented ✅ (MVP Complete)
+**Status:** Implemented (v1.x Shipped)
 
 ## Summary
 
@@ -190,81 +190,12 @@ If both `spec.k8s` and `spec.eks` are set, the runner rejects the configuration 
 
 ## Implementation Status
 
-Last updated: 2026-02-07
+**Status:** v1.x Shipped 🚀
 
-### Completed (MVP Phase 1)
+All core components for AWS (EKS, RDS, EC2), Karpenter, and Generic Workload Scaler are fully implemented and stable. The streaming architecture, RBAC controls, and scheduling engine are production-ready.
 
-| Component | File(s) | Notes |
-|-----------|---------|-------|
-| Project scaffolding | `go.mod`, `Makefile`, `Dockerfile` | Kubernetes 1.34, aws-sdk-go-v2 v1.34.0 |
-| CRD types | `api/v1alpha1/*.go` | HibernatePlan, CloudProvider, K8SCluster with kubebuilder markers |
-| Scheduler/planner | `internal/scheduler/planner.go` | All 4 strategies: Sequential, Parallel, DAG (Kahn's algorithm), Staged |
-| Scheduler tests | `internal/scheduler/planner_test.go` | Cycle detection, unknown target validation, diamond DAG |
-| EKS executor | `internal/executor/eks/` | ManagedNodeGroups scale to zero, restore state tracking, Karpenter placeholder |
-| RDS executor | `internal/executor/rds/` | Instance/cluster stop, optional snapshot before stop, start logic |
-| EC2 executor | `internal/executor/ec2/` | Tag-based selector, instance ID support, stop/start running instances |
-| HibernatePlan controller | `internal/controller/hibernateplan_controller.go` | Phase state machine, Job dispatch, status ledger, finalizer cleanup |
-| Runner binary | `cmd/runner/main.go` | Fat runner, projected SA token auth, connector loading |
-| Controller main | `cmd/controller/main.go` | Manager setup, leader election, health probes |
-| CRD manifests | `config/crd/bases/` | OpenAPIv3 schema for all 3 CRDs |
-| RBAC & deployment | `config/manager/manager.yaml` | ClusterRole, ServiceAccount, Deployment |
-| Sample CRs | `config/samples/hibernateplan_samples.yaml` | DAG, Staged, Sequential examples |
-
-### Completed (MVP Phase 2 - P0/P1)
-
-| Component | File(s) | Notes |
-|-----------|---------|-------|
-| Cron schedule parsing | `internal/scheduler/schedule.go` | Uses robfig/cron/v3, timezone-aware, next requeue calculation |
-| Schedule tests | `internal/scheduler/schedule_test.go` | Work hours, night hours, timezone handling |
-| Restore data manager | `internal/restore/manager.go` | ConfigMap-based persistence, per-target JSON storage |
-| Restore manager tests | `internal/restore/manager_test.go` | Save/Load/LoadAll/Delete operations |
-| Validation webhook | `api/v1alpha1/hibernateplan_webhook.go` | DAG cycle detection, cron validation, target uniqueness |
-| Webhook tests | `api/v1alpha1/hibernateplan_webhook_test.go` | Full validation coverage |
-| Runner SA configuration | `cmd/controller/main.go`, `internal/controller/hibernateplan_controller.go` | Fixed runner ServiceAccount configured via controller flag |
-| Integration tests | `internal/controller/hibernateplan_controller_test.go` | envtest-based, schedule evaluation |
-| Webhook manifests | `config/webhook/webhook.yaml` | ValidatingWebhookConfiguration, cert-manager integration |
-| Runner RBAC | `config/rbac/runner_role.yaml` | Minimal ClusterRole for runner pods (connectors, secrets, ConfigMaps) |
-
-### Completed (MVP Phase 3 - P2 Streaming)
-
-| Component | File(s) | Notes |
-|-----------|---------|-------|
-| Proto/types definitions | `api/streaming/v1alpha1/execution.proto`, `types.go` | ExecutionService with StreamLogs, ReportProgress, ReportCompletion, Heartbeat |
-| TokenReview auth validator | `internal/streaming/auth/validator.go` | Audience check for `hibernator-control-plane`, namespace/SA extraction |
-| gRPC auth interceptors | `internal/streaming/auth/interceptor.go` | Unary and streaming interceptors with execution access validation |
-| gRPC streaming server | `internal/streaming/server/grpc.go` | ExecutionServiceServer with log storage, progress tracking, completion handling |
-| Webhook callback server | `internal/streaming/server/webhook.go` | HTTP fallback with TokenReview auth, unified payload handling |
-| gRPC client | `internal/streaming/client/grpc.go` | Log buffering, heartbeat, projected token from `/var/run/secrets/stream/token` |
-| Webhook client | `internal/streaming/client/webhook.go` | HTTP fallback with same StreamingClient interface |
-| Auto-select client | `internal/streaming/client/client.go` | Factory that tries gRPC first, falls back to webhook |
-| Runner streaming integration | `cmd/runner/main.go` | Progress reporting (10%, 20%, 30%, 50%, 90%), completion handling, error streaming, heartbeat |
-
-### Completed (Additional Executors & Features - P2/P3)
-
-| Component | File(s) | Notes |
-|-----------|---------|-------|
-| Schedule Migration | `internal/scheduler/schedule.go` | RFC-0002 implemented: start/end/daysOfWeek format with cron conversion |
-| Karpenter executor | `internal/executor/karpenter/` | NodePool scaling with disruption budget and resource limit management |
-| Workload Scaler | `internal/executor/workloadscaler/` | RFC-0004 implemented: Generic scale subresource downscaler for Deployments/StatefulSets/CRDs |
-| Restore data quality | `internal/executor/*`, `internal/restore/` | RFC-0001 implemented: IsLive flag, quality-aware preservation, annotation-based locking |
-| Prometheus metrics | `internal/metrics/metrics.go` | Execution duration, success/failure counters, reconcile metrics, restore data size |
-| Error recovery | `internal/recovery/recovery.go` | Automatic retry with exponential backoff, error classification (transient vs permanent) |
-
-### Future Work
-
-**Future Priorities:**
-
-| Priority | Task | Description |
-|----------|------|-------------|
-| P3 | Complete GCP API integration | Implement actual google.golang.org/api calls for GKE and Cloud SQL (current implementation is placeholder) |
-| P3 | Azure executors | AKS, Azure SQL executors |
-| P3 | E2E Tests | Complete full test suite in `test/e2e/` (framework exists) |
-| P3 | Helm Chart | Finalize packaging for artifact hub |
+Future enhancements (GCP, Azure) will be tracked in separate RFCs or issues.
 
 ## Appendix — examples
 
 - See `config/samples/hibernateplan_samples.yaml` for example `HibernatePlan` configurations.
-
-## Links
-
-- Agent guidelines: `AGENTS.md`

@@ -1,6 +1,6 @@
 ---
 date: February 8, 2026
-status: investigated
+status: resolved
 component: HibernatePlan Lifecycle
 ---
 
@@ -47,17 +47,23 @@ if !hasRestoreData {
 
 This assumes that every `WakingUp` phase was preceded by a successful `Hibernating` phase. It does not account for the "bootstrap" failure where the first-ever state capture never happened.
 
-## Proposed Guidelines / Solutions
+## Resolution
 
-### User Guideline (Manual Intervention Required)
-If a `HibernatePlan` fails during its **very first** hibernation attempt, the operator **must** fix the root cause before the next wakeup window arrives. If the wakeup window is reached while the plan is in `PhaseError` without a restore point, the system cannot automatically recover.
+### Mechanism: Retry-Now Annotation
+We have shipped the `hibernator.io/retry-now` annotation to force a retry when the retry limit is exceeded. This allows operators to manually trigger a reconciliation loop after addressing the underlying issue.
 
-### Technical Mitigation: The "Graceful Bootstrap"
-The manual retry signal (e.g., the proposed `retry-now` annotation) should be enhanced with "Bootstrap Awareness":
-- If `retry-now` is triggered during a **Wakeup** window.
-- AND `hasRestoreData` is **false**.
-- The Controller should transition to **`PhaseActive`** instead of `PhaseError`.
-- **Rationale:** If no restore data exists, we assume the resources were never successfully hibernated and are still in their "Active" state. This breaks the deadlock and lets the plan align with the schedule.
+### Manual Intervention Protocol
+Even with the `retry-now` mechanism, **execution errors are outside the scope of Hibernator**. If the underlying resource fails to hibernate (e.g., due to permissions, network issues, or cloud provider errors), Hibernator cannot magically fix it.
+
+Therefore, **manual intervention is mandatory** for first-cycle failures:
+1.  **Diagnose:** Identify why the target failed to hibernate (check logs, permissions).
+2.  **Fix:** Resolve the root cause (e.g., update IAM role, fix network tags).
+3.  **Retry:** Apply the `hibernator.io/retry-now` annotation to the `HibernatePlan` to force a new attempt.
+    ```bash
+    kubectl annotate hibernateplan <name> hibernator.io/retry-now=$(date +%s) --overwrite
+    ```
+
+This approach ensures that the operator explicitly acknowledges and resolves the state before the system attempts to proceed, preventing the "blind" wakeup loop.
 
 ## Impact
 
