@@ -79,7 +79,7 @@ var _ = Describe("Execution Strategy E2E", func() {
 			Expect(k8sClient.Create(ctx, plan)).To(Succeed())
 
 			By("Advancing time to hibernation window")
-			fakeClock.SetTime(time.Date(2026, 2, 9, 20, 1, 0, 0, time.UTC))
+			fakeClock.SetTime(time.Date(2026, 2, 9, 20, 1, 10, 0, time.UTC))
 			testutil.TriggerReconcile(ctx, k8sClient, plan)
 			testutil.EventuallyPhase(ctx, k8sClient, plan, hibernatorv1alpha1.PhaseHibernating)
 
@@ -138,7 +138,7 @@ var _ = Describe("Execution Strategy E2E", func() {
 			Expect(k8sClient.Create(ctx, plan)).To(Succeed())
 
 			By("Advancing time to hibernation window")
-			fakeClock.SetTime(time.Date(2026, 2, 9, 20, 1, 0, 0, time.UTC))
+			fakeClock.SetTime(time.Date(2026, 2, 9, 20, 1, 10, 0, time.UTC))
 			testutil.TriggerReconcile(ctx, k8sClient, plan)
 			testutil.EventuallyPhase(ctx, k8sClient, plan, hibernatorv1alpha1.PhaseHibernating)
 
@@ -185,7 +185,7 @@ var _ = Describe("Execution Strategy E2E", func() {
 
 			// --- HIBERNATION (Shutdown) ---
 			By("[Shutdown] Advancing time to hibernation window")
-			fakeClock.SetTime(time.Date(2026, 2, 9, 20, 1, 0, 0, time.UTC))
+			fakeClock.SetTime(time.Date(2026, 2, 9, 20, 1, 10, 0, time.UTC))
 			testutil.TriggerReconcile(ctx, k8sClient, plan)
 			testutil.EventuallyPhase(ctx, k8sClient, plan, hibernatorv1alpha1.PhaseHibernating)
 
@@ -223,7 +223,7 @@ var _ = Describe("Execution Strategy E2E", func() {
 
 			// --- WAKEUP (Restore) ---
 			By("[Wakeup] Advancing time to wakeup window")
-			fakeClock.SetTime(time.Date(2026, 2, 10, 6, 1, 0, 0, time.UTC))
+			fakeClock.SetTime(time.Date(2026, 2, 10, 6, 1, 10, 0, time.UTC))
 			testutil.TriggerReconcile(ctx, k8sClient, plan)
 			testutil.EventuallyPhase(ctx, k8sClient, plan, hibernatorv1alpha1.PhaseWakingUp)
 
@@ -283,7 +283,7 @@ var _ = Describe("Execution Strategy E2E", func() {
 			Expect(k8sClient.Create(ctx, plan)).To(Succeed())
 
 			By("Advancing time to hibernation window")
-			fakeClock.SetTime(time.Date(2026, 2, 9, 20, 1, 0, 0, time.UTC))
+			fakeClock.SetTime(time.Date(2026, 2, 9, 20, 1, 10, 0, time.UTC))
 			testutil.TriggerReconcile(ctx, k8sClient, plan)
 			testutil.EventuallyPhase(ctx, k8sClient, plan, hibernatorv1alpha1.PhaseHibernating)
 
