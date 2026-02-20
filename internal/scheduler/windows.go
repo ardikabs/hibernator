@@ -96,7 +96,7 @@ func isInLeadTimeWindow(windows []OffHourWindow, now time.Time, leadTime time.Du
 		checkDays := []string{currentDay}
 
 		if currentHour > 12 {
-			nextDay := time.Now().Add(24 * time.Hour).Weekday()
+			nextDay := now.Add(24 * time.Hour).Weekday()
 			checkDays = append(checkDays, strings.ToUpper(nextDay.String()[:3]))
 		}
 
@@ -147,59 +147,77 @@ func isInLeadTimeWindow(windows []OffHourWindow, now time.Time, leadTime time.Du
 	return false
 }
 
-// isInLateWindow checks if we're within grace time after any hibernation window starts.
-func isInLateWindow(windows []OffHourWindow, now time.Time, lateDuration time.Duration) bool {
-	currentDay := strings.ToUpper(now.Weekday().String()[:3])
-	currentHour := now.Hour()
-	currentMin := now.Minute()
-	currentTimeMinutes := currentHour*60 + currentMin
-	lateDurationMinutes := int(lateDuration.Minutes())
+type WindowBoundary int
 
+const (
+	StartBoundary WindowBoundary = iota
+	EndBoundary
+)
+
+// isInGraceTimeWindow determines whether the current time falls within
+// the grace period immediately after a window boundary.
+//
+// This is primarily used for full-day hibernation windows to prevent
+// unintended wake-up actions at the exact boundary of the window.
+//
+// For example, with a window of 00:00–23:59 and a 1-minute grace period,
+// the time range 23:59:00–23:59:59 is still considered within the grace
+// window, preventing a wake-up operation from being triggered.
+func isInGraceTimeWindow(boundary WindowBoundary, windows []OffHourWindow, now time.Time, grace time.Duration) bool {
 	for _, w := range windows {
-		// Check if today is in the window's days
-		dayMatch := false
-		checkDays := []string{currentDay}
+		for _, day := range w.DaysOfWeek {
+			targetDay, ok := parseWeekday(day)
+			if !ok {
+				continue
+			}
 
-		if currentHour > 12 {
-			nextDay := time.Now().Add(24 * time.Hour).Weekday()
-			checkDays = append(checkDays, strings.ToUpper(nextDay.String()[:3]))
-		}
+			// Find the correct base date for this window
+			// We anchor using the most recent occurrence,
+			// but adjust carefully for overnight windows.
+			baseDate := mostRecentWeekday(now, targetDay)
 
-		for _, checkDay := range checkDays {
-			for _, day := range w.DaysOfWeek {
-				if strings.EqualFold(day, checkDay) {
-					dayMatch = true
-					break
+			// If this is a shutdown window,
+			// measured from the start time
+			switch boundary {
+			case StartBoundary:
+				startHour, startMin, err := parseTime(w.Start)
+				if err != nil {
+					continue
 				}
-			}
-			if dayMatch {
-				break
-			}
-		}
 
-		if !dayMatch {
-			continue
-		}
+				startTime := time.Date(
+					baseDate.Year(), baseDate.Month(), baseDate.Day(),
+					startHour, startMin, 0, 0, now.Location(),
+				)
 
-		// Parse window start time
-		startHour, startMin, err := parseTime(w.Start)
-		if err != nil {
-			continue
-		}
+				startGraceEnd := startTime.Add(grace)
 
-		startMinutes := startHour*60 + startMin
-		lateEndMinutes := startMinutes + lateDurationMinutes
+				// Valid cases:
+				// 1️⃣ Start grace (allow midnight crossing)
+				if (now.After(startTime) || now.Equal(startTime)) &&
+					(now.Before(startGraceEnd) || now.Equal(startGraceEnd)) {
+					return true
+				}
 
-		// Check if current time is in late window (after start, within late duration)
-		if lateEndMinutes < 24*60 {
-			// Normal case: late window doesn't cross midnight
-			if currentTimeMinutes >= startMinutes && currentTimeMinutes < lateEndMinutes {
-				return true
-			}
-		} else {
-			// Late window crosses midnight
-			if currentTimeMinutes >= startMinutes || currentTimeMinutes < (lateEndMinutes-24*60) {
-				return true
+			case EndBoundary:
+				endHour, endMin, err := parseTime(w.End)
+				if err != nil {
+					continue
+				}
+
+				endTime := time.Date(
+					baseDate.Year(), baseDate.Month(), baseDate.Day(),
+					endHour, endMin, 0, 0, now.Location(),
+				)
+
+				endGraceEnd := endTime.Add(grace)
+
+				// 2️⃣ End grace (STRICT: must still be same weekday)
+				if now.Weekday() == targetDay &&
+					(now.After(endTime) || now.Equal(endTime)) &&
+					(now.Before(endGraceEnd) || now.Equal(endGraceEnd)) {
+					return true
+				}
 			}
 		}
 	}
@@ -207,67 +225,30 @@ func isInLateWindow(windows []OffHourWindow, now time.Time, lateDuration time.Du
 	return false
 }
 
-// isInGraceTimeWindow checks if the end window within grace time
-// Primarily used for a full-day hibernation window to prevent wakeup at boundary per grace time setting.
-// E.g., for a window 00:00-23:59 with 1-minute grace time, at 23:59:00 - 23:59:59 we're still at grace time that prevents a wakeup operation.
-func isInGraceTimeWindow(windows []OffHourWindow, now time.Time, graceTime time.Duration) bool {
-	currentDay := strings.ToUpper(now.Weekday().String()[:3])
-	currentHour := now.Hour()
-	currentMin := now.Minute()
-	currentTimeMinutes := currentHour*60 + currentMin
-	graceTimeMinutes := int(graceTime.Minutes())
-
-	for _, w := range windows {
-		// Check if today is in the window's days (also check previous day for overnight windows)
-		dayMatch := false
-		checkDays := []string{currentDay}
-
-		// For overnight windows, also check if we're in grace time from yesterday's window end
-		if currentHour < 12 { // Rough heuristic: check previous day's window if we're early in the day
-			prevDay := time.Now().Add(-24 * time.Hour).Weekday()
-			checkDays = append(checkDays, strings.ToUpper(prevDay.String()[:3]))
-		}
-
-		for _, checkDay := range checkDays {
-			for _, day := range w.DaysOfWeek {
-				if strings.EqualFold(day, checkDay) {
-					dayMatch = true
-					break
-				}
-			}
-			if dayMatch {
-				break
-			}
-		}
-
-		if !dayMatch {
-			continue
-		}
-
-		// Parse window end time
-		endHour, endMin, err := parseTime(w.End)
-		if err != nil {
-			continue
-		}
-
-		endTimeMinutes := endHour*60 + endMin
-		graceEndMinutes := endTimeMinutes + graceTimeMinutes
-
-		// Check if current time is in grace time window (after end, within grace time)
-		if graceEndMinutes < 24*60 {
-			// Normal case: grace time doesn't cross midnight
-			if currentTimeMinutes >= endTimeMinutes && currentTimeMinutes < graceEndMinutes {
-				return true
-			}
-		} else {
-			// Grace time crosses midnight
-			if currentTimeMinutes >= endTimeMinutes || currentTimeMinutes < (graceEndMinutes-24*60) {
-				return true
-			}
-		}
+func parseWeekday(day string) (time.Weekday, bool) {
+	switch strings.ToUpper(day[:3]) {
+	case "SUN":
+		return time.Sunday, true
+	case "MON":
+		return time.Monday, true
+	case "TUE":
+		return time.Tuesday, true
+	case "WED":
+		return time.Wednesday, true
+	case "THU":
+		return time.Thursday, true
+	case "FRI":
+		return time.Friday, true
+	case "SAT":
+		return time.Saturday, true
+	default:
+		return 0, false
 	}
+}
 
-	return false
+func mostRecentWeekday(now time.Time, target time.Weekday) time.Time {
+	diff := (int(now.Weekday()) - int(target) + 7) % 7
+	return now.AddDate(0, 0, -diff)
 }
 
 // OffHourWindow represents a user-friendly time window for hibernation.

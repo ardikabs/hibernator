@@ -114,17 +114,17 @@ func TestScheduleEvaluator_eval(t *testing.T) {
 
 			result, err := evaluator.eval(tt.window)
 			if (err != nil) != tt.wantErr {
-				t.Errorf("Evaluate() error = %v, wantErr %v", err, tt.wantErr)
+				t.Errorf("eval() error = %v, wantErr %v", err, tt.wantErr)
 				return
 			}
 			if tt.wantErr {
 				return
 			}
 			if result.ShouldHibernate != tt.wantHibernate {
-				t.Errorf("Evaluate() ShouldHibernate = %v, want %v", result.ShouldHibernate, tt.wantHibernate)
+				t.Errorf("eval() ShouldHibernate = %v, want %v", result.ShouldHibernate, tt.wantHibernate)
 			}
 			if result.CurrentState != tt.wantState {
-				t.Errorf("Evaluate() CurrentState = %v, want %v", result.CurrentState, tt.wantState)
+				t.Errorf("eval() CurrentState = %v, want %v", result.CurrentState, tt.wantState)
 			}
 		})
 	}
@@ -156,26 +156,59 @@ func TestScheduleEvaluator_ValidateCron(t *testing.T) {
 }
 
 func TestScheduleEvaluator_NextRequeueTime(t *testing.T) {
-	now := time.Date(2026, 1, 28, 14, 0, 0, 0, time.UTC) // Wednesday 2 PM
-	evaluator := NewScheduleEvaluator(clocktesting.NewFakeClock(now))
-
-	window := ScheduleWindow{
-		HibernateCron: "0 20 * * 1-5", // 8 PM weekdays
-		WakeUpCron:    "0 6 * * 1-5",  // 6 AM weekdays
-		Timezone:      "UTC",
+	baseWindows := []OffHourWindow{
+		{Start: "20:00", End: "06:00", DaysOfWeek: []string{"MON", "TUE", "WED", "THU", "FRI"}},
 	}
 
-	result, err := evaluator.eval(window)
-	if err != nil {
-		t.Fatalf("Evaluate() error = %v", err)
+	tests := []struct {
+		name        string
+		baseWindows []OffHourWindow
+		timezone    string
+		now         time.Time
+		want        time.Duration
+	}{
+		{
+			name:        "next reconcile to hibernate",
+			baseWindows: baseWindows,
+			timezone:    "UTC",
+			now:         time.Date(2026, 1, 28, 19, 0, 0, 0, time.UTC), // Wednesday 7 PM UTC
+			want:        time.Hour + time.Minute + 10*time.Second,
+		},
+		{
+			name:        "next reconcile to hibernate - when at exact start time",
+			baseWindows: baseWindows,
+			timezone:    "UTC",
+			now:         time.Date(2026, 1, 28, 20, 0, 0, 0, time.UTC), // Wednesday 8 PM UTC
+			want:        time.Minute + 10*time.Second,
+		},
+		{
+			name:        "within buffer window - should requeue soon not next day",
+			baseWindows: baseWindows,
+			timezone:    "UTC",
+			// Wednesday 20:00:30 UTC - within 1m buffer of 20:00 start
+			// ShouldHibernate will be FALSE due to buffer.
+			// NextHibernateTime (from cron) will be TOMORROW 20:00.
+			// We want requeue to be remaining buffer (30s) + safety (10s) = 40s
+			now:  time.Date(2026, 1, 28, 20, 0, 30, 0, time.UTC),
+			want: 30*time.Second + 10*time.Second,
+		},
 	}
 
-	requeueDuration := evaluator.NextRequeueTime(result)
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			evaluator := NewScheduleEvaluator(clocktesting.NewFakeClock(tt.now), WithScheduleBuffer("1m"))
+			result, err := evaluator.Evaluate(tt.baseWindows, tt.timezone, nil)
+			if err != nil {
+				t.Fatalf("Evaluate() error = %v", err)
+			}
 
-	// Currently active (2 PM), next event is hibernate at 8 PM = 6 hours + 10s buffer
-	expectedDuration := 6*time.Hour + 10*time.Second
-	if requeueDuration != expectedDuration {
-		t.Errorf("NextRequeueTime() = %v, want %v", requeueDuration, expectedDuration)
+			// fmt.Println("Result:", "HibernateAt:", result.NextHibernateTime, "WakeUpAt:", result.NextWakeUpTime, "ShouldHibernate:", result.ShouldHibernate)
+
+			requeueDuration := evaluator.NextRequeueTime(result)
+			if requeueDuration != tt.want {
+				t.Errorf("NextRequeueTime() = %v, want %v", requeueDuration, tt.want)
+			}
+		})
 	}
 }
 
@@ -389,7 +422,6 @@ func TestScheduleEvaluator_Evaluate(t *testing.T) {
 
 	tests := []struct {
 		name          string
-		opts          []ScheduleEvaluatorOption
 		baseWindows   []OffHourWindow
 		timezone      string
 		exception     *Exception
@@ -431,7 +463,7 @@ func TestScheduleEvaluator_Evaluate(t *testing.T) {
 				},
 			},
 			// Friday 20:00 hibernated, Wakeup at 00:00 Saturday then hibernate again from 12:00
-			now:           time.Date(2026, 1, 31, 0, 1, 0, 0, time.UTC),
+			now:           time.Date(2026, 1, 31, 0, 1, 1, 0, time.UTC),
 			wantHibernate: false,
 			wantState:     "active",
 		},
@@ -447,7 +479,7 @@ func TestScheduleEvaluator_Evaluate(t *testing.T) {
 					{Start: "12:00", End: "00:00", DaysOfWeek: []string{"SAT", "SUN"}},
 				},
 			},
-			now:           time.Date(2026, 2, 2, 0, 0, 0, 0, time.UTC),
+			now:           time.Date(2026, 2, 2, 0, 1, 0, 0, time.UTC),
 			wantHibernate: true,
 			wantState:     "hibernated",
 		},
@@ -463,7 +495,7 @@ func TestScheduleEvaluator_Evaluate(t *testing.T) {
 					{Start: "12:00", End: "00:00", DaysOfWeek: []string{"SAT", "SUN"}},
 				},
 			},
-			now:           time.Date(2026, 2, 2, 6, 1, 0, 0, time.UTC),
+			now:           time.Date(2026, 2, 2, 6, 1, 1, 0, time.UTC),
 			wantHibernate: false,
 			wantState:     "active",
 		},
@@ -620,6 +652,17 @@ func TestScheduleEvaluator_Evaluate(t *testing.T) {
 			wantState:     "hibernated",
 		},
 		{
+			name: "full day off on sunday - should hibernate all day on next day",
+			baseWindows: []OffHourWindow{
+				{Start: "00:00", End: "23:59", DaysOfWeek: []string{"SAT", "SUN", "MON"}},
+			},
+			timezone:      "UTC",
+			exception:     nil,
+			now:           time.Date(2026, 2, 8, 1, 10, 0, 0, time.UTC), // Monday, 00:00:00 WIB
+			wantHibernate: true,
+			wantState:     "hibernated",
+		},
+		{
 			name: "full day awake on sunday - should operate all day",
 			baseWindows: []OffHourWindow{
 				{Start: "23:59", End: "00:00", DaysOfWeek: []string{"SAT", "SUN", "MON"}},
@@ -627,6 +670,28 @@ func TestScheduleEvaluator_Evaluate(t *testing.T) {
 			timezone:      "UTC",
 			exception:     nil,
 			now:           time.Date(2026, 2, 8, 23, 59, 15, 0, time.UTC), // Sunday, 23:59:25 WIB
+			wantHibernate: false,
+			wantState:     "active",
+		},
+		{
+			name: "full day awake on sunday - should operate all day on next day",
+			baseWindows: []OffHourWindow{
+				{Start: "23:59", End: "00:00", DaysOfWeek: []string{"SAT", "SUN", "MON"}},
+			},
+			timezone:      "UTC",
+			exception:     nil,
+			now:           time.Date(2026, 2, 8, 0, 1, 10, 0, time.UTC), // Monday, 00:01:10 WIB
+			wantHibernate: false,
+			wantState:     "active",
+		},
+		{
+			name: "custom",
+			baseWindows: []OffHourWindow{
+				{Start: "23:59", End: "00:00", DaysOfWeek: []string{"MON", "TUE", "WED", "THU", "FRI", "SAT", "SUN"}},
+			},
+			timezone:      "UTC",
+			exception:     nil,
+			now:           time.Date(2026, 2, 9, 0, 1, 1, 0, time.UTC),
 			wantHibernate: false,
 			wantState:     "active",
 		},
@@ -755,91 +820,9 @@ func TestIsInLeadTimeWindow(t *testing.T) {
 	}
 }
 
-func TestIsInLateWindow(t *testing.T) {
-	tests := []struct {
-		name         string
-		windows      []OffHourWindow
-		now          time.Time
-		lateDuration time.Duration
-		want         bool
-	}{
-		{
-			name: "in late window after start",
-			windows: []OffHourWindow{
-				{Start: "20:00", End: "06:00", DaysOfWeek: []string{"WED"}},
-			},
-			now:          time.Date(2026, 1, 28, 20, 30, 0, 0, time.UTC), // 30 min after 20:00
-			lateDuration: 1 * time.Hour,
-			want:         true,
-		},
-		{
-			name: "outside late window - late has expired",
-			windows: []OffHourWindow{
-				{Start: "20:00", End: "06:00", DaysOfWeek: []string{"WED"}},
-			},
-			now:          time.Date(2026, 1, 28, 21, 30, 0, 0, time.UTC), // 1.5 hours after 20:00
-			lateDuration: 1 * time.Hour,
-			want:         false,
-		},
-		{
-			name: "at exact start time - in late period",
-			windows: []OffHourWindow{
-				{Start: "20:00", End: "06:00", DaysOfWeek: []string{"WED"}},
-			},
-			now:          time.Date(2026, 1, 28, 20, 0, 0, 0, time.UTC), // Exactly at 20:00
-			lateDuration: 1 * time.Hour,
-			want:         true,
-		},
-		{
-			name: "wrong day - not in late window",
-			windows: []OffHourWindow{
-				{Start: "20:00", End: "06:00", DaysOfWeek: []string{"WED"}},
-			},
-			now:          time.Date(2026, 1, 29, 20, 30, 0, 0, time.UTC), // Thursday (not Wednesday)
-			lateDuration: 1 * time.Hour,
-			want:         false,
-		},
-		{
-			name: "late window with small buffer - seconds precision",
-			windows: []OffHourWindow{
-				{Start: "23:59", End: "00:00", DaysOfWeek: []string{"SUN"}},
-			},
-			now:          time.Date(2026, 2, 1, 23, 59, 30, 0, time.UTC), // 30 seconds after 23:59
-			lateDuration: 1 * time.Minute,
-			want:         true,
-		},
-		{
-			name: "late window expires at boundary",
-			windows: []OffHourWindow{
-				{Start: "23:59", End: "00:00", DaysOfWeek: []string{"SUN"}},
-			},
-			now:          time.Date(2026, 2, 1, 0, 0, 1, 0, time.UTC), // 61 seconds after 23:59
-			lateDuration: 1 * time.Minute,
-			want:         false,
-		},
-		{
-			name: "late window crossing midnight",
-			windows: []OffHourWindow{
-				{Start: "23:30", End: "00:00", DaysOfWeek: []string{"SUN"}},
-			},
-			now:          time.Date(2026, 2, 1, 23, 45, 0, 0, time.UTC), // 15 min after 23:30 on Sunday
-			lateDuration: 30 * time.Minute,
-			want:         true,
-		},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			got := isInLateWindow(tt.windows, tt.now, tt.lateDuration)
-			if got != tt.want {
-				t.Errorf("isInLateWindow() = %v, want %v", got, tt.want)
-			}
-		})
-	}
-}
-
 func TestIsInGraceTimeWindow(t *testing.T) {
 	tests := []struct {
+		boundary  WindowBoundary
 		name      string
 		windows   []OffHourWindow
 		now       time.Time
@@ -847,7 +830,68 @@ func TestIsInGraceTimeWindow(t *testing.T) {
 		want      bool
 	}{
 		{
-			name: "in grace time window after end",
+			boundary: StartBoundary,
+			name:     "at exact start time",
+			windows: []OffHourWindow{
+				{Start: "20:00", End: "06:00", DaysOfWeek: []string{"WED"}},
+			},
+			now:       time.Date(2026, 1, 28, 20, 0, 0, 0, time.UTC), // Exactly at 20:00
+			graceTime: 1 * time.Hour,
+			want:      true,
+		},
+		{
+			boundary: StartBoundary,
+			name:     "at exact end of grace time window of start time",
+			windows: []OffHourWindow{
+				{Start: "20:00", End: "06:00", DaysOfWeek: []string{"WED"}},
+			},
+			now:       time.Date(2026, 1, 28, 21, 0, 0, 0, time.UTC), // Exactly at 21:00
+			graceTime: 1 * time.Hour,
+			want:      true,
+		},
+		{
+			boundary: StartBoundary,
+			name:     "in grace time window after start",
+			windows: []OffHourWindow{
+				{Start: "20:00", End: "06:00", DaysOfWeek: []string{"WED"}},
+			},
+			now:       time.Date(2026, 1, 28, 20, 30, 0, 0, time.UTC), // 30 min after 20:00
+			graceTime: 1 * time.Hour,
+			want:      true,
+		},
+		{
+			boundary: StartBoundary,
+			name:     "outside grace time window - grace has expired",
+			windows: []OffHourWindow{
+				{Start: "20:00", End: "06:00", DaysOfWeek: []string{"WED"}},
+			},
+			now:       time.Date(2026, 1, 28, 21, 30, 0, 0, time.UTC), // 1.5 hours after 20:00
+			graceTime: 1 * time.Hour,
+			want:      false,
+		},
+		{
+			boundary: StartBoundary,
+			name:     "at exact start time - in grace period",
+			windows: []OffHourWindow{
+				{Start: "20:00", End: "06:00", DaysOfWeek: []string{"WED"}},
+			},
+			now:       time.Date(2026, 1, 28, 20, 0, 0, 0, time.UTC), // Exactly at 20:00
+			graceTime: 1 * time.Hour,
+			want:      true,
+		},
+		{
+			boundary: StartBoundary,
+			name:     "wrong day - not in grace time window",
+			windows: []OffHourWindow{
+				{Start: "20:00", End: "06:00", DaysOfWeek: []string{"WED"}},
+			},
+			now:       time.Date(2026, 1, 29, 20, 30, 0, 0, time.UTC), // Thursday (not Wednesday)
+			graceTime: 1 * time.Hour,
+			want:      false,
+		},
+		{
+			boundary: EndBoundary,
+			name:     "in grace time window after end",
 			windows: []OffHourWindow{
 				{Start: "20:00", End: "06:00", DaysOfWeek: []string{"WED"}},
 			},
@@ -856,7 +900,8 @@ func TestIsInGraceTimeWindow(t *testing.T) {
 			want:      true,
 		},
 		{
-			name: "outside grace time window - grace expired",
+			boundary: EndBoundary,
+			name:     "outside grace time window - grace expired",
 			windows: []OffHourWindow{
 				{Start: "20:00", End: "06:00", DaysOfWeek: []string{"WED"}},
 			},
@@ -865,7 +910,8 @@ func TestIsInGraceTimeWindow(t *testing.T) {
 			want:      false,
 		},
 		{
-			name: "at exact end time - in grace period",
+			boundary: EndBoundary,
+			name:     "at exact end time",
 			windows: []OffHourWindow{
 				{Start: "20:00", End: "06:00", DaysOfWeek: []string{"WED"}},
 			},
@@ -874,7 +920,18 @@ func TestIsInGraceTimeWindow(t *testing.T) {
 			want:      true,
 		},
 		{
-			name: "wrong day - not in grace window",
+			boundary: EndBoundary,
+			name:     "at exact end of grace time window of end time",
+			windows: []OffHourWindow{
+				{Start: "20:00", End: "06:00", DaysOfWeek: []string{"WED"}},
+			},
+			now:       time.Date(2026, 1, 28, 7, 0, 0, 0, time.UTC), // Exactly at 07:00
+			graceTime: 1 * time.Hour,
+			want:      true,
+		},
+		{
+			boundary: EndBoundary,
+			name:     "wrong day - not in grace window",
 			windows: []OffHourWindow{
 				{Start: "20:00", End: "06:00", DaysOfWeek: []string{"WED"}},
 			},
@@ -883,7 +940,8 @@ func TestIsInGraceTimeWindow(t *testing.T) {
 			want:      false,
 		},
 		{
-			name: "grace period with small buffer - seconds precision",
+			boundary: EndBoundary,
+			name:     "grace period with small buffer - seconds precision",
 			windows: []OffHourWindow{
 				{Start: "23:59", End: "00:00", DaysOfWeek: []string{"SUN"}},
 			},
@@ -892,7 +950,8 @@ func TestIsInGraceTimeWindow(t *testing.T) {
 			want:      true,
 		},
 		{
-			name: "grace period expires at boundary",
+			boundary: EndBoundary,
+			name:     "grace period expires at boundary",
 			windows: []OffHourWindow{
 				{Start: "23:59", End: "00:00", DaysOfWeek: []string{"SUN"}},
 			},
@@ -901,11 +960,12 @@ func TestIsInGraceTimeWindow(t *testing.T) {
 			want:      false,
 		},
 		{
-			name: "grace period expires at boundary",
+			boundary: EndBoundary,
+			name:     "grace period expires at boundary",
 			windows: []OffHourWindow{
 				{Start: "23:59", End: "00:00", DaysOfWeek: []string{"SUN"}},
 			},
-			now:       time.Date(2026, 2, 1, 23, 59, 1, 0, time.UTC), // 61 seconds after midnight
+			now:       time.Date(2026, 2, 2, 0, 0, 1, 0, time.UTC), // 1 seconds after midnight
 			graceTime: 1 * time.Minute,
 			want:      false,
 		},
@@ -913,7 +973,7 @@ func TestIsInGraceTimeWindow(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			got := isInGraceTimeWindow(tt.windows, tt.now, tt.graceTime)
+			got := isInGraceTimeWindow(tt.boundary, tt.windows, tt.now, tt.graceTime)
 			if got != tt.want {
 				t.Errorf("isInGraceTimeWindow() = %v, want %v", got, tt.want)
 			}

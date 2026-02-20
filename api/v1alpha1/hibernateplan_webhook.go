@@ -84,8 +84,9 @@ func (r *HibernatePlan) validate(plan *HibernatePlan) (admission.Warnings, error
 	var warnings admission.Warnings
 
 	// Validate schedule
-	scheduleErrs := r.validateSchedule(plan)
+	scheduleErrs, scheduleWarnings := r.validateSchedule(plan)
 	allErrs = append(allErrs, scheduleErrs...)
+	warnings = append(warnings, scheduleWarnings...)
 
 	// Validate targets
 	targetErrs, targetWarnings := r.validateTargets(plan)
@@ -104,8 +105,9 @@ func (r *HibernatePlan) validate(plan *HibernatePlan) (admission.Warnings, error
 }
 
 // validateSchedule validates the schedule configuration.
-func (r *HibernatePlan) validateSchedule(plan *HibernatePlan) field.ErrorList {
+func (r *HibernatePlan) validateSchedule(plan *HibernatePlan) (field.ErrorList, admission.Warnings) {
 	var errs field.ErrorList
+	var warnings admission.Warnings
 	schedulePath := field.NewPath("spec", "schedule")
 
 	// Validate timezone
@@ -173,6 +175,26 @@ func (r *HibernatePlan) validateSchedule(plan *HibernatePlan) field.ErrorList {
 			))
 		}
 
+		// Warn about backward windows (e.g., start=23:59, end=00:00)
+		// These represent overnight windows which are semantically confusing as base schedule windows
+		if window.Start != "" && window.End != "" && window.Start != window.End {
+			if startHour, startMin, errStart := parseTimeValues(window.Start); errStart == nil {
+				if endHour, endMin, errEnd := parseTimeValues(window.End); errEnd == nil {
+					startMinutes := startHour*60 + startMin
+					endMinutes := endHour*60 + endMin
+					if startMinutes > endMinutes {
+						// This is a warning (not an error) for base schedule since overnight windows are valid
+						// but we guide users toward clearer patterns
+						warnings = append(warnings, fmt.Sprintf(
+							"offHours[%d]: backward time range (start=%s > end=%s) represents an overnight window. "+
+								"Consider using suspend exceptions for time-bound wakeup patterns instead.",
+							i, window.Start, window.End,
+						))
+					}
+				}
+			}
+		}
+
 		// Validate daysOfWeek
 		if len(window.DaysOfWeek) == 0 {
 			errs = append(errs, field.Required(
@@ -193,7 +215,7 @@ func (r *HibernatePlan) validateSchedule(plan *HibernatePlan) field.ErrorList {
 		}
 	}
 
-	return errs
+	return errs, warnings
 }
 
 // validateTargets validates target configuration.
@@ -492,4 +514,20 @@ func (r *HibernatePlan) validateStaged(plan *HibernatePlan, targetNames map[stri
 	}
 
 	return errs
+}
+
+// parseTimeValues parses HH:MM format and returns (hour, minute, error).
+func parseTimeValues(timeStr string) (int, int, error) {
+	parts := strings.Split(timeStr, ":")
+	if len(parts) != 2 {
+		return 0, 0, fmt.Errorf("invalid time format")
+	}
+
+	hour := 0
+	min := 0
+	if n, err := fmt.Sscanf(timeStr, "%d:%d", &hour, &min); err != nil || n != 2 {
+		return 0, 0, fmt.Errorf("failed to parse time")
+	}
+
+	return hour, min, nil
 }

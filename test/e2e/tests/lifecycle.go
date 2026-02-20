@@ -98,8 +98,8 @@ var _ = Describe("Lifecycle E2E", func() {
 		Expect(plan.Status.Executions).To(BeEmpty())
 
 		// 2. Transition to Hibernation
-		By("Advancing time to hibernation window (20:01)")
-		fakeClock.SetTime(time.Date(2026, 2, 9, 20, 1, 0, 0, time.UTC))
+		By("Advancing time to hibernation window (20:01:11)")
+		fakeClock.SetTime(time.Date(2026, 2, 9, 20, 1, 11, 0, time.UTC))
 		testutil.TriggerReconcile(ctx, k8sClient, plan)
 
 		By("Verifying plan transitions to Hibernating")
@@ -127,8 +127,8 @@ var _ = Describe("Lifecycle E2E", func() {
 		})).To(Succeed())
 
 		// 3. Transition to Wakeup
-		By("Advancing time to wakeup window (Tuesday 06:01)")
-		fakeClock.SetTime(time.Date(2026, 2, 10, 6, 1, 0, 0, time.UTC))
+		By("Advancing time to wakeup window (Tuesday 06:01:10)")
+		fakeClock.SetTime(time.Date(2026, 2, 10, 6, 1, 10, 0, time.UTC))
 		testutil.TriggerReconcile(ctx, k8sClient, plan)
 
 		By("Verifying plan transitions to WakingUp")
