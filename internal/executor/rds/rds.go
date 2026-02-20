@@ -9,6 +9,7 @@ package rds
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"strings"
 	"sync"
@@ -18,6 +19,7 @@ import (
 	"github.com/aws/aws-sdk-go-v2/service/rds"
 	rdsTypes "github.com/aws/aws-sdk-go-v2/service/rds/types"
 	"github.com/aws/aws-sdk-go-v2/service/sts"
+	"github.com/aws/smithy-go"
 	"github.com/go-logr/logr"
 
 	"github.com/ardikabs/hibernator/internal/executor"
@@ -402,6 +404,14 @@ func (e *Executor) stopInstance(ctx context.Context, log logr.Logger, client RDS
 		DBInstanceIdentifier: aws.String(instanceId),
 	})
 	if err != nil {
+		var apiErr smithy.APIError
+		if errors.As(err, &apiErr) {
+			switch apiErr.ErrorCode() {
+			case "DBInstanceNotFound":
+				log.Info("instance not found, skipping ...", "instanceId", instanceId)
+				return nil
+			}
+		}
 		return err
 	}
 
@@ -415,10 +425,12 @@ func (e *Executor) stopInstance(ctx context.Context, log logr.Logger, client RDS
 		InstanceType: aws.ToString(instance.DBInstanceClass),
 	}
 
+	status := aws.ToString(instance.DBInstanceStatus)
+
 	// Check if already stopped
-	if aws.ToString(instance.DBInstanceStatus) == "stopped" {
+	if status == "stopped" {
+		log.Info("instance is already stopped", "instanceId", instanceId)
 		state.WasStopped = true
-		return nil
 	}
 
 	// Create snapshot if requested
@@ -445,11 +457,25 @@ func (e *Executor) stopInstance(ctx context.Context, log logr.Logger, client RDS
 		log.Info("snapshot available", "snapshotId", snapshotId)
 	}
 
+	if status != "available" {
+		log.Info("instance is in a status that cannot be stopped, skipping stop ...",
+			"instanceId", instanceId, "status", status)
+		return nil
+	}
+
 	// Stop instance
 	log.Info("stopping DB instance", "instanceId", instanceId)
 	if _, err = client.StopDBInstance(ctx, &rds.StopDBInstanceInput{
 		DBInstanceIdentifier: aws.String(instanceId),
 	}); err != nil {
+		var apiErr smithy.APIError
+		if errors.As(err, &apiErr) {
+			switch apiErr.ErrorCode() {
+			case "DBInstanceNotFound":
+				log.Info("instance not found, skipping ...", "instanceId", instanceId)
+				return nil
+			}
+		}
 		return err
 	}
 	log.Info("instance processed successfully",
@@ -481,6 +507,14 @@ func (e *Executor) stopCluster(ctx context.Context, log logr.Logger, client RDSC
 		DBClusterIdentifier: aws.String(clusterId),
 	})
 	if err != nil {
+		var apiErr smithy.APIError
+		if errors.As(err, &apiErr) {
+			switch apiErr.ErrorCode() {
+			case "DBClusterNotFoundFault":
+				log.Info("cluster not found, skipping ...", "clusterId", clusterId)
+				return nil
+			}
+		}
 		return err
 	}
 
@@ -493,10 +527,12 @@ func (e *Executor) stopCluster(ctx context.Context, log logr.Logger, client RDSC
 		ClusterId: clusterId,
 	}
 
+	status := aws.ToString(cluster.Status)
+
 	// Check if already stopped
-	if aws.ToString(cluster.Status) == "stopped" {
+	if status == "stopped" {
+		log.Info("cluster is already stopped", "clusterId", clusterId)
 		state.WasStopped = true
-		return nil
 	}
 
 	// Create snapshot if requested
@@ -523,11 +559,25 @@ func (e *Executor) stopCluster(ctx context.Context, log logr.Logger, client RDSC
 		log.Info("cluster snapshot available", "snapshotId", snapshotId)
 	}
 
+	if status != "available" {
+		log.Info("cluster is in a status that cannot be stopped, skipping stop ...",
+			"clusterId", clusterId, "status", status)
+		return nil
+	}
+
 	// Stop cluster
 	log.Info("stopping DB cluster", "clusterId", clusterId)
 	if _, err = client.StopDBCluster(ctx, &rds.StopDBClusterInput{
 		DBClusterIdentifier: aws.String(clusterId),
 	}); err != nil {
+		var apiErr smithy.APIError
+		if errors.As(err, &apiErr) {
+			switch apiErr.ErrorCode() {
+			case "DBClusterNotFoundFault":
+				log.Info("cluster not found, skipping ...", "clusterId", clusterId)
+				return nil
+			}
+		}
 		return err
 	}
 
@@ -560,6 +610,14 @@ func (e *Executor) startInstance(ctx context.Context, log logr.Logger, client RD
 		DBInstanceIdentifier: aws.String(instanceId),
 	})
 	if err != nil {
+		var apiErr smithy.APIError
+		if errors.As(err, &apiErr) {
+			switch apiErr.ErrorCode() {
+			case "DBInstanceNotFound":
+				log.Info("instance not found, skipping ...", "instanceId", instanceId)
+				return nil
+			}
+		}
 		return err
 	}
 
@@ -570,10 +628,11 @@ func (e *Executor) startInstance(ctx context.Context, log logr.Logger, client RD
 	status := aws.ToString(desc.DBInstances[0].DBInstanceStatus)
 	if status == "available" {
 		// Instance is already running, no action needed
+		log.Info("instance is already running", "instanceId", instanceId)
 		return nil
 	}
 
-	if status == "stopped" {
+	if status != "stopped" {
 		// For now we simplify it that only RDS in "stopped" status can be started.
 		// In practice, there are some other statuses that can be started (e.g. incompatible-network),
 		// but we would need to do more complex handling to determine if start is valid in those cases (e.g. only certain instance types, only non-SQLServer engines).
@@ -581,12 +640,25 @@ func (e *Executor) startInstance(ctx context.Context, log logr.Logger, client RD
 		// As of now here are following statuses that are startable:
 		// stopped, inaccessible-encryption-credentials-recoverable, incompatible-network (only valid for non-SqlServer instances)
 
-		_, err = client.StartDBInstance(ctx, &rds.StartDBInstanceInput{
-			DBInstanceIdentifier: aws.String(instanceId),
-		})
-		if err != nil {
-			return err
+		log.Info("instance is in a status that cannot be started, skipping start ...",
+			"instanceId", instanceId, "status", status)
+		return nil
+	}
+
+	_, err = client.StartDBInstance(ctx, &rds.StartDBInstanceInput{
+		DBInstanceIdentifier: aws.String(instanceId),
+	})
+
+	if err != nil {
+		var apiErr smithy.APIError
+		if errors.As(err, &apiErr) {
+			switch apiErr.ErrorCode() {
+			case "DBInstanceNotFound":
+				log.Info("instance not found, skipping ...", "instanceId", instanceId)
+				return nil
+			}
 		}
+		return err
 	}
 
 	// Add to waiting list for awaiting completion if configured
@@ -603,6 +675,14 @@ func (e *Executor) startCluster(ctx context.Context, log logr.Logger, client RDS
 		DBClusterIdentifier: aws.String(clusterId),
 	})
 	if err != nil {
+		var apiErr smithy.APIError
+		if errors.As(err, &apiErr) {
+			switch apiErr.ErrorCode() {
+			case "DBClusterNotFoundFault":
+				log.Info("cluster not found, skipping ...", "clusterId", clusterId)
+				return nil
+			}
+		}
 		return err
 	}
 
@@ -613,18 +693,30 @@ func (e *Executor) startCluster(ctx context.Context, log logr.Logger, client RDS
 	status := aws.ToString(desc.DBClusters[0].Status)
 	if status == "available" {
 		// Cluster is already running, no action needed
+		log.Info("cluster is already running", "clusterId", clusterId)
 		return nil
 	}
 
-	if status == "stopped" {
+	if status != "stopped" {
 		// Only "stopped" clusters can be started
+		log.Info("cluster is in a status that cannot be started, skipping start ...",
+			"clusterId", clusterId, "status", status)
+		return nil
+	}
 
-		_, err = client.StartDBCluster(ctx, &rds.StartDBClusterInput{
-			DBClusterIdentifier: aws.String(clusterId),
-		})
-		if err != nil {
-			return err
+	_, err = client.StartDBCluster(ctx, &rds.StartDBClusterInput{
+		DBClusterIdentifier: aws.String(clusterId),
+	})
+	if err != nil {
+		var apiErr smithy.APIError
+		if errors.As(err, &apiErr) {
+			switch apiErr.ErrorCode() {
+			case "DBClusterNotFoundFault":
+				log.Info("cluster not found, skipping ...", "clusterId", clusterId)
+				return nil
+			}
 		}
+		return err
 	}
 
 	// Wait for cluster to be available if configured
