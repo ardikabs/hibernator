@@ -315,7 +315,7 @@ func (e *Executor) WakeUp(ctx context.Context, log logr.Logger, spec executor.Sp
 				}
 				log.Info("instance started successfully", "instanceId", state.InstanceId)
 			} else {
-				log.Info("instance was already stopped, skipping start", "instanceId", state.InstanceId)
+				log.Info("instance was already started, skipping start", "instanceId", state.InstanceId)
 			}
 
 		} else if strings.HasPrefix(key, "cluster:") {
@@ -334,7 +334,7 @@ func (e *Executor) WakeUp(ctx context.Context, log logr.Logger, spec executor.Sp
 				}
 				log.Info("cluster started successfully", "clusterId", state.ClusterId)
 			} else {
-				log.Info("cluster was already stopped, skipping start", "clusterId", state.ClusterId)
+				log.Info("cluster was already started, skipping start", "clusterId", state.ClusterId)
 			}
 		} else {
 			log.Info("unknown resource type in restore data, skipping", "key", key)
@@ -569,14 +569,24 @@ func (e *Executor) startInstance(ctx context.Context, log logr.Logger, client RD
 
 	status := aws.ToString(desc.DBInstances[0].DBInstanceStatus)
 	if status == "available" {
-		return nil // Already running
+		// Instance is already running, no action needed
+		return nil
 	}
 
-	_, err = client.StartDBInstance(ctx, &rds.StartDBInstanceInput{
-		DBInstanceIdentifier: aws.String(instanceId),
-	})
-	if err != nil {
-		return err
+	if status == "stopped" {
+		// For now we simplify it that only RDS in "stopped" status can be started.
+		// In practice, there are some other statuses that can be started (e.g. incompatible-network),
+		// but we would need to do more complex handling to determine if start is valid in those cases (e.g. only certain instance types, only non-SQLServer engines).
+		// For simplicity, we only allow starting from "stopped" status for now, and we can expand support later if needed.
+		// As of now here are following statuses that are startable:
+		// stopped, inaccessible-encryption-credentials-recoverable, incompatible-network (only valid for non-SqlServer instances)
+
+		_, err = client.StartDBInstance(ctx, &rds.StartDBInstanceInput{
+			DBInstanceIdentifier: aws.String(instanceId),
+		})
+		if err != nil {
+			return err
+		}
 	}
 
 	// Add to waiting list for awaiting completion if configured
@@ -587,36 +597,39 @@ func (e *Executor) startInstance(ctx context.Context, log logr.Logger, client RD
 	return nil
 }
 
-func (e *Executor) startCluster(ctx context.Context, log logr.Logger, client RDSClient, clusterID string, params Parameters) error {
+func (e *Executor) startCluster(ctx context.Context, log logr.Logger, client RDSClient, clusterId string, params Parameters) error {
 	// Check current status
 	desc, err := client.DescribeDBClusters(ctx, &rds.DescribeDBClustersInput{
-		DBClusterIdentifier: aws.String(clusterID),
+		DBClusterIdentifier: aws.String(clusterId),
 	})
 	if err != nil {
 		return err
 	}
 
 	if len(desc.DBClusters) == 0 {
-		return fmt.Errorf("cluster %s not found", clusterID)
+		return fmt.Errorf("cluster %s not found", clusterId)
 	}
 
 	status := aws.ToString(desc.DBClusters[0].Status)
 	if status == "available" {
-		return nil // Already running
+		// Cluster is already running, no action needed
+		return nil
 	}
 
-	_, err = client.StartDBCluster(ctx, &rds.StartDBClusterInput{
-		DBClusterIdentifier: aws.String(clusterID),
-	})
-	if err != nil {
-		return err
+	if status == "stopped" {
+		// Only "stopped" clusters can be started
+
+		_, err = client.StartDBCluster(ctx, &rds.StartDBClusterInput{
+			DBClusterIdentifier: aws.String(clusterId),
+		})
+		if err != nil {
+			return err
+		}
 	}
 
 	// Wait for cluster to be available if configured
 	if params.AwaitCompletion.Enabled {
-		if err := e.waitForClusterAvailable(ctx, log, client, clusterID, params.AwaitCompletion.Timeout); err != nil {
-			return fmt.Errorf("wait for cluster available: %w", err)
-		}
+		e.waitinglistForClusters = append(e.waitinglistForClusters, clusterId)
 	}
 
 	return nil
@@ -673,6 +686,11 @@ func (e *Executor) findDBInstances(ctx context.Context, log logr.Logger, client 
 		instanceTags := make(map[string]string)
 		for _, tag := range tagsResp.TagList {
 			instanceTags[aws.ToString(tag.Key)] = aws.ToString(tag.Value)
+		}
+
+		if strings.HasPrefix(instanceID, "aws-restore-") {
+			log.Info("skipping instance that appears to be an AWS-managed restore job resource", "instanceId", instanceID)
+			continue
 		}
 
 		// Apply tag filtering
