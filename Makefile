@@ -179,7 +179,8 @@ build: generate fmt vet ## Build controller and runner binaries.
 	@echo "$(CYAN)Building binaries...$(RESET)"
 	$(GOCMD) build -o bin/controller ./cmd/controller
 	$(GOCMD) build -o bin/runner ./cmd/runner
-	@echo "$(GREEN)Binaries built: bin/controller, bin/runner$(RESET)"
+	$(GOCMD) build -o bin/kubectl-hibernator ./cmd/kubectl-hibernator
+	@echo "$(GREEN)Binaries built: bin/controller, bin/runner, bin/kubectl-hibernator$(RESET)"
 
 .PHONY: build-controller
 build-controller: ## Build controller binary only.
@@ -188,6 +189,10 @@ build-controller: ## Build controller binary only.
 .PHONY: build-runner
 build-runner: ## Build runner binary only.
 	$(GOCMD) build -o bin/runner ./cmd/runner
+
+.PHONY: build-cli
+build-cli: ## Build kubectl-hibernator CLI plugin binary only.
+	$(GOCMD) build -o bin/kubectl-hibernator ./cmd/kubectl-hibernator
 
 .PHONY: run
 run: generate fmt vet ## Run controller from source.

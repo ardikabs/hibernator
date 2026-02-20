@@ -84,6 +84,8 @@ Core features that are production-ready and actively used.
 | **Create K8SCluster Connector** | Configure Kubernetes cluster access (EKS, GKE, on-prem) | Cluster Operator, DevOps | ✅ Implemented | RFC-0001 | [Details](./create-k8scluster-connector.md) |
 | **Wakeup and Restore Resources** | Automatically restore resources from hibernation to normal operation | SRE, Platform Engineer | ✅ Implemented | RFC-0001 | [Details](./wakeup-and-restore-resources.md) |
 | **Discover Hibernation Impact** | Understand how hibernation affects application deployments | End User, Application Team | ✅ Implemented | RFC-0002 | [Details](./discover-hibernation-impact.md) |
+| **Validate Schedule Before Deployment** | Verify hibernation schedule correctness with dry-run validation before applying | DevOps Engineer, Platform Engineer | 🚀 In Progress | RFC-0007 | [Details](./validate-schedule-before-deployment.md) |
+| **Manage Hibernation via CLI Plugin** | Use kubectl hibernator CLI for operational tasks (status, suspend, retry, logs) | SRE, On-Call Engineer, DevOps | 🚀 In Progress | RFC-0007 | [Details](./manage-hibernation-via-cli.md) |
 
 ### Enhanced Tier — Exceptions, Approvals, Workloads (7 journeys)
 
@@ -158,6 +160,13 @@ Covers journeys:
 Covers journeys:
 - [Create Emergency Exception](./create-emergency-exception.md)
 - [Extend Hibernation for Event](./extend-hibernation-for-event.md)
+
+### RFC-0007: kubectl hibernator CLI Plugin for Day-to-Day Operations
+**Schedule dry-run validation, operational status, suspend/resume, retry, and log streaming**
+
+Covers journeys:
+- [Validate Schedule Before Deployment](./validate-schedule-before-deployment.md)
+- [Manage Hibernation via CLI Plugin](./manage-hibernation-via-cli.md)
 - [Scale Hibernation Across Organizations](./scale-hibernation-across-organizations.md)
 
 ### RFC-0004: Scale Subresource Executor for Workload Downscaling

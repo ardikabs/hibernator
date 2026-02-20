@@ -28,11 +28,22 @@ This document tracks the current status and future plans for the Hibernator Oper
   - [x] Lead-time prevention of new hibernation starts
   - [x] Behavior mode integration (Strict vs BestEffort) with bounded concurrency
 
+## � In Progress (P2)
+
+- [ ] **kubectl hibernator CLI Plugin for Day-to-Day Operations** (RFC-0007)
+  - [ ] `show schedule` — Validate schedules before deployment
+  - [ ] `show status` — Display operational status and progress
+  - [ ] `suspend/resume` — Temporarily disable hibernation
+  - [ ] `retry` — Enforce immediate retry of failed targets
+  - [ ] `logs` — Stream executor logs for debugging
+  - [ ] Plugin installation guide and RBAC templates
+  - [ ] E2E test coverage for all commands
+
 ## 📋 Planned (P3-P4)
 
 - [ ] **Schedule Exception Approval Workflows** (RFC-0003 Future Enhancement)
   - [ ] Slack DM approval integration with email-based approver notification
-  - [ ] kubectl plugin for CLI-based approvals
+  - [ ] CLI-based approvals (RFC-0007 Phase 2)
   - [ ] SSO/URL-based approval workflow for enterprise
   - [ ] Dashboard UI for exception management
 - [ ] GCP executors (GKE, Cloud SQL, Compute Engine)
@@ -40,7 +51,6 @@ This document tracks the current status and future plans for the Hibernator Oper
 - [ ] Advanced scheduling (holidays, blackout windows, timezone exceptions)
 - [ ] Multi-cluster federation
 - [ ] Object-store artifact persistence (S3/GCS)
-- [ ] kubectl hibernator plugin for CLI management
 
 ## ⚠️ Known Limitations
 
