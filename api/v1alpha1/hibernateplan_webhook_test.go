@@ -7,6 +7,7 @@ package v1alpha1
 
 import (
 	"context"
+	"strings"
 	"testing"
 
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -557,5 +558,114 @@ func TestHibernatePlan_ValidateUpdate_WrongType(t *testing.T) {
 	_, err := plan.ValidateUpdate(context.Background(), runtime.Object(plan), runtime.Object(wrongType))
 	if err == nil {
 		t.Error("ValidateUpdate() expected error for wrong type, got nil")
+	}
+}
+
+func TestHibernatePlan_SmallGapWindowWarning(t *testing.T) {
+	tests := []struct {
+		name          string
+		start         string
+		end           string
+		expectWarning bool
+		wantGuidance  string
+	}{
+		{
+			name:          "1-minute gap (23:59 to 00:00) should warn",
+			start:         "23:59",
+			end:           "00:00",
+			expectWarning: true,
+			wantGuidance:  "start=00:00, end=23:59",
+		},
+		{
+			name:          "1-minute gap (14:59 to 15:00) should warn",
+			start:         "14:59",
+			end:           "15:00",
+			expectWarning: true,
+			wantGuidance:  "start=00:00, end=23:59",
+		},
+		{
+			name:          "2-minute gap should not warn",
+			start:         "23:58",
+			end:           "00:00",
+			expectWarning: false,
+			wantGuidance:  "",
+		},
+		{
+			name:          "5-hour gap should not warn",
+			start:         "22:00",
+			end:           "03:00",
+			expectWarning: false,
+			wantGuidance:  "",
+		},
+		{
+			name:          "1-hour gap (forward) should not warn",
+			start:         "14:00",
+			end:           "15:00",
+			expectWarning: false,
+			wantGuidance:  "",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			plan := &HibernatePlan{
+				ObjectMeta: metav1.ObjectMeta{Name: "test"},
+				Spec: HibernatePlanSpec{
+					Schedule: Schedule{
+						Timezone: "UTC",
+						OffHours: []OffHourWindow{
+							{
+								Start:      tt.start,
+								End:        tt.end,
+								DaysOfWeek: []string{"MON"},
+							},
+						},
+					},
+					Execution: Execution{
+						Strategy: ExecutionStrategy{Type: StrategySequential},
+					},
+					Targets: []Target{
+						{
+							Name:         "target1",
+							Type:         "ec2",
+							ConnectorRef: ConnectorRef{Kind: "CloudProvider", Name: "aws"},
+							Parameters:   ec2Params(),
+						},
+					},
+				},
+			}
+
+			warnings, err := plan.ValidateCreate(context.Background(), plan)
+			if err != nil {
+				t.Fatalf("ValidateCreate() unexpected error: %v", err)
+			}
+
+			// Check for warning presence
+			var foundWarning string
+			for _, w := range warnings {
+				if len(w) > 0 {
+					foundWarning = w
+					break
+				}
+			}
+
+			if tt.expectWarning && foundWarning == "" {
+				t.Error("expected warning for small gap, got none")
+			}
+			if !tt.expectWarning && foundWarning != "" {
+				t.Errorf("expected no warning, got: %s", foundWarning)
+			}
+
+			// Check guidance if expecting warning
+			if tt.expectWarning && tt.wantGuidance != "" {
+				if !strings.Contains(foundWarning, tt.wantGuidance) {
+					t.Errorf("warning guidance missing %q, got: %s", tt.wantGuidance, foundWarning)
+				}
+				// Also check that ScheduleException with Suspend type is mentioned
+				if !strings.Contains(foundWarning, "ScheduleException") || !strings.Contains(foundWarning, "Suspend") {
+					t.Errorf("warning should mention 'ScheduleException' with 'Suspend' type, got: %s", foundWarning)
+				}
+			}
+		})
 	}
 }

@@ -175,21 +175,31 @@ func (r *HibernatePlan) validateSchedule(plan *HibernatePlan) (field.ErrorList, 
 			))
 		}
 
-		// Warn about backward windows (e.g., start=23:59, end=00:00)
-		// These represent overnight windows which are semantically confusing as base schedule windows
+		// Warn about wakeup windows with gaps ≤ 1 minute
+		// These are typically clearer when expressed as suspend exceptions
 		if window.Start != "" && window.End != "" && window.Start != window.End {
 			if startHour, startMin, errStart := parseTimeValues(window.Start); errStart == nil {
 				if endHour, endMin, errEnd := parseTimeValues(window.End); errEnd == nil {
 					startMinutes := startHour*60 + startMin
 					endMinutes := endHour*60 + endMin
-					if startMinutes > endMinutes {
-						// This is a warning (not an error) for base schedule since overnight windows are valid
-						// but we guide users toward clearer patterns
-						warnings = append(warnings, fmt.Sprintf(
-							"offHours[%d]: backward time range (start=%s > end=%s) represents an overnight window. "+
-								"Consider using suspend exceptions for time-bound wakeup patterns instead.",
-							i, window.Start, window.End,
-						))
+
+					// Calculate the gap (handling overnight wrapping)
+					var gap int
+					if endMinutes >= startMinutes {
+						gap = endMinutes - startMinutes
+					} else {
+						// Overnight case: e.g., 23:59 to 00:00 wraps around midnight
+						gap = (24*60 - startMinutes) + endMinutes
+					}
+
+					// Warn if gap is 1 minute or less
+					if gap > 0 && gap <= 1 {
+						// Alert user about the small wakeup window
+						// Suggest using suspend exception for full-day wakeup pattern
+						guidance := fmt.Sprintf("offHours[%d]: detected wakeup window within 1 minute gap from hibernation (start=%s, end=%s). "+
+							"If the intention is to apply full-day wakeup operation, consider using ScheduleException with type=Suspend, start=00:00, end=23:59",
+							i, window.Start, window.End)
+						warnings = append(warnings, guidance)
 					}
 				}
 			}
