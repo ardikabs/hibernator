@@ -3,7 +3,7 @@ Copyright 2026 Ardika Saputro.
 Licensed under the Apache License, Version 2.0.
 */
 
-package cmd
+package cli
 
 import (
 	"bufio"
@@ -151,6 +151,7 @@ func runLogs(ctx context.Context, opts *logsOptions, planName string) error {
 
 	for scanner.Scan() {
 		line := scanner.Text()
+		fmt.Println(line)
 
 		if filter.matches(line) {
 			if opts.root.jsonOutput {
@@ -183,13 +184,8 @@ func buildLogFilter(planName string, opts *logsOptions, plan *hibernatorv1alpha1
 	// Collect execution IDs from current executions
 	for _, exec := range plan.Status.Executions {
 		if exec.LogsRef != "" {
-			f.executionIDs = append(f.executionIDs, exec.LogsRef)
+			f.executionIDs = append(f.executionIDs, strings.TrimPrefix(exec.LogsRef, wellknown.ExecutionIDLogPrefix))
 		}
-	}
-
-	// Collect from current cycle
-	if plan.Status.CurrentCycleID != "" {
-		f.executionIDs = append(f.executionIDs, plan.Status.CurrentCycleID)
 	}
 
 	return f

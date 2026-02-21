@@ -3,7 +3,7 @@ Copyright 2026 Ardika Saputro.
 Licensed under the Apache License, Version 2.0.
 */
 
-package cmd
+package cli
 
 import (
 	"context"
@@ -65,8 +65,7 @@ func runResume(ctx context.Context, opts *resumeOptions, planName string) error 
 	hasSuspendAnnotations := false
 	if plan.Annotations != nil {
 		_, hasUntil := plan.Annotations[wellknown.AnnotationSuspendUntil]
-		_, hasReason := plan.Annotations[wellknown.AnnotationSuspendReason]
-		hasSuspendAnnotations = hasUntil || hasReason
+		hasSuspendAnnotations = hasUntil
 	}
 
 	if !isSuspended && !hasSuspendAnnotations {
@@ -80,7 +79,6 @@ func runResume(ctx context.Context, opts *resumeOptions, planName string) error 
 	plan.Spec.Suspend = false
 	if plan.Annotations != nil {
 		delete(plan.Annotations, wellknown.AnnotationSuspendUntil)
-		delete(plan.Annotations, wellknown.AnnotationSuspendReason)
 	}
 
 	if err := c.Patch(ctx, &plan, patch); err != nil {

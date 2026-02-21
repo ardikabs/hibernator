@@ -3,7 +3,7 @@ Copyright 2026 Ardika Saputro.
 Licensed under the Apache License, Version 2.0.
 */
 
-package cmd
+package cli
 
 import (
 	"context"
@@ -66,16 +66,16 @@ func runShowStatus(ctx context.Context, opts *showStatusOptions, planName string
 }
 
 type statusJSONOutput struct {
-	Plan           string                                     `json:"plan"`
-	Namespace      string                                     `json:"namespace"`
-	Phase          hibernatorv1alpha1.PlanPhase                `json:"phase"`
-	Suspended      bool                                       `json:"suspended"`
-	CycleID        string                                     `json:"currentCycleID,omitempty"`
-	Operation      string                                     `json:"currentOperation,omitempty"`
-	RetryCount     int32                                      `json:"retryCount"`
-	ErrorMessage   string                                     `json:"errorMessage,omitempty"`
-	Targets        []hibernatorv1alpha1.ExecutionStatus        `json:"targets,omitempty"`
-	LastExecution  *hibernatorv1alpha1.ExecutionCycle           `json:"lastExecution,omitempty"`
+	Plan          string                               `json:"plan"`
+	Namespace     string                               `json:"namespace"`
+	Phase         hibernatorv1alpha1.PlanPhase         `json:"phase"`
+	Suspended     bool                                 `json:"suspended"`
+	CycleID       string                               `json:"currentCycleID,omitempty"`
+	Operation     string                               `json:"currentOperation,omitempty"`
+	RetryCount    int32                                `json:"retryCount"`
+	ErrorMessage  string                               `json:"errorMessage,omitempty"`
+	Targets       []hibernatorv1alpha1.ExecutionStatus `json:"targets,omitempty"`
+	LastExecution *hibernatorv1alpha1.ExecutionCycle   `json:"lastExecution,omitempty"`
 }
 
 func printStatusJSON(plan hibernatorv1alpha1.HibernatePlan) error {

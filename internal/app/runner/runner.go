@@ -3,7 +3,7 @@ Copyright 2026 Ardika Saputro.
 Licensed under the Apache License, Version 2.0.
 */
 
-package main
+package runner
 
 import (
 	"context"
@@ -18,6 +18,9 @@ import (
 	"github.com/go-logr/logr"
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/runtime"
+	utilruntime "k8s.io/apimachinery/pkg/util/runtime"
+	clientgoscheme "k8s.io/client-go/kubernetes/scheme"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/config"
 
@@ -28,6 +31,13 @@ import (
 	"github.com/ardikabs/hibernator/pkg/awsutil"
 	"github.com/ardikabs/hibernator/pkg/logsink"
 )
+
+var scheme = runtime.NewScheme()
+
+func init() {
+	utilruntime.Must(clientgoscheme.AddToScheme(scheme))
+	utilruntime.Must(hibernatorv1alpha1.AddToScheme(scheme))
+}
 
 // runner encapsulates the execution context and dependencies.
 type runner struct {
@@ -95,15 +105,6 @@ func (r *runner) close() {
 			r.log.Error(err, "failed to close streaming client")
 		}
 	}
-}
-
-// streamingLogSender adapts StreamingClient to logsink.LogSender interface.
-type streamingLogSender struct {
-	client streamclient.StreamingClient
-}
-
-func (s *streamingLogSender) Log(ctx context.Context, level, message string, fields map[string]string) error {
-	return s.client.Log(ctx, level, message, fields)
 }
 
 // run executes the hibernation operation.

@@ -3,7 +3,7 @@ Copyright 2026 Ardika Saputro.
 Licensed under the Apache License, Version 2.0.
 */
 
-package cmd
+package cli
 
 import (
 	"context"
@@ -19,10 +19,10 @@ import (
 )
 
 type suspendOptions struct {
-	root   *rootOptions
-	hours  float64
-	until  string
-	reason string
+	root    *rootOptions
+	seconds float64
+	until   string
+	reason  string
 }
 
 // newSuspendCommand creates the "suspend" command.
@@ -35,38 +35,38 @@ func newSuspendCommand(opts *rootOptions) *cobra.Command {
 		Long: `Suspend a HibernatePlan by adding suspend-until and suspend-reason annotations.
 The controller will prevent hibernation operations until the deadline expires.
 
-You must specify either --hours or --until to set the suspension deadline.
+You must specify either --seconds or --until to set the suspension deadline.
 
 Examples:
-  kubectl hibernator suspend my-plan --hours 4 --reason "deploying new version"
+  kubectl hibernator suspend my-plan --seconds 4 --reason "deploying new version"
   kubectl hibernator suspend my-plan --until "2026-01-15T06:00:00Z" --reason "maintenance window"
-  kubectl hibernator suspend my-plan --hours 24 --reason "incident response"`,
+  kubectl hibernator suspend my-plan --seconds 24 --reason "incident response"`,
 		Args: cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			return runSuspend(cmd.Context(), susOpts, args[0])
 		},
 	}
 
-	cmd.Flags().Float64Var(&susOpts.hours, "hours", 0, "Duration in hours to suspend (e.g., 4, 0.5)")
-	cmd.Flags().StringVar(&susOpts.until, "until", "", "Deadline for suspension in RFC3339 format (e.g., 2026-01-15T06:00:00Z)")
-	cmd.Flags().StringVar(&susOpts.reason, "reason", "", "Reason for suspension (recommended)")
+	cmd.Flags().Float64Var(&susOpts.seconds, "seconds", 0, "Duration in seconds to suspend (e.g., 3600, 1800)")
+	cmd.Flags().StringVar(&susOpts.until, "until", "", "Deadline for suspension in RFC3339 format in UTC (e.g., 2026-01-15T06:00:00Z)")
+	cmd.Flags().StringVar(&susOpts.reason, "reason", "User initiated", "Reason for suspension (recommended)")
 
 	return cmd
 }
 
 func runSuspend(ctx context.Context, opts *suspendOptions, planName string) error {
-	// Validate: must have either --hours or --until
-	if opts.hours <= 0 && opts.until == "" {
-		return fmt.Errorf("either --hours or --until must be specified")
+	// Validate: must have either --seconds or --until
+	if opts.seconds <= 0 && opts.until == "" {
+		return fmt.Errorf("either --seconds or --until must be specified")
 	}
-	if opts.hours > 0 && opts.until != "" {
-		return fmt.Errorf("only one of --hours or --until can be specified")
+	if opts.seconds > 0 && opts.until != "" {
+		return fmt.Errorf("only one of --seconds or --until can be specified")
 	}
 
 	// Calculate deadline
 	var deadline time.Time
-	if opts.hours > 0 {
-		deadline = time.Now().Add(time.Duration(opts.hours * float64(time.Hour)))
+	if opts.seconds > 0 {
+		deadline = time.Now().Add(time.Duration(opts.seconds * float64(time.Second)))
 	} else {
 		var err error
 		deadline, err = time.Parse(time.RFC3339, opts.until)
@@ -91,13 +91,15 @@ func runSuspend(ctx context.Context, opts *suspendOptions, planName string) erro
 		return fmt.Errorf("failed to get HibernatePlan %q in namespace %q: %w", planName, ns, err)
 	}
 
-	// Patch annotations
+	// Patch: set annotations for suspend-until and reason
 	patch := client.MergeFrom(plan.DeepCopy())
+
+	plan.Spec.Suspend = true
 
 	if plan.Annotations == nil {
 		plan.Annotations = make(map[string]string)
 	}
-	plan.Annotations[wellknown.AnnotationSuspendUntil] = deadline.UTC().Format(time.RFC3339)
+	plan.Annotations[wellknown.AnnotationSuspendUntil] = deadline.Format(time.RFC3339)
 	if opts.reason != "" {
 		plan.Annotations[wellknown.AnnotationSuspendReason] = opts.reason
 	}
@@ -106,7 +108,8 @@ func runSuspend(ctx context.Context, opts *suspendOptions, planName string) erro
 		return fmt.Errorf("failed to patch HibernatePlan %q: %w", planName, err)
 	}
 
-	fmt.Printf("HibernatePlan %q suspended until %s\n", planName, deadline.UTC().Format(time.RFC3339))
+	fmt.Printf("HibernatePlan %q suspended\n", planName)
+	fmt.Printf("Suspended Until: %s\n", deadline.Format(time.RFC3339))
 	if opts.reason != "" {
 		fmt.Printf("Reason: %s\n", opts.reason)
 	}

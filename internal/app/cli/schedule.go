@@ -3,7 +3,7 @@ Copyright 2026 Ardika Saputro.
 Licensed under the Apache License, Version 2.0.
 */
 
-package cmd
+package cli
 
 import (
 	"context"
@@ -210,13 +210,13 @@ func convertAPIWindows(apiWindows []hibernatorv1alpha1.OffHourWindow) []schedule
 }
 
 type scheduleJSONOutput struct {
-	Plan       string                                      `json:"plan"`
-	Namespace  string                                      `json:"namespace,omitempty"`
-	Timezone   string                                      `json:"timezone"`
-	OffHours   []hibernatorv1alpha1.OffHourWindow           `json:"offHours"`
-	Current    scheduleCurrentJSON                         `json:"current"`
-	Events     []scheduleEvent                             `json:"upcomingEvents"`
-	Exceptions []hibernatorv1alpha1.ExceptionReference      `json:"activeExceptions,omitempty"`
+	Plan       string                                  `json:"plan"`
+	Namespace  string                                  `json:"namespace,omitempty"`
+	Timezone   string                                  `json:"timezone"`
+	OffHours   []hibernatorv1alpha1.OffHourWindow      `json:"offHours"`
+	Current    scheduleCurrentJSON                     `json:"current"`
+	Events     []scheduleEvent                         `json:"upcomingEvents"`
+	Exceptions []hibernatorv1alpha1.ExceptionReference `json:"activeExceptions,omitempty"`
 }
 
 type scheduleCurrentJSON struct {
