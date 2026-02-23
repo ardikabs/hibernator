@@ -10,11 +10,11 @@ import (
 
 	_ "time/tzdata"
 
-	cliapp "github.com/ardikabs/hibernator/internal/app/cli"
+	"github.com/ardikabs/hibernator/cmd/kubectl-hibernator/cli"
 )
 
 func main() {
-	if err := cliapp.NewRootCommand().Execute(); err != nil {
+	if err := cli.NewRootCommand().Execute(); err != nil {
 		os.Exit(1)
 	}
 }

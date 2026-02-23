@@ -8,13 +8,13 @@ package main
 import (
 	"os"
 
-	controlerapp "github.com/ardikabs/hibernator/internal/app/controller"
+	"github.com/ardikabs/hibernator/cmd/controller/app"
 )
 
 func main() {
-	opts := controlerapp.ParseFlags()
+	opts := app.ParseFlags()
 
-	if err := controlerapp.Run(opts); err != nil {
+	if err := app.Run(opts); err != nil {
 		os.Exit(1)
 	}
 }

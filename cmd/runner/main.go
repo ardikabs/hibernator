@@ -8,13 +8,13 @@ package main
 import (
 	"os"
 
-	runnerapp "github.com/ardikabs/hibernator/internal/app/runner"
+	"github.com/ardikabs/hibernator/cmd/runner/app"
 )
 
 func main() {
-	cfg := runnerapp.ParseFlags()
+	cfg := app.ParseFlags()
 
-	if err := runnerapp.Run(cfg); err != nil {
+	if err := app.Run(cfg); err != nil {
 		os.Exit(1)
 	}
 }
