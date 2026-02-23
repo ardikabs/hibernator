@@ -42,7 +42,8 @@ plugins:
     "@semantic-release/exec",
     {
       "generateNotesCmd": "./hack/sync-version.sh ${nextRelease.version} app",
-      "publishCmd": "./hack/auto-release-branch.sh ${nextRelease.version} ${nextRelease.gitTag}"
+      "publishCmd": "make build-dist VERSION=${nextRelease.version}",
+      "successCmd": "./hack/auto-release-branch.sh ${nextRelease.version} ${nextRelease.gitTag}"
     }
   ]
 - [
@@ -55,4 +56,14 @@ plugins:
       "message": "chore(release): ${nextRelease.version} [skip ci]\n${nextRelease.notes}"
     }
   ]
-- "@semantic-release/github"
+- [
+    "@semantic-release/github",
+    {
+      "assets": [
+        {
+          "path": "dist/kubectl-hibernator/${nextRelease.version}/kubectl-hibernator-*",
+          "label": "Kubectl Hibernator Plugin"
+        },
+      ]
+    }
+  ]

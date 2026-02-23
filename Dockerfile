@@ -14,13 +14,17 @@ COPY . .
 FROM builder AS build-controller
 ARG TARGETOS
 ARG TARGETARCH
-RUN CGO_ENABLED=0 GOOS=${TARGETOS} GOARCH=${TARGETARCH} go build -ldflags="-s -w" -o /controller ./cmd/controller
+ARG VERSION=dev
+ARG COMMIT_HASH
+RUN CGO_ENABLED=0 GOOS=${TARGETOS} GOARCH=${TARGETARCH} go build -ldflags="-s -w -X github.com/ardikabs/hibernator/internal/version.Version=${VERSION} -X github.com/ardikabs/hibernator/internal/version.CommitHash=${COMMIT_HASH}" -o /controller ./cmd/controller
 
 # Build runner
 FROM builder AS build-runner
 ARG TARGETOS
 ARG TARGETARCH
-RUN CGO_ENABLED=0 GOOS=${TARGETOS} GOARCH=${TARGETARCH} go build -ldflags="-s -w" -o /runner ./cmd/runner
+ARG VERSION=dev
+ARG COMMIT_HASH
+RUN CGO_ENABLED=0 GOOS=${TARGETOS} GOARCH=${TARGETARCH} go build -ldflags="-s -w -X github.com/ardikabs/hibernator/internal/version.Version=${VERSION} -X github.com/ardikabs/hibernator/internal/version.CommitHash=${COMMIT_HASH}" -o /runner ./cmd/runner
 
 # Controller image
 FROM gcr.io/distroless/static:nonroot AS controller
