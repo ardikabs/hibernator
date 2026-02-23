@@ -61,8 +61,7 @@ plugins:
     {
       "assets": [
         {
-          "path": "dist/kubectl-hibernator/${nextRelease.version}/kubectl-hibernator-*",
-          "label": "Kubectl Hibernator Plugin"
+          "path": "dist/kubectl-hibernator/**/kubectl-hibernator-*",
         },
       ]
     }

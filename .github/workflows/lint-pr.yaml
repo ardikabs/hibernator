@@ -26,10 +26,12 @@ jobs:
             charts
             api
             cmd
+            controller
+            executor
+            scheduler
             pkg
-            internal
-            enhancement
             docs
+            enhancement
             test
 
           # Configure which types are allowed.
