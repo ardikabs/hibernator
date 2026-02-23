@@ -8,10 +8,15 @@ package cli
 import (
 	"bufio"
 	"context"
+	"crypto/md5"
 	"encoding/json"
 	"fmt"
+	"io"
 	"os"
+	"sort"
 	"strings"
+	"sync"
+	"time"
 
 	"github.com/spf13/cobra"
 	corev1 "k8s.io/api/core/v1"
@@ -93,7 +98,7 @@ func runLogs(ctx context.Context, opts *logsOptions, planName string) error {
 		return fmt.Errorf("failed to get HibernatePlan %q in namespace %q: %w", planName, ns, err)
 	}
 
-	// Discover controller pod
+	// Discover controller namespace and fetch all running controller pods
 	controllerNS := discoverControllerNamespace()
 
 	var podList corev1.PodList
@@ -108,16 +113,15 @@ func runLogs(ctx context.Context, opts *logsOptions, planName string) error {
 		return fmt.Errorf("no controller pod found with label app.kubernetes.io/name=hibernator in namespace %q", controllerNS)
 	}
 
-	// Use the first running pod
-	var controllerPod *corev1.Pod
+	// Filter running pods
+	var runningPods []*corev1.Pod
 	for i := range podList.Items {
 		if podList.Items[i].Status.Phase == corev1.PodRunning {
-			controllerPod = &podList.Items[i]
-			break
+			runningPods = append(runningPods, &podList.Items[i])
 		}
 	}
-	if controllerPod == nil {
-		controllerPod = &podList.Items[0]
+	if len(runningPods) == 0 {
+		runningPods = append(runningPods, &podList.Items[0])
 	}
 
 	// Build clientset for pod logs API
@@ -126,39 +130,202 @@ func runLogs(ctx context.Context, opts *logsOptions, planName string) error {
 		return fmt.Errorf("failed to create Kubernetes clientset: %w", err)
 	}
 
-	// Fetch logs
-	logOpts := &corev1.PodLogOptions{
-		Follow: opts.follow,
+	// Build filter context from plan
+	filter := buildLogFilter(planName, opts, &plan)
+
+	// Fetch logs from all controller pods
+	if opts.follow {
+		return followLogsFromPods(ctx, clientset, runningPods, opts, filter)
 	}
+
+	return tailLogsFromPods(ctx, clientset, runningPods, opts, filter)
+}
+
+// logLine represents a parsed log entry with timestamp for sorting.
+type logLine struct {
+	raw       string    // Original log raw line
+	timestamp time.Time // Parsed timestamp
+	hash      string    // Content hash for deduplication
+	line      string    // Formatted line
+}
+
+// tailLogsFromPods fetches and aggregates logs from all controller pods, sorts by timestamp, and displays.
+func tailLogsFromPods(ctx context.Context, clientset *kubernetes.Clientset, pods []*corev1.Pod, opts *logsOptions, filter *logFilter) error {
+	logChan := make(chan *logLine, 1000)
+	errChan := make(chan error, len(pods))
+	var wg sync.WaitGroup
+
+	// Fetch logs from each pod concurrently
+	for _, pod := range pods {
+		wg.Add(1)
+		go func(p *corev1.Pod) {
+			defer wg.Done()
+			if err := fetchAndFilterPodLogs(ctx, clientset, p, opts, filter, logChan); err != nil {
+				errChan <- fmt.Errorf("pod %s/%s: %w", p.Namespace, p.Name, err)
+			}
+		}(pod)
+	}
+
+	// Close channel when all goroutines finish
+	go func() {
+		wg.Wait()
+		close(logChan)
+	}()
+
+	// Collect all logs
+	var allLogs []*logLine
+	for log := range logChan {
+		allLogs = append(allLogs, log)
+	}
+
+	// Check for errors
+	close(errChan)
+	for err := range errChan {
+		fmt.Fprintf(os.Stderr, "Warning: %v\n", err)
+	}
+
+	// Sort by timestamp
+	sort.Slice(allLogs, func(i, j int) bool {
+		if allLogs[i].timestamp.Equal(allLogs[j].timestamp) {
+			// Break ties by hash for consistency
+			return allLogs[i].hash < allLogs[j].hash
+		}
+		return allLogs[i].timestamp.Before(allLogs[j].timestamp)
+	})
+
+	// Deduplicate and display
+	seen := make(map[string]bool)
+	for _, log := range allLogs {
+		if !seen[log.hash] {
+			seen[log.hash] = true
+			if opts.root.jsonOutput {
+				fmt.Println(log.raw)
+			} else {
+				fmt.Println(log.line)
+			}
+		}
+	}
+
+	return nil
+}
+
+// followLogsFromPods streams logs from all controller pods concurrently, merging by timestamp.
+func followLogsFromPods(ctx context.Context, clientset *kubernetes.Clientset, pods []*corev1.Pod, opts *logsOptions, filter *logFilter) error {
+	logChan := make(chan *logLine, 1000)
+	errChan := make(chan error, len(pods))
+	var wg sync.WaitGroup
+
+	// Show which pods we're querying
+	fmt.Fprintf(os.Stderr, "Following logs from %d controller pod(s):\n", len(pods))
+	for _, pod := range pods {
+		fmt.Fprintf(os.Stderr, "  - %s/%s\n", pod.Namespace, pod.Name)
+	}
+	fmt.Fprintf(os.Stderr, "\n")
+
+	// Stream logs from each pod concurrently
+	for _, pod := range pods {
+		wg.Add(1)
+		go func(p *corev1.Pod) {
+			defer wg.Done()
+			logOpts := &corev1.PodLogOptions{
+				Follow: true,
+			}
+			if err := streamPodLogs(ctx, clientset, p, opts, filter, logOpts, logChan); err != nil {
+				errChan <- fmt.Errorf("pod %s/%s: %w", p.Namespace, p.Name, err)
+			}
+		}(pod)
+	}
+
+	// Close channel when all goroutines finish
+	go func() {
+		wg.Wait()
+		close(logChan)
+	}()
+
+	// Collect and deduplicate logs as they arrive
+	seen := make(map[string]bool)
+	seenMutex := &sync.Mutex{}
+
+	for log := range logChan {
+		seenMutex.Lock()
+		if !seen[log.hash] {
+			seen[log.hash] = true
+			if opts.root.jsonOutput {
+				fmt.Println(log.raw)
+			} else {
+				fmt.Println(log.line)
+			}
+		}
+		seenMutex.Unlock()
+	}
+
+	// Report any errors
+	close(errChan)
+	for err := range errChan {
+		fmt.Fprintf(os.Stderr, "Error: %v\n", err)
+	}
+
+	return nil
+}
+
+// fetchAndFilterPodLogs reads logs from a single pod, filters them, and sends to channel.
+func fetchAndFilterPodLogs(ctx context.Context, clientset *kubernetes.Clientset, pod *corev1.Pod, opts *logsOptions, filter *logFilter, logChan chan<- *logLine) error {
+	logOpts := &corev1.PodLogOptions{}
 	if opts.tail > 0 {
 		logOpts.TailLines = &opts.tail
 	}
 
-	req := clientset.CoreV1().Pods(controllerPod.Namespace).GetLogs(controllerPod.Name, logOpts)
+	req := clientset.CoreV1().Pods(pod.Namespace).GetLogs(pod.Name, logOpts)
 	stream, err := req.Stream(ctx)
 	if err != nil {
-		return fmt.Errorf("failed to stream logs from pod %q: %w", controllerPod.Name, err)
+		return err
 	}
 	defer stream.Close()
 
-	// Build filter context from plan
-	filter := buildLogFilter(planName, opts, &plan)
+	return parseLogs(stream, filter, logChan)
+}
 
-	// Parse and filter logs
+// streamPodLogs streams logs from a single pod in follow mode.
+func streamPodLogs(ctx context.Context, clientset *kubernetes.Clientset, pod *corev1.Pod, opts *logsOptions, filter *logFilter, logOpts *corev1.PodLogOptions, logChan chan<- *logLine) error {
+	req := clientset.CoreV1().Pods(pod.Namespace).GetLogs(pod.Name, logOpts)
+	stream, err := req.Stream(ctx)
+	if err != nil {
+		return err
+	}
+	defer stream.Close()
+
+	return parseLogs(stream, filter, logChan)
+}
+
+// parseLogs reads a log stream, filters lines, and sends to channel.
+func parseLogs(stream io.ReadCloser, filter *logFilter, logChan chan<- *logLine) error {
 	scanner := bufio.NewScanner(stream)
 	// Increase buffer for long log lines
 	scanner.Buffer(make([]byte, 0, 64*1024), 1024*1024)
 
 	for scanner.Scan() {
 		line := scanner.Text()
-		fmt.Println(line)
 
 		if filter.matches(line) {
-			if opts.root.jsonOutput {
-				// Pass through JSON lines as-is
-				fmt.Println(line)
-			} else {
-				fmt.Println(formatLogLine(line))
+			// Parse timestamp from JSON
+			var logEntry map[string]interface{}
+			ts := time.Now()
+			if err := json.Unmarshal([]byte(line), &logEntry); err == nil {
+				if tsStr, ok := logEntry["ts"].(string); ok {
+					if parsed, err := time.Parse(time.RFC3339Nano, tsStr); err == nil {
+						ts = parsed
+					}
+				}
+			}
+
+			// Calculate content hash for deduplication
+			hash := fmt.Sprintf("%x", md5.Sum([]byte(line)))
+
+			logChan <- &logLine{
+				raw:       line,
+				timestamp: ts,
+				hash:      hash,
+				line:      formatLogLine(line),
 			}
 		}
 	}
