@@ -30,11 +30,11 @@ import (
 )
 
 type logsOptions struct {
-	root     *rootOptions
-	executor string
-	target   string
-	tail     int64
-	follow   bool
+	root   *rootOptions
+	target string
+	tail   int64
+	follow bool
+	level  string
 }
 
 // newLogsCommand creates the "logs" command.
@@ -45,7 +45,7 @@ func newLogsCommand(opts *rootOptions) *cobra.Command {
 		Use:   "logs <plan-name>",
 		Short: "View controller logs filtered by plan context",
 		Long: `Fetch logs from the Hibernator controller pod and filter them
-by plan name, executor, target, or execution ID.
+by plan name, target, or execution ID.
 
 The command discovers the controller pod automatically by label selector
 (app.kubernetes.io/name=hibernator), then streams or tails its logs.
@@ -53,7 +53,7 @@ The command discovers the controller pod automatically by label selector
 Examples:
   kubectl hibernator logs my-plan
   kubectl hibernator logs my-plan --tail 100
-  kubectl hibernator logs my-plan --executor eks --target my-cluster
+  kubectl hibernator logs my-plan --target my-cluster
   kubectl hibernator logs my-plan --follow
   kubectl hibernator logs my-plan --json`,
 		Args: cobra.ExactArgs(1),
@@ -62,8 +62,8 @@ Examples:
 		},
 	}
 
-	cmd.Flags().StringVar(&logsOpts.executor, "executor", "", "Filter logs by executor type (e.g., eks, rds, ec2)")
 	cmd.Flags().StringVar(&logsOpts.target, "target", "", "Filter logs by target name")
+	cmd.Flags().StringVar(&logsOpts.level, "level", "", "Filter logs by level: 'error' (logs with error field) or 'info' (logs without errors)")
 	cmd.Flags().Int64Var(&logsOpts.tail, "tail", 500, "Number of recent log lines to fetch")
 	cmd.Flags().BoolVarP(&logsOpts.follow, "follow", "f", false, "Follow log output (stream)")
 
@@ -336,16 +336,16 @@ func parseLogs(stream io.ReadCloser, filter *logFilter, logChan chan<- *logLine)
 // logFilter holds criteria for filtering log lines.
 type logFilter struct {
 	planName     string
-	executor     string
 	target       string
 	executionIDs []string
+	level        string
 }
 
 func buildLogFilter(planName string, opts *logsOptions, plan *hibernatorv1alpha1.HibernatePlan) *logFilter {
 	f := &logFilter{
 		planName: planName,
-		executor: opts.executor,
 		target:   opts.target,
+		level:    strings.ToLower(opts.level),
 	}
 
 	// Collect execution IDs from current executions
@@ -360,6 +360,10 @@ func buildLogFilter(planName string, opts *logsOptions, plan *hibernatorv1alpha1
 
 // matches checks if a log line matches the filter criteria.
 func (f *logFilter) matches(line string) bool {
+	if !strings.Contains(line, "execution-service.runner-logs") {
+		return false
+	}
+
 	// Must contain the plan name
 	if !strings.Contains(line, f.planName) {
 		// Also check for execution IDs if plan name not found directly
@@ -375,20 +379,39 @@ func (f *logFilter) matches(line string) bool {
 		}
 	}
 
-	// Optional executor filter
-	if f.executor != "" && !strings.Contains(line, f.executor) {
-		return false
-	}
-
 	// Optional target filter
 	if f.target != "" && !strings.Contains(line, f.target) {
 		return false
+	}
+
+	// Optional level filter
+	// Note: Runner logs are all INFO level, so we detect "error" by presence of error field
+	if f.level != "" {
+		var logEntry map[string]interface{}
+		if err := json.Unmarshal([]byte(line), &logEntry); err == nil {
+			switch f.level {
+			case "error":
+				// Error logs have an error field present and non-empty
+				errField := extractString(logEntry, "error")
+				if errField == "" {
+					return false
+				}
+			case "info":
+				// Info logs (default) should NOT have an error field
+				errField := extractString(logEntry, "error")
+				if errField != "" {
+					return false
+				}
+				// Add more level types as needed (debug, warn, etc.)
+			}
+		}
 	}
 
 	return true
 }
 
 // formatLogLine attempts to pretty-print a structured JSON log line.
+// Handles different log types (startup, progress, error, waiting, polling, operation).
 // Falls back to returning the raw line if parsing fails.
 func formatLogLine(line string) string {
 	// Try to parse as JSON
@@ -398,44 +421,147 @@ func formatLogLine(line string) string {
 	}
 
 	// Extract common fields
-	ts, _ := logEntry["ts"].(string)
-	if ts == "" {
-		if tsFloat, ok := logEntry["ts"].(float64); ok {
-			ts = fmt.Sprintf("%.3f", tsFloat)
-		}
-	}
-	level, _ := logEntry["level"].(string)
-	msg, _ := logEntry["msg"].(string)
-	logger, _ := logEntry["logger"].(string)
+	ts := extractTimestamp(logEntry)
+	level := extractString(logEntry, "level")
+	msg := extractString(logEntry, "msg")
+	target := extractString(logEntry, "target")
+	execID := extractString(logEntry, "executionId")
 
-	// Check for execution-id prefix
-	execID := ""
-	if eid, ok := logEntry["execution-id"].(string); ok {
-		execID = eid
-	}
-
+	// Build base log line
 	var sb strings.Builder
+
+	// Timestamp
 	if ts != "" {
 		sb.WriteString(ts)
 		sb.WriteString(" ")
 	}
+
+	// Log level (highlight errors)
 	if level != "" {
 		sb.WriteString("[")
-		sb.WriteString(strings.ToUpper(level))
+		if level == "error" || extractString(logEntry, "error") != "" {
+			sb.WriteString("ERROR")
+		} else {
+			sb.WriteString(strings.ToUpper(level))
+		}
 		sb.WriteString("] ")
 	}
-	if logger != "" {
-		sb.WriteString(logger)
-		sb.WriteString(": ")
+
+	// Execution context
+	if execID != "" && target != "" {
+		sb.WriteString(fmt.Sprintf("(exec=%s, target=%s) ", execID, target))
 	}
-	if execID != "" {
-		sb.WriteString(wellknown.ExecutionIDLogPrefix)
-		sb.WriteString(execID)
-		sb.WriteString(" ")
-	}
+
+	// Main message
 	sb.WriteString(msg)
 
+	// Handle different log types
+	switch msg {
+	case "starting runner":
+		if op := extractString(logEntry, "operation"); op != "" {
+			sb.WriteString(fmt.Sprintf(" [%s]", op))
+		}
+		if tt := extractString(logEntry, "targetType"); tt != "" {
+			sb.WriteString(fmt.Sprintf(" (%s)", tt))
+		}
+
+	case "progress":
+		if message := extractString(logEntry, "message"); message != "" {
+			sb.WriteString(fmt.Sprintf(": %s", message))
+		}
+		if phase := extractString(logEntry, "phase"); phase != "" {
+			sb.WriteString(fmt.Sprintf(" (phase: %s", phase))
+			if percent := extractString(logEntry, "percent"); percent != "" {
+				sb.WriteString(fmt.Sprintf(", %s%%", percent))
+			}
+			sb.WriteString(")")
+		}
+
+	case "error context":
+		if errMsg := extractString(logEntry, "error"); errMsg != "" {
+			sb.WriteString(fmt.Sprintf(": %s", errMsg))
+		}
+
+	case "waiting for workload replicas to scale", "waiting for operation":
+		if name := extractString(logEntry, "name"); name != "" {
+			ns := extractString(logEntry, "namespace")
+			sb.WriteString(fmt.Sprintf(" %s/%s", ns, name))
+		}
+		if desc := extractString(logEntry, "description"); desc != "" {
+			sb.WriteString(fmt.Sprintf(": %s", desc))
+		}
+		if timeout := extractString(logEntry, "timeout"); timeout != "" {
+			sb.WriteString(fmt.Sprintf(" (timeout: %s)", timeout))
+		}
+
+	case "polling operation (initial)", "polling operation":
+		if desc := extractString(logEntry, "description"); desc != "" {
+			sb.WriteString(fmt.Sprintf(": %s", desc))
+		}
+		if status := extractString(logEntry, "status"); status != "" {
+			sb.WriteString(fmt.Sprintf(" → %s", status))
+		}
+
+	case "operation completed":
+		if desc := extractString(logEntry, "description"); desc != "" {
+			sb.WriteString(fmt.Sprintf(": %s", desc))
+		}
+
+	default:
+		// Generic handling for other message types
+		if desc := extractString(logEntry, "description"); desc != "" {
+			sb.WriteString(fmt.Sprintf(": %s", desc))
+		}
+		if message := extractString(logEntry, "message"); message != "" {
+			sb.WriteString(fmt.Sprintf(": %s", message))
+		}
+		if status := extractString(logEntry, "status"); status != "" {
+			sb.WriteString(fmt.Sprintf(" → %s", status))
+		}
+		if errMsg := extractString(logEntry, "error"); errMsg != "" {
+			sb.WriteString(fmt.Sprintf(" (ERROR: %s)", errMsg))
+		}
+	}
+
 	return sb.String()
+}
+
+// extractTimestamp extracts and formats the timestamp from log entry.
+// Prefers "ts" field (RFC3339Nano), falls back to "timestamp" field.
+// Converts to local timezone for display.
+func extractTimestamp(logEntry map[string]interface{}) string {
+	// Try "ts" field first (standard logr field)
+	if tsStr, ok := logEntry["ts"].(string); ok && tsStr != "" {
+		// Parse RFC3339Nano and format as readable timestamp in local timezone
+		if parsed, err := time.Parse(time.RFC3339Nano, tsStr); err == nil {
+			return parsed.Local().Format("2006-01-02T15:04:05")
+		}
+		return tsStr
+	}
+
+	// Fall back to "timestamp" field
+	if tsStr, ok := logEntry["timestamp"].(string); ok && tsStr != "" {
+		if parsed, err := time.Parse(time.RFC3339Nano, tsStr); err == nil {
+			return parsed.Local().Format("2006-01-02T15:04:05")
+		}
+		return tsStr
+	}
+
+	return ""
+}
+
+// extractString safely extracts a string value from JSON map, handling various types.
+func extractString(m map[string]interface{}, key string) string {
+	if v, ok := m[key]; ok {
+		if s, ok := v.(string); ok {
+			return s
+		}
+		if f, ok := v.(float64); ok {
+			return fmt.Sprintf("%.0f", f)
+		}
+		return fmt.Sprintf("%v", v)
+	}
+	return ""
 }
 
 // discoverControllerNamespace returns the namespace where the controller is expected to run.
