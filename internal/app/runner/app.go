@@ -15,6 +15,7 @@ import (
 	"github.com/go-logr/zapr"
 	"go.uber.org/zap"
 
+	"github.com/ardikabs/hibernator/internal/version"
 	"github.com/ardikabs/hibernator/internal/wellknown"
 )
 
@@ -42,7 +43,9 @@ type Config struct {
 // ParseFlags parses command-line flags and environment variables.
 func ParseFlags() *Config {
 	cfg := &Config{}
+	var showVersion bool
 
+	flag.BoolVar(&showVersion, "version", false, "Print version and exit.")
 	flag.DurationVar(&cfg.Timeout, "timeout", time.Hour, "Overall execution timeout, default 1h")
 	flag.StringVar(&cfg.Operation, "operation", "", "Operation: shutdown or wakeup")
 	flag.StringVar(&cfg.Target, "target", "", "Target name")
@@ -50,6 +53,12 @@ func ParseFlags() *Config {
 	flag.StringVar(&cfg.Plan, "plan", "", "HibernatePlan name")
 	flag.StringVar(&cfg.TokenPath, "token-path", "/var/run/secrets/stream/token", "Path to stream token")
 	flag.Parse()
+
+	// Check if version flag is set
+	if showVersion {
+		fmt.Println("hibernator-runner", version.GetVersion())
+		os.Exit(0)
+	}
 
 	// Environment variable overrides
 	envMappings := map[string]*string{

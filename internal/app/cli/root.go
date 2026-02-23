@@ -61,6 +61,7 @@ func NewRootCommand() *cobra.Command {
 	cmd.PersistentFlags().BoolVar(&opts.jsonOutput, "json", false, "Output in JSON format")
 
 	// Register subcommands
+	cmd.AddCommand(newVersionCommand())
 	cmd.AddCommand(newShowCommand(opts))
 	cmd.AddCommand(newSuspendCommand(opts))
 	cmd.AddCommand(newResumeCommand(opts))

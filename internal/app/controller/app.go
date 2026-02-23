@@ -7,6 +7,8 @@ package controllerapp
 
 import (
 	"flag"
+	"fmt"
+	"os"
 	"time"
 
 	_ "time/tzdata"
@@ -28,6 +30,7 @@ import (
 	"github.com/ardikabs/hibernator/internal/restore"
 	"github.com/ardikabs/hibernator/internal/scheduler"
 	"github.com/ardikabs/hibernator/internal/streaming"
+	"github.com/ardikabs/hibernator/internal/version"
 	"github.com/ardikabs/hibernator/pkg/envutil"
 )
 
@@ -62,7 +65,9 @@ type Options struct {
 // ParseFlags parses command-line flags and environment variables.
 func ParseFlags() Options {
 	var opts Options
+	var showVersion bool
 
+	flag.BoolVar(&showVersion, "version", false, "Print version and exit.")
 	flag.StringVar(&opts.MetricsAddr, "metrics-bind-address", ":8080", "The address the metric endpoint binds to.")
 	flag.StringVar(&opts.ProbeAddr, "health-probe-bind-address", ":8081", "The address the probe endpoint binds to.")
 	flag.BoolVar(&opts.EnableLeaderElection, "leader-elect", envutil.GetBool("LEADER_ELECTION_ENABLED", true),
@@ -96,6 +101,12 @@ func ParseFlags() Options {
 	}
 	zapOpts.BindFlags(flag.CommandLine)
 	flag.Parse()
+
+	// Check if version flag is set
+	if showVersion {
+		fmt.Println("hibernator-controller", version.GetVersion())
+		os.Exit(0)
+	}
 
 	ctrl.SetLogger(zap.New(zap.UseFlagOptions(&zapOpts)))
 
