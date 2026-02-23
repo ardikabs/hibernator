@@ -14,7 +14,6 @@ import (
 	"time"
 
 	"github.com/spf13/cobra"
-	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/apimachinery/pkg/util/yaml"
 	"k8s.io/utils/clock"
@@ -324,12 +323,4 @@ func humanDuration(d time.Duration) string {
 		return fmt.Sprintf("%dd%dh", days, remainHours)
 	}
 	return fmt.Sprintf("%dd", days)
-}
-
-// formatTime formats a metav1.Time pointer to a string, or returns "N/A".
-func formatTime(t *metav1.Time) string {
-	if t == nil || t.IsZero() {
-		return "N/A"
-	}
-	return t.Format(time.RFC3339)
 }

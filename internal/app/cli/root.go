@@ -7,7 +7,6 @@ package cli
 
 import (
 	"fmt"
-	"os"
 
 	"github.com/spf13/cobra"
 	"k8s.io/apimachinery/pkg/runtime"
@@ -116,9 +115,4 @@ func resolveNamespace(opts *rootOptions) string {
 	}
 
 	return ns
-}
-
-// exitError prints an error message to stderr.
-func exitError(format string, args ...interface{}) {
-	fmt.Fprintf(os.Stderr, "Error: "+format+"\n", args...)
 }

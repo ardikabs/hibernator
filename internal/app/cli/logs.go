@@ -280,6 +280,7 @@ func fetchAndFilterPodLogs(ctx context.Context, clientset *kubernetes.Clientset,
 	if err != nil {
 		return err
 	}
+	// nolint:errcheck
 	defer stream.Close()
 
 	return parseLogs(stream, filter, logChan)
@@ -292,6 +293,7 @@ func streamPodLogs(ctx context.Context, clientset *kubernetes.Clientset, pod *co
 	if err != nil {
 		return err
 	}
+	// nolint:errcheck
 	defer stream.Close()
 
 	return parseLogs(stream, filter, logChan)
