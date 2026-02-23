@@ -3,14 +3,14 @@ rfc: RFC-0007
 title: kubectl hibernator Plugin for Day-to-Day Operations
 status: In Progress 🚀
 date: 2026-02-20
-last-updated: 2026-02-20
+last-updated: 2026-02-23
 ---
 
 # RFC 0007 — kubectl hibernator Plugin for Day-to-Day Operations
 
 **Keywords:** CLI, kubectl-plugin, Operational-Management, Schedule-Validation, Debug, Observability, User-Experience
 
-**Status:** In Progress 🚀 (Client-side: ✅ Complete | Server-side: ⏳ Pending)
+**Status:** In Progress 🚀 (Client-side: ✅ Complete | Server-side: ✅ Implemented, ⏳ Verification)
 
 ## Summary
 
@@ -237,24 +237,36 @@ kubectl hibernator retry my-plan -n prod --force --until "2026-02-21T10:00:00Z"
 **Purpose**: View executor and runner logs from the hibernation execution, filtered by executor and target.
 
 **Behavior**:
-1. Identifies the Plan resource and its associated server pod
-2. Fetches logs from the server pod using `kubectl logs`
-3. Parses logs locally, extracting structured fields: execution-id, executor, target, severity
-4. Filters based on optional `--executor` and `--target` parameters
-5. With `--follow`, streams live logs from server pod (like `tail -f`)
+1. Discovers ALL running controller pod replicas (HA-aware)
+2. Fetches logs from **all controller pods concurrently**
+3. Parses logs locally using pattern-based matching to extract relevant fields: execution-id, executor, target, severity
+4. Aggregates logs and sorts by timestamp (chronological order)
+5. Deduplicates logs (in case a log appears in multiple pods)
+6. Filters based on optional `--executor` and `--target` parameters
+7. With `--follow`, streams live logs from all pods, merging by timestamp
+
+**Multi-Replica Support**:
+- In HA setups with multiple controller replicas, the CLI queries all running pods
+- Logs are aggregated from all pods for complete visibility
+- Duplicates are automatically removed using content-based deduplication (MD5 hash)
+- In follow mode, timestamps are used to preserve chronological order across pods
+- User sees a message showing which pods are being queried
 
 **How It Works**:
-1. CLI discovers server pod: `kubectl get pod -l app=hibernator-controller -n hibernator-system`
-2. Fetches logs: `kubectl logs <server-pod> [--follow] -n hibernator-system`
-3. Parses structured logs output: extracts execution-id, executor, target, timestamp, severity
-4. Filters by executor/target if specified
-5. Displays to user
+1. CLI discovers controller pods: `kubectl get pods -l app.kubernetes.io/name=hibernator -n hibernator-system`
+2. Fetches logs from **all running pods** concurrently using goroutines
+3. Each pod stream is parsed independently with pattern-based matching
+4. All log lines collected and sorted by timestamp
+5. Deduplication removes identical logs from multiple pods
+6. Reformats for human-readable display
+7. This approach is resilient to HA deployments and ensures no logs are missed
 
-**Output**:
+**Output** (formatted from JSON logs):
 ```
-Execution ID: exec-20260220-001
-Plan: my-app-hibernation (Namespace: production)
-Server: hibernator-controller-xyz (hibernator-system)
+Following logs from 3 controller pod(s):
+  - hibernator-controller-abc
+  - hibernator-controller-def
+  - hibernator-controller-ghi
 
 [2026-02-20 20:05:12 UTC] INFO  executor=eks-executor target=my-cluster: Starting hibernation
 [2026-02-20 20:05:18 UTC] DEBUG executor=eks-executor target=my-cluster: Fetched 3 node groups
@@ -263,12 +275,10 @@ Server: hibernator-controller-xyz (hibernator-system)
 [2026-02-20 21:35:52 UTC] INFO  executor=rds-executor target=my-database: Database hibernation successful
 ```
 
-**Output Format** (per log entry):
-```
-[timestamp(RFC3339)] [severity:INFO|WARN|ERROR] [executor:rds] [target:production]: [message]
-[2025-02-20T14:23:45Z] [ERROR] [eks] [prod-nodes]: Failed to drain node; error=node lock held by system
-[2025-02-20T14:24:15Z] [INFO] [rds] [customer-db]: Backup snapshot created: snap-0x1234567
-```
+**Log Format** (Server outputs JSON; CLI parses and filters):
+- Server logs are in JSON format with various fields
+- CLI uses pattern-based regex matching to extract execution context (executor, target, timestamp, severity)
+- Human-readable output shown to user (reformatted from parsed JSON)
 
 **Examples**:
 ```bash
@@ -319,12 +329,20 @@ cmd/
       status.go                # Show status command
       suspend.go               # Suspend/resume commands
       retry.go                 # Retry command
-      logs.go                  # Logs command
+      logs.go                  # Logs command (multi-pod aggregation)
     pkg/
       scheduler/               # Local schedule evaluation (reuse from internal/)
       output/                  # Formatting & display utilities
       client/                  # Kubernetes client helpers
 ```
+
+**Multi-Pod Log Aggregation** (for HA/replica deployments):
+- CLI discovers all running controller pod replicas via label selector
+- Uses concurrent goroutines to fetch logs from all pods in parallel
+- Aggregates log streams and sorts by timestamp for chronological order
+- Deduplicates logs using content-based MD5 hash (prevents duplicates from replicas)
+- In follow mode: streams from all pods, merging real-time output by timestamp
+- User sees which pods are being queried (stderr output)
 
 #### Installation
 
@@ -446,16 +464,20 @@ type ExecutionRecord struct {
 
 CLI uses `executionId` to correlate logs from server pod output.
 
-### 4. Server Pod Logging (Existing)
+### 4. Server Pod Logging (JSON-based with Pattern Matching)
 
-**Requirement**: Hibernator server pod already writes logs; no changes needed.
+**Requirement**: Hibernator server pod writes logs in JSON format; CLI parses using pattern-based regex matching.
 
-**Format**: Logs should contain execution context:
-```
-[timestamp] [severity] [execution-id] [executor] [target] [message]
-```
+**Format**: Server logs are JSON (standard logr JSON output); CLI extracts executor context via patterns:
+- Pattern matching identifies: executor names, target names, timestamps, severity levels
+- CLI handles unstructured JSON gracefully (no strict schema required)
+- Examples of extractable patterns: `executor="rds"`, `target="prod-db"`, timestamps in ISO format
 
-**CLI Access**: CLI fetches logs via `kubectl logs <server-pod>`, then filters locally by execution-id, executor, target, etc.
+**CLI Access**:
+1. CLI fetches logs via `kubectl logs <server-pod>`
+2. Applies pattern-based filtering locally (executors, targets, severity)
+3. Reformats for human-readable display
+4. This approach is resilient to log format changes (patterns adapt independently)
 
 ### Error Handling & User Feedback
 
@@ -545,21 +567,28 @@ The CLI and server follow this contract for all operations:
 - [x] Tested with sample YAML: schedule evaluation works correctly
 
 **Known Limitations**:
-- Logs command requires controller pod in `hibernator-system` namespace (or `HIBERNATOR_CONTROLLER_NAMESPACE` env var)
+- Logs command requires controller pod(s) in `hibernator-system` namespace (or `HIBERNATOR_CONTROLLER_NAMESPACE` env var)
 - Schedule evaluation uses local time (no clock parameter exposed in CLI yet)
+- Log filtering uses pattern-based matching on JSON output (resilient but dependent on field presence in logs)
+- In follow mode, real-time merging may occasionally show slight timestamp out-of-order if stream latency differs between pods (rare)
 
-### ⏳ Server-Side (Control Plane) — PENDING
+### ✅ Server-Side (Control Plane) — MOSTLY COMPLETE
 
-**Tasks that need implementation**:
-- [ ] Handle `suspend-until` annotation on controller reconcile (parse RFC3339, check deadline, auto-resume if expired)
-- [ ] Handle `suspend-reason` annotation (informational only, no logic)
-- [ ] Respect `spec.suspend=true/false` and prevent hibernation start when true
-- [ ] Handle `retry-now` annotation and trigger immediate retry when detected
-- [ ] Verify `execution-id` is populated in `status.executions[]` for log filtering
-- [ ] Verify server writes structured logs with execution-id format to stdout (existing functionality check)
-- [ ] RBAC: Update Helm values to ensure controller ServiceAccount can access pod logs (discovery)
+**Completed tasks**:
+- [x] Handle `suspend-until` annotation (parse RFC3339 deadline, auto-resume when expired)
+- [x] Server logs in JSON format with pattern-based extraction by CLI
+- [x] Execution-id tracking in status
 
-**Note**: Most of this is likely already implemented in the controller — needs verification and testing with CLI.
+**Verification/Integration tasks**:
+- [ ] Verify `suspend-reason` annotation is propagated (informational)
+- [ ] Verify `spec.suspend=true/false` prevents hibernation start when true
+- [ ] Verify `retry-now` annotation triggers immediate retry on controller reconcile
+- [ ] Verify `execution-id` is consistently populated in `status.executions[]` for log correlation
+- [ ] End-to-end testing: CLI ↔ Server integration validation
+
+**Documentation**:
+- [x] RBAC template: [config/rbac/cli_role.yaml](../../config/rbac/cli_role.yaml)
+- [x] User guide: [docs/user-guide/cli.md](../../docs/user-guide/cli.md)
 
 ## Future Enhancements (Phase 2+)
 
