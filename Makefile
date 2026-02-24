@@ -205,17 +205,7 @@ build-cli: ## Build kubectl-hibernator CLI plugin binary only.
 
 .PHONY: build-dist
 build-dist: ## Build kubectl-hibernator CLI distribution for all platforms (darwin/linux amd64/arm64) with version.
-	@echo "$(CYAN)Building CLI distribution for all platforms (version=$(VERSION))...$(RESET)"
-	@mkdir -p $(CLI_DIST_DIR)
-	@for platform in $(CLI_PLATFORMS); do \
-		OS=$$(echo $$platform | cut -d'/' -f1); \
-		ARCH=$$(echo $$platform | cut -d'/' -f2); \
-		BINARY_NAME=kubectl-hibernator-$$OS-$$ARCH; \
-		echo "$(CYAN)  Building for $$OS/$$ARCH...$(RESET)"; \
-		CGO_ENABLED=0 GOOS=$$OS GOARCH=$$ARCH $(GOCMD) build $(LDFLAGS) -o $(CLI_DIST_DIR)/$$BINARY_NAME ./cmd/kubectl-hibernator; \
-	done
-	@echo "$(GREEN)CLI distribution built in $(CLI_DIST_DIR)$(RESET)"
-	@echo "$(GREEN)Run: ls -lh $(CLI_DIST_DIR)$(RESET)"
+	@./hack/build-dist.sh --version $(VERSION) --commit $(COMMIT_HASH) --output $(CLI_DIST_DIR) --platforms "$(CLI_PLATFORMS)"
 
 .PHONY: run
 run: generate fmt vet ## Run controller from source.
