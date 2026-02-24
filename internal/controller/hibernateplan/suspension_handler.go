@@ -3,6 +3,7 @@ package hibernateplan
 import (
 	"context"
 	"fmt"
+	"time"
 
 	hibernatorv1alpha1 "github.com/ardikabs/hibernator/api/v1alpha1"
 	"github.com/ardikabs/hibernator/internal/controller/status"
@@ -14,21 +15,32 @@ import (
 )
 
 // reconcileSuspension handles suspension state transitions (both suspend and resume).
-// Returns (handled, result, error) where handled indicates if a state transition occurred.
+// Annotation handler adjusts spec.suspend and returns deadline requeue timing.
+// Transition handlers always run and take priority if phase needs updating.
 func (r *Reconciler) reconcileSuspension(ctx context.Context, log logr.Logger, plan *hibernatorv1alpha1.HibernatePlan) (bool, ctrl.Result, error) {
-	// Handle suspend transition
+	// Annotation handler adjusts spec.suspend based on deadline and provides requeue timing
+	suspendDeadlineResult, err := r.handleSuspendUntilAnnotation(ctx, log, plan)
+	if err != nil {
+		return false, ctrl.Result{}, err
+	}
+
+	// Handle suspend transition - takes priority
 	if plan.Spec.Suspend && plan.Status.Phase != hibernatorv1alpha1.PhaseSuspended {
 		result, err := r.transitionToSuspended(ctx, log, plan)
 		return true, result, err
 	}
 
-	// Handle resume transition
+	// Handle resume transition - takes priority
 	if !plan.Spec.Suspend && plan.Status.Phase == hibernatorv1alpha1.PhaseSuspended {
 		result, err := r.transitionFromSuspended(ctx, log, plan)
 		return true, result, err
 	}
 
-	// No state transition needed
+	// No phase transition needed - use annotation deadline requeue if present
+	if suspendDeadlineResult.RequeueAfter > 0 || suspendDeadlineResult.Requeue {
+		return true, suspendDeadlineResult, nil
+	}
+
 	return false, ctrl.Result{}, nil
 }
 
@@ -140,4 +152,63 @@ func (r *Reconciler) forceWakeUpOnResume(ctx context.Context, log logr.Logger, p
 
 	// Immediately start wake-up
 	return r.startWakeUp(ctx, log, plan)
+}
+
+// handleSuspendUntilAnnotation adjusts spec.suspend based on the suspend-until deadline
+// and returns deadline-based requeue timing. It always lets transition handlers run.
+func (r *Reconciler) handleSuspendUntilAnnotation(ctx context.Context, log logr.Logger, plan *hibernatorv1alpha1.HibernatePlan) (ctrl.Result, error) {
+	suspendUntilStr, ok := plan.Annotations[wellknown.AnnotationSuspendUntil]
+	// If annotation is missing but plan is suspended, revert suspension
+	if !ok && plan.Spec.Suspend && plan.Status.Phase == hibernatorv1alpha1.PhaseSuspended {
+		log.Info(fmt.Sprintf("%s annotation removed, reverting suspension", wellknown.AnnotationSuspendUntil))
+		orig := plan.DeepCopy()
+		plan.Spec.Suspend = false
+		if err := r.Patch(ctx, plan, client.MergeFrom(orig)); err != nil {
+			return ctrl.Result{}, fmt.Errorf("revert suspend when annotation removed: %w", err)
+		}
+		// Let transition handler manage phase change
+		return ctrl.Result{Requeue: true}, nil
+	}
+
+	if !ok {
+		return ctrl.Result{}, nil // Guard clause: no annotation, continue
+	}
+
+	deadline, err := time.Parse(time.RFC3339, suspendUntilStr)
+	if err != nil {
+		log.Error(err, "invalid annotation format, expected RFC3339, ignoring ...", "got", suspendUntilStr)
+		return ctrl.Result{}, nil // Guard clause: parse error, skip processing
+	}
+
+	now := r.Clock.Now()
+
+	// If deadline passed, revert suspension and remove annotation
+	if now.After(deadline) {
+		if plan.Spec.Suspend {
+			log.Info("suspension deadline reached, reverting suspension", "deadline", deadline)
+			orig := plan.DeepCopy()
+			plan.Spec.Suspend = false
+			delete(plan.Annotations, wellknown.AnnotationSuspendUntil)
+			if err := r.Patch(ctx, plan, client.MergeFrom(orig)); err != nil {
+				return ctrl.Result{}, fmt.Errorf("auto-resume from suspension: %w", err)
+			}
+		}
+		// Let transition handler manage phase change
+		return ctrl.Result{Requeue: true}, nil
+	}
+
+	// Deadline not reached: enforce suspension if not already set
+	if !plan.Spec.Suspend {
+		log.Info("suspend-until annotation active, enforcing suspension", "deadline", deadline)
+		orig := plan.DeepCopy()
+		plan.Spec.Suspend = true
+		if err := r.Patch(ctx, plan, client.MergeFrom(orig)); err != nil {
+			return ctrl.Result{}, fmt.Errorf("enforce suspension until deadline: %w", err)
+		}
+	}
+
+	// Return deadline-based requeue timing for when suspension expires
+	requeueAfter := deadline.Sub(now) + time.Second
+	log.V(1).Info("suspend-until deadline pending, will requeue at deadline", "deadline", deadline, "requeueAfter", requeueAfter)
+	return ctrl.Result{RequeueAfter: requeueAfter}, nil
 }

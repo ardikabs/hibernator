@@ -1,0 +1,66 @@
+---
+# ClusterRole for kubectl-hibernator CLI plugin users
+#
+# This role grants the minimal permissions required to operate with the
+# kubectl-hibernator plugin. It allows users to:
+# - View and manage HibernatePlan resources (get, list, patch for annotations)
+# - View ScheduleException resources for context
+# - Access server pod logs for debugging
+#
+# Apply this role with:
+#   kubectl apply -f config/rbac/cli_role.yaml
+#   kubectl create rolebinding hibernator-cli-user --clusterrole=hibernator-cli-user --user=<user-email>
+#
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: hibernator-cli-user
+  namespace: default
+rules:
+# HibernatePlan: Read and annotate (get, list, patch for suspend/retry operations)
+- apiGroups:
+  - hibernator.ardikabs.com
+  resources:
+  - hibernateplans
+  verbs:
+  - get
+  - list
+  - patch
+  # patch is used for adding suspend-until, suspend-reason, retry-now annotations
+# ScheduleException: Read-only for context (understanding active exceptions)
+- apiGroups:
+  - hibernator.ardikabs.com
+  resources:
+  - scheduleexceptions
+  verbs:
+  - get
+  - list
+# Pods and Pod Logs: Access server pod logs for debugging
+# Restricted to hibernator-controller pods in hibernator-system namespace
+- apiGroups:
+  - ""
+  resources:
+  - pods
+  - pods/log
+  resourceNames:
+  - hibernator-controller
+  verbs:
+  - get
+  - list
+---
+# Example ClusterRoleBinding: Bind the role to a user or group
+# Uncomment and customize as needed:
+#
+# apiVersion: rbac.authorization.k8s.io/v1
+# kind: ClusterRoleBinding
+# metadata:
+#   name: hibernator-cli-user
+# roleRef:
+#   apiGroup: rbac.authorization.k8s.io
+#   kind: ClusterRole
+#   name: hibernator-cli-user
+# subjects:
+# - kind: User
+#   name: user@example.com
+# - kind: Group
+#   name: platform-engineers

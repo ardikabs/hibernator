@@ -46,6 +46,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v6
+
       - uses: actions/setup-go@v5
         with:
           go-version: '1.24'
@@ -70,6 +71,11 @@ jobs:
       contents: read
     steps:
       - uses: actions/checkout@v6
+
+      - name: Setup Config
+        id: setup-config
+        run: |
+          echo "sha_short=$(git rev-parse --short HEAD)" >> $GITHUB_OUTPUT
 
       - name: Set up QEMU
         uses: docker/setup-qemu-action@v3
@@ -104,6 +110,9 @@ jobs:
           tags: ${{ steps.meta-controller.outputs.tags }}
           labels: ${{ steps.meta-controller.outputs.labels }}
           annotations: ${{ steps.meta-controller.outputs.annotations }}
+          build-args: |
+            VERSION=dev
+            COMMIT_HASH=${{ steps.setup-config.outputs.sha_short }}
           cache-from: type=gha
           cache-to: type=gha,mode=max
 
@@ -126,5 +135,8 @@ jobs:
           tags: ${{ steps.meta-runner.outputs.tags }}
           labels: ${{ steps.meta-runner.outputs.labels }}
           annotations: ${{ steps.meta-runner.outputs.annotations }}
+          build-args: |
+            VERSION=dev
+            COMMIT_HASH=${{ steps.setup-config.outputs.sha_short }}
           cache-from: type=gha
           cache-to: type=gha,mode=max

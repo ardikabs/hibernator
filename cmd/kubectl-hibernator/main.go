@@ -8,13 +8,13 @@ package main
 import (
 	"os"
 
-	"github.com/ardikabs/hibernator/cmd/runner/app"
+	_ "time/tzdata"
+
+	"github.com/ardikabs/hibernator/cmd/kubectl-hibernator/cli"
 )
 
 func main() {
-	cfg := app.ParseFlags()
-
-	if err := app.Run(cfg); err != nil {
+	if err := cli.NewRootCommand().Execute(); err != nil {
 		os.Exit(1)
 	}
 }

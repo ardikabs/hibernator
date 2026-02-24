@@ -7,10 +7,13 @@ set -e
 
 VERSION=$1
 TYPE=$2
+basename="${0##*/}"
+toolname="${basename%.*}"
 
 msg () {
-  echo >&2 "[$(date +'%-I:%M:%S %p')] [sync-version] $*"
+  echo >&2 -e "[$(date +'%-I:%M:%S %p')] [${toolname}] $*"
 }
+
 if [ -z "$VERSION" ] || [ -z "$TYPE" ]; then
   msg "Usage: $0 <version> <type>"
   msg "  <type>: 'app' (updates appVersion) or 'chart' (updates version)"

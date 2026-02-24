@@ -23,14 +23,16 @@ jobs:
 
           # Optional: Disallow scopes that are not relevant (e.g., only allow 'charts', 'api', etc.)
           scopes: |
-            charts
             api
             cmd
-            pkg
-            internal
-            enhancement
-            docs
+            controller
+            deps
+            executor
+            scheduler
             test
+            docs
+            enhancement
+            charts
 
           # Configure which types are allowed.
           types: |

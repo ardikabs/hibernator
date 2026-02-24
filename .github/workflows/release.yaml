@@ -27,6 +27,11 @@ jobs:
           fetch-depth: 0
           token: ${{ secrets.GITHUB_TOKEN }}
 
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.24'
+          cache: true
+
       - name: Setup Node.js
         uses: actions/setup-node@v6
         with:
@@ -93,6 +98,9 @@ jobs:
           tags: ${{ steps.meta-controller.outputs.tags }}
           labels: ${{ steps.meta-controller.outputs.labels }}
           annotations: ${{ steps.meta-controller.outputs.annotations }}
+          build-args: |
+            VERSION=${{ steps.semantic.outputs.new_release_version }}
+            COMMIT_HASH=${{ steps.semantic.outputs.new_release_git_sha_short }}
           cache-from: type=gha
           cache-to: type=gha,mode=max
 
@@ -118,5 +126,8 @@ jobs:
           tags: ${{ steps.meta-runner.outputs.tags }}
           labels: ${{ steps.meta-runner.outputs.labels }}
           annotations: ${{ steps.meta-runner.outputs.annotations }}
+          build-args: |
+            VERSION=${{ steps.semantic.outputs.new_release_version }}
+            COMMIT_HASH=${{ steps.semantic.outputs.new_release_git_sha_short }}
           cache-from: type=gha
           cache-to: type=gha,mode=max

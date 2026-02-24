@@ -11,6 +11,15 @@ RUNNER_IMG ?= ghcr.io/ardikabs/hibernator-runner:latest
 PLATFORMS ?= linux/amd64,linux/arm64
 GOLANGCI_VERSION ?= 2.8.0
 
+# CLI multi-platform configuration
+CLI_PLATFORMS := darwin/amd64 darwin/arm64 linux/amd64 linux/arm64
+CLI_DIST_DIR := dist/kubectl-hibernator/$(VERSION)
+
+# Version configuration
+VERSION ?= dev
+COMMIT_HASH := $(shell git rev-parse --short HEAD 2>/dev/null || echo "unknown")
+LDFLAGS := -ldflags "-X github.com/ardikabs/hibernator/internal/version.Version=$(VERSION) -X github.com/ardikabs/hibernator/internal/version.CommitHash=$(COMMIT_HASH)"
+
 # Go configuration
 GOBIN ?= $(shell go env GOPATH)/bin
 GOCMD ?= go
@@ -176,18 +185,27 @@ clean-coverage: ## Clean coverage files.
 
 .PHONY: build
 build: generate fmt vet ## Build controller and runner binaries.
-	@echo "$(CYAN)Building binaries...$(RESET)"
-	$(GOCMD) build -o bin/controller ./cmd/controller
-	$(GOCMD) build -o bin/runner ./cmd/runner
-	@echo "$(GREEN)Binaries built: bin/controller, bin/runner$(RESET)"
+	@echo "$(CYAN)Building binaries (version=$(VERSION))...$(RESET)"
+	$(GOCMD) build $(LDFLAGS) -o bin/controller ./cmd/controller
+	$(GOCMD) build $(LDFLAGS) -o bin/runner ./cmd/runner
+	$(GOCMD) build $(LDFLAGS) -o bin/kubectl-hibernator ./cmd/kubectl-hibernator
+	@echo "$(GREEN)Binaries built: bin/controller, bin/runner, bin/kubectl-hibernator$(RESET)"
 
 .PHONY: build-controller
 build-controller: ## Build controller binary only.
-	$(GOCMD) build -o bin/controller ./cmd/controller
+	$(GOCMD) build $(LDFLAGS) -o bin/controller ./cmd/controller
 
 .PHONY: build-runner
 build-runner: ## Build runner binary only.
-	$(GOCMD) build -o bin/runner ./cmd/runner
+	$(GOCMD) build $(LDFLAGS) -o bin/runner ./cmd/runner
+
+.PHONY: build-cli
+build-cli: ## Build kubectl-hibernator CLI plugin binary only.
+	$(GOCMD) build $(LDFLAGS) -o bin/kubectl-hibernator ./cmd/kubectl-hibernator
+
+.PHONY: build-dist
+build-dist: ## Build kubectl-hibernator CLI distribution for all platforms (darwin/linux amd64/arm64) with version.
+	@./hack/build-dist.sh --version $(VERSION) --commit $(COMMIT_HASH) --output $(CLI_DIST_DIR) --platforms "$(CLI_PLATFORMS)"
 
 .PHONY: run
 run: generate fmt vet ## Run controller from source.
@@ -198,14 +216,14 @@ docker-build: docker-build-controller docker-build-runner ## Build all docker im
 
 .PHONY: docker-build-controller
 docker-build-controller: ## Build controller docker image and push to registry.
-	@echo "$(CYAN)Building Controller Docker image...$(RESET)"
-	docker buildx build --push -t $(IMG) --platform $(PLATFORMS) -f Dockerfile --target controller .
+	@echo "$(CYAN)Building Controller Docker image (version=$(VERSION))...$(RESET)"
+	docker buildx build --push -t $(IMG) --platform $(PLATFORMS) --build-arg VERSION=$(VERSION) --build-arg COMMIT_HASH=$(COMMIT_HASH) -f Dockerfile --target controller .
 	@echo "$(GREEN)Controller image built: $(IMG)$(RESET)"
 
 .PHONY: docker-build-runner
 docker-build-runner: ## Build runner docker image and push to registry.
-	@echo "$(CYAN)Building Runner Docker image...$(RESET)"
-	docker buildx build --push -t $(RUNNER_IMG) --platform $(PLATFORMS) -f Dockerfile --target runner .
+	@echo "$(CYAN)Building Runner Docker image (version=$(VERSION))...$(RESET)"
+	docker buildx build --push -t $(RUNNER_IMG) --platform $(PLATFORMS) --build-arg VERSION=$(VERSION) --build-arg COMMIT_HASH=$(COMMIT_HASH) -f Dockerfile --target runner .
 	@echo "$(GREEN)Runner image built: $(RUNNER_IMG)$(RESET)"
 
 .PHONY: clean
