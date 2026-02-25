@@ -1,0 +1,40 @@
+style: github
+template: CHANGELOG.tpl.md
+info:
+  title: CHANGELOG
+  repository_url: https://github.com/ardikabs/hibernator
+options:
+  tag_filter_pattern: '^v'
+  sort: "date"
+  commits:
+    filters:
+      Type:
+        - feat
+        - fix
+        - perf
+        - refactor
+      Scope:
+        - ""
+        - api
+        - cmd
+        - controller
+        - deps
+        - executor
+        - scheduler
+        - test
+  commit_groups:
+    title_maps:
+      feat: ✨ Features
+      fix: 🐛 Bug Fixes
+      perf: ⚡ Performance Improvements
+      refactor: 🛠️ Code Refactoring
+      chore: 🧹 Miscellaneous
+  header:
+    pattern: "^(\\w*!?)(?:\\(([\\w\\$\\.\\-\\*\\s]*)\\))?\\:\\s(.*)$"
+    pattern_maps:
+      - Type
+      - Scope
+      - Subject
+  notes:
+    keywords:
+      - BREAKING CHANGE

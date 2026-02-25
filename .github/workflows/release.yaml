@@ -5,7 +5,8 @@ run-name: Release - ${{ format('{0}',github.event.repository.updated_at) }}
 on:
   push:
     branches:
-      - 'release/v*'
+      - "stable"
+      - "release/v*"
   workflow_dispatch:
 
 jobs:
@@ -13,13 +14,18 @@ jobs:
     name: Release
     if: |
       (github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main') ||
-      (github.event_name == 'push' && startsWith(github.ref, 'refs/heads/release/v'))
+      (github.event_name == 'push' && startsWith(github.ref, 'refs/heads/release/v')) ||
+      (github.event_name == 'push' && startsWith(github.ref, 'refs/heads/stable'))
     runs-on: ubuntu-latest
     permissions:
       contents: write
       packages: write
       issues: write
       pull-requests: write
+    outputs:
+      new_release_published: ${{ steps.semantic.outputs.new_release_published }}
+      new_release_version: ${{ steps.semantic.outputs.new_release_version }}
+      new_release_git_sha_short: ${{ steps.semantic.outputs.new_release_git_sha_short }}
     steps:
       - name: Checkout
         uses: actions/checkout@v6
@@ -49,7 +55,7 @@ jobs:
         id: semantic
         uses: cycjimmy/semantic-release-action@v6
         env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GITHUB_TOKEN: ${{ secrets.PAT }}
         with:
           semantic_version: 24
           extra_plugins: |
@@ -58,17 +64,49 @@ jobs:
             @semantic-release/exec
             conventional-changelog-conventionalcommits
 
-      # --- Docker Setup (Only runs on new release) ---
+          # Workaround for https://github.com/semantic-release/semantic-release/issues/1487
+          # It will cover the release from main, but when moved to stable branch,
+          # the main branch marked as prerelease.
+          branches: |
+            [
+              {
+                "name": "main",
+                "channel": ${{ github.ref_name == 'main' && '"latest"' || '"next"' }},
+                "prerelease": ${{ github.ref_name == 'main' && 'false' || '"rc"' }}
+              },
+              {
+                "name": "stable",
+                "channel": "stable"
+              },
+              {
+                "name": "release/v+([0-9]).+([0-9])",
+                "range": "${name.replace('release/v', '') + '.x'}",
+                "channel": "${name.replace('release/v', '')}"
+              }
+            ]
+
+  # --- Publish Image (Only runs on new release) ---
+  publish-image:
+    name: Publish Image
+    needs: release
+    if: needs.release.outputs.new_release_published == 'true'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+      issues: write
+      pull-requests: write
+    steps:
       - name: Set up QEMU
-        if: steps.semantic.outputs.new_release_published == 'true'
+        if: needs.release.outputs.new_release_published == 'true'
         uses: docker/setup-qemu-action@v3
 
       - name: Set up Docker Buildx
-        if: steps.semantic.outputs.new_release_published == 'true'
+        if: needs.release.outputs.new_release_published == 'true'
         uses: docker/setup-buildx-action@v3
 
       - name: Login to GHCR
-        if: steps.semantic.outputs.new_release_published == 'true'
+        if: needs.release.outputs.new_release_published == 'true'
         uses: docker/login-action@v3
         with:
           registry: ghcr.io
@@ -77,17 +115,17 @@ jobs:
 
       # --- Metadata & Caching Improvements ---
       - name: Metadata (Controller)
-        if: steps.semantic.outputs.new_release_published == 'true'
+        if: needs.release.outputs.new_release_published == 'true'
         id: meta-controller
         uses: docker/metadata-action@v5
         with:
           images: ghcr.io/${{ github.repository }}
           tags: |
-            type=semver,pattern={{version}},value=${{ steps.semantic.outputs.new_release_version }}
-            type=semver,pattern={{major}}.{{minor}},value=${{ steps.semantic.outputs.new_release_version }}
+            type=semver,pattern={{version}},value=${{ needs.release.outputs.new_release_version }}
+            type=semver,pattern={{major}}.{{minor}},value=${{ needs.release.outputs.new_release_version }}
 
       - name: Build Controller
-        if: steps.semantic.outputs.new_release_published == 'true'
+        if: needs.release.outputs.new_release_published == 'true'
         uses: docker/build-push-action@v5
         with:
           context: .
@@ -99,23 +137,23 @@ jobs:
           labels: ${{ steps.meta-controller.outputs.labels }}
           annotations: ${{ steps.meta-controller.outputs.annotations }}
           build-args: |
-            VERSION=${{ steps.semantic.outputs.new_release_version }}
-            COMMIT_HASH=${{ steps.semantic.outputs.new_release_git_sha_short }}
+            VERSION=${{ needs.release.outputs.new_release_version }}
+            COMMIT_HASH=${{ needs.release.outputs.new_release_git_sha_short }}
           cache-from: type=gha
           cache-to: type=gha,mode=max
 
       - name: Metadata (Runner)
-        if: steps.semantic.outputs.new_release_published == 'true'
+        if: needs.release.outputs.new_release_published == 'true'
         id: meta-runner
         uses: docker/metadata-action@v5
         with:
           images: ghcr.io/${{ github.repository }}-runner
           tags: |
-            type=semver,pattern={{version}},value=${{ steps.semantic.outputs.new_release_version }}
-            type=semver,pattern={{major}}.{{minor}},value=${{ steps.semantic.outputs.new_release_version }}
+            type=semver,pattern={{version}},value=${{ needs.release.outputs.new_release_version }}
+            type=semver,pattern={{major}}.{{minor}},value=${{ needs.release.outputs.new_release_version }}
 
       - name: Build Runner
-        if: steps.semantic.outputs.new_release_published == 'true'
+        if: needs.release.outputs.new_release_published == 'true'
         uses: docker/build-push-action@v5
         with:
           context: .
@@ -127,7 +165,7 @@ jobs:
           labels: ${{ steps.meta-runner.outputs.labels }}
           annotations: ${{ steps.meta-runner.outputs.annotations }}
           build-args: |
-            VERSION=${{ steps.semantic.outputs.new_release_version }}
-            COMMIT_HASH=${{ steps.semantic.outputs.new_release_git_sha_short }}
+            VERSION=${{ needs.release.outputs.new_release_version }}
+            COMMIT_HASH=${{ needs.release.outputs.new_release_git_sha_short }}
           cache-from: type=gha
           cache-to: type=gha,mode=max

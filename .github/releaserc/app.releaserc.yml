@@ -1,16 +1,3 @@
-branches:
-- name: main
-  channel: "next"
-  prerelease: "rc"
-- name: "v+([0-9])"
-  channel: "latest"
-- name: "release/v+([0-9]).+([0-9])"
-  range: "${name.replace('release/v', '') + '.x'}"
-  channel: "${name.replace('release/v', '')}"
-
-# Until the https://github.com/semantic-release/semantic-release/issues/1487 is resolved,
-# we workaround by using a prerelease branch for the main branch,
-# and latest stable branch for with major version as transition.
 tagFormat: "v${version}"
 
 plugins:
@@ -41,10 +28,11 @@ plugins:
           "test"
         ],
         "types": [
-          { "type": "feat", "section": "✨ Features", "hidden": false },
-          { "type": "fix", "section": "🐛 Bug Fixes", "hidden": false },
-          { "type": "perf", "section": "🚀 Performance Improvements", "hidden": false },
-          { "type": "chore", "section": "🧹 Miscellaneous", "hidden": false }
+          {"type": "feat", "section": "✨ Features", "hidden": false},
+          {"type": "fix", "section": "🐛 Bug Fixes", "hidden": false},
+          {"type": "perf", "section": "🚀 Performance Improvements", "hidden": false},
+          {"type": "chore", "section": "🧹 Miscellaneous", "hidden": false},
+          {"type": "refactor", "section": "🛠️ Code Refactoring", "hidden": false}
         ]
       }
     }
@@ -52,9 +40,10 @@ plugins:
 - [
     "@semantic-release/exec",
     {
+      "verifyReleaseCmd": "./hack/verify-release.sh ${nextRelease.type}",
       "generateNotesCmd": "./hack/sync-version.sh ${nextRelease.version} app",
       "publishCmd": "make build-dist VERSION=${nextRelease.version}",
-      "successCmd": "./hack/create-maintenance-branch.sh ${nextRelease.version}",
+      "successCmd": "./hack/post-release-branch.sh ${nextRelease.version}"
     }
   ]
 - [
