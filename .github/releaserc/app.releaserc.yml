@@ -2,6 +2,12 @@ tagFormat: "v${version}"
 
 plugins:
 - [
+    "./.github/releaserc/plugins/scope-filter.cjs",
+    {
+      "excludeScopes": ["charts", "release"],
+    }
+  ]
+- [
     "@semantic-release/commit-analyzer",
     {
       "preset": "conventionalcommits",
