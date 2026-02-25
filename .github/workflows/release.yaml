@@ -49,7 +49,7 @@ jobs:
           version: v1.14.2
 
       - name: Setup Semantic Release Config for App
-        run: envsubst < .github/releaserc/app.releaserc.yml > .releaserc.yml
+        run: cp .github/releaserc/app.releaserc.yml .releaserc.yml
 
       - name: Semantic Release (App)
         id: semantic
@@ -97,6 +97,12 @@ jobs:
       issues: write
       pull-requests: write
     steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+          token: ${{ secrets.GITHUB_TOKEN }}
+
       - name: Set up QEMU
         if: needs.release.outputs.new_release_published == 'true'
         uses: docker/setup-qemu-action@v3
