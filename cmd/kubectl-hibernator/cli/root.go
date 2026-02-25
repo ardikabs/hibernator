@@ -61,11 +61,14 @@ func NewRootCommand() *cobra.Command {
 
 	// Register subcommands
 	cmd.AddCommand(newVersionCommand())
+	cmd.AddCommand(newListCommand(opts))
+	cmd.AddCommand(newDescribeCommand(opts))
 	cmd.AddCommand(newShowCommand(opts))
 	cmd.AddCommand(newSuspendCommand(opts))
 	cmd.AddCommand(newResumeCommand(opts))
 	cmd.AddCommand(newRetryCommand(opts))
 	cmd.AddCommand(newLogsCommand(opts))
+	cmd.AddCommand(newRestorePointCommand(opts))
 
 	return cmd
 }
