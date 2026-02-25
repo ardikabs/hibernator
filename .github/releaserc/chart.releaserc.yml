@@ -5,13 +5,19 @@ tagFormat: "chart-v${version}"
 
 plugins:
 - [
+    "./.github/releaserc/plugins/scope-filter.cjs",
+    {
+      "scopes": ["charts"],
+      "filterOutMissingScope": true
+    }
+  ]
+- [
     "@semantic-release/commit-analyzer",
     {
       "preset": "conventionalcommits",
       "releaseRules": [
-        {"scope": "charts", "type": "feat", "release": "minor"},
-        {"scope": "charts", "type": "fix", "release": "patch"},
-        {"scope": "!charts", "release": false},
+        {"type": "feat", "release": "minor"},
+        {"type": "fix", "release": "patch"}
       ]
     }
   ]
@@ -21,9 +27,9 @@ plugins:
       "preset": "conventionalcommits",
       "presetConfig": {
         "types": [
-          { "type": "feat", "section": "✨ Features", "hidden": false },
-          { "type": "fix", "section": "🐛 Bug Fixes", "hidden": false },
-          { "type": "chore", "section": "🧹 Miscellaneous", "hidden": false }
+          {"type": "feat", "section": "✨ Features", "hidden": false},
+          {"type": "fix", "section": "🐛 Bug Fixes", "hidden": false},
+          {"type": "chore", "section": "🧹 Miscellaneous", "hidden": false}
         ]
       }
     }
