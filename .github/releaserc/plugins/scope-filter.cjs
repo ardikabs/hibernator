@@ -1,5 +1,5 @@
 const path = require("path");
-const { Transform } = require("readable-stream");
+const { Transform } = require("stream");
 
 module.exports = {
   verifyConditions: (pluginConfig, context) => {
