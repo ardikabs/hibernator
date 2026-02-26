@@ -40,6 +40,11 @@ spec:
           imagePullPolicy: {{ .Values.image.controller.pullPolicy }}
 
           args:
+            {{- if .Values.controlPlane.logging }}
+            - --zap-log-level={{ .Values.controlPlane.logging.level | default "info" }}
+            - --zap-encoder={{ .Values.controlPlane.logging.format | default "json" }}
+            - --zap-time-encoding={{ .Values.controlPlane.logging.time | default "rfc3339" }}
+            {{- end }}
             - --runner-service-account={{ include "hibernator.runnerServiceAccountName" . }}
             {{- if .Values.webhook.enabled }}
             - --webhook-cert-dir={{ .Values.webhook.certs.certDir }}
