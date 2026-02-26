@@ -22,6 +22,8 @@ import (
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/labels"
 	"k8s.io/apimachinery/pkg/runtime/schema"
+
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 )
 
 const (
@@ -319,9 +321,7 @@ func (e *Executor) scaleDownWorkloads(ctx context.Context,
 		// Get the scale subresource for this workload
 		scaleObj, err := client.GetScale(ctx, gvr, namespace, item.GetName())
 		if err != nil {
-			// Skip resources that don't support scale subresource
-			// TODO: we can set an info log that the corresponding object
-			// has no scale subresource, hence ignored.
+			log.Info("failed to get scale subresource, skipping", "namespace", namespace, "name", item.GetName(), "kind", item.GetKind())
 			continue
 		}
 
@@ -362,6 +362,13 @@ func (e *Executor) scaleDownWorkloads(ctx context.Context,
 		// Update the scale subresource
 		_, err = client.UpdateScale(ctx, gvr, namespace, scaleObj)
 		if err != nil {
+			if apierrors.IsNotFound(err) {
+				log.Info("resource not found, skipping", "namespace", namespace, "name", item.GetName(), "kind", item.GetKind())
+
+				// Skip resources that no longer exist
+				continue
+			}
+
 			return 0, fmt.Errorf("update scale for %s/%s: %w", item.GetKind(), item.GetName(), err)
 		}
 
@@ -396,6 +403,11 @@ func (e *Executor) restoreWorkload(ctx context.Context, log logr.Logger, client 
 	// Get the scale subresource
 	scaleObj, err := client.GetScale(ctx, gvr, state.Namespace, state.Name)
 	if err != nil {
+		if apierrors.IsNotFound(err) {
+			log.Info("resource not found, skipping", "namespace", state.Namespace, "name", state.Name, "kind", state.Kind)
+			return nil
+		}
+
 		return fmt.Errorf("get scale subresource: %w", err)
 	}
 
@@ -407,6 +419,11 @@ func (e *Executor) restoreWorkload(ctx context.Context, log logr.Logger, client 
 	// Update the scale subresource
 	_, err = client.UpdateScale(ctx, gvr, state.Namespace, scaleObj)
 	if err != nil {
+		if apierrors.IsNotFound(err) {
+			log.Info("resource not found, skipping", "namespace", state.Namespace, "name", state.Name, "kind", state.Kind)
+			return nil
+		}
+
 		return fmt.Errorf("update scale subresource: %w", err)
 	}
 
