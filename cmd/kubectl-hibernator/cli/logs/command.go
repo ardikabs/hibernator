@@ -3,7 +3,7 @@ Copyright 2026 Ardika Saputro.
 Licensed under the Apache License, Version 2.0.
 */
 
-package cli
+package logs
 
 import (
 	"bufio"
@@ -26,19 +26,20 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
 	hibernatorv1alpha1 "github.com/ardikabs/hibernator/api/v1alpha1"
+	"github.com/ardikabs/hibernator/cmd/kubectl-hibernator/common"
 	"github.com/ardikabs/hibernator/internal/wellknown"
 )
 
 type logsOptions struct {
-	root   *rootOptions
+	root   *common.RootOptions
 	target string
 	tail   int64
 	follow bool
 	level  string
 }
 
-// newLogsCommand creates the "logs" command.
-func newLogsCommand(opts *rootOptions) *cobra.Command {
+// NewCommand creates the "logs" command.
+func NewCommand(opts *common.RootOptions) *cobra.Command {
 	logsOpts := &logsOptions{root: opts}
 
 	cmd := &cobra.Command{
@@ -73,8 +74,8 @@ Examples:
 func runLogs(ctx context.Context, opts *logsOptions, planName string) error {
 	// Build kubeconfig
 	loadingRules := clientcmd.NewDefaultClientConfigLoadingRules()
-	if opts.root.kubeconfig != "" {
-		loadingRules.ExplicitPath = opts.root.kubeconfig
+	if opts.root.Kubeconfig != "" {
+		loadingRules.ExplicitPath = opts.root.Kubeconfig
 	}
 
 	configOverrides := &clientcmd.ConfigOverrides{}
@@ -86,13 +87,13 @@ func runLogs(ctx context.Context, opts *logsOptions, planName string) error {
 	}
 
 	// Build controller-runtime client for fetching plan info
-	k8sClient, err := newK8sClient(opts.root)
+	k8sClient, err := common.NewK8sClient(opts.root)
 	if err != nil {
 		return err
 	}
 
 	// Fetch the plan to get execution IDs for filtering
-	ns := resolveNamespace(opts.root)
+	ns := common.ResolveNamespace(opts.root)
 	var plan hibernatorv1alpha1.HibernatePlan
 	if err := k8sClient.Get(ctx, types.NamespacedName{Name: planName, Namespace: ns}, &plan); err != nil {
 		return fmt.Errorf("failed to get HibernatePlan %q in namespace %q: %w", planName, ns, err)
@@ -198,7 +199,7 @@ func tailLogsFromPods(ctx context.Context, clientset *kubernetes.Clientset, pods
 	for _, log := range allLogs {
 		if !seen[log.hash] {
 			seen[log.hash] = true
-			if opts.root.jsonOutput {
+			if opts.root.JsonOutput {
 				fmt.Println(log.raw)
 			} else {
 				fmt.Println(log.line)
@@ -250,7 +251,7 @@ func followLogsFromPods(ctx context.Context, clientset *kubernetes.Clientset, po
 		seenMutex.Lock()
 		if !seen[log.hash] {
 			seen[log.hash] = true
-			if opts.root.jsonOutput {
+			if opts.root.JsonOutput {
 				fmt.Println(log.raw)
 			} else {
 				fmt.Println(log.line)
@@ -323,7 +324,7 @@ func parseLogs(stream io.ReadCloser, filter *logFilter, logChan chan<- *logLine)
 			}
 
 			// Calculate content hash for deduplication
-			hash := fmt.Sprintf("%x", md5.Sum([]byte(line)))
+		hash := fmt.Sprintf("%x", md5.Sum([]byte(line)))
 
 			logChan <- &logLine{
 				raw:       line,

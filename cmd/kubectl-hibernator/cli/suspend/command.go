@@ -3,7 +3,7 @@ Copyright 2026 Ardika Saputro.
 Licensed under the Apache License, Version 2.0.
 */
 
-package cli
+package suspend
 
 import (
 	"context"
@@ -15,18 +15,19 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
 	hibernatorv1alpha1 "github.com/ardikabs/hibernator/api/v1alpha1"
+	"github.com/ardikabs/hibernator/cmd/kubectl-hibernator/common"
 	"github.com/ardikabs/hibernator/internal/wellknown"
 )
 
 type suspendOptions struct {
-	root    *rootOptions
+	root    *common.RootOptions
 	seconds float64
 	until   string
 	reason  string
 }
 
-// newSuspendCommand creates the "suspend" command.
-func newSuspendCommand(opts *rootOptions) *cobra.Command {
+// NewCommand creates the "suspend" command.
+func NewCommand(opts *common.RootOptions) *cobra.Command {
 	susOpts := &suspendOptions{root: opts}
 
 	cmd := &cobra.Command{
@@ -78,12 +79,12 @@ func runSuspend(ctx context.Context, opts *suspendOptions, planName string) erro
 		}
 	}
 
-	c, err := newK8sClient(opts.root)
+	c, err := common.NewK8sClient(opts.root)
 	if err != nil {
 		return err
 	}
 
-	ns := resolveNamespace(opts.root)
+	ns := common.ResolveNamespace(opts.root)
 
 	// Fetch current plan to verify it exists
 	var plan hibernatorv1alpha1.HibernatePlan

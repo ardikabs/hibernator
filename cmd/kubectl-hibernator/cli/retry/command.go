@@ -3,7 +3,7 @@ Copyright 2026 Ardika Saputro.
 Licensed under the Apache License, Version 2.0.
 */
 
-package cli
+package retry
 
 import (
 	"context"
@@ -14,16 +14,17 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
 	hibernatorv1alpha1 "github.com/ardikabs/hibernator/api/v1alpha1"
+	"github.com/ardikabs/hibernator/cmd/kubectl-hibernator/common"
 	"github.com/ardikabs/hibernator/internal/wellknown"
 )
 
 type retryOptions struct {
-	root  *rootOptions
+	root  *common.RootOptions
 	force bool
 }
 
-// newRetryCommand creates the "retry" command.
-func newRetryCommand(opts *rootOptions) *cobra.Command {
+// NewCommand creates the "retry" command.
+func NewCommand(opts *common.RootOptions) *cobra.Command {
 	retryOpts := &retryOptions{root: opts}
 
 	cmd := &cobra.Command{
@@ -50,12 +51,12 @@ Examples:
 }
 
 func runRetry(ctx context.Context, opts *retryOptions, planName string) error {
-	c, err := newK8sClient(opts.root)
+	c, err := common.NewK8sClient(opts.root)
 	if err != nil {
 		return err
 	}
 
-	ns := resolveNamespace(opts.root)
+	ns := common.ResolveNamespace(opts.root)
 
 	// Fetch current plan
 	var plan hibernatorv1alpha1.HibernatePlan

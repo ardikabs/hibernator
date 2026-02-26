@@ -3,7 +3,7 @@ Copyright 2026 Ardika Saputro.
 Licensed under the Apache License, Version 2.0.
 */
 
-package cli
+package restore
 
 import (
 	"context"
@@ -17,11 +17,12 @@ import (
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/types"
 
+	"github.com/ardikabs/hibernator/cmd/kubectl-hibernator/common"
 	"github.com/ardikabs/hibernator/internal/restore"
 )
 
-type restorePatchOptions struct {
-	root       *rootOptions
+type patchOptions struct {
+	root       *common.RootOptions
 	target     string
 	resourceID string
 	sets       []string
@@ -31,53 +32,53 @@ type restorePatchOptions struct {
 	dryRun     bool
 }
 
-// newRestorePatchCommand creates the "restore patch" command
-func newRestorePatchCommand(opts *rootOptions) *cobra.Command {
-	patchOpts := &restorePatchOptions{root: opts}
+// newPatchCommand creates the "restore patch" command
+func newPatchCommand(opts *common.RootOptions) *cobra.Command {
+	patchOpts := &patchOptions{root: opts}
 
 	cmd := &cobra.Command{
 		Use:   "patch <plan-name>",
 		Short: "Update resource state in the restore point",
 		Long: `Modify specific fields or apply structured patches to a resource's restore state.
 
-Supports three mutation modes:
-1. Field-level updates: --set key.path=value --remove key.path
-2. JSON merge patch: --patch '{"key":"value"}'
-3. File-based patch: --patch-file=patch.json
+		Supports three mutation modes:
+		1. Field-level updates: --set key.path=value --remove key.path
+		2. JSON merge patch: --patch '{"key":"value"}'
+		3. File-based patch: --patch-file=patch.json
 
-Field paths support dot notation for nested access: config.scaling.min
+		Field paths support dot notation for nested access: config.scaling.min
 
-Modes are mutually exclusive:
-- Use --set/--remove for granular field updates
-- Use --patch or --patch-file for structured changes
-- Cannot mix granular and patch modes in one command
+		Modes are mutually exclusive:
+		- Use --set/--remove for granular field updates
+		- Use --patch or --patch-file for structured changes
+		- Cannot mix granular and patch modes in one command
 
-Examples:
-  # Field updates (dot notation)
-  kubectl hibernator restore patch my-plan -t eks -r node-123 \
-    --set desiredCapacity=10 \
-    --set config.tags.environment=prod
+		Examples:
+		  # Field updates (dot notation)
+		  kubectl hibernator restore patch my-plan -t eks -r node-123 \
+		    --set desiredCapacity=10 \
+		    --set config.tags.environment=prod
 
-  # Remove fields
-  kubectl hibernator restore patch my-plan -t eks -r node-123 \
-    --remove config.deprecated \
-    --remove tempData
+		  # Remove fields
+		  kubectl hibernator restore patch my-plan -t eks -r node-123 \
+		    --remove config.deprecated \
+		    --remove tempData
 
-  # Inline JSON patch (RFC 7386 merge patch)
-  kubectl hibernator restore patch my-plan -t eks -r node-123 \
-    --patch '{"desiredCapacity":10,"isLive":false}'
+		  # Inline JSON patch (RFC 7386 merge patch)
+		  kubectl hibernator restore patch my-plan -t eks -r node-123 \
+		    --patch '{"desiredCapacity":10,"isLive":false}'
 
-  # File-based patch
-  kubectl hibernator restore patch my-plan -t eks -r node-123 \
-    --patch-file=update.json
+		  # File-based patch
+		  kubectl hibernator restore patch my-plan -t eks -r node-123 \
+		    --patch-file=update.json
 
-  # Preview changes without applying
-  kubectl hibernator restore patch my-plan -t eks -r node-123 \
-    --set desiredCapacity=10 \
-    --dry-run`,
+		  # Preview changes without applying
+		  kubectl hibernator restore patch my-plan -t eks -r node-123 \
+		    --set desiredCapacity=10 \
+		    --dry-run`,
 		Args: cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			return runRestorePatch(cmd.Context(), patchOpts, args[0])
+			return runPatch(cmd.Context(), patchOpts, args[0])
 		},
 	}
 
@@ -95,7 +96,7 @@ Examples:
 	return cmd
 }
 
-func runRestorePatch(ctx context.Context, opts *restorePatchOptions, planName string) error {
+func runPatch(ctx context.Context, opts *patchOptions, planName string) error {
 	// Validate mutual exclusivity
 	hasFieldOps := len(opts.sets) > 0 || len(opts.removes) > 0
 	hasPatchOps := opts.patchJSON != "" || opts.patchFile != ""
@@ -109,12 +110,12 @@ func runRestorePatch(ctx context.Context, opts *restorePatchOptions, planName st
 	}
 
 	// Load client and fetch restore data
-	c, err := newK8sClient(opts.root)
+	c, err := common.NewK8sClient(opts.root)
 	if err != nil {
 		return err
 	}
 
-	ns := resolveNamespace(opts.root)
+	ns := common.ResolveNamespace(opts.root)
 
 	cmName := restore.GetRestoreConfigMap(planName)
 	var cm corev1.ConfigMap
@@ -162,7 +163,7 @@ func runRestorePatch(ctx context.Context, opts *restorePatchOptions, planName st
 		fmt.Printf("  Executor:  %s\n", targetData.Executor)
 		fmt.Printf("  Resource:  %s (NEW)\n\n", opts.resourceID)
 
-		if !opts.root.jsonOutput {
+		if !opts.root.JsonOutput {
 			fmt.Print("Proceed with creating this resource? (y/N): ")
 			var response string
 			lo.Must1(fmt.Scanln(&response))
@@ -245,7 +246,7 @@ func runRestorePatch(ctx context.Context, opts *restorePatchOptions, planName st
 	}
 
 	// Confirm before applying (unless forced)
-	if !opts.root.jsonOutput {
+	if !opts.root.JsonOutput {
 		fmt.Print("\nApply changes? (y/N): ")
 		var response string
 		lo.Must1(fmt.Scanln(&response))
