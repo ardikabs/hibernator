@@ -1,3 +1,12 @@
+<a name="v1.2.1"></a>
+
+## [v1.2.1](https://github.com/ardikabs/hibernator/compare/v1.2.0...v1.2.1) (2026-02-26)
+
+### 🐛 Bug Fixes
+
+* **executor:** handle notfound and alreadyexists error ([#54](https://github.com/ardikabs/hibernator/issues/54))
+
+
 <a name="v1.2.0"></a>
 
 ## [v1.2.0](https://github.com/ardikabs/hibernator/compare/v1.1.3...v1.2.0) (2026-02-25)
