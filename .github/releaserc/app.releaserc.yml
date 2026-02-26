@@ -12,7 +12,6 @@ plugins:
     {
       "preset": "conventionalcommits",
       "releaseRules": [
-        {"scope": "charts", "release": false},
         {"type": "feat", "release": "minor"},
         {"type": "fix", "release": "patch"},
         {"type": "perf", "release": "patch"}
@@ -24,15 +23,6 @@ plugins:
     {
       "preset": "conventionalcommits",
       "presetConfig": {
-        "scope": [
-          "api",
-          "cmd",
-          "controller",
-          "deps",
-          "executor",
-          "scheduler",
-          "test"
-        ],
         "types": [
           {"type": "feat", "section": "✨ Features", "hidden": false},
           {"type": "fix", "section": "🐛 Bug Fixes", "hidden": false},
