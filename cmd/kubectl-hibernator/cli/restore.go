@@ -13,6 +13,7 @@ import (
 	"text/tabwriter"
 	"time"
 
+	"github.com/samber/lo"
 	"github.com/spf13/cobra"
 	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
@@ -97,8 +98,8 @@ Examples:
 	cmd.Flags().StringVarP(&initOpts.executor, "executor", "x", "", "Executor type (required)")
 	cmd.Flags().BoolVar(&initOpts.force, "force", false, "Overwrite existing restore point entry for the target")
 
-	cmd.MarkFlagRequired("target")
-	cmd.MarkFlagRequired("executor")
+	lo.Must0(cmd.MarkFlagRequired("target"))
+	lo.Must0(cmd.MarkFlagRequired("executor"))
 
 	return cmd
 }
@@ -314,14 +315,14 @@ func printRestoreShowTable(cm corev1.ConfigMap) error {
 
 	// Table of restore points by target
 	w := tabwriter.NewWriter(os.Stdout, 0, 0, 2, ' ', 0)
-	fmt.Fprintln(w, "TARGET\tEXECUTOR\tLIVE\tRESOURCES\tCAPTURED AT")
+	lo.Must1(fmt.Fprintln(w, "TARGET\tEXECUTOR\tLIVE\tRESOURCES\tCAPTURED AT"))
 
 	for _, p := range points {
 		live := "no"
 		if p.IsLive {
 			live = "yes"
 		}
-		fmt.Fprintf(w, "%s\t%s\t%s\t%d\t%s\n", p.Target, p.Executor, live, p.ResourceCount, p.CapturedAt)
+		lo.Must1(fmt.Fprintf(w, "%s\t%s\t%s\t%d\t%s\n", p.Target, p.Executor, live, p.ResourceCount, p.CapturedAt))
 	}
 
 	return w.Flush()
@@ -449,14 +450,14 @@ func printRestoreResourcesTable(cm corev1.ConfigMap, filterTarget string) error 
 	}
 
 	w := tabwriter.NewWriter(os.Stdout, 0, 0, 2, ' ', 0)
-	fmt.Fprintln(w, "RESOURCE ID\tTARGET\tEXECUTOR\tLIVE\tCAPTURED AT")
+	lo.Must1(fmt.Fprintln(w, "RESOURCE ID\tTARGET\tEXECUTOR\tLIVE\tCAPTURED AT"))
 
 	for _, r := range resources {
 		live := "no"
 		if r.IsLive {
 			live = "yes"
 		}
-		fmt.Fprintf(w, "%s\t%s\t%s\t%s\t%s\n", r.ResourceID, r.Target, r.Executor, live, r.CapturedAt)
+		lo.Must1(fmt.Fprintf(w, "%s\t%s\t%s\t%s\t%s\n", r.ResourceID, r.Target, r.Executor, live, r.CapturedAt))
 	}
 
 	return w.Flush()
@@ -491,8 +492,9 @@ Examples:
 
 	cmd.Flags().StringVarP(&restoreOpts.target, "target", "t", "", "Target name (required)")
 	cmd.Flags().StringVarP(&restoreOpts.resourceID, "resource-id", "r", "", "Resource ID (required)")
-	cmd.MarkFlagRequired("target")
-	cmd.MarkFlagRequired("resource-id")
+
+	lo.Must0(cmd.MarkFlagRequired("target"))
+	lo.Must0(cmd.MarkFlagRequired("resource-id"))
 
 	return cmd
 }
@@ -634,8 +636,9 @@ Examples:
 
 	cmd.Flags().StringVarP(&restoreOpts.target, "target", "t", "", "Target name (required)")
 	cmd.Flags().StringVarP(&restoreOpts.resourceID, "resource-id", "r", "", "Resource ID to drop (required)")
-	cmd.MarkFlagRequired("target")
-	cmd.MarkFlagRequired("resource-id")
+
+	lo.Must0(cmd.MarkFlagRequired("target"))
+	lo.Must0(cmd.MarkFlagRequired("resource-id"))
 
 	return cmd
 }

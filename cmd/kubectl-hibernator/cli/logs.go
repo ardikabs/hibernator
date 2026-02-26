@@ -314,10 +314,10 @@ func parseLogs(stream io.ReadCloser, filter *logFilter, logChan chan<- *logLine)
 			ts := time.Now()
 			if err := json.Unmarshal([]byte(line), &logEntry); err == nil {
 				// Try ts field (string or float64)
-				ts, ok := parseTimestampField(logEntry, "ts", ts)
-
-				// Fall back to timestamp field
-				if !ok {
+				res, ok := parseTimestampField(logEntry, "ts", ts)
+				if ok {
+					ts = res
+				} else {
 					ts, _ = parseTimestampField(logEntry, "timestamp", ts)
 				}
 			}

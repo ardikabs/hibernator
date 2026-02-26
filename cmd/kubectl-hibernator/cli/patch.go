@@ -12,6 +12,7 @@ import (
 	"os"
 	"strings"
 
+	"github.com/samber/lo"
 	"github.com/spf13/cobra"
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/types"
@@ -88,8 +89,8 @@ Examples:
 	cmd.Flags().StringVar(&patchOpts.patchFile, "patch-file", "", "Path to JSON merge patch file")
 	cmd.Flags().BoolVar(&patchOpts.dryRun, "dry-run", false, "Preview changes without applying")
 
-	cmd.MarkFlagRequired("target")
-	cmd.MarkFlagRequired("resource-id")
+	lo.Must0(cmd.MarkFlagRequired("target"))
+	lo.Must0(cmd.MarkFlagRequired("resource-id"))
 
 	return cmd
 }
@@ -164,7 +165,7 @@ func runRestorePatch(ctx context.Context, opts *restorePatchOptions, planName st
 		if !opts.root.jsonOutput {
 			fmt.Print("Proceed with creating this resource? (y/N): ")
 			var response string
-			fmt.Scanln(&response)
+			lo.Must1(fmt.Scanln(&response))
 			if strings.ToLower(response) != "y" {
 				fmt.Println("Cancelled - no changes made")
 				return nil
@@ -247,7 +248,7 @@ func runRestorePatch(ctx context.Context, opts *restorePatchOptions, planName st
 	if !opts.root.jsonOutput {
 		fmt.Print("\nApply changes? (y/N): ")
 		var response string
-		fmt.Scanln(&response)
+		lo.Must1(fmt.Scanln(&response))
 		if strings.ToLower(response) != "y" {
 			fmt.Println("Cancelled")
 			return nil

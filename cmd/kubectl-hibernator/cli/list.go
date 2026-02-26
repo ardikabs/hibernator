@@ -17,6 +17,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
 	hibernatorv1alpha1 "github.com/ardikabs/hibernator/api/v1alpha1"
+	"github.com/samber/lo"
 )
 
 type listOptions struct {
@@ -116,7 +117,7 @@ func printListJSON(plans hibernatorv1alpha1.HibernatePlanList) error {
 
 func printListTable(plans hibernatorv1alpha1.HibernatePlanList) error {
 	w := tabwriter.NewWriter(os.Stdout, 0, 0, 2, ' ', 0)
-	fmt.Fprintln(w, "NAME\tNAMESPACE\tPHASE\tSUSPENDED\tNEXT EVENT\tAGE")
+	lo.Must1(fmt.Fprintln(w, "NAME\tNAMESPACE\tPHASE\tSUSPENDED\tNEXT EVENT\tAGE"))
 
 	for _, plan := range plans.Items {
 		suspended := "no"
@@ -127,14 +128,14 @@ func printListTable(plans hibernatorv1alpha1.HibernatePlanList) error {
 		age := formatAge(time.Since(plan.CreationTimestamp.Time))
 		nextEvent := getNextEvent(plan)
 
-		fmt.Fprintf(w, "%s\t%s\t%s\t%s\t%s\t%s\n",
+		lo.Must1(fmt.Fprintf(w, "%s\t%s\t%s\t%s\t%s\t%s\n",
 			plan.Name,
 			plan.Namespace,
 			plan.Status.Phase,
 			suspended,
 			nextEvent,
 			age,
-		)
+		))
 	}
 
 	return w.Flush()
