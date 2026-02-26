@@ -1,6 +1,6 @@
 # Hibernator Operator Helm Chart
 
-![Version: 1.1.3](https://img.shields.io/badge/Version-1.1.3-informational?style=flat-square) ![Type: application](https://img.shields.io/badge/Type-application-informational?style=flat-square) ![AppVersion: 1.2.0](https://img.shields.io/badge/AppVersion-1.2.0-informational?style=flat-square)
+![Version: 1.2.0](https://img.shields.io/badge/Version-1.2.0-informational?style=flat-square) ![Type: application](https://img.shields.io/badge/Type-application-informational?style=flat-square) ![AppVersion: 1.2.1](https://img.shields.io/badge/AppVersion-1.2.1-informational?style=flat-square)
 
 A Helm chart for Hibernator Operator - Kubernetes-native time-based infrastructure hibernation.
 
@@ -63,6 +63,9 @@ helm install hibernator hibernator/hibernator \
 | autoscaling.targetCPUUtilizationPercentage | int | `80` |  |
 | autoscaling.targetMemoryUtilizationPercentage | int | `80` |  |
 | controlPlane.endpoint | string | `"hibernator.hibernator-system.svc"` |  |
+| controlPlane.logging.format | string | `"json"` |  |
+| controlPlane.logging.level | string | `"info"` |  |
+| controlPlane.logging.time | string | `"epoch"` |  |
 | controlPlane.scheduleBufferDuration | string | `"1m"` |  |
 | crds.create | bool | `true` |  |
 | crds.upgrade | bool | `true` |  |
