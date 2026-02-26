@@ -295,6 +295,7 @@ func (e *Executor) scaleDownNodePool(ctx context.Context, log logr.Logger, clien
 	nodePool, err := client.Resource(nodePoolGVR).Get(ctx, nodePoolName, metav1.GetOptions{})
 	if err != nil {
 		if apierrors.IsNotFound(err) {
+			log.Info("NodePool not found, skipping", "nodePool", nodePoolName)
 			return nil
 		}
 
@@ -378,6 +379,11 @@ func (e *Executor) restoreNodePool(ctx context.Context, log logr.Logger, client 
 
 	// Create the NodePool
 	if _, err := client.Resource(nodePoolGVR).Create(ctx, nodePool, metav1.CreateOptions{}); err != nil {
+		if apierrors.IsAlreadyExists(err) {
+			log.Info("NodePool already exists", "nodePool", nodePoolName)
+			return nil
+		}
+
 		return fmt.Errorf("create NodePool: %w", err)
 	}
 
