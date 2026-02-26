@@ -125,6 +125,11 @@ controlPlane:
   # Buffer duration to add to scheduled times to account for scheduling delays (e.g., 1m for 1 minute)
   scheduleBufferDuration: "1m"
 
+  logging:
+    level: info
+    format: json
+    time: epoch
+
 # Operator configuration
 operator:
   # Number of concurrent reconciliations
