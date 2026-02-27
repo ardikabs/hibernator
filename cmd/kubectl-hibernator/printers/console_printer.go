@@ -18,10 +18,10 @@ import (
 	corev1 "k8s.io/api/core/v1"
 )
 
-// HumanReadablePrinter handles table-like output for various resources
-type HumanReadablePrinter struct{}
+// ConsolePrinter handles table-like output for various resources
+type ConsolePrinter struct{}
 
-func (p *HumanReadablePrinter) PrintObj(obj interface{}, w io.Writer) error {
+func (p *ConsolePrinter) PrintObj(obj interface{}, w io.Writer) error {
 	switch v := obj.(type) {
 	case hibernatorv1alpha1.HibernatePlan:
 		return p.printPlan(v, w)
@@ -47,7 +47,7 @@ func (p *HumanReadablePrinter) PrintObj(obj interface{}, w io.Writer) error {
 
 // textWriter wraps tabwriter with convenient methods for building formatted text output.
 
-func (p *HumanReadablePrinter) printPlanListOutput(out *PlanListOutput, w io.Writer) error {
+func (p *ConsolePrinter) printPlanListOutput(out *PlanListOutput, w io.Writer) error {
 	tw := newTextWriter(w)
 	tw.header("Name", "Namespace", "Phase", "Suspended", "Next Event", "Age")
 
@@ -68,7 +68,7 @@ func (p *HumanReadablePrinter) printPlanListOutput(out *PlanListOutput, w io.Wri
 	return tw.flush()
 }
 
-func (p *HumanReadablePrinter) printPlan(plan hibernatorv1alpha1.HibernatePlan, w io.Writer) error {
+func (p *ConsolePrinter) printPlan(plan hibernatorv1alpha1.HibernatePlan, w io.Writer) error {
 	tw := newTextWriter(w)
 
 	tw.line("Name:       %s", plan.Name)
@@ -139,7 +139,7 @@ func (p *HumanReadablePrinter) printPlan(plan hibernatorv1alpha1.HibernatePlan, 
 	return p.printStatus(&StatusOutput{Plan: plan}, w)
 }
 
-func (p *HumanReadablePrinter) printStatus(out *StatusOutput, w io.Writer) error {
+func (p *ConsolePrinter) printStatus(out *StatusOutput, w io.Writer) error {
 	plan := out.Plan
 
 	tw := newTextWriter(w)
@@ -223,7 +223,7 @@ func (p *HumanReadablePrinter) printStatus(out *StatusOutput, w io.Writer) error
 	return tw.flush()
 }
 
-func (p *HumanReadablePrinter) printOperationSummary(tw *textWriter, prefix string, op *hibernatorv1alpha1.ExecutionOperationSummary) {
+func (p *ConsolePrinter) printOperationSummary(tw *textWriter, prefix string, op *hibernatorv1alpha1.ExecutionOperationSummary) {
 	successStr := "failed"
 	if op.Success {
 		successStr = "success"
@@ -239,7 +239,7 @@ func (p *HumanReadablePrinter) printOperationSummary(tw *textWriter, prefix stri
 	}
 }
 
-func (p *HumanReadablePrinter) printSchedule(out *ScheduleOutput, w io.Writer) error {
+func (p *ConsolePrinter) printSchedule(out *ScheduleOutput, w io.Writer) error {
 	plan := out.Plan
 	result := out.Result.(*scheduler.EvaluationResult)
 	exceptions := out.Exceptions
@@ -297,7 +297,7 @@ func (p *HumanReadablePrinter) printSchedule(out *ScheduleOutput, w io.Writer) e
 	return nil
 }
 
-func (p *HumanReadablePrinter) printRestorePoint(cm corev1.ConfigMap, w io.Writer) error {
+func (p *ConsolePrinter) printRestorePoint(cm corev1.ConfigMap, w io.Writer) error {
 	var totalResources int
 	var points []RestorePointData
 
@@ -345,7 +345,7 @@ func (p *HumanReadablePrinter) printRestorePoint(cm corev1.ConfigMap, w io.Write
 	return tw.flush()
 }
 
-func (p *HumanReadablePrinter) printRestoreResources(out *RestoreResourcesOutput, w io.Writer) error {
+func (p *ConsolePrinter) printRestoreResources(out *RestoreResourcesOutput, w io.Writer) error {
 	cm := out.ConfigMap
 	filterTarget := out.Target
 
@@ -395,7 +395,7 @@ func (p *HumanReadablePrinter) printRestoreResources(out *RestoreResourcesOutput
 	return tw.flush()
 }
 
-func (p *HumanReadablePrinter) printRestoreDetail(out *RestoreDetailOutput, w io.Writer) error {
+func (p *ConsolePrinter) printRestoreDetail(out *RestoreDetailOutput, w io.Writer) error {
 	data := out.TargetData.(restore.Data)
 	tw := newTextWriter(w)
 

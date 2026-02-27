@@ -20,6 +20,6 @@ func (d *Dispatcher) PrintObj(obj interface{}, w io.Writer) error {
 	}
 
 	// Default to HumanReadable (Table)
-	p := &HumanReadablePrinter{}
+	p := &ConsolePrinter{}
 	return p.PrintObj(obj, w)
 }
