@@ -51,6 +51,21 @@ jobs:
       - name: Setup Semantic Release Config for App
         run: cp .github/releaserc/app.releaserc.yml .releaserc.yml
 
+      - name: Prepare Semantic Release Branches Configuration
+        id: prep
+        run: |
+          # Define the three components
+          MAIN_BRANCH='{"name": "main", "channel":  ${{ github.ref_name == 'main' && '"latest"' || '"next"' }}, "prerelease": ${{ github.ref_name == 'main' && 'false' || '"rc"' }}}'
+          STABLE_BRANCH='{"name": "stable", "channel": "stable"}'
+          REGEX_BRANCH='{"name": "release/v+([0-9]).+([0-9])", "range": "${name.replace(\"release/v\", \"\") + \".x\"}", "channel": "${name.replace(\"release/v\", \"\")}"}'
+
+          # Logic: If main, use 0 and 2. Otherwise (stable), use all three.
+          if [[ "${{ github.ref_name }}" == "main" ]]; then
+            echo "branches=[$MAIN_BRANCH, $REGEX_BRANCH]" >> $GITHUB_OUTPUT
+          else
+            echo "branches=[$MAIN_BRANCH, $STABLE_BRANCH, $REGEX_BRANCH]" >> $GITHUB_OUTPUT
+          fi
+
       - name: Semantic Release (App)
         id: semantic
         uses: cycjimmy/semantic-release-action@v6
@@ -67,22 +82,7 @@ jobs:
           # It will cover the release from main, but when moved to stable branch,
           # the main branch marked as prerelease.
           branches: |
-            [
-              {
-                "name": "main",
-                "channel": ${{ github.ref_name == 'main' && '"latest"' || '"next"' }},
-                "prerelease": ${{ github.ref_name == 'main' && 'false' || '"rc"' }}
-              },
-              {
-                "name": "stable",
-                "channel": "stable"
-              },
-              {
-                "name": "release/v+([0-9]).+([0-9])",
-                "range": "${name.replace('release/v', '') + '.x'}",
-                "channel": "${name.replace('release/v', '')}"
-              }
-            ]
+            ${{ steps.prep.outputs.branches }}
 
   # --- Publish Image (Only runs on new release) ---
   publish-image:
