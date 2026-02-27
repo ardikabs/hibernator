@@ -45,7 +45,7 @@ Examples:
 		},
 	}
 
-	cmd.Flags().StringVar(&restoreOpts.target, "target", "", "Filter by specific target name")
+	cmd.Flags().StringVarP(&restoreOpts.target, "target", "t", "", "Filter by specific target name")
 
 	return cmd
 }

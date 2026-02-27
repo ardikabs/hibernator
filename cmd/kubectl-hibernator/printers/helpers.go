@@ -10,41 +10,17 @@ import (
 	"time"
 
 	hibernatorv1alpha1 "github.com/ardikabs/hibernator/api/v1alpha1"
-	"github.com/jedib0t/go-pretty/v6/table"
+	"github.com/ardikabs/hibernator/cmd/kubectl-hibernator/common"
 )
 
-var (
-	StyleBoxNoPaddingLeft = table.BoxStyle{
-		BottomLeft:       "╰",
-		BottomRight:      "╯",
-		BottomSeparator:  "┴",
-		EmptySeparator:   " ",
-		Left:             "│",
-		LeftSeparator:    "├",
-		MiddleHorizontal: "─",
-		MiddleSeparator:  "┼",
-		MiddleVertical:   "│",
-		PaddingLeft:      "",
-		PaddingRight:     " ",
-		PageSeparator:    "\n",
-		Right:            "│",
-		RightSeparator:   "┤",
-		TopLeft:          "╭",
-		TopRight:         "╮",
-		TopSeparator:     "┬",
-		UnfinishedRow:    " ≈",
+func FormatNextEvent(event *common.ScheduleEvent) string {
+	if event == nil {
+		return "-"
 	}
 
-	DefaultTableStyle = table.Style{
-		Name:   "Default",
-		Box:    StyleBoxNoPaddingLeft,
-		Color:  table.ColorOptionsDefault,
-		Format: table.FormatOptionsDefault,
-		HTML:   table.DefaultHTMLOptions,
-		Size:   table.SizeOptionsDefault,
-		Title:  table.TitleOptionsDefault,
-	}
-)
+	duration := time.Until(event.Time)
+	return fmt.Sprintf("%s (%s)", event.Operation, HumanDuration(duration))
+}
 
 // FormatAge formats a duration into a Kubernetes-like age string.
 func FormatAge(d time.Duration) string {
