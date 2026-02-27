@@ -3,7 +3,7 @@ Copyright 2026 Ardika Saputro.
 Licensed under the Apache License, Version 2.0.
 */
 
-package v1alpha1
+package validationwebhook
 
 import (
 	"context"
@@ -14,52 +14,53 @@ import (
 
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/util/validation/field"
-	ctrl "sigs.k8s.io/controller-runtime"
-	logf "sigs.k8s.io/controller-runtime/pkg/log"
-	"sigs.k8s.io/controller-runtime/pkg/webhook"
 	"sigs.k8s.io/controller-runtime/pkg/webhook/admission"
 
+	hibernatorv1alpha1 "github.com/ardikabs/hibernator/api/v1alpha1"
 	"github.com/ardikabs/hibernator/pkg/executorparams"
+	"github.com/go-logr/logr"
 )
 
-var hibernateplanlog = logf.Log.WithName("hibernateplan-resource")
-
-// SetupWebhookWithManager sets up the webhook with the manager.
-func (r *HibernatePlan) SetupWebhookWithManager(mgr ctrl.Manager) error {
-	return ctrl.NewWebhookManagedBy(mgr).
-		For(r).
-		WithValidator(r).
-		Complete()
+// HibernatePlanValidator validates HibernatePlan resources.
+type HibernatePlanValidator struct {
+	log logr.Logger
 }
 
-// +kubebuilder:webhook:path=/validate-hibernator-ardikabs-com-v1alpha1-hibernateplan,mutating=false,failurePolicy=fail,sideEffects=None,groups=hibernator.ardikabs.com,resources=hibernateplans,verbs=create;update,versions=v1alpha1,name=vhibernateplan.kb.io,admissionReviewVersions=v1
+// NewHibernatePlanValidator creates a new HibernatePlanValidator.
+func NewHibernatePlanValidator(log logr.Logger) *HibernatePlanValidator {
+	return &HibernatePlanValidator{
+		log: log.WithName("hibernateplan"),
+	}
+}
 
-var _ webhook.CustomValidator = &HibernatePlan{}
+var _ admission.CustomValidator = &HibernatePlanValidator{}
 
 // ValidateCreate implements webhook.CustomValidator.
-func (r *HibernatePlan) ValidateCreate(ctx context.Context, obj runtime.Object) (admission.Warnings, error) {
-	plan, ok := obj.(*HibernatePlan)
+func (v *HibernatePlanValidator) ValidateCreate(ctx context.Context, obj runtime.Object) (admission.Warnings, error) {
+	plan, ok := obj.(*hibernatorv1alpha1.HibernatePlan)
 	if !ok {
 		return nil, fmt.Errorf("expected HibernatePlan but got %T", obj)
 	}
-	hibernateplanlog.Info("validate create", "name", plan.Name)
-	return r.validate(plan)
+	v.log.V(1).Info("validate create", "name", plan.Name)
+	return v.validate(plan)
 }
 
 // ValidateUpdate implements webhook.CustomValidator.
-func (r *HibernatePlan) ValidateUpdate(ctx context.Context, oldObj, newObj runtime.Object) (admission.Warnings, error) {
-	oldPlan, ok := oldObj.(*HibernatePlan)
+func (v *HibernatePlanValidator) ValidateUpdate(ctx context.Context, oldObj, newObj runtime.Object) (admission.Warnings, error) {
+	oldPlan, ok := oldObj.(*hibernatorv1alpha1.HibernatePlan)
 	if !ok {
 		return nil, fmt.Errorf("expected HibernatePlan but got %T", newObj)
 	}
 
-	newPlan, ok := newObj.(*HibernatePlan)
+	newPlan, ok := newObj.(*hibernatorv1alpha1.HibernatePlan)
 	if !ok {
 		return nil, fmt.Errorf("expected HibernatePlan but got %T", newObj)
 	}
 
 	// Allow target edits only in Active, Suspended, or Error phases
-	if oldPlan.Status.Phase != PhaseActive && oldPlan.Status.Phase != PhaseSuspended && oldPlan.Status.Phase != PhaseError {
+	if oldPlan.Status.Phase != hibernatorv1alpha1.PhaseActive &&
+		oldPlan.Status.Phase != hibernatorv1alpha1.PhaseSuspended &&
+		oldPlan.Status.Phase != hibernatorv1alpha1.PhaseError {
 		if !reflect.DeepEqual(oldPlan.Spec.Targets, newPlan.Spec.Targets) {
 			return nil, field.Forbidden(
 				field.NewPath("spec", "targets"),
@@ -68,33 +69,29 @@ func (r *HibernatePlan) ValidateUpdate(ctx context.Context, oldObj, newObj runti
 		}
 	}
 
-	hibernateplanlog.Info("validate update", "name", newPlan.Name)
-	return r.validate(newPlan)
+	v.log.V(1).Info("validate update", "name", newPlan.Name)
+	return v.validate(newPlan)
 }
 
 // ValidateDelete implements webhook.CustomValidator.
-func (r *HibernatePlan) ValidateDelete(ctx context.Context, obj runtime.Object) (admission.Warnings, error) {
-	// No validation on delete
+func (v *HibernatePlanValidator) ValidateDelete(ctx context.Context, obj runtime.Object) (admission.Warnings, error) {
 	return nil, nil
 }
 
 // validate performs validation on the HibernatePlan.
-func (r *HibernatePlan) validate(plan *HibernatePlan) (admission.Warnings, error) {
+func (v *HibernatePlanValidator) validate(plan *hibernatorv1alpha1.HibernatePlan) (admission.Warnings, error) {
 	var allErrs field.ErrorList
 	var warnings admission.Warnings
 
-	// Validate schedule
-	scheduleErrs, scheduleWarnings := r.validateSchedule(plan)
+	scheduleErrs, scheduleWarnings := v.validateSchedule(plan)
 	allErrs = append(allErrs, scheduleErrs...)
 	warnings = append(warnings, scheduleWarnings...)
 
-	// Validate targets
-	targetErrs, targetWarnings := r.validateTargets(plan)
+	targetErrs, targetWarnings := v.validateTargets(plan)
 	allErrs = append(allErrs, targetErrs...)
 	warnings = append(warnings, targetWarnings...)
 
-	// Validate execution strategy
-	strategyErrs, strategyWarnings := r.validateStrategy(plan)
+	strategyErrs, strategyWarnings := v.validateStrategy(plan)
 	allErrs = append(allErrs, strategyErrs...)
 	warnings = append(warnings, strategyWarnings...)
 
@@ -105,12 +102,11 @@ func (r *HibernatePlan) validate(plan *HibernatePlan) (admission.Warnings, error
 }
 
 // validateSchedule validates the schedule configuration.
-func (r *HibernatePlan) validateSchedule(plan *HibernatePlan) (field.ErrorList, admission.Warnings) {
+func (v *HibernatePlanValidator) validateSchedule(plan *hibernatorv1alpha1.HibernatePlan) (field.ErrorList, admission.Warnings) {
 	var errs field.ErrorList
 	var warnings admission.Warnings
 	schedulePath := field.NewPath("spec", "schedule")
 
-	// Validate timezone
 	if plan.Spec.Schedule.Timezone == "" {
 		errs = append(errs, field.Required(
 			schedulePath.Child("timezone"),
@@ -118,7 +114,6 @@ func (r *HibernatePlan) validateSchedule(plan *HibernatePlan) (field.ErrorList, 
 		))
 	}
 
-	// Validate offHours
 	if len(plan.Spec.Schedule.OffHours) == 0 {
 		errs = append(errs, field.Required(
 			schedulePath.Child("offHours"),
@@ -126,7 +121,6 @@ func (r *HibernatePlan) validateSchedule(plan *HibernatePlan) (field.ErrorList, 
 		))
 	}
 
-	// HH:MM time format regex
 	timeRegex := regexp.MustCompile(`^([0-1]?[0-9]|2[0-3]):[0-5][0-9]$`)
 	validDays := map[string]bool{
 		"MON": true, "TUE": true, "WED": true, "THU": true,
@@ -136,7 +130,6 @@ func (r *HibernatePlan) validateSchedule(plan *HibernatePlan) (field.ErrorList, 
 	for i, window := range plan.Spec.Schedule.OffHours {
 		windowPath := schedulePath.Child("offHours").Index(i)
 
-		// Validate start time
 		if window.Start == "" {
 			errs = append(errs, field.Required(
 				windowPath.Child("start"),
@@ -150,7 +143,6 @@ func (r *HibernatePlan) validateSchedule(plan *HibernatePlan) (field.ErrorList, 
 			))
 		}
 
-		// Validate end time
 		if window.End == "" {
 			errs = append(errs, field.Required(
 				windowPath.Child("end"),
@@ -164,9 +156,6 @@ func (r *HibernatePlan) validateSchedule(plan *HibernatePlan) (field.ErrorList, 
 			))
 		}
 
-		// Validate that start and end times are different
-		// When both times are equal, it creates ambiguity about hibernation intent
-		// A hibernation window must define a clear shutdown period (start) and wakeup period (end)
 		if window.Start != "" && window.End != "" && window.Start == window.End {
 			errs = append(errs, field.Invalid(
 				windowPath.Child("start"),
@@ -175,27 +164,20 @@ func (r *HibernatePlan) validateSchedule(plan *HibernatePlan) (field.ErrorList, 
 			))
 		}
 
-		// Warn about wakeup windows with gaps ≤ 1 minute
-		// These are typically clearer when expressed as suspend exceptions
 		if window.Start != "" && window.End != "" && window.Start != window.End {
 			if startHour, startMin, errStart := parseTimeValues(window.Start); errStart == nil {
 				if endHour, endMin, errEnd := parseTimeValues(window.End); errEnd == nil {
 					startMinutes := startHour*60 + startMin
 					endMinutes := endHour*60 + endMin
 
-					// Calculate the gap (handling overnight wrapping)
 					var gap int
 					if endMinutes >= startMinutes {
 						gap = endMinutes - startMinutes
 					} else {
-						// Overnight case: e.g., 23:59 to 00:00 wraps around midnight
 						gap = (24*60 - startMinutes) + endMinutes
 					}
 
-					// Warn if gap is 1 minute or less
 					if gap > 0 && gap <= 1 {
-						// Alert user about the small wakeup window
-						// Suggest using suspend exception for full-day wakeup pattern
 						guidance := fmt.Sprintf("offHours[%d]: detected wakeup window within 1 minute gap from hibernation (start=%s, end=%s). "+
 							"If the intention is to apply full-day wakeup operation, consider using ScheduleException with type=Suspend, start=00:00, end=23:59",
 							i, window.Start, window.End)
@@ -205,7 +187,6 @@ func (r *HibernatePlan) validateSchedule(plan *HibernatePlan) (field.ErrorList, 
 			}
 		}
 
-		// Validate daysOfWeek
 		if len(window.DaysOfWeek) == 0 {
 			errs = append(errs, field.Required(
 				windowPath.Child("daysOfWeek"),
@@ -229,12 +210,11 @@ func (r *HibernatePlan) validateSchedule(plan *HibernatePlan) (field.ErrorList, 
 }
 
 // validateTargets validates target configuration.
-func (r *HibernatePlan) validateTargets(plan *HibernatePlan) (field.ErrorList, admission.Warnings) {
+func (v *HibernatePlanValidator) validateTargets(plan *hibernatorv1alpha1.HibernatePlan) (field.ErrorList, admission.Warnings) {
 	var errs field.ErrorList
 	var warnings admission.Warnings
 	targetsPath := field.NewPath("spec", "targets")
 
-	// Check for duplicate target names
 	seen := make(map[string]int)
 	for i, target := range plan.Spec.Targets {
 		if prevIdx, ok := seen[target.Name]; ok {
@@ -245,7 +225,6 @@ func (r *HibernatePlan) validateTargets(plan *HibernatePlan) (field.ErrorList, a
 		}
 		seen[target.Name] = i
 
-		// Validate connector reference
 		if target.ConnectorRef.Kind == "" {
 			errs = append(errs, field.Required(
 				targetsPath.Index(i).Child("connectorRef", "kind"),
@@ -266,16 +245,9 @@ func (r *HibernatePlan) validateTargets(plan *HibernatePlan) (field.ErrorList, a
 			))
 		}
 
-		// Validate target type
 		validTypes := []string{
-			"ec2",
-			"eks",
-			"rds",
-			"karpenter",
-			"workloadscaler",
-			"gke",
-			"cloudsql",
-			"noop",
+			"ec2", "eks", "rds", "karpenter", "workloadscaler",
+			"gke", "cloudsql", "noop",
 		}
 		isValidType := false
 		for _, vt := range validTypes {
@@ -292,7 +264,6 @@ func (r *HibernatePlan) validateTargets(plan *HibernatePlan) (field.ErrorList, a
 			))
 		}
 
-		// Validate target parameters using executor-specific validators
 		var paramsRaw []byte
 		if target.Parameters != nil {
 			paramsRaw = target.Parameters.Raw
@@ -300,12 +271,10 @@ func (r *HibernatePlan) validateTargets(plan *HibernatePlan) (field.ErrorList, a
 		if result := executorparams.ValidateParams(target.Type, paramsRaw); result != nil {
 			paramPath := targetsPath.Index(i).Child("parameters")
 
-			// Add errors
 			for _, errMsg := range result.Errors {
 				errs = append(errs, field.Invalid(paramPath, target.Parameters, errMsg))
 			}
 
-			// Add warnings (unknown fields, etc.)
 			for _, warnMsg := range result.Warnings {
 				warnings = append(warnings, fmt.Sprintf("target %q: %s", target.Name, warnMsg))
 			}
@@ -316,39 +285,41 @@ func (r *HibernatePlan) validateTargets(plan *HibernatePlan) (field.ErrorList, a
 }
 
 // validateStrategy validates the execution strategy.
-func (r *HibernatePlan) validateStrategy(plan *HibernatePlan) (field.ErrorList, admission.Warnings) {
+func (v *HibernatePlanValidator) validateStrategy(plan *hibernatorv1alpha1.HibernatePlan) (field.ErrorList, admission.Warnings) {
 	var errs field.ErrorList
 	var warnings admission.Warnings
 	strategyPath := field.NewPath("spec", "execution", "strategy")
 
 	strategy := plan.Spec.Execution.Strategy
 
-	// Build target name set for reference validation
 	targetNames := make(map[string]bool)
 	for _, t := range plan.Spec.Targets {
 		targetNames[t.Name] = true
 	}
 
 	switch strategy.Type {
-	case StrategyDAG:
-		// Validate DAG dependencies
-		dagErrs, dagWarnings := r.validateDAG(plan, targetNames, strategyPath)
+	case hibernatorv1alpha1.StrategyDAG:
+		dagErrs, dagWarnings := v.validateDAG(plan, targetNames, strategyPath)
 		errs = append(errs, dagErrs...)
 		warnings = append(warnings, dagWarnings...)
 
-	case StrategyStaged:
-		// Validate staged configuration
-		stagedErrs := r.validateStaged(plan, targetNames, strategyPath)
+	case hibernatorv1alpha1.StrategyStaged:
+		stagedErrs := v.validateStaged(plan, targetNames, strategyPath)
 		errs = append(errs, stagedErrs...)
 
-	case StrategyParallel, StrategySequential:
+	case hibernatorv1alpha1.StrategyParallel, hibernatorv1alpha1.StrategySequential:
 		// No additional validation needed
 
 	default:
 		errs = append(errs, field.NotSupported(
 			strategyPath.Child("type"),
 			strategy.Type,
-			[]string{string(StrategySequential), string(StrategyParallel), string(StrategyDAG), string(StrategyStaged)},
+			[]string{
+				string(hibernatorv1alpha1.StrategySequential),
+				string(hibernatorv1alpha1.StrategyParallel),
+				string(hibernatorv1alpha1.StrategyDAG),
+				string(hibernatorv1alpha1.StrategyStaged),
+			},
 		))
 	}
 
@@ -356,24 +327,20 @@ func (r *HibernatePlan) validateStrategy(plan *HibernatePlan) (field.ErrorList, 
 }
 
 // validateDAG validates DAG dependencies and checks for cycles.
-func (r *HibernatePlan) validateDAG(plan *HibernatePlan, targetNames map[string]bool, strategyPath *field.Path) (field.ErrorList, admission.Warnings) {
+func (v *HibernatePlanValidator) validateDAG(plan *hibernatorv1alpha1.HibernatePlan, targetNames map[string]bool, strategyPath *field.Path) (field.ErrorList, admission.Warnings) {
 	var errs field.ErrorList
 	var warnings admission.Warnings
 	depsPath := strategyPath.Child("dependencies")
 
-	// Build adjacency list
 	graph := make(map[string][]string)
 	inDegree := make(map[string]int)
 
-	// Initialize all targets
 	for name := range targetNames {
 		graph[name] = []string{}
 		inDegree[name] = 0
 	}
 
-	// Process dependencies
 	for i, dep := range plan.Spec.Execution.Strategy.Dependencies {
-		// Validate 'from' exists
 		if !targetNames[dep.From] {
 			errs = append(errs, field.Invalid(
 				depsPath.Index(i).Child("from"),
@@ -383,7 +350,6 @@ func (r *HibernatePlan) validateDAG(plan *HibernatePlan, targetNames map[string]
 			continue
 		}
 
-		// Validate 'to' exists
 		if !targetNames[dep.To] {
 			errs = append(errs, field.Invalid(
 				depsPath.Index(i).Child("to"),
@@ -393,7 +359,6 @@ func (r *HibernatePlan) validateDAG(plan *HibernatePlan, targetNames map[string]
 			continue
 		}
 
-		// Self-dependency check
 		if dep.From == dep.To {
 			errs = append(errs, field.Invalid(
 				depsPath.Index(i),
@@ -407,7 +372,6 @@ func (r *HibernatePlan) validateDAG(plan *HibernatePlan, targetNames map[string]
 		inDegree[dep.From]++
 	}
 
-	// Cycle detection using Kahn's algorithm
 	if len(errs) == 0 {
 		queue := []string{}
 		for name, degree := range inDegree {
@@ -439,7 +403,6 @@ func (r *HibernatePlan) validateDAG(plan *HibernatePlan, targetNames map[string]
 		}
 	}
 
-	// Check for orphan targets (not in any dependency)
 	referencedTargets := make(map[string]bool)
 	for _, dep := range plan.Spec.Execution.Strategy.Dependencies {
 		referencedTargets[dep.From] = true
@@ -458,7 +421,7 @@ func (r *HibernatePlan) validateDAG(plan *HibernatePlan, targetNames map[string]
 }
 
 // validateStaged validates staged execution configuration.
-func (r *HibernatePlan) validateStaged(plan *HibernatePlan, targetNames map[string]bool, strategyPath *field.Path) field.ErrorList {
+func (v *HibernatePlanValidator) validateStaged(plan *hibernatorv1alpha1.HibernatePlan, targetNames map[string]bool, strategyPath *field.Path) field.ErrorList {
 	var errs field.ErrorList
 	stagesPath := strategyPath.Child("stages")
 
@@ -470,12 +433,10 @@ func (r *HibernatePlan) validateStaged(plan *HibernatePlan, targetNames map[stri
 		return errs
 	}
 
-	// Track which targets are assigned to stages
-	assignedTargets := make(map[string]string) // target -> stage name
-	stageNames := make(map[string]int)         // stage name -> index
+	assignedTargets := make(map[string]string)
+	stageNames := make(map[string]int)
 
 	for i, stage := range plan.Spec.Execution.Strategy.Stages {
-		// Check duplicate stage names
 		if prevIdx, ok := stageNames[stage.Name]; ok {
 			errs = append(errs, field.Duplicate(
 				stagesPath.Index(i).Child("name"),
@@ -484,7 +445,6 @@ func (r *HibernatePlan) validateStaged(plan *HibernatePlan, targetNames map[stri
 		}
 		stageNames[stage.Name] = i
 
-		// Check stage has targets
 		if len(stage.Targets) == 0 {
 			errs = append(errs, field.Required(
 				stagesPath.Index(i).Child("targets"),
@@ -492,7 +452,6 @@ func (r *HibernatePlan) validateStaged(plan *HibernatePlan, targetNames map[stri
 			))
 		}
 
-		// Validate targets in stage
 		for j, targetName := range stage.Targets {
 			if !targetNames[targetName] {
 				errs = append(errs, field.Invalid(
@@ -512,7 +471,6 @@ func (r *HibernatePlan) validateStaged(plan *HibernatePlan, targetNames map[stri
 		}
 	}
 
-	// Check for unassigned targets
 	for name := range targetNames {
 		if _, ok := assignedTargets[name]; !ok {
 			errs = append(errs, field.Invalid(

@@ -3,7 +3,7 @@ Copyright 2026 Ardika Saputro.
 Licensed under the Apache License, Version 2.0.
 */
 
-package v1alpha1
+package validationwebhook
 
 import (
 	"context"
@@ -11,89 +11,79 @@ import (
 	"regexp"
 	"time"
 
-	"github.com/ardikabs/hibernator/internal/wellknown"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/util/validation/field"
-	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
-	logf "sigs.k8s.io/controller-runtime/pkg/log"
-	"sigs.k8s.io/controller-runtime/pkg/webhook"
 	"sigs.k8s.io/controller-runtime/pkg/webhook/admission"
+
+	hibernatorv1alpha1 "github.com/ardikabs/hibernator/api/v1alpha1"
+	"github.com/ardikabs/hibernator/internal/wellknown"
+	"github.com/go-logr/logr"
 )
 
-var scheduleexceptionlog = logf.Log.WithName("scheduleexception-resource")
-
-// scheduleExceptionValidator is a package-level variable that holds the client for validation.
-// It is initialized by SetupWebhookWithManager.
-var scheduleExceptionValidator client.Reader
-
-// SetupWebhookWithManager sets up the webhook with the manager.
-func (r *ScheduleException) SetupWebhookWithManager(mgr ctrl.Manager) error {
-	scheduleExceptionValidator = mgr.GetClient()
-	return ctrl.NewWebhookManagedBy(mgr).
-		For(r).
-		WithValidator(r).
-		Complete()
+// ScheduleExceptionValidator validates ScheduleException resources.
+type ScheduleExceptionValidator struct {
+	log    logr.Logger
+	client client.Reader
 }
 
-// +kubebuilder:webhook:path=/validate-hibernator-ardikabs-com-v1alpha1-scheduleexception,mutating=false,failurePolicy=fail,sideEffects=None,groups=hibernator.ardikabs.com,resources=scheduleexceptions,verbs=create;update,versions=v1alpha1,name=vscheduleexception.kb.io,admissionReviewVersions=v1
+// NewScheduleExceptionValidator creates a new ScheduleExceptionValidator with the given client.
+func NewScheduleExceptionValidator(log logr.Logger, c client.Reader) *ScheduleExceptionValidator {
+	return &ScheduleExceptionValidator{
+		log:    log.WithName("scheduleexception"),
+		client: c,
+	}
+}
 
-var _ webhook.CustomValidator = &ScheduleException{}
+var _ admission.CustomValidator = &ScheduleExceptionValidator{}
 
 // ValidateCreate implements webhook.CustomValidator.
-func (r *ScheduleException) ValidateCreate(ctx context.Context, obj runtime.Object) (admission.Warnings, error) {
-	exception, ok := obj.(*ScheduleException)
+func (v *ScheduleExceptionValidator) ValidateCreate(ctx context.Context, obj runtime.Object) (admission.Warnings, error) {
+	exception, ok := obj.(*hibernatorv1alpha1.ScheduleException)
 	if !ok {
 		return nil, fmt.Errorf("expected ScheduleException but got %T", obj)
 	}
-	scheduleexceptionlog.Info("validate create", "name", exception.Name)
-	return r.validate(ctx, exception)
+	v.log.V(1).Info("validate create", "name", exception.Name)
+	return v.validate(ctx, exception)
 }
 
 // ValidateUpdate implements webhook.CustomValidator.
-func (r *ScheduleException) ValidateUpdate(ctx context.Context, oldObj, newObj runtime.Object) (admission.Warnings, error) {
-	exception, ok := newObj.(*ScheduleException)
+func (v *ScheduleExceptionValidator) ValidateUpdate(ctx context.Context, oldObj, newObj runtime.Object) (admission.Warnings, error) {
+	exception, ok := newObj.(*hibernatorv1alpha1.ScheduleException)
 	if !ok {
 		return nil, fmt.Errorf("expected ScheduleException but got %T", newObj)
 	}
-	scheduleexceptionlog.Info("validate update", "name", exception.Name)
-	return r.validate(ctx, exception)
+	v.log.V(1).Info("validate update", "name", exception.Name)
+	return v.validate(ctx, exception)
 }
 
 // ValidateDelete implements webhook.CustomValidator.
-func (r *ScheduleException) ValidateDelete(ctx context.Context, obj runtime.Object) (admission.Warnings, error) {
-	// No validation on delete
+func (v *ScheduleExceptionValidator) ValidateDelete(ctx context.Context, obj runtime.Object) (admission.Warnings, error) {
 	return nil, nil
 }
 
 // validate performs validation on the ScheduleException.
-func (r *ScheduleException) validate(ctx context.Context, exception *ScheduleException) (admission.Warnings, error) {
-	// Skip validation if object is being deleted
+func (v *ScheduleExceptionValidator) validate(ctx context.Context, exception *hibernatorv1alpha1.ScheduleException) (admission.Warnings, error) {
 	if !exception.DeletionTimestamp.IsZero() {
 		return nil, nil
 	}
 
 	var allErrs field.ErrorList
 
-	// Validate planRef
-	planErrs := r.validatePlanRef(ctx, exception)
+	planErrs := v.validatePlanRef(ctx, exception)
 	allErrs = append(allErrs, planErrs...)
 
-	// Validate time range
-	timeErrs := r.validateTimeRange(exception)
+	timeErrs := v.validateTimeRange(exception)
 	allErrs = append(allErrs, timeErrs...)
 
-	// Validate type-specific fields
-	typeErrs := r.validateTypeSpecificFields(exception)
+	typeErrs := v.validateTypeSpecificFields(exception)
 	allErrs = append(allErrs, typeErrs...)
 
-	// Validate windows
-	windowErrs := r.validateWindows(exception)
+	windowErrs := v.validateWindows(exception)
 	allErrs = append(allErrs, windowErrs...)
 
-	// Check for overlapping exceptions constraint
-	activeErrs := r.validateNoOverlappingExceptions(ctx, exception)
+	activeErrs := v.validateNoOverlappingExceptions(ctx, exception)
 	allErrs = append(allErrs, activeErrs...)
 
 	if len(allErrs) > 0 {
@@ -108,23 +98,20 @@ func (r *ScheduleException) validate(ctx context.Context, exception *ScheduleExc
 }
 
 // validatePlanRef validates the planRef field.
-func (r *ScheduleException) validatePlanRef(ctx context.Context, exception *ScheduleException) field.ErrorList {
+func (v *ScheduleExceptionValidator) validatePlanRef(ctx context.Context, exception *hibernatorv1alpha1.ScheduleException) field.ErrorList {
 	var allErrs field.ErrorList
 	planRefPath := field.NewPath("spec", "planRef")
 
-	// Ensure planRef.name is not empty
 	if exception.Spec.PlanRef.Name == "" {
 		allErrs = append(allErrs, field.Required(planRefPath.Child("name"), "planRef.name must be specified"))
 		return allErrs
 	}
 
-	// Determine target namespace (default to exception's namespace if not specified)
 	targetNamespace := exception.Spec.PlanRef.Namespace
 	if targetNamespace == "" {
 		targetNamespace = exception.Namespace
 	}
 
-	// Enforce same-namespace constraint
 	if targetNamespace != exception.Namespace {
 		allErrs = append(allErrs, field.Invalid(
 			planRefPath.Child("namespace"),
@@ -134,13 +121,12 @@ func (r *ScheduleException) validatePlanRef(ctx context.Context, exception *Sche
 		return allErrs
 	}
 
-	// Verify HibernatePlan exists
-	plan := &HibernatePlan{}
+	plan := &hibernatorv1alpha1.HibernatePlan{}
 	planKey := client.ObjectKey{
 		Namespace: targetNamespace,
 		Name:      exception.Spec.PlanRef.Name,
 	}
-	if err := scheduleExceptionValidator.Get(ctx, planKey, plan); err != nil {
+	if err := v.client.Get(ctx, planKey, plan); err != nil {
 		if apierrors.IsNotFound(err) {
 			allErrs = append(allErrs, field.NotFound(
 				planRefPath.Child("name"),
@@ -158,11 +144,10 @@ func (r *ScheduleException) validatePlanRef(ctx context.Context, exception *Sche
 }
 
 // validateTimeRange validates validFrom and validUntil.
-func (r *ScheduleException) validateTimeRange(exception *ScheduleException) field.ErrorList {
+func (v *ScheduleExceptionValidator) validateTimeRange(exception *hibernatorv1alpha1.ScheduleException) field.ErrorList {
 	var allErrs field.ErrorList
 	specPath := field.NewPath("spec")
 
-	// Validate validFrom <= validUntil
 	if !exception.Spec.ValidFrom.Before(&exception.Spec.ValidUntil) {
 		allErrs = append(allErrs, field.Invalid(
 			specPath.Child("validUntil"),
@@ -171,7 +156,6 @@ func (r *ScheduleException) validateTimeRange(exception *ScheduleException) fiel
 		))
 	}
 
-	// Validate duration <= 90 days
 	duration := exception.Spec.ValidUntil.Sub(exception.Spec.ValidFrom.Time)
 	maxDuration := 90 * 24 * time.Hour
 	if duration > maxDuration {
@@ -186,12 +170,11 @@ func (r *ScheduleException) validateTimeRange(exception *ScheduleException) fiel
 }
 
 // validateTypeSpecificFields validates fields specific to exception type.
-func (r *ScheduleException) validateTypeSpecificFields(exception *ScheduleException) field.ErrorList {
+func (v *ScheduleExceptionValidator) validateTypeSpecificFields(exception *hibernatorv1alpha1.ScheduleException) field.ErrorList {
 	var allErrs field.ErrorList
 	specPath := field.NewPath("spec")
 
-	// LeadTime is only valid for suspend type
-	if exception.Spec.LeadTime != "" && exception.Spec.Type != ExceptionSuspend {
+	if exception.Spec.LeadTime != "" && exception.Spec.Type != hibernatorv1alpha1.ExceptionSuspend {
 		allErrs = append(allErrs, field.Invalid(
 			specPath.Child("leadTime"),
 			exception.Spec.LeadTime,
@@ -199,7 +182,6 @@ func (r *ScheduleException) validateTypeSpecificFields(exception *ScheduleExcept
 		))
 	}
 
-	// Validate leadTime format if present
 	if exception.Spec.LeadTime != "" {
 		if _, err := time.ParseDuration(exception.Spec.LeadTime); err != nil {
 			allErrs = append(allErrs, field.Invalid(
@@ -214,17 +196,15 @@ func (r *ScheduleException) validateTypeSpecificFields(exception *ScheduleExcept
 }
 
 // validateWindows validates the time windows.
-func (r *ScheduleException) validateWindows(exception *ScheduleException) field.ErrorList {
+func (v *ScheduleExceptionValidator) validateWindows(exception *hibernatorv1alpha1.ScheduleException) field.ErrorList {
 	var allErrs field.ErrorList
 	windowsPath := field.NewPath("spec", "windows")
 
-	// Ensure at least one window
 	if len(exception.Spec.Windows) == 0 {
 		allErrs = append(allErrs, field.Required(windowsPath, "at least one window must be specified"))
 		return allErrs
 	}
 
-	// Validate each window
 	timePattern := regexp.MustCompile(`^([0-1]?[0-9]|2[0-3]):[0-5][0-9]$`)
 	validDays := map[string]bool{
 		"MON": true, "TUE": true, "WED": true, "THU": true,
@@ -234,7 +214,6 @@ func (r *ScheduleException) validateWindows(exception *ScheduleException) field.
 	for i, window := range exception.Spec.Windows {
 		windowPath := windowsPath.Index(i)
 
-		// Validate start time format
 		if !timePattern.MatchString(window.Start) {
 			allErrs = append(allErrs, field.Invalid(
 				windowPath.Child("start"),
@@ -243,7 +222,6 @@ func (r *ScheduleException) validateWindows(exception *ScheduleException) field.
 			))
 		}
 
-		// Validate end time format
 		if !timePattern.MatchString(window.End) {
 			allErrs = append(allErrs, field.Invalid(
 				windowPath.Child("end"),
@@ -252,11 +230,6 @@ func (r *ScheduleException) validateWindows(exception *ScheduleException) field.
 			))
 		}
 
-		// Note: Suspend exceptions support both forward and overnight (backward) windows.
-		// Overnight windows like 21:00-02:00 are valid for suspending base hibernation windows.
-		// The grace period logic in the scheduler handles boundary edge cases correctly.
-
-		// Validate daysOfWeek
 		if len(window.DaysOfWeek) == 0 {
 			allErrs = append(allErrs, field.Required(
 				windowPath.Child("daysOfWeek"),
@@ -279,17 +252,15 @@ func (r *ScheduleException) validateWindows(exception *ScheduleException) field.
 }
 
 // validateNoOverlappingExceptions ensures only one active or pending exception per plan at any given time.
-func (r *ScheduleException) validateNoOverlappingExceptions(ctx context.Context, exception *ScheduleException) field.ErrorList {
+func (v *ScheduleExceptionValidator) validateNoOverlappingExceptions(ctx context.Context, exception *hibernatorv1alpha1.ScheduleException) field.ErrorList {
 	var allErrs field.ErrorList
 
-	// Determine target namespace
 	targetNamespace := exception.Spec.PlanRef.Namespace
 	if targetNamespace == "" {
 		targetNamespace = exception.Namespace
 	}
 
-	// Query for existing exceptions referencing this plan
-	exceptionList := &ScheduleExceptionList{}
+	exceptionList := &hibernatorv1alpha1.ScheduleExceptionList{}
 	listOpts := []client.ListOption{
 		client.InNamespace(targetNamespace),
 		client.MatchingLabels{
@@ -297,8 +268,7 @@ func (r *ScheduleException) validateNoOverlappingExceptions(ctx context.Context,
 		},
 	}
 
-	if err := scheduleExceptionValidator.List(ctx, exceptionList, listOpts...); err != nil {
-		// If we can't query, fail open with internal error
+	if err := v.client.List(ctx, exceptionList, listOpts...); err != nil {
 		allErrs = append(allErrs, field.InternalError(
 			field.NewPath("spec", "planRef"),
 			fmt.Errorf("failed to query existing exceptions: %w", err),
@@ -306,26 +276,20 @@ func (r *ScheduleException) validateNoOverlappingExceptions(ctx context.Context,
 		return allErrs
 	}
 
-	// Check for overlaps with existing non-expired exceptions
 	for _, existing := range exceptionList.Items {
-		// Skip self
 		if existing.Namespace == exception.Namespace && existing.Name == exception.Name {
 			continue
 		}
 
-		// Skip expired exceptions
-		if existing.Status.State == ExceptionStateExpired {
+		if existing.Status.State == hibernatorv1alpha1.ExceptionStateExpired {
 			continue
 		}
 
-		// Check for time range overlap
-		// Two intervals [s1, e1] and [s2, e2] overlap if s1 < e2 AND s2 < e1
-		// (where s = start, e = end)
 		s1 := exception.Spec.ValidFrom.Time
 		e1 := exception.Spec.ValidUntil.Time
-
 		s2 := existing.Spec.ValidFrom.Time
 		e2 := existing.Spec.ValidUntil.Time
+
 		if s1.Before(e2) && s2.Before(e1) {
 			allErrs = append(allErrs, field.Forbidden(
 				field.NewPath("spec", "planRef", "name"),
@@ -338,8 +302,6 @@ func (r *ScheduleException) validateNoOverlappingExceptions(ctx context.Context,
 					e2.Format(time.RFC3339),
 				),
 			))
-
-			// Only report first conflict
 			break
 		}
 	}
