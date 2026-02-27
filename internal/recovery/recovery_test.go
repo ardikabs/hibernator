@@ -12,8 +12,10 @@ import (
 
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/utils/clock"
+	testingclock "k8s.io/utils/clock/testing"
 
 	hibernatorv1alpha1 "github.com/ardikabs/hibernator/api/v1alpha1"
+	"github.com/stretchr/testify/require"
 )
 
 func TestErrorClassification_Constants(t *testing.T) {
@@ -191,7 +193,7 @@ func TestRecordRetryAttempt(t *testing.T) {
 		},
 	}
 
-	RecordRetryAttempt(plan, clock.RealClock{}, errors.New("test error"))
+	require.True(t, RecordRetryAttempt(plan, clock.RealClock{}, errors.New("test error")))
 
 	if plan.Status.RetryCount != 3 {
 		t.Errorf("RetryCount = %d, want 3", plan.Status.RetryCount)
@@ -201,6 +203,46 @@ func TestRecordRetryAttempt(t *testing.T) {
 	}
 	if plan.Status.ErrorMessage != "test error" {
 		t.Errorf("ErrorMessage = %q, want 'test error'", plan.Status.ErrorMessage)
+	}
+}
+
+func TestRecordRetryAttempt_Idempotent(t *testing.T) {
+	now := time.Now()
+	fakeClock := testingclock.NewFakeClock(now)
+
+	plan := &hibernatorv1alpha1.HibernatePlan{
+		Status: hibernatorv1alpha1.HibernatePlanStatus{
+			RetryCount: 2,
+		},
+	}
+
+	// First call should increment
+	RecordRetryAttempt(plan, fakeClock, errors.New("first error"))
+	if plan.Status.RetryCount != 3 {
+		t.Errorf("After first call: RetryCount = %d, want 3", plan.Status.RetryCount)
+	}
+	if plan.Status.ErrorMessage != "first error" {
+		t.Errorf("After first call: ErrorMessage = %q, want 'first error'", plan.Status.ErrorMessage)
+	}
+
+	// Second call within 5s should NOT increment (idempotency guard)
+	fakeClock.Step(2 * time.Second)
+	RecordRetryAttempt(plan, fakeClock, errors.New("second error"))
+	if plan.Status.RetryCount != 3 {
+		t.Errorf("After second call (within 5s): RetryCount = %d, want 3", plan.Status.RetryCount)
+	}
+	if plan.Status.ErrorMessage != "second error" {
+		t.Errorf("After second call: ErrorMessage = %q, want 'second error' (should update)", plan.Status.ErrorMessage)
+	}
+
+	// Third call after 5s should increment
+	fakeClock.Step(5 * time.Second)
+	RecordRetryAttempt(plan, fakeClock, errors.New("third error"))
+	if plan.Status.RetryCount != 4 {
+		t.Errorf("After third call (after 5s): RetryCount = %d, want 4", plan.Status.RetryCount)
+	}
+	if plan.Status.ErrorMessage != "third error" {
+		t.Errorf("After third call: ErrorMessage = %q, want 'third error'", plan.Status.ErrorMessage)
 	}
 }
 

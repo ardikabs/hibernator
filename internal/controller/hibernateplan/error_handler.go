@@ -47,19 +47,25 @@ func (r *Reconciler) handleErrorRecovery(ctx context.Context, log logr.Logger, p
 
 	if !strategy.ShouldRetry {
 		// Check for manual retry signal
-		if plan.Annotations[wellknown.AnnotationRetryNow] == "true" {
+		if val, ok := plan.Annotations[wellknown.AnnotationRetryNow]; ok && val == "true" {
 			log.Info("manual retry triggered via annotation")
 
-			if err := r.statusUpdater.Update(ctx, plan, status.MutatorFunc(func(obj client.Object) client.Object {
-				p := obj.(*hibernatorv1alpha1.HibernatePlan)
-				delete(p.Annotations, wellknown.AnnotationRetryNow)
-				recovery.ResetRetryState(p)
-				return p
-			})); err != nil {
-				log.Error(err, "during status update")
+			orig := plan.DeepCopy()
+			delete(plan.Annotations, wellknown.AnnotationRetryNow)
+			if err := r.Patch(ctx, plan, client.MergeFrom(orig)); err != nil {
+				log.Error(err, "failed to clear manual retry annotation")
+			} else {
+				log.Info("cleared manual retry annotation")
 			}
 
-			return ctrl.Result{Requeue: true}, nil
+			recovery.ResetRetryState(plan)
+			if err := r.Status().Patch(ctx, plan, client.MergeFrom(orig)); err != nil {
+				log.Error(err, "failed to reset retry state")
+			} else {
+				log.Info("reset retry state")
+			}
+
+			return ctrl.Result{}, nil
 		}
 
 		// Max retries exceeded or permanent error
@@ -100,7 +106,7 @@ func (r *Reconciler) handleErrorRecovery(ctx context.Context, log logr.Logger, p
 	// Relabel stale failed jobs from current cycle to unblock retry
 	r.relabelStaleFailedJobs(ctx, log, plan, operation)
 
-	if err := r.statusUpdater.Update(ctx, plan, status.MutatorFunc(func(obj client.Object) client.Object {
+	if err := r.statusUpdater.Update(ctx, plan, status.MutatorFunc(func(obj client.Object) (client.Object, bool) {
 		p := obj.(*hibernatorv1alpha1.HibernatePlan)
 
 		// Ensure error is not nil before recording retry
@@ -108,7 +114,9 @@ func (r *Reconciler) handleErrorRecovery(ctx context.Context, log logr.Logger, p
 			lastErr = fmt.Errorf("unknown error (no error message in status)")
 		}
 
-		recovery.RecordRetryAttempt(p, r.Clock, lastErr)
+		if ok := recovery.RecordRetryAttempt(p, r.Clock, lastErr); !ok {
+			return nil, false
+		}
 
 		currentStage := execPlan.Stages[p.Status.CurrentStageIndex]
 		for _, target := range currentStage.Targets {
@@ -131,17 +139,17 @@ func (r *Reconciler) handleErrorRecovery(ctx context.Context, log logr.Logger, p
 			log.Info("transitioning to waking up phase for recovery", "attempt", plan.Status.RetryCount)
 		}
 
-		return p
+		return p, true
 	})); err != nil {
 		return ctrl.Result{}, err
 	}
 
-	return ctrl.Result{Requeue: true}, nil
+	return ctrl.Result{}, nil
 }
 
 // setError transitions the plan to error state.
 func (r *Reconciler) setError(ctx context.Context, plan *hibernatorv1alpha1.HibernatePlan, phaseErr error) (ctrl.Result, error) {
-	if err := r.statusUpdater.Update(ctx, plan, status.MutatorFunc(func(obj client.Object) client.Object {
+	if err := r.statusUpdater.Update(ctx, plan, status.MutatorFunc(func(obj client.Object) (client.Object, bool) {
 		p := obj.(*hibernatorv1alpha1.HibernatePlan)
 		p.Status.Phase = hibernatorv1alpha1.PhaseError
 		p.Status.LastTransitionTime = ptr.To(metav1.NewTime(r.Clock.Now()))
@@ -152,7 +160,7 @@ func (r *Reconciler) setError(ctx context.Context, plan *hibernatorv1alpha1.Hibe
 			p.Status.ErrorMessage = "unknown error"
 		}
 
-		return p
+		return p, true
 	})); err != nil {
 		return ctrl.Result{}, fmt.Errorf("failed to update status onError: %w, phaseErr: %v", err, phaseErr)
 	}
