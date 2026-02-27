@@ -3,7 +3,7 @@ Copyright 2026 Ardika Saputro.
 Licensed under the Apache License, Version 2.0.
 */
 
-package cli
+package logs
 
 import (
 	"bufio"
@@ -26,19 +26,20 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
 	hibernatorv1alpha1 "github.com/ardikabs/hibernator/api/v1alpha1"
+	"github.com/ardikabs/hibernator/cmd/kubectl-hibernator/common"
 	"github.com/ardikabs/hibernator/internal/wellknown"
 )
 
 type logsOptions struct {
-	root   *rootOptions
+	root   *common.RootOptions
 	target string
 	tail   int64
 	follow bool
 	level  string
 }
 
-// newLogsCommand creates the "logs" command.
-func newLogsCommand(opts *rootOptions) *cobra.Command {
+// NewCommand creates the "logs" command.
+func NewCommand(opts *common.RootOptions) *cobra.Command {
 	logsOpts := &logsOptions{root: opts}
 
 	cmd := &cobra.Command{
@@ -73,8 +74,8 @@ Examples:
 func runLogs(ctx context.Context, opts *logsOptions, planName string) error {
 	// Build kubeconfig
 	loadingRules := clientcmd.NewDefaultClientConfigLoadingRules()
-	if opts.root.kubeconfig != "" {
-		loadingRules.ExplicitPath = opts.root.kubeconfig
+	if opts.root.Kubeconfig != "" {
+		loadingRules.ExplicitPath = opts.root.Kubeconfig
 	}
 
 	configOverrides := &clientcmd.ConfigOverrides{}
@@ -86,13 +87,13 @@ func runLogs(ctx context.Context, opts *logsOptions, planName string) error {
 	}
 
 	// Build controller-runtime client for fetching plan info
-	k8sClient, err := newK8sClient(opts.root)
+	k8sClient, err := common.NewK8sClient(opts.root)
 	if err != nil {
 		return err
 	}
 
 	// Fetch the plan to get execution IDs for filtering
-	ns := resolveNamespace(opts.root)
+	ns := common.ResolveNamespace(opts.root)
 	var plan hibernatorv1alpha1.HibernatePlan
 	if err := k8sClient.Get(ctx, types.NamespacedName{Name: planName, Namespace: ns}, &plan); err != nil {
 		return fmt.Errorf("failed to get HibernatePlan %q in namespace %q: %w", planName, ns, err)
@@ -198,7 +199,7 @@ func tailLogsFromPods(ctx context.Context, clientset *kubernetes.Clientset, pods
 	for _, log := range allLogs {
 		if !seen[log.hash] {
 			seen[log.hash] = true
-			if opts.root.jsonOutput {
+			if opts.root.JsonOutput {
 				fmt.Println(log.raw)
 			} else {
 				fmt.Println(log.line)
@@ -250,7 +251,7 @@ func followLogsFromPods(ctx context.Context, clientset *kubernetes.Clientset, po
 		seenMutex.Lock()
 		if !seen[log.hash] {
 			seen[log.hash] = true
-			if opts.root.jsonOutput {
+			if opts.root.JsonOutput {
 				fmt.Println(log.raw)
 			} else {
 				fmt.Println(log.line)
@@ -313,15 +314,17 @@ func parseLogs(stream io.ReadCloser, filter *logFilter, logChan chan<- *logLine)
 			var logEntry map[string]interface{}
 			ts := time.Now()
 			if err := json.Unmarshal([]byte(line), &logEntry); err == nil {
-				if tsStr, ok := logEntry["ts"].(string); ok {
-					if parsed, err := time.Parse(time.RFC3339Nano, tsStr); err == nil {
-						ts = parsed
-					}
+				// Try ts field (string or float64)
+				res, ok := parseTimestampField(logEntry, "ts", ts)
+				if ok {
+					ts = res
+				} else {
+					ts, _ = parseTimestampField(logEntry, "timestamp", ts)
 				}
 			}
 
 			// Calculate content hash for deduplication
-			hash := fmt.Sprintf("%x", md5.Sum([]byte(line)))
+		hash := fmt.Sprintf("%x", md5.Sum([]byte(line)))
 
 			logChan <- &logLine{
 				raw:       line,
@@ -529,27 +532,103 @@ func formatLogLine(line string) string {
 }
 
 // extractTimestamp extracts and formats the timestamp from log entry.
-// Prefers "ts" field (RFC3339Nano), falls back to "timestamp" field.
-// Converts to local timezone for display.
+// Tries "ts" field first (standard logr field), handles multiple formats:
+// - RFC3339Nano, RFC3339, ISO8601
+// - Basic timestamp (2026-02-26T02:38:52)
+// - Float64 epoch timestamps (seconds with fractional part)
+// Falls back to "timestamp" field.
 func extractTimestamp(logEntry map[string]interface{}) string {
-	// Try "ts" field first (standard logr field)
+	// Try "ts" field first (standard logr field) - could be string or float64
 	if tsStr, ok := logEntry["ts"].(string); ok && tsStr != "" {
-		// Parse RFC3339Nano and format as readable timestamp in local timezone
-		if parsed, err := time.Parse(time.RFC3339Nano, tsStr); err == nil {
+		if parsed, err := parseTimestampFromString(tsStr); err == nil {
 			return parsed.Local().Format("2006-01-02T15:04:05")
 		}
 		return tsStr
+	}
+	if tsNum, ok := logEntry["ts"].(float64); ok {
+		return convertEpochToTime(tsNum).Local().Format("2006-01-02T15:04:05")
 	}
 
 	// Fall back to "timestamp" field
 	if tsStr, ok := logEntry["timestamp"].(string); ok && tsStr != "" {
-		if parsed, err := time.Parse(time.RFC3339Nano, tsStr); err == nil {
+		if parsed, err := parseTimestampFromString(tsStr); err == nil {
 			return parsed.Local().Format("2006-01-02T15:04:05")
 		}
 		return tsStr
 	}
+	if tsNum, ok := logEntry["timestamp"].(float64); ok {
+		return convertEpochToTime(tsNum).Local().Format("2006-01-02T15:04:05")
+	}
 
 	return ""
+}
+
+// parseTimestampFromString parses timestamps in various formats:
+// - RFC3339: 2026-02-26T02:38:52Z07:00
+// - RFC3339Nano: 2026-02-26T02:38:52.123456789Z07:00
+// If none match, a warning is printed and time.Now() is returned.
+// The server should use one of: RFC3339Nano, RFC3339, ISO8601, or epoch formats.
+func parseTimestampFromString(tsStr string) (time.Time, error) {
+	tsStr = strings.TrimSpace(tsStr)
+	if tsStr == "" {
+		return time.Now(), nil
+	}
+
+	// Try standard time formats in order of likelihood
+	formats := []string{
+		time.RFC3339,
+		time.RFC3339Nano,
+	}
+
+	for _, format := range formats {
+		if parsed, err := time.Parse(format, tsStr); err == nil {
+			return parsed, nil
+		}
+	}
+
+	return time.Now(), nil
+}
+
+// parseTimestampField extracts timestamp from a log entry field, supporting both string and float64.
+// Handles string formats (RFC3339, ISO8601, etc.) and float64 epoch timestamps.
+func parseTimestampField(logEntry map[string]interface{}, fieldName string, defaultTime time.Time) (time.Time, bool) {
+	if val, ok := logEntry[fieldName]; ok {
+		// Try string format first
+		if tsStr, ok := val.(string); ok && tsStr != "" {
+			if parsedTime, err := parseTimestampFromString(tsStr); err == nil {
+				return parsedTime, true
+			}
+		}
+		// Try float64 epoch timestamp
+		if tsNum, ok := val.(float64); ok {
+			return convertEpochToTime(tsNum), true
+		}
+	}
+	return defaultTime, false
+}
+
+// convertEpochToTime converts a float64 epoch timestamp to time.Time.
+// Intelligently detects precision (seconds, milliseconds, nanoseconds) based on magnitude.
+func convertEpochToTime(epoch float64) time.Time {
+	// Determine precision by magnitude:
+	// - Seconds: < 10^11 (year 5138)
+	// - Milliseconds: 10^11 to 10^15 (year 33658)
+	// - Nanoseconds: > 10^15
+	switch {
+	case epoch > 1e15:
+		// Nanoseconds precision
+		return time.Unix(0, int64(epoch))
+	case epoch > 1e11:
+		// Milliseconds precision
+		sec := int64(epoch / 1000)
+		nsec := int64((epoch - float64(sec)*1000) * 1e6)
+		return time.Unix(sec, nsec)
+	default:
+		// Seconds precision (with fractional part)
+		sec := int64(epoch)
+		nsec := int64((epoch - float64(sec)) * 1e9)
+		return time.Unix(sec, nsec)
+	}
 }
 
 // extractString safely extracts a string value from JSON map, handling various types.

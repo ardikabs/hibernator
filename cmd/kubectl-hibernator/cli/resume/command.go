@@ -3,7 +3,7 @@ Copyright 2026 Ardika Saputro.
 Licensed under the Apache License, Version 2.0.
 */
 
-package cli
+package resume
 
 import (
 	"context"
@@ -14,15 +14,16 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
 	hibernatorv1alpha1 "github.com/ardikabs/hibernator/api/v1alpha1"
+	"github.com/ardikabs/hibernator/cmd/kubectl-hibernator/common"
 	"github.com/ardikabs/hibernator/internal/wellknown"
 )
 
 type resumeOptions struct {
-	root *rootOptions
+	root *common.RootOptions
 }
 
-// newResumeCommand creates the "resume" command.
-func newResumeCommand(opts *rootOptions) *cobra.Command {
+// NewCommand creates the "resume" command.
+func NewCommand(opts *common.RootOptions) *cobra.Command {
 	resOpts := &resumeOptions{root: opts}
 
 	cmd := &cobra.Command{
@@ -47,12 +48,12 @@ Examples:
 }
 
 func runResume(ctx context.Context, opts *resumeOptions, planName string) error {
-	c, err := newK8sClient(opts.root)
+	c, err := common.NewK8sClient(opts.root)
 	if err != nil {
 		return err
 	}
 
-	ns := resolveNamespace(opts.root)
+	ns := common.ResolveNamespace(opts.root)
 
 	// Fetch current plan
 	var plan hibernatorv1alpha1.HibernatePlan
