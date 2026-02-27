@@ -9,16 +9,16 @@ import (
 
 // Mutator is an interface to hold mutator functions for status updates.
 type Mutator interface {
-	Mutate(obj client.Object) client.Object
+	Mutate(obj client.Object) (new client.Object, ok bool)
 }
 
 // MutatorFunc is a function adaptor for Mutators.
-type MutatorFunc func(client.Object) client.Object
+type MutatorFunc func(old client.Object) (new client.Object, ok bool)
 
 // Mutate adapts the MutatorFunc to fit through the Mutator interface.
-func (m MutatorFunc) Mutate(old client.Object) client.Object {
+func (m MutatorFunc) Mutate(old client.Object) (new client.Object, ok bool) {
 	if m == nil {
-		return nil
+		return nil, false
 	}
 
 	return m(old)
@@ -44,10 +44,13 @@ func (s *SyncStatusUpdater) Update(ctx context.Context, obj client.Object, mutat
 		}
 
 		// Apply mutations
-		updated := mutator.Mutate(obj)
-		updated.SetUID(obj.GetUID())
+		mutated, ok := mutator.Mutate(obj)
+		if !ok {
+			return nil
+		}
 
+		mutated.SetUID(obj.GetUID())
 		// Update with fresh resourceVersion
-		return s.client.Status().Update(ctx, updated)
+		return s.client.Status().Update(ctx, mutated)
 	})
 }

@@ -196,15 +196,34 @@ func CalculateBackoff(attempt int32) time.Duration {
 }
 
 // RecordRetryAttempt updates the plan status for a retry attempt.
-func RecordRetryAttempt(plan *hibernatorv1alpha1.HibernatePlan, clk clock.Clock, err error) {
+// This function is idempotent - it will not increment RetryCount if
+// a retry was already recorded within the deduplication window.
+func RecordRetryAttempt(plan *hibernatorv1alpha1.HibernatePlan, clk clock.Clock, err error) bool {
+	now := clk.Now()
+
+	// Idempotency guard: if LastRetryTime was set very recently (within 5s),
+	// this is likely a duplicate call from the same reconciliation attempt.
+	// Skip incrementing to prevent inflating the retry count.
+	if plan.Status.LastRetryTime != nil {
+		elapsed := now.Sub(plan.Status.LastRetryTime.Time)
+		if elapsed < 5*time.Second {
+			if err != nil {
+				plan.Status.ErrorMessage = err.Error()
+			}
+			return false
+		}
+	}
+
 	plan.Status.RetryCount++
-	plan.Status.LastRetryTime = ptr.To(metav1.NewTime(clk.Now()))
+	plan.Status.LastRetryTime = ptr.To(metav1.NewTime(now))
 
 	if err != nil {
 		plan.Status.ErrorMessage = err.Error()
 	} else {
 		plan.Status.ErrorMessage = "unknown error"
 	}
+
+	return true
 }
 
 // ResetRetryState clears retry tracking when transitioning out of error state.

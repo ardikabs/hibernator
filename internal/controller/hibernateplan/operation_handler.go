@@ -40,7 +40,7 @@ func (r *Reconciler) initializeOperation(ctx context.Context, log logr.Logger, p
 	// Initialize execution status - fresh start for each operation
 	log.V(1).Info("resetting execution statuses", "operation", operation, "numTargets", len(plan.Spec.Targets))
 
-	if err := r.statusUpdater.Update(ctx, plan, status.MutatorFunc(func(obj client.Object) client.Object {
+	if err := r.statusUpdater.Update(ctx, plan, status.MutatorFunc(func(obj client.Object) (client.Object, bool) {
 		p := obj.(*hibernatorv1alpha1.HibernatePlan)
 
 		p.Status.Executions = make([]hibernatorv1alpha1.ExecutionStatus, len(p.Spec.Targets))
@@ -63,7 +63,7 @@ func (r *Reconciler) initializeOperation(ctx context.Context, log logr.Logger, p
 		p.Status.CurrentStageIndex = 0
 		p.Status.CurrentOperation = operation
 		p.Status.LastTransitionTime = ptr.To(metav1.NewTime(r.Clock.Now()))
-		return p
+		return p, true
 	})); err != nil {
 		return scheduler.ExecutionPlan{}, err
 	}
@@ -162,7 +162,7 @@ func (r *Reconciler) finalizeOperation(ctx context.Context, log logr.Logger, pla
 	summary := r.buildOperationSummary(ctx, plan, operation)
 	currentCycleID := plan.Status.CurrentCycleID
 
-	if err := r.statusUpdater.Update(ctx, plan, status.MutatorFunc(func(obj client.Object) client.Object {
+	if err := r.statusUpdater.Update(ctx, plan, status.MutatorFunc(func(obj client.Object) (client.Object, bool) {
 		p := obj.(*hibernatorv1alpha1.HibernatePlan)
 
 		// Append operation to execution history (idempotent)
@@ -201,7 +201,7 @@ func (r *Reconciler) finalizeOperation(ctx context.Context, log logr.Logger, pla
 
 		recovery.ResetRetryState(p)
 		p.Status.LastTransitionTime = ptr.To(metav1.NewTime(r.Clock.Now()))
-		return p
+		return p, true
 	})); err != nil {
 		return err
 	}

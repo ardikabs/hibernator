@@ -13,7 +13,7 @@ import (
 	"github.com/go-logr/logr"
 	batchv1 "k8s.io/api/batch/v1"
 	corev1 "k8s.io/api/core/v1"
-	"k8s.io/apimachinery/pkg/api/errors"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/types"
@@ -73,7 +73,7 @@ func (r *Reconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Resu
 	// Fetch the HibernatePlan
 	plan := &hibernatorv1alpha1.HibernatePlan{}
 	if err := r.Get(ctx, req.NamespacedName, plan); err != nil {
-		if errors.IsNotFound(err) {
+		if apierrors.IsNotFound(err) {
 			return ctrl.Result{}, nil
 		}
 		return ctrl.Result{}, err
@@ -91,19 +91,19 @@ func (r *Reconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Resu
 		if err := r.Patch(ctx, plan, client.MergeFrom(orig)); err != nil {
 			return ctrl.Result{}, fmt.Errorf("add finalizer to plan: %w", err)
 		}
-		return ctrl.Result{Requeue: true}, nil
+		return ctrl.Result{}, nil
 	}
 
 	// Initialize status if needed
 	if plan.Status.Phase == "" {
 		log.Info("initializing plan status")
 
-		if err := r.statusUpdater.Update(ctx, plan, status.MutatorFunc(func(obj client.Object) client.Object {
+		if err := r.statusUpdater.Update(ctx, plan, status.MutatorFunc(func(obj client.Object) (new client.Object, ok bool) {
 			p := obj.(*hibernatorv1alpha1.HibernatePlan)
 			p.Status.Phase = hibernatorv1alpha1.PhaseActive
 			p.Status.ObservedGeneration = plan.Generation
 
-			return p
+			return p, true
 		})); err != nil {
 			return ctrl.Result{}, err
 		}
@@ -112,7 +112,7 @@ func (r *Reconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Resu
 			return ctrl.Result{}, err
 		}
 
-		return ctrl.Result{Requeue: true}, nil
+		return ctrl.Result{}, nil
 	}
 
 	// Handle suspension state transitions (suspend/resume)
@@ -166,7 +166,6 @@ func (r *Reconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Resu
 			return r.startHibernation(ctx, log, plan)
 		}
 
-	// Step 9: Phase guard - skip duplicate shutdown when already Hibernated
 	case hibernatorv1alpha1.PhaseHibernated:
 		if desiredPhase == hibernatorv1alpha1.PhaseHibernating {
 			log.V(1).Info("already hibernated, skipping duplicate shutdown")
@@ -194,6 +193,7 @@ func (r *Reconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Resu
 	}
 
 	// Requeue based on schedule (next hibernate or wake-up time)
+	log.Info("reconciliation complete", "nextRequeue", requeueAfter.String())
 	return ctrl.Result{RequeueAfter: requeueAfter}, nil
 }
 
@@ -324,7 +324,7 @@ func (r *Reconciler) evaluateSchedule(ctx context.Context, log logr.Logger, plan
 		return false, time.Minute, err
 	}
 
-	log.V(1).Info(
+	log.Info(
 		"schedule evaluation result",
 		"nextHibernateTime", result.NextHibernateTime,
 		"nextWakeUpTime", result.NextWakeUpTime,
@@ -483,7 +483,7 @@ func (r *Reconciler) buildExecutionPlan(plan *hibernatorv1alpha1.HibernatePlan, 
 // executeStage creates jobs for targets in the current stage, respecting maxConcurrency.
 func (r *Reconciler) executeStage(ctx context.Context, log logr.Logger, plan *hibernatorv1alpha1.HibernatePlan, execPlan scheduler.ExecutionPlan, stageIndex int, operation string) (ctrl.Result, error) {
 	if err := r.APIReader.Get(ctx, types.NamespacedName{Name: plan.Name, Namespace: plan.Namespace}, plan); err != nil {
-		if errors.IsNotFound(err) {
+		if apierrors.IsNotFound(err) {
 			return ctrl.Result{}, nil
 		}
 
@@ -491,7 +491,7 @@ func (r *Reconciler) executeStage(ctx context.Context, log logr.Logger, plan *hi
 	}
 
 	if stageIndex >= len(execPlan.Stages) {
-		if err := r.statusUpdater.Update(ctx, plan, status.MutatorFunc(func(obj client.Object) client.Object {
+		if err := r.statusUpdater.Update(ctx, plan, status.MutatorFunc(func(obj client.Object) (new client.Object, ok bool) {
 			p := obj.(*hibernatorv1alpha1.HibernatePlan)
 
 			// All stages complete
@@ -503,7 +503,7 @@ func (r *Reconciler) executeStage(ctx context.Context, log logr.Logger, plan *hi
 			now := metav1.NewTime(r.Clock.Now())
 			p.Status.LastTransitionTime = &now
 
-			return p
+			return p, true
 		})); err != nil {
 			return ctrl.Result{}, err
 		}
@@ -649,10 +649,10 @@ func (r *Reconciler) reconcileExecution(ctx context.Context, log logr.Logger, pl
 		if nextStageIndex < len(execPlan.Stages) {
 			// Progress to next stage
 			log.V(1).Info("stage complete, progressing to next stage", "currentStage", plan.Status.CurrentStageIndex, "nextStage", nextStageIndex)
-			if err := r.statusUpdater.Update(ctx, plan, status.MutatorFunc(func(obj client.Object) client.Object {
+			if err := r.statusUpdater.Update(ctx, plan, status.MutatorFunc(func(obj client.Object) (new client.Object, ok bool) {
 				p := obj.(*hibernatorv1alpha1.HibernatePlan)
 				p.Status.CurrentStageIndex = nextStageIndex
-				return p
+				return p, true
 			})); err != nil {
 				log.Error(err, "failed to update plan status for next stage")
 				return ctrl.Result{}, err
@@ -716,7 +716,7 @@ func (r *Reconciler) reconcileDelete(ctx context.Context, log logr.Logger, plan 
 	for _, job := range jobList.Items {
 		if err := r.Delete(ctx, &job, &client.DeleteOptions{
 			PropagationPolicy: &propagation,
-		}); err != nil && !errors.IsNotFound(err) {
+		}); err != nil && !apierrors.IsNotFound(err) {
 			return ctrl.Result{}, err
 		}
 	}
