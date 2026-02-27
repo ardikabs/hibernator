@@ -16,6 +16,7 @@ import (
 	"k8s.io/apimachinery/pkg/runtime"
 	utilruntime "k8s.io/apimachinery/pkg/util/runtime"
 	clientgoscheme "k8s.io/client-go/kubernetes/scheme"
+	"k8s.io/klog/v2"
 	"k8s.io/utils/clock"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/cache"
@@ -30,6 +31,7 @@ import (
 	"github.com/ardikabs/hibernator/internal/restore"
 	"github.com/ardikabs/hibernator/internal/scheduler"
 	"github.com/ardikabs/hibernator/internal/streaming"
+	"github.com/ardikabs/hibernator/internal/validationwebhook"
 	"github.com/ardikabs/hibernator/internal/version"
 	"github.com/ardikabs/hibernator/pkg/envutil"
 )
@@ -108,7 +110,9 @@ func ParseFlags() Options {
 		os.Exit(0)
 	}
 
-	ctrl.SetLogger(zap.New(zap.UseFlagOptions(&zapOpts)))
+	logger := zap.New(zap.UseFlagOptions(&zapOpts))
+	ctrl.SetLogger(logger)
+	klog.SetLogger(logger)
 
 	return opts
 }
@@ -117,6 +121,7 @@ func ParseFlags() Options {
 func Run(opts Options) error {
 	mgr, err := ctrl.NewManager(ctrl.GetConfigOrDie(), ctrl.Options{
 		Scheme: scheme,
+		Logger: ctrl.Log.WithName("controller-runtime"),
 		Cache: cache.Options{
 			SyncPeriod: &opts.SyncPeriod,
 		},
@@ -169,15 +174,9 @@ func Run(opts Options) error {
 		return err
 	}
 
-	// Set up validation webhook
-	if err = (&hibernatorv1alpha1.HibernatePlan{}).SetupWebhookWithManager(mgr); err != nil {
-		setupLog.Error(err, "unable to create webhook", "webhook", "HibernatePlan")
-		return err
-	}
-
-	// Set up ScheduleException validation webhook
-	if err = (&hibernatorv1alpha1.ScheduleException{}).SetupWebhookWithManager(mgr); err != nil {
-		setupLog.Error(err, "unable to create webhook", "webhook", "ScheduleException")
+	// Set up validation webhooks
+	if err = validationwebhook.SetupWithManager(mgr, ctrl.Log.WithName("validationwebhook")); err != nil {
+		setupLog.Error(err, "unable to setup webhooks")
 		return err
 	}
 
