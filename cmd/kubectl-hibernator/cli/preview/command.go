@@ -3,14 +3,13 @@ Copyright 2026 Ardika Saputro.
 Licensed under the Apache License, Version 2.0.
 */
 
-package schedule
+package preview
 
 import (
 	"context"
 	"fmt"
 	"os"
 	"strings"
-	"time"
 
 	"github.com/spf13/cobra"
 	"k8s.io/apimachinery/pkg/types"
@@ -23,38 +22,39 @@ import (
 	"github.com/ardikabs/hibernator/internal/scheduler"
 )
 
-type scheduleOptions struct {
+type previewOptions struct {
 	root   *common.RootOptions
 	file   string
 	events int
 }
 
-// NewCommand creates the "schedule" command.
+// NewCommand creates the "preview" command.
 func NewCommand(opts *common.RootOptions) *cobra.Command {
-	schedOpts := &scheduleOptions{root: opts, events: 5}
+	previewOpts := &previewOptions{root: opts, events: 5}
 
 	cmd := &cobra.Command{
-		Use:   "schedule <plan-name>",
-		Short: "Display schedule details and upcoming events for a HibernatePlan",
+		Use:     "preview <plan-name>",
+		Aliases: []string{"schedule"},
+		Short:   "Preview schedule details and upcoming events for a HibernatePlan",
 		Long: `Show the hibernation schedule including timezone, off-hour windows,
 upcoming hibernate/wakeup events, and any active schedule exceptions.
 
 Works with both cluster resources and local YAML files:
-  kubectl hibernator schedule my-plan
-  kubectl hibernator schedule --file plan.yaml`,
+  kubectl hibernator preview my-plan
+  kubectl hibernator preview --file plan.yaml`,
 		Args: cobra.MaximumNArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			return runSchedule(cmd.Context(), schedOpts, args)
+			return runPreview(cmd.Context(), previewOpts, args)
 		},
 	}
 
-	cmd.Flags().StringVarP(&schedOpts.file, "file", "f", "", "Path to a local HibernatePlan YAML file")
-	cmd.Flags().IntVar(&schedOpts.events, "events", 5, "Number of upcoming events to display")
+	cmd.Flags().StringVarP(&previewOpts.file, "file", "f", "", "Path to a local HibernatePlan YAML file")
+	cmd.Flags().IntVar(&previewOpts.events, "events", 5, "Number of upcoming events to display")
 
 	return cmd
 }
 
-func runSchedule(ctx context.Context, opts *scheduleOptions, args []string) error {
+func runPreview(ctx context.Context, opts *previewOptions, args []string) error {
 	var plan hibernatorv1alpha1.HibernatePlan
 
 	if opts.file != "" {
@@ -81,10 +81,7 @@ func runSchedule(ctx context.Context, opts *scheduleOptions, args []string) erro
 
 	// Evaluate schedule
 	evaluator := scheduler.NewScheduleEvaluator(clock.RealClock{})
-	windows, err := convertPlanWindows(plan.Spec.Schedule)
-	if err != nil {
-		return fmt.Errorf("failed to convert schedule windows: %w", err)
-	}
+	windows := common.ConvertAPIWindows(plan.Spec.Schedule.OffHours)
 
 	result, err := evaluator.Evaluate(windows, plan.Spec.Schedule.Timezone, nil)
 	if err != nil {
@@ -97,10 +94,9 @@ func runSchedule(ctx context.Context, opts *scheduleOptions, args []string) erro
 		exceptions = plan.Status.ActiveExceptions
 	}
 
-	events, err := computeUpcomingEvents(plan.Spec.Schedule, opts.events)
+	events, err := common.ComputeUpcomingEvents(plan.Spec.Schedule, opts.events)
 	if err != nil {
-		// Degrade gracefully, empty events
-		events = []printers.ScheduleEvent{}
+		events = []common.ScheduleEvent{}
 	}
 
 	output := &printers.ScheduleOutput{
@@ -144,71 +140,3 @@ func loadPlanFromFile(path string, plan *hibernatorv1alpha1.HibernatePlan) error
 	return nil
 }
 
-func convertPlanWindows(schedule hibernatorv1alpha1.Schedule) ([]scheduler.OffHourWindow, error) {
-	windows := make([]scheduler.OffHourWindow, len(schedule.OffHours))
-	for i, w := range schedule.OffHours {
-		windows[i] = scheduler.OffHourWindow{
-			Start:      w.Start,
-			End:        w.End,
-			DaysOfWeek: w.DaysOfWeek,
-		}
-	}
-
-	return windows, nil
-}
-
-// computeUpcomingEvents computes the next N hibernate/wakeup events.
-func computeUpcomingEvents(schedule hibernatorv1alpha1.Schedule, count int) ([]printers.ScheduleEvent, error) {
-	hibernateCron, wakeUpCron, err := scheduler.ConvertOffHoursToCron(convertAPIWindows(schedule.OffHours))
-	if err != nil {
-		return nil, fmt.Errorf("failed to convert to cron: %w", err)
-	}
-
-	loc, err := time.LoadLocation(schedule.Timezone)
-	if err != nil {
-		return nil, fmt.Errorf("invalid timezone %q: %w", schedule.Timezone, err)
-	}
-
-	now := time.Now().In(loc)
-
-	parser := scheduler.NewCronParser()
-	hSched, err := parser.Parse(hibernateCron)
-	if err != nil {
-		return nil, fmt.Errorf("failed to parse hibernate cron: %w", err)
-	}
-
-	wSched, err := parser.Parse(wakeUpCron)
-	if err != nil {
-		return nil, fmt.Errorf("failed to parse wakeup cron: %w", err)
-	}
-
-	// Generate next N events from both schedules, interleaved by time
-	var events []printers.ScheduleEvent
-	hNext := hSched.Next(now)
-	wNext := wSched.Next(now)
-
-	for len(events) < count {
-		if hNext.Before(wNext) {
-			events = append(events, printers.ScheduleEvent{Time: hNext, Operation: "Hibernate"})
-			hNext = hSched.Next(hNext)
-		} else {
-			events = append(events, printers.ScheduleEvent{Time: wNext, Operation: "WakeUp"})
-			wNext = wSched.Next(wNext)
-		}
-	}
-
-	return events, nil
-}
-
-// convertAPIWindows converts API OffHourWindows to scheduler OffHourWindows.
-func convertAPIWindows(apiWindows []hibernatorv1alpha1.OffHourWindow) []scheduler.OffHourWindow {
-	out := make([]scheduler.OffHourWindow, len(apiWindows))
-	for i, w := range apiWindows {
-		out[i] = scheduler.OffHourWindow{
-			Start:      w.Start,
-			End:        w.End,
-			DaysOfWeek: w.DaysOfWeek,
-		}
-	}
-	return out
-}

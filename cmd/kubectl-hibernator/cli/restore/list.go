@@ -24,7 +24,7 @@ func newListResourcesCommand(opts *common.RootOptions) *cobra.Command {
 	restoreOpts := &restorePointOptions{root: opts}
 
 	cmd := &cobra.Command{
-		Use:   "list-resources <plan-name>",
+		Use:   "list <plan-name>",
 		Short: "List all resources in the restore point",
 		Long: `Show all resources stored in the restore point for a HibernatePlan.
 Resources are organized by target. Display shows:
@@ -36,9 +36,9 @@ Resources are organized by target. Display shows:
 Filter by specific target using --target flag.
 
 Examples:
-  kubectl hibernator restore list-resources my-plan
-  kubectl hibernator restore list-resources my-plan --target eks-cluster
-  kubectl hibernator restore list-resources my-plan --json`,
+  kubectl hibernator restore list my-plan
+  kubectl hibernator restore list my-plan --target eks-cluster
+  kubectl hibernator restore list my-plan --json`,
 		Args: cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			return runListResources(cmd.Context(), restoreOpts, args[0])

@@ -7,6 +7,7 @@ package printers
 
 import (
 	hibernatorv1alpha1 "github.com/ardikabs/hibernator/api/v1alpha1"
+	"github.com/ardikabs/hibernator/cmd/kubectl-hibernator/common"
 	corev1 "k8s.io/api/core/v1"
 )
 
@@ -15,7 +16,18 @@ type ScheduleOutput struct {
 	Plan       hibernatorv1alpha1.HibernatePlan
 	Result     interface{} // EvaluationResult
 	Exceptions []hibernatorv1alpha1.ExceptionReference
-	Events     []ScheduleEvent
+	Events     []common.ScheduleEvent
+}
+
+// PlanListItem represents a single plan with computed next event
+type PlanListItem struct {
+	Plan      hibernatorv1alpha1.HibernatePlan `json:"plan"`
+	NextEvent *common.ScheduleEvent            `json:"nextEvent,omitempty"`
+}
+
+// PlanListOutput is a wrapper for printing enriched plan list
+type PlanListOutput struct {
+	Items []PlanListItem `json:"items"`
 }
 
 // StatusOutput is a wrapper for printing plan status

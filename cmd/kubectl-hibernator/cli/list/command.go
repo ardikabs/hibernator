@@ -66,6 +66,18 @@ func runList(ctx context.Context, opts *listOptions) error {
 		return fmt.Errorf("failed to list HibernatePlans: %w", err)
 	}
 
+	items := make([]printers.PlanListItem, len(plans.Items))
+	for i, plan := range plans.Items {
+		items[i].Plan = plan
+
+		if !plan.Spec.Suspend {
+			if event, err := common.ComputeNextEvent(plan.Spec.Schedule); err == nil {
+				items[i].NextEvent = event
+			}
+		}
+	}
+
+	output := &printers.PlanListOutput{Items: items}
 	d := &printers.Dispatcher{JSON: opts.root.JsonOutput}
-	return d.PrintObj(plans, os.Stdout)
+	return d.PrintObj(output, os.Stdout)
 }

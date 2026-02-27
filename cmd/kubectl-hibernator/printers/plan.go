@@ -14,25 +14,28 @@ import (
 	"time"
 
 	hibernatorv1alpha1 "github.com/ardikabs/hibernator/api/v1alpha1"
+	"github.com/ardikabs/hibernator/cmd/kubectl-hibernator/common"
 	"github.com/ardikabs/hibernator/internal/scheduler"
 	"github.com/jedib0t/go-pretty/v6/table"
 	"github.com/samber/lo"
 )
 
-func (p *HumanReadablePrinter) printHibernatePlanList(plans hibernatorv1alpha1.HibernatePlanList, w io.Writer) error {
+func (p *HumanReadablePrinter) printPlanListOutput(out *PlanListOutput, w io.Writer) error {
 	t := table.NewWriter()
-	t.SetStyle(DefaultStyle)
+	t.SetStyle(DefaultTableStyle)
 	t.SetOutputMirror(w)
 	t.AppendHeader(table.Row{"Name", "Namespace", "Phase", "Suspended", "Next Event", "Age"})
 
-	for _, plan := range plans.Items {
+	for _, item := range out.Items {
+		plan := item.Plan
+
 		suspended := "no"
 		if plan.Spec.Suspend {
 			suspended = "yes"
 		}
 
 		age := FormatAge(time.Since(plan.CreationTimestamp.Time))
-		nextEvent := "" // Placeholder
+		nextEvent := formatNextEvent(item.NextEvent)
 
 		t.AppendRow(table.Row{
 			plan.Name,
@@ -46,6 +49,15 @@ func (p *HumanReadablePrinter) printHibernatePlanList(plans hibernatorv1alpha1.H
 
 	t.Render()
 	return nil
+}
+
+func formatNextEvent(event *common.ScheduleEvent) string {
+	if event == nil {
+		return "-"
+	}
+
+	duration := time.Until(event.Time)
+	return fmt.Sprintf("%s (%s)", event.Operation, HumanDuration(duration))
 }
 
 func (p *HumanReadablePrinter) printHibernatePlan(plan hibernatorv1alpha1.HibernatePlan, w io.Writer) error {
@@ -238,7 +250,7 @@ func (p *HumanReadablePrinter) printSchedule(out *ScheduleOutput, w io.Writer) e
 		fmt.Fprintf(w, "Upcoming Events (next %d):\n", len(events))
 		t := table.NewWriter()
 		t.SetOutputMirror(w)
-		t.SetStyle(DefaultStyle)
+		t.SetStyle(DefaultTableStyle)
 		t.AppendHeader(table.Row{"#", "Operation", "Time", "In"})
 
 		for i, ev := range events {
@@ -263,10 +275,4 @@ func (p *HumanReadablePrinter) printSchedule(out *ScheduleOutput, w io.Writer) e
 	}
 
 	return nil
-}
-
-// ScheduleEvent represents a single upcoming event.
-type ScheduleEvent struct {
-	Time      time.Time `json:"time"`
-	Operation string    `json:"operation"`
 }

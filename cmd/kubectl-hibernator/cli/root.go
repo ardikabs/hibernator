@@ -17,7 +17,7 @@ import (
 	"github.com/ardikabs/hibernator/cmd/kubectl-hibernator/cli/restore"
 	"github.com/ardikabs/hibernator/cmd/kubectl-hibernator/cli/resume"
 	"github.com/ardikabs/hibernator/cmd/kubectl-hibernator/cli/retry"
-	"github.com/ardikabs/hibernator/cmd/kubectl-hibernator/cli/schedule"
+	"github.com/ardikabs/hibernator/cmd/kubectl-hibernator/cli/preview"
 	"github.com/ardikabs/hibernator/cmd/kubectl-hibernator/cli/suspend"
 	"github.com/ardikabs/hibernator/cmd/kubectl-hibernator/cli/version"
 	"github.com/ardikabs/hibernator/cmd/kubectl-hibernator/common"
@@ -45,7 +45,7 @@ func NewRootCommand() *cobra.Command {
 			"Then use as:\n" +
 			"  kubectl hibernator list\n" +
 			"  kubectl hibernator describe my-plan\n" +
-			"  kubectl hibernator schedule my-plan\n" +
+			"  kubectl hibernator preview my-plan\n" +
 			"  kubectl hibernator suspend my-plan --hours 4 --reason \"deployment\"\n" +
 			"  kubectl hibernator resume my-plan\n" +
 			"  kubectl hibernator retry my-plan\n" +
@@ -63,7 +63,7 @@ func NewRootCommand() *cobra.Command {
 	cmd.AddCommand(version.NewCommand())
 	cmd.AddCommand(list.NewCommand(opts))
 	cmd.AddCommand(describe.NewCommand(opts))
-	cmd.AddCommand(schedule.NewCommand(opts))
+	cmd.AddCommand(preview.NewCommand(opts))
 	cmd.AddCommand(suspend.NewCommand(opts))
 	cmd.AddCommand(resume.NewCommand(opts))
 	cmd.AddCommand(retry.NewCommand(opts))

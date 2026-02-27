@@ -42,10 +42,6 @@ type HumanReadablePrinter struct{}
 
 func (p *HumanReadablePrinter) PrintObj(obj interface{}, w io.Writer) error {
 	switch v := obj.(type) {
-	case hibernatorv1alpha1.HibernatePlanList:
-		return p.printHibernatePlanList(v, w)
-	case *hibernatorv1alpha1.HibernatePlanList:
-		return p.printHibernatePlanList(*v, w)
 	case hibernatorv1alpha1.HibernatePlan:
 		return p.printHibernatePlan(v, w)
 	case *hibernatorv1alpha1.HibernatePlan:
@@ -57,6 +53,8 @@ func (p *HumanReadablePrinter) PrintObj(obj interface{}, w io.Writer) error {
 		return p.printRestorePoint(*v, w)
 	case *ScheduleOutput:
 		return p.printSchedule(v, w)
+	case *PlanListOutput:
+		return p.printPlanListOutput(v, w)
 	case *RestoreDetailOutput:
 		return p.printRestoreDetail(v, w)
 	case *RestoreResourcesOutput:

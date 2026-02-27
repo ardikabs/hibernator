@@ -14,9 +14,30 @@ import (
 )
 
 var (
-	DefaultStyle = table.Style{
+	StyleBoxNoPaddingLeft = table.BoxStyle{
+		BottomLeft:       "╰",
+		BottomRight:      "╯",
+		BottomSeparator:  "┴",
+		EmptySeparator:   " ",
+		Left:             "│",
+		LeftSeparator:    "├",
+		MiddleHorizontal: "─",
+		MiddleSeparator:  "┼",
+		MiddleVertical:   "│",
+		PaddingLeft:      "",
+		PaddingRight:     " ",
+		PageSeparator:    "\n",
+		Right:            "│",
+		RightSeparator:   "┤",
+		TopLeft:          "╭",
+		TopRight:         "╮",
+		TopSeparator:     "┬",
+		UnfinishedRow:    " ≈",
+	}
+
+	DefaultTableStyle = table.Style{
 		Name:   "Default",
-		Box:    table.StyleBoxRounded,
+		Box:    StyleBoxNoPaddingLeft,
 		Color:  table.ColorOptionsDefault,
 		Format: table.FormatOptionsDefault,
 		HTML:   table.DefaultHTMLOptions,

@@ -40,42 +40,41 @@ func newPatchCommand(opts *common.RootOptions) *cobra.Command {
 		Use:   "patch <plan-name>",
 		Short: "Update resource state in the restore point",
 		Long: `Modify specific fields or apply structured patches to a resource's restore state.
+Supports three mutation modes:
+1. Field-level updates: --set key.path=value --remove key.path
+2. JSON merge patch: --patch '{"key":"value"}'
+3. File-based patch: --patch-file=patch.json
 
-		Supports three mutation modes:
-		1. Field-level updates: --set key.path=value --remove key.path
-		2. JSON merge patch: --patch '{"key":"value"}'
-		3. File-based patch: --patch-file=patch.json
+Field paths support dot notation for nested access: config.scaling.min
 
-		Field paths support dot notation for nested access: config.scaling.min
+Modes are mutually exclusive:
+- Use --set/--remove for granular field updates
+- Use --patch or --patch-file for structured changes
+- Cannot mix granular and patch modes in one command
 
-		Modes are mutually exclusive:
-		- Use --set/--remove for granular field updates
-		- Use --patch or --patch-file for structured changes
-		- Cannot mix granular and patch modes in one command
+Examples:
+# Field updates (dot notation)
+kubectl hibernator restore patch my-plan -t eks -r node-123 \
+--set desiredCapacity=10 \
+--set config.tags.environment=prod
 
-		Examples:
-		  # Field updates (dot notation)
-		  kubectl hibernator restore patch my-plan -t eks -r node-123 \
-		    --set desiredCapacity=10 \
-		    --set config.tags.environment=prod
+# Remove fields
+kubectl hibernator restore patch my-plan -t eks -r node-123 \
+--remove config.deprecated \
+--remove tempData
 
-		  # Remove fields
-		  kubectl hibernator restore patch my-plan -t eks -r node-123 \
-		    --remove config.deprecated \
-		    --remove tempData
+# Inline JSON patch (RFC 7386 merge patch)
+kubectl hibernator restore patch my-plan -t eks -r node-123 \
+--patch '{"desiredCapacity":10,"isLive":false}'
 
-		  # Inline JSON patch (RFC 7386 merge patch)
-		  kubectl hibernator restore patch my-plan -t eks -r node-123 \
-		    --patch '{"desiredCapacity":10,"isLive":false}'
+# File-based patch
+kubectl hibernator restore patch my-plan -t eks -r node-123 \
+--patch-file=update.json
 
-		  # File-based patch
-		  kubectl hibernator restore patch my-plan -t eks -r node-123 \
-		    --patch-file=update.json
-
-		  # Preview changes without applying
-		  kubectl hibernator restore patch my-plan -t eks -r node-123 \
-		    --set desiredCapacity=10 \
-		    --dry-run`,
+# Preview changes without applying
+kubectl hibernator restore patch my-plan -t eks -r node-123 \
+--set desiredCapacity=10 \
+--dry-run`,
 		Args: cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			return runPatch(cmd.Context(), patchOpts, args[0])

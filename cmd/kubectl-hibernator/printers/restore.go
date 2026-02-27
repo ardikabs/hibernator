@@ -106,6 +106,7 @@ func (p *HumanReadablePrinter) printRestorePoint(cm corev1.ConfigMap, w io.Write
 	// Table of restore points by target
 	t := table.NewWriter()
 	t.SetOutputMirror(w)
+	t.SetStyle(DefaultTableStyle)
 	t.AppendHeader(table.Row{"Target", "Executor", "Live", "Resources", "Captured At"})
 
 	for _, p := range points {
@@ -160,7 +161,7 @@ func (p *HumanReadablePrinter) printRestoreResources(out *RestoreResourcesOutput
 
 	t := table.NewWriter()
 	t.SetOutputMirror(w)
-	t.SetStyle(DefaultStyle)
+	t.SetStyle(DefaultTableStyle)
 	t.AppendHeader(table.Row{"Resource ID", "Target", "Executor", "Live", "Captured At"})
 
 	for _, r := range resources {
