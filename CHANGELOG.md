@@ -1,3 +1,21 @@
+<a name="v1.3.0"></a>
+
+## [v1.3.0](https://github.com/ardikabs/hibernator/compare/v1.2.1...v1.3.0) (2026-02-27)
+
+### ✨ Features
+
+* **cmd:** kubectl-hibernator more subcommand ([#51](https://github.com/ardikabs/hibernator/issues/51))
+
+### 🐛 Bug Fixes
+
+* recovery attempt handling and status updater with exclusion support ([#58](https://github.com/ardikabs/hibernator/issues/58))
+* **executor:** handle notfound and alreadyexists error ([#54](https://github.com/ardikabs/hibernator/issues/54))
+
+### 🛠️ Code Refactoring
+
+* move validationwebhook to internal ([#57](https://github.com/ardikabs/hibernator/issues/57))
+
+
 <a name="v1.2.1"></a>
 
 ## [v1.2.1](https://github.com/ardikabs/hibernator/compare/v1.2.0...v1.2.1) (2026-02-26)
