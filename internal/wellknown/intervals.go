@@ -14,4 +14,10 @@ const (
 
 	// RequeueIntervalForScheduleException is the default requeue interval for exception reconciliation.
 	RequeueIntervalForScheduleException = 1 * time.Minute
+
+	// RequeueIntervalOnRecoveryError is the requeue interval when an error occurs during recovery.
+	RequeueIntervalOnRecoveryError = 1 * time.Minute
+
+	// DeadlineTransitionToSuspended is the deadline duration for transitioning to suspended state when in-flight executions are present.
+	DeadlineTransitionToSuspended = 30 * time.Minute
 )

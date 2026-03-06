@@ -125,7 +125,7 @@ func ClassifyError(err error) ErrorClassification {
 }
 
 // DetermineRecoveryStrategy decides if and when to retry based on plan state.
-func DetermineRecoveryStrategy(plan *hibernatorv1alpha1.HibernatePlan, err error) ErrorRecoveryStrategy {
+func DetermineRecoveryStrategy(plan *hibernatorv1alpha1.HibernatePlan, clk clock.Clock, err error) ErrorRecoveryStrategy {
 	classification := ClassifyError(err)
 
 	maxRetries := wellknown.DefaultRecoveryMaxRetryAttempts
@@ -152,7 +152,7 @@ func DetermineRecoveryStrategy(plan *hibernatorv1alpha1.HibernatePlan, err error
 	backoff := CalculateBackoff(plan.Status.RetryCount)
 
 	if plan.Status.LastRetryTime != nil {
-		elapsed := time.Since(plan.Status.LastRetryTime.Time)
+		elapsed := clk.Since(plan.Status.LastRetryTime.Time)
 		if elapsed < backoff {
 			return ErrorRecoveryStrategy{
 				ShouldRetry:    true,
@@ -167,7 +167,7 @@ func DetermineRecoveryStrategy(plan *hibernatorv1alpha1.HibernatePlan, err error
 		ShouldRetry:    true,
 		RetryAfter:     0,
 		Classification: classification,
-		Reason:         fmt.Sprintf("retrying (attempt %d/%d)", plan.Status.RetryCount+1, maxRetries),
+		Reason:         fmt.Sprintf("retrying from previous error: %v (attempt %d/%d)", err, plan.Status.RetryCount+1, maxRetries),
 	}
 }
 
@@ -221,6 +221,34 @@ func RecordRetryAttempt(plan *hibernatorv1alpha1.HibernatePlan, clk clock.Clock,
 		plan.Status.ErrorMessage = err.Error()
 	} else {
 		plan.Status.ErrorMessage = "unknown error"
+	}
+
+	return true
+}
+
+func RecordRetryAttemptOnStatus(status *hibernatorv1alpha1.HibernatePlanStatus, clk clock.Clock, err error) bool {
+	now := clk.Now()
+
+	// Idempotency guard: if LastRetryTime was set very recently (within 5s),
+	// this is likely a duplicate call from the same reconciliation attempt.
+	// Skip incrementing to prevent inflating the retry count.
+	if status.LastRetryTime != nil {
+		elapsed := now.Sub(status.LastRetryTime.Time)
+		if elapsed < 5*time.Second {
+			if err != nil {
+				status.ErrorMessage = err.Error()
+			}
+			return false
+		}
+	}
+
+	status.RetryCount++
+	status.LastRetryTime = ptr.To(metav1.NewTime(now))
+
+	if err != nil {
+		status.ErrorMessage = err.Error()
+	} else {
+		status.ErrorMessage = "unknown error"
 	}
 
 	return true

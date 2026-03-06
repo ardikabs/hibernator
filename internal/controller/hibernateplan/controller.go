@@ -765,33 +765,32 @@ func (r *Reconciler) updatePlanExecutionStatuses(ctx context.Context, log logr.L
 				continue
 			}
 
-			isJobComplete := false
-			isJobFailed := false
-			for _, cond := range job.Status.Conditions {
-				if cond.Type == batchv1.JobComplete && cond.Status == corev1.ConditionTrue {
-					isJobComplete = true
-					exec.FinishedAt = cond.LastTransitionTime.DeepCopy()
-				}
-				if cond.Type == batchv1.JobFailed && cond.Status == corev1.ConditionTrue {
-					isJobFailed = true
-					exec.FinishedAt = cond.LastTransitionTime.DeepCopy()
-				}
-			}
-
 			found = true
 			log.V(1).Info("found matching job for target", "target", exec.Target, "jobName", job.Name, "succeeded", job.Status.Succeeded, "failed", job.Status.Failed, "active", job.Status.Active)
 
-			// Update status based on job
-			if isJobComplete {
-				exec.State = hibernatorv1alpha1.StateCompleted
-			} else if isJobFailed {
-				exec.State = hibernatorv1alpha1.StateFailed
-				if msg := r.getDetailedErrorFromPod(ctx, &job); msg != "" {
-					exec.Message = msg
-				}
-			} else if job.Status.Active > 0 {
-				exec.State = hibernatorv1alpha1.StateRunning
+			if exec.StartedAt == nil && job.Status.StartTime != nil {
 				exec.StartedAt = job.Status.StartTime
+			}
+
+			if job.Status.Active > 0 {
+				exec.State = hibernatorv1alpha1.StateRunning
+			}
+
+			for _, cond := range job.Status.Conditions {
+				if cond.Type == batchv1.JobComplete && cond.Status == corev1.ConditionTrue {
+					exec.State = hibernatorv1alpha1.StateCompleted
+					exec.FinishedAt = cond.LastTransitionTime.DeepCopy()
+					break
+				}
+
+				if cond.Type == batchv1.JobFailed && cond.Status == corev1.ConditionTrue {
+					exec.State = hibernatorv1alpha1.StateFailed
+					if msg := r.getDetailedErrorFromPod(ctx, &job); msg != "" {
+						exec.Message = msg
+					}
+					exec.FinishedAt = cond.LastTransitionTime.DeepCopy()
+					break
+				}
 			}
 
 			if execId, ok := job.Labels[wellknown.LabelExecutionID]; ok {

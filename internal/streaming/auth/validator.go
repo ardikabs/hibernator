@@ -26,13 +26,13 @@ const (
 
 // TokenValidator validates projected ServiceAccount tokens using TokenReview.
 type TokenValidator struct {
-	clientset *kubernetes.Clientset
+	clientset kubernetes.Interface
 	log       logr.Logger
 	audience  string
 }
 
 // NewTokenValidator creates a new token validator.
-func NewTokenValidator(clientset *kubernetes.Clientset, log logr.Logger) *TokenValidator {
+func NewTokenValidator(clientset kubernetes.Interface, log logr.Logger) *TokenValidator {
 	return &TokenValidator{
 		clientset: clientset,
 		log:       log.WithName("token-validator"),
