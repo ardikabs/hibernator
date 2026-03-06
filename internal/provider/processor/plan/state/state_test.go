@@ -1,0 +1,452 @@
+/*
+Copyright 2026 Ardika Saputro.
+Licensed under the Apache License, Version 2.0.
+*/
+
+package state
+
+import (
+	"context"
+	"errors"
+	"testing"
+	"time"
+
+	"github.com/go-logr/logr"
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
+	batchv1 "k8s.io/api/batch/v1"
+	corev1 "k8s.io/api/core/v1"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/runtime"
+	"k8s.io/apimachinery/pkg/types"
+	clocktesting "k8s.io/utils/clock/testing"
+	"k8s.io/utils/ptr"
+	"sigs.k8s.io/controller-runtime/pkg/client"
+	"sigs.k8s.io/controller-runtime/pkg/client/fake"
+
+	hibernatorv1alpha1 "github.com/ardikabs/hibernator/api/v1alpha1"
+	"github.com/ardikabs/hibernator/internal/message"
+	"github.com/ardikabs/hibernator/internal/restore"
+	"github.com/ardikabs/hibernator/internal/scheduler"
+	"github.com/ardikabs/hibernator/internal/wellknown"
+)
+
+// newHandlerScheme returns a runtime.Scheme with the types required by state handler tests.
+func newHandlerScheme() *runtime.Scheme {
+	s := runtime.NewScheme()
+	_ = hibernatorv1alpha1.AddToScheme(s)
+	_ = batchv1.AddToScheme(s)
+	_ = corev1.AddToScheme(s)
+	return s
+}
+
+// timerTracker records invocations of the timer-control closures supplied to State.
+type timerTracker struct {
+	requeueCalled        bool
+	cancelRequeueCalled  bool
+	requeueDuration      time.Duration
+	deadlineDuration     time.Duration
+	cancelDeadlineCalled bool
+}
+
+// newHandlerFakeClient returns a fake controller-runtime client pre-populated with objs.
+func newHandlerFakeClient(objs ...client.Object) client.Client {
+	return fake.NewClientBuilder().
+		WithScheme(newHandlerScheme()).
+		WithObjects(objs...).
+		WithStatusSubresource(&hibernatorv1alpha1.HibernatePlan{}).
+		Build()
+}
+
+// newHandlerState constructs a State wired to the supplied plan, fake client, and timer tracker.
+func newHandlerState(plan *hibernatorv1alpha1.HibernatePlan, c client.Client, tt *timerTracker) *State {
+	clk := clocktesting.NewFakeClock(time.Now())
+	return &State{
+		Key: types.NamespacedName{Name: plan.Name, Namespace: plan.Namespace},
+		Log: logr.Discard(),
+		PlanCtx: &message.PlanContext{
+			Plan: plan,
+		},
+		Client:         c,
+		APIReader:      c,
+		Clock:          clk,
+		Scheme:         newHandlerScheme(),
+		Planner:        scheduler.NewPlanner(),
+		Statuses:       message.NewControllerStatuses(),
+		RestoreManager: restore.NewManager(c),
+		RequeueAfter: func(d time.Duration) {
+			tt.requeueCalled = true
+			tt.requeueDuration = d
+		},
+		CancelRequeue: func() {
+			tt.cancelRequeueCalled = true
+		},
+		DeadlineAfter: func(d time.Duration) {
+			tt.deadlineDuration = d
+		},
+		CancelDeadline: func() {
+			tt.cancelDeadlineCalled = true
+		},
+		OnJobMissing: func(target string) bool { return false },
+		OnJobFound:   func(target string) {},
+	}
+}
+
+// basePlanForState returns a minimal HibernatePlan with the given name and phase.
+func basePlanForState(name string, phase hibernatorv1alpha1.PlanPhase) *hibernatorv1alpha1.HibernatePlan {
+	return &hibernatorv1alpha1.HibernatePlan{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      name,
+			Namespace: "default",
+		},
+		Status: hibernatorv1alpha1.HibernatePlanStatus{
+			Phase: phase,
+		},
+	}
+}
+
+// ---------------------------------------------------------------------------
+// New()
+// ---------------------------------------------------------------------------
+
+func TestNew_EmptyPhase_ReturnsLifecycleState(t *testing.T) {
+	plan := basePlanForState("p", "")
+	c := newHandlerFakeClient(plan)
+	state := newHandlerState(plan, c, &timerTracker{})
+
+	h := Factory(state)
+	require.NotNil(t, h)
+	_, ok := h.(*lifecycleState)
+	assert.True(t, ok, "expected *lifecycleState for empty phase")
+}
+
+func TestNew_PhaseActive_ReturnsIdleState(t *testing.T) {
+	plan := basePlanForState("p", hibernatorv1alpha1.PhaseActive)
+	c := newHandlerFakeClient(plan)
+	state := newHandlerState(plan, c, &timerTracker{})
+
+	h := Factory(state)
+	require.NotNil(t, h)
+	_, ok := h.(*idleState)
+	assert.True(t, ok, "expected *idleState for PhaseActive")
+}
+
+func TestNew_PhaseHibernated_ReturnsIdleState(t *testing.T) {
+	plan := basePlanForState("p", hibernatorv1alpha1.PhaseHibernated)
+	c := newHandlerFakeClient(plan)
+	state := newHandlerState(plan, c, &timerTracker{})
+
+	h := Factory(state)
+	require.NotNil(t, h)
+	_, ok := h.(*idleState)
+	assert.True(t, ok, "expected *idleState for PhaseHibernated")
+}
+
+func TestNew_PhaseHibernating_ReturnsHibernatingState(t *testing.T) {
+	plan := basePlanForState("p", hibernatorv1alpha1.PhaseHibernating)
+	c := newHandlerFakeClient(plan)
+	state := newHandlerState(plan, c, &timerTracker{})
+
+	h := Factory(state)
+	require.NotNil(t, h)
+	_, ok := h.(*hibernatingState)
+	assert.True(t, ok, "expected *hibernatingState for PhaseHibernating")
+}
+
+func TestNew_PhaseWakingUp_ReturnsWakingUpState(t *testing.T) {
+	plan := basePlanForState("p", hibernatorv1alpha1.PhaseWakingUp)
+	c := newHandlerFakeClient(plan)
+	state := newHandlerState(plan, c, &timerTracker{})
+
+	h := Factory(state)
+	require.NotNil(t, h)
+	_, ok := h.(*wakingUpState)
+	assert.True(t, ok, "expected *wakingUpState for PhaseWakingUp")
+}
+
+func TestNew_PhaseSuspended_ReturnsSuspendedState(t *testing.T) {
+	plan := basePlanForState("p", hibernatorv1alpha1.PhaseSuspended)
+	c := newHandlerFakeClient(plan)
+	state := newHandlerState(plan, c, &timerTracker{})
+
+	h := Factory(state)
+	require.NotNil(t, h)
+	_, ok := h.(*suspendedState)
+	assert.True(t, ok, "expected *suspendedState for PhaseSuspended")
+}
+
+func TestNew_PhaseError_ReturnsRecoveryState(t *testing.T) {
+	plan := basePlanForState("p", hibernatorv1alpha1.PhaseError)
+	c := newHandlerFakeClient(plan)
+	state := newHandlerState(plan, c, &timerTracker{})
+
+	h := Factory(state)
+	require.NotNil(t, h)
+	_, ok := h.(*recoveryState)
+	assert.True(t, ok, "expected *recoveryState for PhaseError")
+}
+
+func TestNew_UnknownPhase_ReturnsNil(t *testing.T) {
+	plan := basePlanForState("p", hibernatorv1alpha1.PlanPhase("unknown-phase"))
+	c := newHandlerFakeClient(plan)
+	state := newHandlerState(plan, c, &timerTracker{})
+
+	h := Factory(state)
+	assert.Nil(t, h, "expected nil for unknown phase")
+}
+
+func TestNew_DeletionTimestamp_ReturnsLifecycleStateDeleteMode(t *testing.T) {
+	plan := basePlanForState("p", hibernatorv1alpha1.PhaseActive)
+	now := metav1.NewTime(time.Now())
+	plan.DeletionTimestamp = &now
+	// fake client requires a finalizer to not immediately delete the object
+	plan.Finalizers = []string{"hibernator.ardikabs.com/finalizer"}
+	c := newHandlerFakeClient(plan)
+	state := newHandlerState(plan, c, &timerTracker{})
+
+	h := Factory(state)
+	require.NotNil(t, h)
+	ls, ok := h.(*lifecycleState)
+	require.True(t, ok, "expected *lifecycleState for plan with DeletionTimestamp")
+	assert.True(t, ls.delete, "expected delete=true for lifecycle state with DeletionTimestamp")
+}
+
+func TestNew_SuspendRequested_NotYetSuspended_ReturnsHandlerFunc(t *testing.T) {
+	plan := basePlanForState("p", hibernatorv1alpha1.PhaseActive)
+	plan.Spec.Suspend = true
+	c := newHandlerFakeClient(plan)
+	state := newHandlerState(plan, c, &timerTracker{})
+
+	h := Factory(state)
+	require.NotNil(t, h)
+	_, ok := h.(HandlerFunc)
+	assert.True(t, ok, "expected HandlerFunc when Suspend=true and phase != PhaseSuspended")
+}
+
+func TestNew_SuspendRequested_AlreadySuspended_ReturnsSuspendedState(t *testing.T) {
+	plan := basePlanForState("p", hibernatorv1alpha1.PhaseSuspended)
+	plan.Spec.Suspend = true
+	c := newHandlerFakeClient(plan)
+	state := newHandlerState(plan, c, &timerTracker{})
+
+	h := Factory(state)
+	require.NotNil(t, h)
+	_, ok := h.(*suspendedState)
+	assert.True(t, ok, "expected *suspendedState when already in PhaseSuspended")
+}
+
+// ---------------------------------------------------------------------------
+// HandlerFunc
+// ---------------------------------------------------------------------------
+
+func TestHandlerFunc_Handle_ExecutesTransitionToSuspended(t *testing.T) {
+	plan := basePlanForState("p", hibernatorv1alpha1.PhaseActive)
+	plan.Spec.Suspend = true
+	c := newHandlerFakeClient(plan)
+	state := newHandlerState(plan, c, &timerTracker{})
+
+	h := Factory(state)
+	require.NotNil(t, h)
+	_, ok := h.(HandlerFunc)
+	require.True(t, ok)
+
+	// Calling Handle should patch the suspended-at-phase annotation.
+	h.Handle(context.Background())
+	assert.Equal(t, string(hibernatorv1alpha1.PhaseActive), plan.Annotations["hibernator.ardikabs.com/suspended-at-phase"])
+}
+
+// ---------------------------------------------------------------------------
+// State.plan()
+// ---------------------------------------------------------------------------
+
+func TestState_Plan_ReturnsPlan(t *testing.T) {
+	plan := basePlanForState("p", hibernatorv1alpha1.PhaseActive)
+	c := newHandlerFakeClient(plan)
+	state := newHandlerState(plan, c, &timerTracker{})
+
+	got := state.plan()
+	assert.Same(t, plan, got)
+}
+
+// ---------------------------------------------------------------------------
+// State.nextStage()
+// ---------------------------------------------------------------------------
+
+func TestState_NextStage_UpdatesInMemoryAndQueues(t *testing.T) {
+	plan := basePlanForState("p", hibernatorv1alpha1.PhaseHibernating)
+	c := newHandlerFakeClient(plan)
+	state := newHandlerState(plan, c, &timerTracker{})
+
+	state.nextStage(1)
+
+	assert.Equal(t, 1, plan.Status.CurrentStageIndex)
+	assert.GreaterOrEqual(t, state.Statuses.PlanStatuses.Len(), 1)
+}
+
+// ---------------------------------------------------------------------------
+// State.setError()
+// ---------------------------------------------------------------------------
+
+func TestState_SetError_SetsPhaseErrorAndQueues(t *testing.T) {
+	plan := basePlanForState("p", hibernatorv1alpha1.PhaseHibernating)
+	// Set RetryCount at max to prevent dispatch→recoveryState from attempting K8s ops.
+	plan.Status.RetryCount = wellknown.DefaultRecoveryMaxRetryAttempts
+	c := newHandlerFakeClient(plan)
+	tt := &timerTracker{}
+	state := newHandlerState(plan, c, tt)
+
+	state.setError(context.Background(), errors.New("something failed"))
+
+	assert.Equal(t, hibernatorv1alpha1.PhaseError, plan.Status.Phase)
+	assert.NotEmpty(t, plan.Status.ErrorMessage)
+	assert.True(t, tt.cancelRequeueCalled, "recovery state should cancel requeue when max retries reached")
+}
+
+// ---------------------------------------------------------------------------
+// State.patchPreservingStatus()
+// ---------------------------------------------------------------------------
+
+func TestState_PatchPreservingStatus_PreservesStatus(t *testing.T) {
+	plan := basePlanForState("p", hibernatorv1alpha1.PhaseActive)
+	plan.Status.ErrorMessage = "should-be-preserved"
+	c := newHandlerFakeClient(plan)
+	state := newHandlerState(plan, c, &timerTracker{})
+
+	orig := plan.DeepCopy()
+	if plan.Annotations == nil {
+		plan.Annotations = make(map[string]string)
+	}
+	plan.Annotations["test-key"] = "test-value"
+
+	err := state.patchPreservingStatus(context.Background(), plan, client.MergeFrom(orig))
+	require.NoError(t, err)
+
+	// Status must be preserved in-memory even after the patch (server might have older status).
+	assert.Equal(t, "should-be-preserved", plan.Status.ErrorMessage)
+}
+
+// ---------------------------------------------------------------------------
+// State.TransitionToSuspended()
+// ---------------------------------------------------------------------------
+
+func TestState_TransitionToSuspended_PatchesAnnotationAndQueuesStatus(t *testing.T) {
+	plan := basePlanForState("p", hibernatorv1alpha1.PhaseActive)
+	c := newHandlerFakeClient(plan)
+	state := newHandlerState(plan, c, &timerTracker{})
+
+	err := state.TransitionToSuspended(context.Background(), false)
+	require.NoError(t, err)
+
+	assert.Equal(t, string(hibernatorv1alpha1.PhaseActive),
+		plan.Annotations[wellknown.AnnotationSuspendedAtPhase])
+	assert.Equal(t, hibernatorv1alpha1.PhaseSuspended, plan.Status.Phase)
+	assert.GreaterOrEqual(t, state.Statuses.PlanStatuses.Len(), 1)
+}
+
+// ---------------------------------------------------------------------------
+// State.buildExecutionPlan()
+// ---------------------------------------------------------------------------
+
+func TestBuildExecutionPlan_Sequential_OneStagePerTarget(t *testing.T) {
+	plan := basePlanForState("p", hibernatorv1alpha1.PhaseHibernating)
+	plan.Spec.Targets = []hibernatorv1alpha1.Target{
+		{Name: "db"}, {Name: "app"}, {Name: "cache"},
+	}
+	plan.Spec.Execution.Strategy.Type = hibernatorv1alpha1.StrategySequential
+
+	c := newHandlerFakeClient(plan)
+	state := newHandlerState(plan, c, &timerTracker{})
+
+	execPlan, err := state.buildExecutionPlan(plan, false)
+	require.NoError(t, err)
+	assert.Len(t, execPlan.Stages, 3, "sequential: one stage per target")
+}
+
+func TestBuildExecutionPlan_Parallel_SingleStage(t *testing.T) {
+	plan := basePlanForState("p", hibernatorv1alpha1.PhaseHibernating)
+	plan.Spec.Targets = []hibernatorv1alpha1.Target{
+		{Name: "db"}, {Name: "app"}, {Name: "cache"},
+	}
+	plan.Spec.Execution.Strategy.Type = hibernatorv1alpha1.StrategyParallel
+
+	c := newHandlerFakeClient(plan)
+	state := newHandlerState(plan, c, &timerTracker{})
+
+	execPlan, err := state.buildExecutionPlan(plan, false)
+	require.NoError(t, err)
+	assert.Len(t, execPlan.Stages, 1, "parallel: all targets in a single stage")
+}
+
+func TestBuildExecutionPlan_DAG_RespectsOrder(t *testing.T) {
+	plan := basePlanForState("p", hibernatorv1alpha1.PhaseHibernating)
+	plan.Spec.Targets = []hibernatorv1alpha1.Target{
+		{Name: "db"}, {Name: "app"},
+	}
+	plan.Spec.Execution.Strategy.Type = hibernatorv1alpha1.StrategyDAG
+	// app depends on db; db must go first.
+	plan.Spec.Execution.Strategy.Dependencies = []hibernatorv1alpha1.Dependency{
+		{From: "db", To: "app"},
+	}
+
+	c := newHandlerFakeClient(plan)
+	state := newHandlerState(plan, c, &timerTracker{})
+
+	execPlan, err := state.buildExecutionPlan(plan, false)
+	require.NoError(t, err)
+	require.GreaterOrEqual(t, len(execPlan.Stages), 2, "DAG: db before app → at least 2 stages")
+	assert.Contains(t, execPlan.Stages[0].Targets, "db")
+}
+
+func TestBuildExecutionPlan_Staged_ReturnsCorrectStages(t *testing.T) {
+	plan := basePlanForState("p", hibernatorv1alpha1.PhaseHibernating)
+	plan.Spec.Targets = []hibernatorv1alpha1.Target{
+		{Name: "db"}, {Name: "app"},
+	}
+	plan.Spec.Execution.Strategy.Type = hibernatorv1alpha1.StrategyStaged
+	plan.Spec.Execution.Strategy.Stages = []hibernatorv1alpha1.Stage{
+		{Name: "infra", Targets: []string{"db"}},
+		{Name: "services", Targets: []string{"app"}},
+	}
+
+	c := newHandlerFakeClient(plan)
+	state := newHandlerState(plan, c, &timerTracker{})
+
+	execPlan, err := state.buildExecutionPlan(plan, false)
+	require.NoError(t, err)
+	assert.Len(t, execPlan.Stages, 2, "staged: two stages as defined")
+}
+
+func TestBuildExecutionPlan_UnknownStrategy_ReturnsError(t *testing.T) {
+	plan := basePlanForState("p", hibernatorv1alpha1.PhaseHibernating)
+	plan.Spec.Targets = []hibernatorv1alpha1.Target{{Name: "db"}}
+	plan.Spec.Execution.Strategy.Type = hibernatorv1alpha1.ExecutionStrategyType("Magic")
+
+	c := newHandlerFakeClient(plan)
+	state := newHandlerState(plan, c, &timerTracker{})
+
+	_, err := state.buildExecutionPlan(plan, false)
+	assert.Error(t, err, "unknown strategy must return error")
+}
+
+func TestBuildExecutionPlan_Reverse_ReversesStages(t *testing.T) {
+	plan := basePlanForState("p", hibernatorv1alpha1.PhaseWakingUp)
+	plan.Spec.Targets = []hibernatorv1alpha1.Target{
+		{Name: "db"}, {Name: "app"}, {Name: "cache"},
+	}
+	plan.Spec.Execution.Strategy.Type = hibernatorv1alpha1.StrategySequential
+	plan.Spec.Execution.Strategy.MaxConcurrency = ptr.To(int32(1))
+
+	c := newHandlerFakeClient(plan)
+	state := newHandlerState(plan, c, &timerTracker{})
+
+	forward, err := state.buildExecutionPlan(plan, false)
+	require.NoError(t, err)
+	backward, err := state.buildExecutionPlan(plan, true)
+	require.NoError(t, err)
+
+	require.Len(t, forward.Stages, 3)
+	require.Len(t, backward.Stages, 3)
+	// Forward: [db, app, cache]; reversed: [cache, app, db]
+	assert.Equal(t, forward.Stages[0].Targets, backward.Stages[len(backward.Stages)-1].Targets)
+	assert.Equal(t, forward.Stages[len(forward.Stages)-1].Targets, backward.Stages[0].Targets)
+}

@@ -1,0 +1,570 @@
+/*
+Copyright 2026 Ardika Saputro.
+Licensed under the Apache License, Version 2.0.
+*/
+
+package state
+
+import (
+	"context"
+	"fmt"
+	"sort"
+
+	"github.com/go-logr/logr"
+	batchv1 "k8s.io/api/batch/v1"
+	corev1 "k8s.io/api/core/v1"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/utils/clock"
+	"sigs.k8s.io/controller-runtime/pkg/client"
+	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
+
+	hibernatorv1alpha1 "github.com/ardikabs/hibernator/api/v1alpha1"
+	"github.com/ardikabs/hibernator/internal/message"
+	"github.com/ardikabs/hibernator/internal/metrics"
+	"github.com/ardikabs/hibernator/internal/restore"
+	"github.com/ardikabs/hibernator/internal/scheduler"
+	"github.com/ardikabs/hibernator/internal/wellknown"
+	"github.com/ardikabs/hibernator/pkg/k8sutil"
+)
+
+// ---------------------------------------------------------------------------
+// Stage execution engine
+// ---------------------------------------------------------------------------
+
+// execute executes the given operation ("shutdown" or "wakeup")
+// starting from the current stage index in the plan status.
+func (s *State) execute(
+	ctx context.Context,
+	log logr.Logger,
+	operation string,
+	reverse bool,
+	onErrorCallback func(context.Context, error),
+	onAdvanceStageCallback func(int),
+	onFinalizeCallback func(context.Context, scheduler.ExecutionPlan),
+) {
+	plan := s.plan()
+
+	jobs, err := s.getCurrentCycleJobs(ctx, plan)
+	if err != nil {
+		log.Error(err, "failed to get current cycle jobs")
+		return
+	}
+	log.V(1).Info("job list fetched", "operation", operation, "jobCount", len(jobs))
+
+	if err := s.updateExecutionStatuses(ctx, log, plan, jobs); err != nil {
+		log.Error(err, "failed to update execution statuses before executing stage, proceeding with best-effort status sync")
+	}
+
+	execPlan, err := s.buildExecutionPlan(plan, reverse)
+	if err != nil {
+		onErrorCallback(ctx, fmt.Errorf("failed to build execution plan: %w", err))
+		return
+	}
+
+	log.V(1).Info("execution plan built",
+		"totalStages", len(execPlan.Stages),
+		"currentStageIndex", plan.Status.CurrentStageIndex)
+
+	if plan.Status.CurrentStageIndex >= len(execPlan.Stages) {
+		onFinalizeCallback(ctx, execPlan)
+		return
+	}
+
+	targetStage := execPlan.Stages[plan.Status.CurrentStageIndex]
+	stageStatus := GetStageStatus(log, plan, targetStage)
+
+	log.V(1).Info("current stage status",
+		"stageIndex", plan.Status.CurrentStageIndex,
+		"targets", targetStage.Targets,
+		"allTerminal", stageStatus.AllTerminal,
+		"completedCount", stageStatus.CompletedCount,
+		"failedCount", stageStatus.FailedCount)
+
+	if stageStatus.AllTerminal {
+		log.Info("stage reached terminal state",
+			"stageIndex", plan.Status.CurrentStageIndex,
+			"completedCount", stageStatus.CompletedCount,
+			"failedCount", stageStatus.FailedCount)
+
+		if stageStatus.FailedCount > 0 && plan.Spec.Behavior.Mode == hibernatorv1alpha1.BehaviorStrict {
+			onErrorCallback(ctx, fmt.Errorf("one or more targets in stage %d failed", plan.Status.CurrentStageIndex))
+			return
+		}
+
+		nextStageIndex := plan.Status.CurrentStageIndex + 1
+		if nextStageIndex < len(execPlan.Stages) {
+			log.V(1).Info("advancing to next stage", "currentStage", plan.Status.CurrentStageIndex, "nextStage", nextStageIndex)
+			onAdvanceStageCallback(nextStageIndex)
+
+			targetStage = execPlan.Stages[nextStageIndex]
+			s.executeForStage(ctx, log, plan, jobs, targetStage, operation, onErrorCallback)
+			return
+		}
+
+		onFinalizeCallback(ctx, execPlan)
+		return
+	}
+
+	if stageStatus.HasPending {
+		log.V(1).Info("filling pending slots in current stage", "stageIndex", plan.Status.CurrentStageIndex, "targetStages", targetStage.Targets)
+		s.executeForStage(ctx, log, plan, jobs, targetStage, operation, onErrorCallback)
+	}
+}
+
+// executeForStage executes the operation for the targets in the given stage.
+func (s *State) executeForStage(
+	ctx context.Context,
+	log logr.Logger,
+	plan *hibernatorv1alpha1.HibernatePlan,
+	jobs []batchv1.Job,
+	stage scheduler.ExecutionStage,
+	operation string,
+	onErrorCallback func(ctx context.Context, err error),
+) {
+	if plan.Spec.Execution.Strategy.Type == hibernatorv1alpha1.StrategyDAG {
+		if failed := FindFailedDependencies(plan, plan.Spec.Execution.Strategy.Dependencies, stage); len(failed) > 0 {
+			onErrorCallback(ctx, fmt.Errorf("cannot execute stage: targets depend on failed targets: %v", failed))
+			return
+		}
+	}
+
+	runningCount := CountRunningJobsInStage(jobs, stage)
+	maxConcurrency := stage.MaxConcurrency
+	if maxConcurrency <= 0 {
+		maxConcurrency = int32(len(stage.Targets))
+	}
+
+	log.V(1).Info("evaluating stage targets for dispatch",
+		"targetCount", len(stage.Targets),
+		"runningCount", runningCount,
+		"maxConcurrency", maxConcurrency)
+
+	jobsCreated := 0
+	for _, targetName := range stage.Targets {
+		target := FindTarget(plan, targetName)
+		if target == nil {
+			continue
+		}
+		if int32(runningCount+jobsCreated) >= maxConcurrency {
+			log.V(1).Info("reached maxConcurrency limit", "maxConcurrency", maxConcurrency)
+			break
+		}
+		if JobExistsForTarget(jobs, targetName, operation, plan.Status.CurrentCycleID) {
+			log.V(1).Info("job already exists for target, skipping", "target", targetName)
+			continue
+		}
+		log.Info("dispatching job for target", "target", targetName, "operation", operation)
+		if err := s.createRunnerJob(ctx, log,
+			s.Clock, plan, target, operation,
+			s.ControlPlaneEndpoint, s.RunnerImage, s.RunnerServiceAccount); err != nil {
+			log.Error(err, "failed to create runner job", "target", targetName)
+			metrics.JobFailuresTotal.WithLabelValues(plan.Name, targetName).Inc()
+
+			if plan.Spec.Behavior.Mode == hibernatorv1alpha1.BehaviorStrict && plan.Spec.Behavior.FailFast {
+				onErrorCallback(ctx, fmt.Errorf("failed to create job for target %s: %w", targetName, err))
+				return
+			}
+		} else {
+			metrics.JobsCreatedTotal.WithLabelValues(plan.Name, targetName).Inc()
+		}
+		jobsCreated++
+	}
+}
+
+// getCurrentCycleJobs returns the runner Jobs for the current execution cycle of a plan.
+// It reads from the API server directly via client.Reader (typically mgr.GetAPIReader())
+// to avoid cache staleness that could cause phantom "job missing" resets during
+// informer re-list gaps. Returns nil if the plan has no active cycle.
+func (s *State) getCurrentCycleJobs(ctx context.Context, plan *hibernatorv1alpha1.HibernatePlan) ([]batchv1.Job, error) {
+	if plan.Status.CurrentCycleID == "" || plan.Status.CurrentOperation == "" {
+		return nil, nil
+	}
+	var jobList batchv1.JobList
+	if err := s.APIReader.List(ctx, &jobList,
+		client.InNamespace(plan.Namespace),
+		client.MatchingLabels{
+			wellknown.LabelPlan:      plan.Name,
+			wellknown.LabelCycleID:   plan.Status.CurrentCycleID,
+			wellknown.LabelOperation: plan.Status.CurrentOperation,
+		},
+	); err != nil {
+		return nil, err
+	}
+	return jobList.Items, nil
+}
+
+// updateExecutionStatuses updates execution statuses in the plan based on job conditions.
+// It mirrors updatePlanExecutionStatuses in the legacy controller exactly:
+//   - Iterates by execution status (not by job) to preserve ordering.
+//   - Skips stale runner jobs marked during retry/recovery (LabelStaleRunnerJob).
+//   - Uses JobComplete/JobFailed conditions rather than Succeeded/Failed counts.
+//   - Handles GC'd jobs: if no job is found and FinishedAt is set while state is Running,
+//     the state is inferred as Completed.
+//   - Handles lost jobs: if no job is found, FinishedAt is nil, and state is Running,
+//     onJobMissing is called. Once the miss threshold is reached the target is reset to
+//     StatePending so executeStageTargets will re-dispatch a new runner Job.
+//   - Sets RestoreConfigMapRef, JobRef, and Attempts fields.
+//
+// Instead of writing directly to the status sub-resource (which clobbers the worker's
+// optimistic in-memory state), this method snapshots Executions before the mutation,
+// mutates in-place, and only queues a PlanStatuses.Send when drift is detected.
+// This keeps the write path through the StatusWriter — the single point of status
+// persistence — and avoids redundant writes on poll ticks where nothing changed.
+//
+// onJobMissing and onJobFound are optional closures (nil disables the safeguard).
+func (s *State) updateExecutionStatuses(ctx context.Context,
+	log logr.Logger,
+	plan *hibernatorv1alpha1.HibernatePlan,
+	jobs []batchv1.Job,
+) error {
+	prevSnapshot := snapshotExecutionStates(plan.Status.Executions)
+	log.V(1).Info("updating execution statuses", "totalExecutions", len(plan.Status.Executions))
+
+	for i := range plan.Status.Executions {
+		exec := &plan.Status.Executions[i]
+		log.V(1).Info("processing execution status", "target", exec.Target, "currentState", exec.State, "index", i)
+
+		found := false
+		for _, job := range jobs {
+			// Skip stale runner jobs marked during retry/recovery.
+			if _, ok := job.Labels[wellknown.LabelStaleRunnerJob]; ok {
+				continue
+			}
+
+			targetLabel := job.Labels[wellknown.LabelTarget]
+			executorLabel := job.Labels[wellknown.LabelExecutor]
+			if exec.Target != targetLabel || exec.Executor != executorLabel {
+				continue
+			}
+
+			prevState := exec.State
+
+			found = true
+			log.V(1).Info("found matching job for target",
+				"target", exec.Target,
+				"jobName", job.Name,
+				"succeeded", job.Status.Succeeded,
+				"failed", job.Status.Failed,
+				"active", job.Status.Active)
+
+			// Job reappeared — reset consecutive-miss counter.
+			if s.OnJobFound != nil {
+				s.OnJobFound(exec.Target)
+			}
+
+			if exec.StartedAt == nil && job.Status.StartTime != nil {
+				exec.StartedAt = job.Status.StartTime
+			}
+
+			if job.Status.Active > 0 {
+				exec.State = hibernatorv1alpha1.StateRunning
+			}
+
+			for _, cond := range job.Status.Conditions {
+				if cond.Type == batchv1.JobComplete && cond.Status == corev1.ConditionTrue {
+					exec.State = hibernatorv1alpha1.StateCompleted
+					exec.FinishedAt = cond.LastTransitionTime.DeepCopy()
+					break
+				}
+
+				if cond.Type == batchv1.JobFailed && cond.Status == corev1.ConditionTrue {
+					exec.State = hibernatorv1alpha1.StateFailed
+					if msg := s.getDetailedErrorFromPod(ctx, &job); msg != "" {
+						exec.Message = msg
+					}
+					exec.FinishedAt = cond.LastTransitionTime.DeepCopy()
+					break
+				}
+			}
+			// Emit per-target execution metrics on first transition to a terminal state.
+			if prevState != exec.State &&
+				(exec.State == hibernatorv1alpha1.StateCompleted || exec.State == hibernatorv1alpha1.StateFailed) {
+
+				operation := plan.Status.CurrentOperation
+				status := "success"
+				if exec.State == hibernatorv1alpha1.StateFailed {
+					status = "failed"
+				}
+				metrics.ExecutionTotal.WithLabelValues(operation, exec.Executor, status).Inc()
+				if exec.StartedAt != nil && exec.FinishedAt != nil {
+					duration := exec.FinishedAt.Sub(exec.StartedAt.Time).Seconds()
+					metrics.ExecutionDuration.WithLabelValues(operation, exec.Executor, status).Observe(duration)
+				}
+			}
+
+			if execID, ok := job.Labels[wellknown.LabelExecutionID]; ok {
+				exec.LogsRef = fmt.Sprintf("%s%s", wellknown.ExecutionIDLogPrefix, execID)
+			}
+			exec.RestoreConfigMapRef = fmt.Sprintf("%s/%s", job.Namespace, restore.GetRestoreConfigMap(plan.Name))
+			exec.JobRef = fmt.Sprintf("%s/%s", job.Namespace, job.Name)
+			exec.Attempts = job.Status.Failed + job.Status.Succeeded
+			break
+		}
+
+		// GC'd job handling: if no job is found but FinishedAt is set and state is still
+		// Running, infer completion. The job completed and was garbage-collected by TTL.
+		if !found {
+			if exec.FinishedAt != nil && exec.State == hibernatorv1alpha1.StateRunning {
+				exec.State = hibernatorv1alpha1.StateCompleted
+				log.V(1).Info("inferred completed state for execution (job GC'd)", "target", exec.Target)
+			} else if exec.FinishedAt == nil && exec.State == hibernatorv1alpha1.StateRunning {
+				// Job missing while still in-flight — track consecutive misses.
+				// Once the threshold is reached the target is reset to StatePending so
+				// executeStageTargets will re-dispatch a replacement runner Job.
+				if s.OnJobMissing != nil && s.OnJobMissing(exec.Target) {
+					exec.State = hibernatorv1alpha1.StatePending
+					log.Info("consecutive job-miss threshold reached, resetting target to pending for re-dispatch", "target", exec.Target)
+				} else {
+					log.V(1).Info("job not found for running target, tracking consecutive misses", "target", exec.Target)
+				}
+			} else {
+				log.V(1).Info("no job found for execution", "target", exec.Target, "currentState", exec.State)
+			}
+		}
+	}
+
+	// Only queue a status write if execution statuses actually changed.
+	// This avoids flooding the StatusWriter on every poll tick when jobs
+	// haven't progressed, while still capturing incremental changes
+	// (state transitions, attempt bumps, JobRef/LogsRef assignment).
+	if !executionStatesEqual(prevSnapshot, plan.Status.Executions) {
+		executions := make([]hibernatorv1alpha1.ExecutionStatus, len(plan.Status.Executions))
+		copy(executions, plan.Status.Executions)
+
+		s.Statuses.PlanStatuses.Send(&message.PlanStatusUpdate{
+			NamespacedName: s.Key,
+			Mutate: func(st *hibernatorv1alpha1.HibernatePlanStatus) {
+				st.Executions = executions
+			},
+		})
+	}
+
+	return nil
+}
+
+// getDetailedErrorFromPod fetches the termination message from the failed pod of a job.
+func (s *State) getDetailedErrorFromPod(ctx context.Context, job *batchv1.Job) string {
+	var podList corev1.PodList
+	if err := s.List(ctx, &podList,
+		client.InNamespace(job.Namespace),
+		client.MatchingLabels(job.Spec.Template.Labels),
+	); err != nil {
+		return ""
+	}
+
+	pods := podList.Items
+	sort.Slice(pods, func(i, j int) bool {
+		return pods[j].CreationTimestamp.Before(&pods[i].CreationTimestamp)
+	})
+
+	for _, pod := range pods {
+		for _, status := range pod.Status.ContainerStatuses {
+			if status.State.Terminated != nil && status.State.Terminated.Message != "" {
+				return status.State.Terminated.Message
+			}
+			if status.LastTerminationState.Terminated != nil && status.LastTerminationState.Terminated.Message != "" {
+				return status.LastTerminationState.Terminated.Message
+			}
+		}
+	}
+	return ""
+}
+
+// buildExecutionPlan creates a scheduler.ExecutionPlan from the plan's strategy.
+func (s *State) buildExecutionPlan(plan *hibernatorv1alpha1.HibernatePlan, reverse bool) (scheduler.ExecutionPlan, error) {
+	targets := make([]string, len(plan.Spec.Targets))
+	for i, t := range plan.Spec.Targets {
+		targets[i] = t.Name
+	}
+
+	strategy := plan.Spec.Execution.Strategy
+	maxConcurrency := int32(1)
+	if strategy.MaxConcurrency != nil {
+		maxConcurrency = *strategy.MaxConcurrency
+	}
+
+	var execPlan scheduler.ExecutionPlan
+	var err error
+
+	switch strategy.Type {
+	case hibernatorv1alpha1.StrategySequential:
+		execPlan = s.Planner.PlanSequential(targets)
+	case hibernatorv1alpha1.StrategyParallel:
+		execPlan = s.Planner.PlanParallel(targets, maxConcurrency)
+	case hibernatorv1alpha1.StrategyDAG:
+		deps := make([]scheduler.Dependency, len(strategy.Dependencies))
+		for i, d := range strategy.Dependencies {
+			deps[i] = scheduler.Dependency{From: d.From, To: d.To}
+		}
+
+		execPlan, err = s.Planner.PlanDAG(targets, deps, maxConcurrency)
+		if err != nil {
+			return scheduler.ExecutionPlan{}, fmt.Errorf("build DAG execution plan: %w", err)
+		}
+
+	case hibernatorv1alpha1.StrategyStaged:
+		stages := make([]scheduler.Stage, len(strategy.Stages))
+		for i, s := range strategy.Stages {
+			var mc int32
+			if s.MaxConcurrency != nil {
+				mc = *s.MaxConcurrency
+			}
+			stages[i] = scheduler.Stage{
+				Name:           s.Name,
+				Parallel:       s.Parallel,
+				MaxConcurrency: mc,
+				Targets:        s.Targets,
+			}
+		}
+
+		execPlan = s.Planner.PlanStaged(stages, maxConcurrency)
+	default:
+		return scheduler.ExecutionPlan{}, fmt.Errorf("unknown strategy type: %s", strategy.Type)
+	}
+
+	// Reverse stage order for wakeup operations
+	if reverse {
+		reversed := make([]scheduler.ExecutionStage, len(execPlan.Stages))
+		for i, stage := range execPlan.Stages {
+			reversed[len(execPlan.Stages)-1-i] = stage
+		}
+		execPlan.Stages = reversed
+	}
+
+	return execPlan, nil
+}
+
+// CreateRunnerJob creates a Kubernetes Job for executing a target.
+func (s *State) createRunnerJob(ctx context.Context, log logr.Logger, clk clock.Clock,
+	plan *hibernatorv1alpha1.HibernatePlan, target *hibernatorv1alpha1.Target, operation string,
+	controlPlaneEndpoint, runnerImage, runnerServiceAccount string) error {
+
+	ts := fmt.Sprintf("%d", clk.Now().Unix())
+	baseID := fmt.Sprintf("%s-%s", plan.Name, target.Name)
+	maxBaseLen := 63 - len(ts) - 1
+	executionID := fmt.Sprintf("%s-%s", k8sutil.ShortenName(baseID, maxBaseLen), ts)
+
+	var paramsJSON []byte
+	if target.Parameters != nil {
+		paramsJSON = target.Parameters.Raw
+	}
+
+	backoffLimit := int32(wellknown.DefaultJobBackoffLimit)
+	ttlSeconds := int32(wellknown.DefaultJobTTLSeconds)
+	tokenExpiration := int64(wellknown.StreamTokenExpirationSeconds)
+
+	if runnerServiceAccount == "" {
+		runnerServiceAccount = "hibernator-runner"
+	}
+	if runnerImage == "" {
+		runnerImage = wellknown.RunnerImage
+	}
+
+	connectorNamespace := target.ConnectorRef.Namespace
+	if connectorNamespace == "" {
+		connectorNamespace = plan.Namespace
+	}
+
+	generateNameBase := fmt.Sprintf("%s-%s", plan.Name, target.Name)
+	generateName := fmt.Sprintf("runner-%s-", k8sutil.ShortenName(generateNameBase, 50))
+
+	job := &batchv1.Job{
+		ObjectMeta: metav1.ObjectMeta{
+			GenerateName: generateName,
+			Namespace:    plan.Namespace,
+			Labels: map[string]string{
+				wellknown.LabelCycleID:     plan.Status.CurrentCycleID,
+				wellknown.LabelOperation:   operation,
+				wellknown.LabelPlan:        plan.Name,
+				wellknown.LabelExecutionID: executionID,
+				wellknown.LabelExecutor:    target.Type,
+				wellknown.LabelTarget:      target.Name,
+			},
+			Annotations: map[string]string{
+				wellknown.AnnotationPlan:   plan.Name,
+				wellknown.AnnotationTarget: target.Name,
+			},
+		},
+		Spec: batchv1.JobSpec{
+			BackoffLimit:            &backoffLimit,
+			TTLSecondsAfterFinished: &ttlSeconds,
+			Template: corev1.PodTemplateSpec{
+				ObjectMeta: metav1.ObjectMeta{
+					Labels: map[string]string{
+						wellknown.LabelCycleID:     plan.Status.CurrentCycleID,
+						wellknown.LabelOperation:   operation,
+						wellknown.LabelPlan:        plan.Name,
+						wellknown.LabelExecutionID: executionID,
+						wellknown.LabelExecutor:    target.Type,
+						wellknown.LabelTarget:      target.Name,
+					},
+					Annotations: map[string]string{
+						wellknown.AnnotationPlan:   plan.Name,
+						wellknown.AnnotationTarget: target.Name,
+					},
+				},
+				Spec: corev1.PodSpec{
+					RestartPolicy:      corev1.RestartPolicyNever,
+					ServiceAccountName: runnerServiceAccount,
+					Containers: []corev1.Container{
+						{
+							Name:  "runner",
+							Image: runnerImage,
+							Args: []string{
+								"--operation", operation,
+								"--target", target.Name,
+								"--target-type", target.Type,
+								"--plan", plan.Name,
+							},
+							Env: []corev1.EnvVar{
+								{Name: "POD_NAMESPACE", Value: plan.Namespace},
+								{Name: "HIBERNATOR_EXECUTION_ID", Value: executionID},
+								{Name: "HIBERNATOR_CONTROL_PLANE_ENDPOINT", Value: controlPlaneEndpoint},
+								{Name: "HIBERNATOR_USE_TLS", Value: "false"},
+								{Name: "HIBERNATOR_GRPC_ENDPOINT", Value: fmt.Sprintf("%s:9444", controlPlaneEndpoint)},
+								{Name: "HIBERNATOR_WEBSOCKET_ENDPOINT", Value: fmt.Sprintf("ws://%s:8082", controlPlaneEndpoint)},
+								{Name: "HIBERNATOR_HTTP_CALLBACK_ENDPOINT", Value: fmt.Sprintf("http://%s:8082", controlPlaneEndpoint)},
+								{Name: "HIBERNATOR_TARGET_PARAMS", Value: string(paramsJSON)},
+								{Name: "HIBERNATOR_CONNECTOR_KIND", Value: target.ConnectorRef.Kind},
+								{Name: "HIBERNATOR_CONNECTOR_NAME", Value: target.ConnectorRef.Name},
+								{Name: "HIBERNATOR_CONNECTOR_NAMESPACE", Value: connectorNamespace},
+							},
+							VolumeMounts: []corev1.VolumeMount{
+								{
+									Name:      "stream-token",
+									MountPath: "/var/run/secrets/stream",
+									ReadOnly:  true,
+								},
+							},
+						},
+					},
+					Volumes: []corev1.Volume{
+						{
+							Name: "stream-token",
+							VolumeSource: corev1.VolumeSource{
+								Projected: &corev1.ProjectedVolumeSource{
+									Sources: []corev1.VolumeProjection{
+										{
+											ServiceAccountToken: &corev1.ServiceAccountTokenProjection{
+												Audience:          wellknown.StreamTokenAudience,
+												ExpirationSeconds: &tokenExpiration,
+												Path:              "token",
+											},
+										},
+									},
+								},
+							},
+						},
+					},
+				},
+			},
+		},
+	}
+
+	if err := controllerutil.SetControllerReference(plan, job, s.Scheme); err != nil {
+		return fmt.Errorf("set owner reference: %w", err)
+	}
+
+	log.V(1).Info("creating runner job", "target", target.Name, "operation", operation, "jobName", generateName)
+	return s.Create(ctx, job)
+}
