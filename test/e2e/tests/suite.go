@@ -26,22 +26,21 @@ import (
 	metricsserver "sigs.k8s.io/controller-runtime/pkg/metrics/server"
 
 	hibernatorv1alpha1 "github.com/ardikabs/hibernator/api/v1alpha1"
-	"github.com/ardikabs/hibernator/internal/controller/hibernateplan"
+	"github.com/ardikabs/hibernator/internal/provider"
 	"github.com/ardikabs/hibernator/internal/restore"
-	"github.com/ardikabs/hibernator/internal/scheduler"
 )
 
 var (
-	cfg                     *rest.Config
-	k8sClient               client.Client
-	testEnv                 *envtest.Environment
-	ctx                     context.Context
-	cancel                  context.CancelFunc
-	mgr                     manager.Manager
-	fakeClock               *clocktesting.FakeClock
-	hibernateplanReconciler *hibernateplan.Reconciler
-	restoreManager          *restore.Manager
-	testNamespace           = "hibernator-e2e-test"
+	cfg       *rest.Config
+	k8sClient client.Client
+	testEnv   *envtest.Environment
+	ctx       context.Context
+	cancel    context.CancelFunc
+	mgr       manager.Manager
+	fakeClock *clocktesting.FakeClock
+	// hibernateplanReconciler *hibernateplan.Reconciler
+	restoreManager *restore.Manager
+	testNamespace  = "hibernator-e2e-test"
 )
 
 var _ = BeforeSuite(func() {
@@ -88,27 +87,19 @@ var _ = BeforeSuite(func() {
 	})
 	Expect(err).NotTo(HaveOccurred())
 
-	// Initialize scheduler components
-	planner := scheduler.NewPlanner()
 	fakeClock = clocktesting.NewFakeClock(time.Now())
-	evaluator := scheduler.NewScheduleEvaluator(fakeClock, scheduler.WithScheduleBuffer("1m"))
 	restoreManager = restore.NewManager(mgr.GetClient())
 
-	hibernateplanReconciler = &hibernateplan.Reconciler{
-		Client:               mgr.GetClient(),
-		APIReader:            mgr.GetAPIReader(),
-		Clock:                fakeClock,
-		Log:                  ctrl.Log.WithName("controllers").WithName("HibernatePlan").V(0),
-		Scheme:               mgr.GetScheme(),
-		Planner:              planner,
-		ScheduleEvaluator:    evaluator,
-		RestoreManager:       restoreManager,
-		ControlPlaneEndpoint: "https://hibernator.example.com",
-		RunnerImage:          "ghcr.io/ardikabs/hibernator-runner:test",
-		RunnerServiceAccount: "hibernator-runner-sa",
-	}
+	err = provider.Setup(mgr, fakeClock, provider.ProviderOptions{
+		Logger: ctrl.Log.WithName("e2e-test"),
+		// Logger:                 logr.Discard(),
+		Workers:                1,
+		ScheduleBufferDuration: "1m",
+		ControlPlaneEndpoint:   "https://hibernator.example.com",
+		RunnerImage:            "ghcr.io/ardikabs/hibernator-runner:test",
+		RunnerServiceAccount:   "hibernator-runner-sa",
+	})
 
-	err = hibernateplanReconciler.SetupWithManager(mgr, 1)
 	Expect(err).NotTo(HaveOccurred())
 
 	// Start the manager in a goroutine

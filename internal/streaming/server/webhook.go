@@ -35,7 +35,7 @@ type WebhookServer struct {
 // NewWebhookServer creates a new webhook server.
 func NewWebhookServer(
 	address string,
-	clientset *kubernetes.Clientset,
+	clientset kubernetes.Interface,
 	execService *ExecutionServiceServer,
 	log logr.Logger,
 ) *WebhookServer {

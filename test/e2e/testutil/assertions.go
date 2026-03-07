@@ -4,6 +4,7 @@ package testutil
 
 import (
 	"context"
+	"sort"
 	"time"
 
 	. "github.com/onsi/gomega"
@@ -27,7 +28,10 @@ func ConsistentllyAtPhase(ctx context.Context, k8sClient client.Client, plan *hi
 	Consistently(func() hibernatorv1alpha1.PlanPhase {
 		_ = k8sClient.Get(ctx, client.ObjectKeyFromObject(plan), plan)
 		return plan.Status.Phase
-	}, duration, DefaultInterval).Should(Equal(phase))
+	}).
+		WithTimeout(duration).
+		WithPolling(time.Second).
+		Should(Equal(phase))
 }
 
 // EventuallyPhase waits until the HibernatePlan reaches the expected phase.
@@ -35,23 +39,37 @@ func EventuallyPhase(ctx context.Context, k8sClient client.Client, plan *hiberna
 	Eventually(func() hibernatorv1alpha1.PlanPhase {
 		_ = k8sClient.Get(ctx, client.ObjectKeyFromObject(plan), plan)
 		return plan.Status.Phase
-	}, DefaultTimeout, DefaultInterval).Should(Equal(phase))
+	}).
+		WithTimeout(DefaultTimeout).
+		WithPolling(DefaultInterval).
+		Should(Equal(phase))
 }
 
 // EventuallyJobCreated waits until a Job with specified labels is created.
 func EventuallyJobCreated(ctx context.Context, k8sClient client.Client, namespace, planName, operation, target string) *batchv1.Job {
 	var job batchv1.Job
 	Eventually(func() bool {
-		var jobs batchv1.JobList
-		_ = k8sClient.List(ctx, &jobs, client.InNamespace(namespace), client.MatchingLabels{
+		var jobList batchv1.JobList
+		_ = k8sClient.List(ctx, &jobList, client.InNamespace(namespace), client.MatchingLabels{
 			wellknown.LabelPlan:      planName,
 			wellknown.LabelOperation: operation,
 			wellknown.LabelTarget:    target,
 		})
-		if len(jobs.Items) > 0 {
-			job = jobs.Items[0]
+
+		jobs := jobList.Items
+		sort.Slice(jobs, func(i, j int) bool {
+			return jobs[j].CreationTimestamp.Before(&jobs[i].CreationTimestamp)
+		})
+
+		for _, j := range jobs {
+			if _, ok := j.Labels[wellknown.LabelStaleRunnerJob]; ok {
+				continue
+			}
+
+			job = j
 			return true
 		}
+
 		return false
 	}, DefaultTimeout, DefaultInterval).Should(BeTrueBecause("Job for plan %s and operation %s should be created", planName, operation))
 	return &job
@@ -136,6 +154,68 @@ func EnsureDeleted(ctx context.Context, k8sClient client.Client, obj client.Obje
 	Eventually(func() bool {
 		return errors.IsNotFound(k8sClient.Get(ctx, client.ObjectKeyFromObject(obj), obj))
 	}, DefaultTimeout, DefaultInterval).Should(BeTrue())
+}
+
+// EnsureDeletedAll deletes all objects in the slice and waits until they're gone.
+func EnsureDeletedAll[T client.Object](ctx context.Context, k8sClient client.Client, objs []T) {
+	for _, obj := range objs {
+		if obj.GetNamespace() == "" && obj.GetName() == "" {
+			continue
+		}
+		_ = k8sClient.Delete(ctx, obj)
+		Eventually(func() bool {
+			return errors.IsNotFound(k8sClient.Get(ctx, client.ObjectKeyFromObject(obj), obj))
+		}, DefaultTimeout, DefaultInterval).Should(BeTrue())
+	}
+}
+
+// SimulateJobFailure updates the Job status to failed (backoff limit exceeded).
+func SimulateJobFailure(ctx context.Context, k8sClient client.Client, job *batchv1.Job, failureTime time.Time) {
+	Expect(k8sClient.Get(ctx, client.ObjectKeyFromObject(job), job)).To(Succeed())
+
+	patch := client.MergeFrom(job.DeepCopy())
+	job.Status.Failed = 4 // exceed default BackoffLimit of 3
+	job.Status.Active = 0
+	if job.Status.StartTime == nil {
+		job.Status.StartTime = &metav1.Time{Time: failureTime.Add(-5 * time.Minute)}
+	}
+	job.Status.Conditions = []batchv1.JobCondition{
+		{
+			Type:               batchv1.JobFailureTarget,
+			Status:             corev1.ConditionTrue,
+			LastTransitionTime: metav1.Time{Time: failureTime},
+		},
+		{
+			Type:               batchv1.JobFailed,
+			Status:             corev1.ConditionTrue,
+			LastTransitionTime: metav1.Time{Time: failureTime},
+			Reason:             "BackoffLimitExceeded",
+			Message:            "Job has reached the specified backoff limit",
+		},
+	}
+	Expect(k8sClient.Status().Patch(ctx, job, patch)).To(Succeed())
+
+	// Verify status is actually updated in the API server
+	Eventually(func() bool {
+		var j batchv1.Job
+		if err := k8sClient.Get(ctx, client.ObjectKeyFromObject(job), &j); err != nil {
+			return false
+		}
+		for _, cond := range j.Status.Conditions {
+			if cond.Type == batchv1.JobFailed && cond.Status == corev1.ConditionTrue {
+				return true
+			}
+		}
+		return false
+	}, DefaultTimeout, DefaultInterval).Should(BeTrueBecause("Job status should reflect failure in API server"))
+}
+
+// EventuallyExceptionState waits until the ScheduleException reaches the expected state.
+func EventuallyExceptionState(ctx context.Context, k8sClient client.Client, exc *hibernatorv1alpha1.ScheduleException, state hibernatorv1alpha1.ExceptionState) {
+	Eventually(func() hibernatorv1alpha1.ExceptionState {
+		_ = k8sClient.Get(ctx, client.ObjectKeyFromObject(exc), exc)
+		return exc.Status.State
+	}, DefaultTimeout, DefaultInterval).Should(Equal(state))
 }
 
 // EventuallyTargetState waits until the specific target in the plan reaches the expected state.

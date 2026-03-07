@@ -44,7 +44,7 @@ metadata:
 spec:
   # Schedule for testing (every weeknight 8 PM to 6 AM)
   schedule:
-    timezone: UTC
+    timezone: Asia/Jakarta
     offHours:
       - start: "20:00"
         end: "06:00"
@@ -99,9 +99,9 @@ metadata:
   namespace: hibernator-system
 spec:
   schedule:
-    timezone: UTC
+    timezone: Asia/Jakarta
     offHours:
-      - start: "22:00"
+      - start: "20:00"
         end: "07:00"
         daysOfWeek: ["MON", "TUE", "WED", "THU", "FRI"]
 
@@ -221,7 +221,7 @@ metadata:
 spec:
   # Schedule for testing (every weeknight 8 PM to 6 AM)
   schedule:
-    timezone: UTC
+    timezone: Asia/Jakarta
     offHours:
       - start: "20:00"
         end: "06:00"

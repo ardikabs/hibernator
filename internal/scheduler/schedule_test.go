@@ -629,6 +629,22 @@ func TestScheduleEvaluator_Evaluate(t *testing.T) {
 			wantHibernate: false,
 			wantState:     "active",
 		},
+		{
+			name:        "suspend exception in boundary time - should prevent hibernation at boundary",
+			baseWindows: baseWindows,
+			timezone:    "UTC",
+			exception: &Exception{
+				Type:       ExceptionSuspend,
+				ValidFrom:  time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC),
+				ValidUntil: time.Date(2026, 12, 31, 23, 59, 59, 0, time.UTC), // Expired
+				Windows: []OffHourWindow{
+					{Start: "20:00", End: "23:59", DaysOfWeek: []string{"THU", "FRI"}},
+				},
+			},
+			now:           time.Date(2026, 3, 5, 20, 1, 0, 0, time.UTC),
+			wantHibernate: false,
+			wantState:     "active",
+		},
 	}
 
 	for _, tt := range tests {

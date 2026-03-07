@@ -85,4 +85,43 @@ var (
 		},
 		[]string{"plan", "target"},
 	)
+
+	// StatusQueueDroppedTotal counts status updates dropped because the queue was full.
+	// A non-zero value indicates the queue capacity (statusQueueCapacity) should be raised
+	// or the writer worker pool should be enlarged.
+	StatusQueueDroppedTotal = promauto.NewCounterVec(
+		prometheus.CounterOpts{
+			Name: "hibernator_status_queue_dropped_total",
+			Help: "Total number of status updates dropped due to a full status queue",
+		},
+		[]string{"queue"}, // "plan" or "exception"
+	)
+
+	// WatchableSubscribeTotal counts per-handler invocations on the internal watchable message bus.
+	WatchableSubscribeTotal = promauto.NewCounterVec(
+		prometheus.CounterOpts{
+			Name: "hibernator_watchable_subscribe_total",
+			Help: "Total number of watchable subscription handler invocations",
+		},
+		[]string{"runner", "message", "status"}, // status: success | error | panic
+	)
+
+	// WatchableSubscribeDuration tracks watchable handler processing time.
+	WatchableSubscribeDuration = promauto.NewHistogramVec(
+		prometheus.HistogramOpts{
+			Name:    "hibernator_watchable_subscribe_duration_seconds",
+			Help:    "Duration of watchable subscription handler processing",
+			Buckets: prometheus.DefBuckets,
+		},
+		[]string{"runner", "message"},
+	)
+
+	// WorkerGoroutinesGauge tracks the number of live Worker goroutines in the Coordinator.
+	// Essential for capacity planning and debugging goroutine leaks.
+	WorkerGoroutinesGauge = promauto.NewGauge(
+		prometheus.GaugeOpts{
+			Name: "hibernator_worker_goroutines",
+			Help: "Number of live plan Worker goroutines managed by the Coordinator",
+		},
+	)
 )

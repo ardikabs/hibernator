@@ -31,4 +31,7 @@ const (
 
 	// ExecutionIDLogPrefix is the prefix used in runner logs to indicate the execution ID.
 	ExecutionIDLogPrefix = "execution-id://"
+
+	// MaxCycleHistorySize is the maximum number of past execution cycles to retain in the plan status.
+	MaxCycleHistorySize = 5
 )

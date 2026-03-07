@@ -19,6 +19,10 @@ const (
 	// AnnotationRetryNow is the annotation key used to trigger a manual retry of a failed plan.
 	AnnotationRetryNow = "hibernator.ardikabs.com/retry-now"
 
+	// AnnotationRetryAt is an internal annotation set by the error recovery processor to schedule
+	// a precise retry requeue. Value is an RFC3339 timestamp. Removed after the retry executes.
+	AnnotationRetryAt = "hibernator.ardikabs.com/retry-at"
+
 	// AnnotationSuspendUntil is the annotation key for the deadline when auto-resume should occur.
 	// Value format: RFC3339 timestamp (e.g., "2026-01-15T06:00:00Z").
 	AnnotationSuspendUntil = "hibernator.ardikabs.com/suspend-until"
