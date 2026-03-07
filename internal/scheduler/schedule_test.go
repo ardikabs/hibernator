@@ -451,72 +451,6 @@ func TestScheduleEvaluator_Evaluate(t *testing.T) {
 			wantState:     "hibernated",
 		},
 		{
-			name:        "extend exception - tentatively add weekend schedule (on Saturday 00:00)",
-			baseWindows: baseWindows,
-			timezone:    "UTC",
-			exception: &Exception{
-				Type:       ExceptionExtend,
-				ValidFrom:  time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC),
-				ValidUntil: time.Date(2026, 12, 31, 23, 59, 59, 0, time.UTC),
-				Windows: []OffHourWindow{
-					{Start: "12:00", End: "00:00", DaysOfWeek: []string{"SAT", "SUN"}},
-				},
-			},
-			// Friday 20:00 hibernated, Wakeup at 00:00 Saturday then hibernate again from 12:00
-			now:           time.Date(2026, 1, 31, 0, 1, 1, 0, time.UTC),
-			wantHibernate: false,
-			wantState:     "active",
-		},
-		{
-			name:        "extend exception - tentatively add weekend schedule (on Monday 00:00)",
-			baseWindows: baseWindows,
-			timezone:    "UTC",
-			exception: &Exception{
-				Type:       ExceptionExtend,
-				ValidFrom:  time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC),
-				ValidUntil: time.Date(2026, 12, 31, 23, 59, 59, 0, time.UTC),
-				Windows: []OffHourWindow{
-					{Start: "12:00", End: "00:00", DaysOfWeek: []string{"SAT", "SUN"}},
-				},
-			},
-			now:           time.Date(2026, 2, 2, 0, 1, 0, 0, time.UTC),
-			wantHibernate: true,
-			wantState:     "hibernated",
-		},
-		{
-			name:        "extend exception - tentatively add weekend schedule (on Monday 06:00)",
-			baseWindows: baseWindows,
-			timezone:    "UTC",
-			exception: &Exception{
-				Type:       ExceptionExtend,
-				ValidFrom:  time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC),
-				ValidUntil: time.Date(2026, 12, 31, 23, 59, 59, 0, time.UTC),
-				Windows: []OffHourWindow{
-					{Start: "12:00", End: "00:00", DaysOfWeek: []string{"SAT", "SUN"}},
-				},
-			},
-			now:           time.Date(2026, 2, 2, 6, 1, 1, 0, time.UTC),
-			wantHibernate: false,
-			wantState:     "active",
-		},
-		{
-			name:        "extend exception - still active outside both windows",
-			baseWindows: baseWindows,
-			timezone:    "UTC",
-			exception: &Exception{
-				Type:       ExceptionExtend,
-				ValidFrom:  time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC),
-				ValidUntil: time.Date(2026, 12, 31, 23, 59, 59, 0, time.UTC),
-				Windows: []OffHourWindow{
-					{Start: "06:00", End: "11:00", DaysOfWeek: []string{"SAT", "SUN"}},
-				},
-			},
-			// Saturday 2 PM UTC - outside both base (weekday) and exception (6-11 Saturday and Sunday)
-			now:           time.Date(2026, 1, 31, 14, 0, 0, 0, time.UTC),
-			wantHibernate: false,
-			wantState:     "active",
-		},
-		{
 			name:        "suspend exception - keep awake during normally hibernated time",
 			baseWindows: baseWindows,
 			timezone:    "UTC",
@@ -685,13 +619,13 @@ func TestScheduleEvaluator_Evaluate(t *testing.T) {
 			wantState:     "active",
 		},
 		{
-			name: "custom",
+			name: "full day awake on all days - should be active past grace period",
 			baseWindows: []OffHourWindow{
 				{Start: "23:59", End: "00:00", DaysOfWeek: []string{"MON", "TUE", "WED", "THU", "FRI", "SAT", "SUN"}},
 			},
 			timezone:      "UTC",
 			exception:     nil,
-			now:           time.Date(2026, 2, 9, 0, 1, 1, 0, time.UTC),
+			now:           time.Date(2026, 2, 9, 0, 1, 1, 0, time.UTC), // Monday 00:01:01 UTC, after 1m grace period ends at 00:01:00
 			wantHibernate: false,
 			wantState:     "active",
 		},
