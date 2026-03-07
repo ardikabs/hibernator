@@ -10,13 +10,11 @@ import (
 	"fmt"
 	"os"
 	"strings"
-	"time"
 
 	"github.com/spf13/cobra"
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/apimachinery/pkg/util/yaml"
 	"k8s.io/utils/clock"
-	"sigs.k8s.io/controller-runtime/pkg/client"
 
 	hibernatorv1alpha1 "github.com/ardikabs/hibernator/api/v1alpha1"
 	"github.com/ardikabs/hibernator/cmd/kubectl-hibernator/common"
@@ -85,7 +83,7 @@ func runPreview(ctx context.Context, opts *previewOptions, args []string) error 
 		}
 
 		exceptions = plan.Status.ActiveExceptions
-		if exc, err := fetchActiveException(ctx, c, plan); err == nil && exc != nil {
+		if exc, err := common.FetchActiveException(ctx, c, plan); err == nil && exc != nil {
 			exception = common.ConvertAPIException(*exc)
 		}
 	}
@@ -145,40 +143,4 @@ func loadPlanFromFile(path string, plan *hibernatorv1alpha1.HibernatePlan) error
 	return nil
 }
 
-// fetchActiveException lists ScheduleException resources for the given plan and
-// returns the newest active one, mirroring the controller's getActiveException logic.
-func fetchActiveException(ctx context.Context, c client.Client, plan hibernatorv1alpha1.HibernatePlan) (*hibernatorv1alpha1.ScheduleException, error) {
-	var list hibernatorv1alpha1.ScheduleExceptionList
-	if err := c.List(ctx, &list,
-		client.InNamespace(plan.Namespace),
-		client.MatchingLabels{"hibernator.ardikabs.com/plan": plan.Name},
-	); err != nil {
-		return nil, fmt.Errorf("list schedule exceptions: %w", err)
-	}
 
-	now := time.Now()
-	var active []hibernatorv1alpha1.ScheduleException
-	for _, exc := range list.Items {
-		if exc.Status.State != hibernatorv1alpha1.ExceptionStateActive {
-			continue
-		}
-		if now.Before(exc.Spec.ValidFrom.Time) || now.After(exc.Spec.ValidUntil.Time) {
-			continue
-		}
-		active = append(active, exc)
-	}
-
-	if len(active) == 0 {
-		return nil, nil
-	}
-
-	// Pick the newest exception (latest creation timestamp = latest intent).
-	newest := active[0]
-	for _, exc := range active[1:] {
-		if newest.CreationTimestamp.Before(&exc.CreationTimestamp) {
-			newest = exc
-		}
-	}
-
-	return &newest, nil
-}

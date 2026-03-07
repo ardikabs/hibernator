@@ -6,12 +6,14 @@ Licensed under the Apache License, Version 2.0.
 package common
 
 import (
+	"context"
 	"fmt"
 	"time"
 
 	hibernatorv1alpha1 "github.com/ardikabs/hibernator/api/v1alpha1"
 	"github.com/ardikabs/hibernator/internal/scheduler"
 	"k8s.io/utils/clock"
+	"sigs.k8s.io/controller-runtime/pkg/client"
 )
 
 // ScheduleEvent represents a single upcoming event.
@@ -123,15 +125,15 @@ func ComputeUpcomingEvents(baseWindows []scheduler.OffHourWindow, timezone strin
 	return events, nil
 }
 
-// ComputeNextEvent computes the next hibernate or wakeup event for a schedule.
+// ComputeNextEvent computes the next hibernate or wakeup event for a schedule,
+// optionally considering an active exception.
 // Returns nil if the schedule has no off-hour windows defined.
-// No active exception is considered here; this is used by the plan list view.
-func ComputeNextEvent(schedule hibernatorv1alpha1.Schedule) (*ScheduleEvent, error) {
+func ComputeNextEvent(schedule hibernatorv1alpha1.Schedule, exception *scheduler.Exception) (*ScheduleEvent, error) {
 	if len(schedule.OffHours) == 0 {
 		return nil, nil
 	}
 
-	events, err := ComputeUpcomingEvents(ConvertAPIWindows(schedule.OffHours), schedule.Timezone, nil, 1)
+	events, err := ComputeUpcomingEvents(ConvertAPIWindows(schedule.OffHours), schedule.Timezone, exception, 1)
 	if err != nil {
 		return nil, err
 	}
@@ -141,4 +143,42 @@ func ComputeNextEvent(schedule hibernatorv1alpha1.Schedule) (*ScheduleEvent, err
 	}
 
 	return &events[0], nil
+}
+
+// FetchActiveException lists ScheduleException resources for the given plan and
+// returns the newest active one, mirroring the controller's getActiveException logic.
+func FetchActiveException(ctx context.Context, c client.Client, plan hibernatorv1alpha1.HibernatePlan) (*hibernatorv1alpha1.ScheduleException, error) {
+	var list hibernatorv1alpha1.ScheduleExceptionList
+	if err := c.List(ctx, &list,
+		client.InNamespace(plan.Namespace),
+		client.MatchingLabels{"hibernator.ardikabs.com/plan": plan.Name},
+	); err != nil {
+		return nil, fmt.Errorf("list schedule exceptions: %w", err)
+	}
+
+	now := time.Now()
+	var active []hibernatorv1alpha1.ScheduleException
+	for _, exc := range list.Items {
+		if exc.Status.State != hibernatorv1alpha1.ExceptionStateActive {
+			continue
+		}
+		if now.Before(exc.Spec.ValidFrom.Time) || now.After(exc.Spec.ValidUntil.Time) {
+			continue
+		}
+		active = append(active, exc)
+	}
+
+	if len(active) == 0 {
+		return nil, nil
+	}
+
+	// Pick the newest exception (latest creation timestamp = latest intent).
+	newest := active[0]
+	for _, exc := range active[1:] {
+		if newest.CreationTimestamp.Before(&exc.CreationTimestamp) {
+			newest = exc
+		}
+	}
+
+	return &newest, nil
 }
