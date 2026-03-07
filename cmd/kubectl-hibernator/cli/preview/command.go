@@ -10,11 +10,13 @@ import (
 	"fmt"
 	"os"
 	"strings"
+	"time"
 
 	"github.com/spf13/cobra"
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/apimachinery/pkg/util/yaml"
 	"k8s.io/utils/clock"
+	"sigs.k8s.io/controller-runtime/pkg/client"
 
 	hibernatorv1alpha1 "github.com/ardikabs/hibernator/api/v1alpha1"
 	"github.com/ardikabs/hibernator/cmd/kubectl-hibernator/common"
@@ -55,7 +57,11 @@ Works with both cluster resources and local YAML files:
 }
 
 func runPreview(ctx context.Context, opts *previewOptions, args []string) error {
-	var plan hibernatorv1alpha1.HibernatePlan
+	var (
+		plan       hibernatorv1alpha1.HibernatePlan
+		exception  *scheduler.Exception
+		exceptions []hibernatorv1alpha1.ExceptionReference
+	)
 
 	if opts.file != "" {
 		// Load from local YAML file
@@ -77,24 +83,23 @@ func runPreview(ctx context.Context, opts *previewOptions, args []string) error 
 		if err := c.Get(ctx, types.NamespacedName{Name: args[0], Namespace: ns}, &plan); err != nil {
 			return fmt.Errorf("failed to get HibernatePlan %q in namespace %q: %w", args[0], ns, err)
 		}
+
+		exceptions = plan.Status.ActiveExceptions
+		if exc, err := fetchActiveException(ctx, c, plan); err == nil && exc != nil {
+			exception = common.ConvertAPIException(*exc)
+		}
 	}
 
 	// Evaluate schedule
 	evaluator := scheduler.NewScheduleEvaluator(clock.RealClock{})
 	windows := common.ConvertAPIWindows(plan.Spec.Schedule.OffHours)
 
-	result, err := evaluator.Evaluate(windows, plan.Spec.Schedule.Timezone, nil)
+	result, err := evaluator.Evaluate(windows, plan.Spec.Schedule.Timezone, exception)
 	if err != nil {
 		return fmt.Errorf("failed to evaluate schedule: %w", err)
 	}
 
-	// Fetch active exceptions if from cluster
-	var exceptions []hibernatorv1alpha1.ExceptionReference
-	if opts.file == "" {
-		exceptions = plan.Status.ActiveExceptions
-	}
-
-	events, err := common.ComputeUpcomingEvents(plan.Spec.Schedule, opts.events)
+	events, err := common.ComputeUpcomingEvents(windows, plan.Spec.Schedule.Timezone, exception, opts.events)
 	if err != nil {
 		events = []common.ScheduleEvent{}
 	}
@@ -140,3 +145,40 @@ func loadPlanFromFile(path string, plan *hibernatorv1alpha1.HibernatePlan) error
 	return nil
 }
 
+// fetchActiveException lists ScheduleException resources for the given plan and
+// returns the newest active one, mirroring the controller's getActiveException logic.
+func fetchActiveException(ctx context.Context, c client.Client, plan hibernatorv1alpha1.HibernatePlan) (*hibernatorv1alpha1.ScheduleException, error) {
+	var list hibernatorv1alpha1.ScheduleExceptionList
+	if err := c.List(ctx, &list,
+		client.InNamespace(plan.Namespace),
+		client.MatchingLabels{"hibernator.ardikabs.com/plan": plan.Name},
+	); err != nil {
+		return nil, fmt.Errorf("list schedule exceptions: %w", err)
+	}
+
+	now := time.Now()
+	var active []hibernatorv1alpha1.ScheduleException
+	for _, exc := range list.Items {
+		if exc.Status.State != hibernatorv1alpha1.ExceptionStateActive {
+			continue
+		}
+		if now.Before(exc.Spec.ValidFrom.Time) || now.After(exc.Spec.ValidUntil.Time) {
+			continue
+		}
+		active = append(active, exc)
+	}
+
+	if len(active) == 0 {
+		return nil, nil
+	}
+
+	// Pick the newest exception (latest creation timestamp = latest intent).
+	newest := active[0]
+	for _, exc := range active[1:] {
+		if newest.CreationTimestamp.Before(&exc.CreationTimestamp) {
+			newest = exc
+		}
+	}
+
+	return &newest, nil
+}
