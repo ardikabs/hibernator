@@ -314,8 +314,10 @@ func (e *ScheduleEvaluator) evaluateWindows(windows []OffHourWindow, timezone st
 	return e.eval(window)
 }
 
-// evaluateExtend combines base windows with exception windows (union).
-// This means hibernation occurs during BOTH base and exception windows.
+// evaluateExtend combines base windows with exception windows using a union (OR).
+// Hibernation occurs when EITHER the base schedule OR the exception schedule says hibernate.
+// Semantically, Extend adds additional hibernation windows on top of the base schedule.
+// To prevent hibernation during specific windows, use the Suspend exception type instead.
 func (e *ScheduleEvaluator) evaluateExtend(baseWindows, exceptionWindows []OffHourWindow, timezone string) (*EvaluationResult, error) {
 	// Evaluate base schedule
 	baseResult, err := e.evaluateWindows(baseWindows, timezone)
