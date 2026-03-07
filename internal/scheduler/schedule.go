@@ -330,7 +330,7 @@ func (e *ScheduleEvaluator) evaluateExtend(baseWindows, exceptionWindows []OffHo
 	}
 
 	// Hibernate when either schedule says hibernate
-	shouldHibernate := baseResult.ShouldHibernate && exceptionResult.ShouldHibernate
+	shouldHibernate := baseResult.ShouldHibernate || exceptionResult.ShouldHibernate
 
 	// Calculate next events (take the earlier of the two for each)
 	nextHibernate := earlierTime(baseResult.NextHibernateTime, exceptionResult.NextHibernateTime)
@@ -447,6 +447,17 @@ func (e *ScheduleEvaluator) evaluateSuspend(baseWindows []OffHourWindow, excepti
 		}
 	}
 
+	// If currently hibernating but not yet inside a suspension window, check for an upcoming
+	// suspension start and pull nextWakeUp forward to that time.  Without this the controller
+	// would requeue based on the base wakeup time (e.g. 18:00) and completely miss the
+	// suspension transition at 09:00, leaving the system hibernated through the carve-out.
+	if shouldHibernate {
+		nextSuspensionStart := e.findNextSuspensionStart(exception.Windows, localNow)
+		if !nextSuspensionStart.IsZero() {
+			nextWakeUp = earlierTime(nextWakeUp, nextSuspensionStart)
+		}
+	}
+
 	return &EvaluationResult{
 		ShouldHibernate:   shouldHibernate,
 		NextHibernateTime: nextHibernate,
@@ -455,6 +466,52 @@ func (e *ScheduleEvaluator) evaluateSuspend(baseWindows []OffHourWindow, excepti
 		InGracePeriod:     inSuspensionGrace,
 		GracePeriodEnd:    baseResult.GracePeriodEnd, // Use base result's grace period if applicable
 	}, nil
+}
+
+// findNextSuspensionStart finds when the next suspension window will start after now.
+// It checks today and tomorrow to handle cross-midnight hibernation scenarios (e.g., the
+// system hibernates at 20:00 and a suspension window starts at 09:00 the following day).
+func (e *ScheduleEvaluator) findNextSuspensionStart(windows []OffHourWindow, now time.Time) time.Time {
+	currentTimeMinutes := now.Hour()*60 + now.Minute()
+
+	var nextStart time.Time
+
+	for daysAhead := 0; daysAhead <= 1; daysAhead++ {
+		checkDay := now.AddDate(0, 0, daysAhead)
+		checkDayStr := strings.ToUpper(checkDay.Weekday().String()[:3])
+
+		for _, w := range windows {
+			dayMatch := false
+			for _, day := range w.DaysOfWeek {
+				if strings.EqualFold(day, checkDayStr) {
+					dayMatch = true
+					break
+				}
+			}
+			if !dayMatch {
+				continue
+			}
+
+			startHour, startMin, err := parseTime(w.Start)
+			if err != nil {
+				continue
+			}
+
+			startMinutes := startHour*60 + startMin
+			startTime := time.Date(checkDay.Year(), checkDay.Month(), checkDay.Day(), startHour, startMin, 0, 0, now.Location())
+
+			// For today: only consider windows whose start is still in the future.
+			if daysAhead == 0 && startMinutes <= currentTimeMinutes {
+				continue
+			}
+
+			if nextStart.IsZero() || startTime.Before(nextStart) {
+				nextStart = startTime
+			}
+		}
+	}
+
+	return nextStart
 }
 
 // findSuspensionEnd finds when the current or upcoming suspension window ends.
