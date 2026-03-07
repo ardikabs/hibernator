@@ -20,10 +20,10 @@ import (
 
 // wakingUpState drives stage-based Job execution for the wakeup operation.
 type wakingUpState struct {
-	*State
+	*state
 }
 
-func (state *wakingUpState) Handle(ctx context.Context) {
+func (state *wakingUpState) Handle(ctx context.Context) (StateResult, error) {
 	plan := state.plan()
 	log := state.Log.
 		WithName("wakingup").
@@ -33,22 +33,13 @@ func (state *wakingUpState) Handle(ctx context.Context) {
 			"cycleID", plan.Status.CurrentCycleID,
 			"stage", plan.Status.CurrentStageIndex)
 
-	defer func() {
-		if plan.Status.Phase == hibernatorv1alpha1.PhaseWakingUp {
-			state.RequeueAfter(wellknown.RequeueIntervalDuringStage)
-		} else {
-			state.CancelRequeue()
-		}
-	}()
-
 	if plan.Status.CurrentOperation != "wakeup" {
 		log.V(1).Info("WakingUp but currentOperation != wakeup, skipping",
 			"currentOperation", plan.Status.CurrentOperation)
-		return
+		return StateResult{RequeueAfter: wellknown.RequeueIntervalDuringStage}, nil
 	}
 
-	state.execute(ctx, log, "wakeup", true,
-		func(ctx context.Context, err error) { state.setError(ctx, err) },
+	return state.execute(ctx, log, "wakeup", true,
 		func(nextIdx int) { state.nextStage(nextIdx) },
 		func(ctx context.Context, ep scheduler.ExecutionPlan) { state.finalize(ctx, log, ep) },
 	)
@@ -89,7 +80,6 @@ func (state *wakingUpState) finalize(ctx context.Context, log logr.Logger, _ sch
 	})
 
 	state.postWakeupCleanup(ctx, log, plan)
-	state.dispatch(ctx)
 }
 
 func (state *wakingUpState) postWakeupCleanup(ctx context.Context, log logr.Logger, plan *hibernatorv1alpha1.HibernatePlan) {

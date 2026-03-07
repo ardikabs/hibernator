@@ -78,10 +78,6 @@ type Worker struct {
 	// on the first execution-phase handle() call. Resets when the job reappears.
 	consecutiveJobMisses map[string]int
 
-	// cachedState is re-used across handle() calls to reduce per-call allocation.
-	// Updated in-place before each handle() via refreshState().
-	cachedState *state.State
-
 	// onIdleReap is a callback to the Coordinator's reap() method.
 	// Called when the idle timer fires so the coordinator can clean up the entry.
 	onIdleReap func()
@@ -141,39 +137,24 @@ func (s *Worker) run(ctx context.Context) {
 	}
 }
 
-// buildState constructs or refreshes the cached state.State wired to this worker.
-// The Config is allocated once and reused across handle() calls to reduce GC pressure (M5).
-// Only the per-call field (PlanCtx) is updated on each invocation.
-func (s *Worker) buildState() *state.State {
-	if s.cachedState == nil {
-		s.cachedState = &state.State{
-			Key: s.key,
-			Log: s.log,
-
-			Client:               s.Client,
-			APIReader:            s.APIReader,
-			Clock:                s.Clock,
-			Scheme:               s.Scheme,
-			Planner:              s.Planner,
-			Statuses:             s.Statuses,
-			RestoreManager:       s.RestoreManager,
-			ControlPlaneEndpoint: s.ControlPlaneEndpoint,
-			RunnerImage:          s.RunnerImage,
-			RunnerServiceAccount: s.RunnerServiceAccount,
-
-			OnJobMissing: s.trackConsecutiveJobMiss,
-			OnJobFound:   s.resetConsecutiveJobMiss,
-
-			RequeueAfter:   s.setRequeueTimer,
-			CancelRequeue:  s.stopRequeueTimer,
-			DeadlineAfter:  s.setDeadlineTimer,
-			CancelDeadline: s.stopDeadlineTimer,
-		}
-	}
-
-	// Update the per-call field.
-	s.cachedState.PlanCtx = s.cachedCtx
-	return s.cachedState
+// buildConfig assembles a *state.Config from the worker's infrastructure
+// dependencies and timer-control closures. A fresh Config is constructed on
+// every handle() call so handlers are fully stateless with respect to the worker.
+func (s *Worker) buildConfig() *state.Config {
+	return state.NewConfig().
+		WithLog(s.log).
+		WithClient(s.Client).
+		WithAPIReader(s.APIReader).
+		WithClock(s.Clock).
+		WithScheme(s.Scheme).
+		WithPlanner(s.Planner).
+		WithStatuses(s.Statuses).
+		WithRestoreManager(s.RestoreManager).
+		WithControlPlaneEndpoint(s.ControlPlaneEndpoint).
+		WithRunnerImage(s.RunnerImage).
+		WithRunnerServiceAccount(s.RunnerServiceAccount).
+		WithOnJobMissingFunc(s.trackConsecutiveJobMiss).
+		WithOnJobFoundFunc(s.resetConsecutiveJobMiss)
 }
 
 // handle dispatches the plan to the appropriate state handler based on its current phase.
@@ -187,23 +168,33 @@ func (s *Worker) handle(ctx context.Context, planCtx *message.PlanContext, onDea
 	phaseBefore := string(plan.Status.Phase)
 
 	start := time.Now()
-	handler := state.Factory(s.buildState())
+	handler := state.New(s.key, planCtx, s.buildConfig())
 	if handler == nil {
 		s.log.V(1).Info("unrecognised phase, skipping", "phase", phaseBefore)
 		return
 	}
 
+	var (
+		result state.StateResult
+		err    error
+	)
+
+	status := "success"
 	if onDeadline {
-		handler.OnDeadline(ctx)
+		result, err = handler.OnDeadline(ctx)
 	} else {
-		handler.Handle(ctx)
+		result, err = handler.Handle(ctx)
+	}
+	if err != nil {
+		status = "error"
+		result = handler.OnError(ctx, err)
 	}
 
 	duration := time.Since(start).Seconds()
 	phaseAfter := string(plan.Status.Phase)
 
 	// ReconcileTotal / ReconcileDuration — one observation per handle() call.
-	metrics.ReconcileTotal.WithLabelValues(planName, phaseBefore, "success").Inc()
+	metrics.ReconcileTotal.WithLabelValues(planName, phaseBefore, status).Inc()
 	metrics.ReconcileDuration.WithLabelValues(planName, phaseBefore).Observe(duration)
 
 	// ActivePlanGauge — update on phase transition.
@@ -213,6 +204,18 @@ func (s *Worker) handle(ctx context.Context, planCtx *message.PlanContext, onDea
 		}
 		metrics.ActivePlanGauge.WithLabelValues(phaseAfter).Inc()
 	}
+
+	// Apply timer directives from StateResult.
+	if result.Requeue {
+		// Phase transition: cancel all timers then immediately re-evaluate.
+		// The next phase arms its own timers via its first Handle() call.
+		s.stopRequeueTimer()
+		s.stopDeadlineTimer()
+		s.handle(ctx, planCtx, false)
+		return
+	}
+
+	s.applyTimers(result)
 }
 
 // trackConsecutiveJobMiss increments the consecutive-miss counter for target and returns
@@ -280,6 +283,28 @@ func (s *Worker) mergeIncoming(incoming *message.PlanContext) {
 // ---------------------------------------------------------------------------
 // Timer helpers
 // ---------------------------------------------------------------------------
+
+// applyTimers applies the non-Requeue timer directives from a StateResult.
+// Zero RequeueAfter cancels the poll timer; zero TimeoutAfter and DeadlineAfter
+// cancel the deadline timer. See StateResult for the full contract.
+func (s *Worker) applyTimers(result state.StateResult) {
+	if result.RequeueAfter > 0 {
+		s.setRequeueTimer(result.RequeueAfter)
+	} else {
+		s.stopRequeueTimer()
+	}
+
+	switch {
+	case result.TimeoutAfter > 0:
+		s.setDeadlineTimer(result.TimeoutAfter) // arm-once: no-op if already running
+	case result.DeadlineAfter > 0:
+		s.stopDeadlineTimer()
+		s.deadlineTimer = time.NewTimer(result.DeadlineAfter) // always-override
+	default:
+		s.stopDeadlineTimer()
+	}
+}
+
 func (s *Worker) setRequeueTimer(d time.Duration) {
 	s.stopRequeueTimer()
 	s.requeueTimer = time.NewTimer(d)

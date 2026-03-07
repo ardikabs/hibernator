@@ -29,9 +29,9 @@ func TestLifecycleState_HandleInit_AddsFinalizerWhenMissing(t *testing.T) {
 	plan := basePlanForState("p", "")
 	// No finalizer present — handler should add it.
 	c := newHandlerFakeClient(plan)
-	state := newHandlerState(plan, c, &timerTracker{})
+	st := newHandlerState(plan, c)
 
-	h := &lifecycleState{State: state}
+	h := &lifecycleState{state: st}
 	h.Handle(context.Background())
 
 	// Verify the finalizer was persisted via the fake client.
@@ -45,14 +45,14 @@ func TestLifecycleState_HandleInit_SetsActivePhaseWhenFinalizerPresent(t *testin
 	plan := basePlanForState("p", "")
 	plan.Finalizers = []string{wellknown.PlanFinalizerName}
 	c := newHandlerFakeClient(plan)
-	state := newHandlerState(plan, c, &timerTracker{})
+	st := newHandlerState(plan, c)
 
-	h := &lifecycleState{State: state}
+	h := &lifecycleState{state: st}
 	h.Handle(context.Background())
 
 	// In-memory plan should be Active; queue should have a status update.
-	assert.Equal(t, hibernatorv1alpha1.PhaseActive, state.plan().Status.Phase)
-	assert.GreaterOrEqual(t, state.Statuses.PlanStatuses.Len(), 1)
+	assert.Equal(t, hibernatorv1alpha1.PhaseActive, st.plan().Status.Phase)
+	assert.GreaterOrEqual(t, st.Statuses.PlanStatuses.Len(), 1)
 }
 
 // ---------------------------------------------------------------------------
@@ -65,9 +65,9 @@ func TestLifecycleState_HandleDelete_RemovesFinalizer(t *testing.T) {
 	now := metav1.NewTime(time.Now())
 	plan.DeletionTimestamp = &now
 	c := newHandlerFakeClient(plan)
-	state := newHandlerState(plan, c, &timerTracker{})
+	st := newHandlerState(plan, c)
 
-	h := &lifecycleState{State: state, delete: true}
+	h := &lifecycleState{state: st, delete: true}
 	h.Handle(context.Background())
 
 	// After removing the last finalizer the fake client may GC the object.
@@ -99,9 +99,9 @@ func TestLifecycleState_HandleDelete_DeletesOwnerJobs(t *testing.T) {
 	}
 
 	c := newHandlerFakeClient(plan, job)
-	state := newHandlerState(plan, c, &timerTracker{})
+	st := newHandlerState(plan, c)
 
-	h := &lifecycleState{State: state, delete: true}
+	h := &lifecycleState{state: st, delete: true}
 	h.Handle(context.Background())
 
 	// Job should be deleted.

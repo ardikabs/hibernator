@@ -10,6 +10,7 @@ import (
 	"testing"
 
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 
 	hibernatorv1alpha1 "github.com/ardikabs/hibernator/api/v1alpha1"
 )
@@ -20,13 +21,13 @@ func TestWakingUpState_Handle_WrongOperation_IsNoop(t *testing.T) {
 	plan.Status.CurrentOperation = "shutdown"
 	plan.Spec.Execution.Strategy.Type = hibernatorv1alpha1.StrategySequential
 	c := newHandlerFakeClient(plan)
-	tt := &timerTracker{}
-	state := newHandlerState(plan, c, tt)
+	st := newHandlerState(plan, c)
 
-	h := &wakingUpState{State: state}
-	h.Handle(context.Background())
+	h := &wakingUpState{state: st}
+	result, err := h.Handle(context.Background())
+	require.NoError(t, err)
 
 	// No status queued; poll timer reset as the phase is still WakingUp.
-	assert.Zero(t, state.Statuses.PlanStatuses.Len())
-	assert.True(t, tt.requeueCalled, "requeue timer should be reset while phase is still WakingUp")
+	assert.Zero(t, st.Statuses.PlanStatuses.Len())
+	assert.True(t, result.RequeueAfter > 0, "requeue timer should be reset while phase is still WakingUp")
 }

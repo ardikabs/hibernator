@@ -19,10 +19,10 @@ import (
 
 // hibernatingState drives stage-based Job execution for the shutdown operation.
 type hibernatingState struct {
-	*State
+	*state
 }
 
-func (state *hibernatingState) Handle(ctx context.Context) {
+func (state *hibernatingState) Handle(ctx context.Context) (StateResult, error) {
 	plan := state.plan()
 	log := state.Log.
 		WithName("hibernating").
@@ -32,22 +32,13 @@ func (state *hibernatingState) Handle(ctx context.Context) {
 			"cycleID", plan.Status.CurrentCycleID,
 			"stage", plan.Status.CurrentStageIndex)
 
-	defer func() {
-		if plan.Status.Phase == hibernatorv1alpha1.PhaseHibernating {
-			state.RequeueAfter(wellknown.RequeueIntervalDuringStage)
-		} else {
-			state.CancelRequeue()
-		}
-	}()
-
 	if plan.Status.CurrentOperation != "shutdown" {
 		log.V(1).Info("Hibernating but currentOperation != shutdown, skipping",
 			"currentOperation", plan.Status.CurrentOperation)
-		return
+		return StateResult{RequeueAfter: wellknown.RequeueIntervalDuringStage}, nil
 	}
 
-	state.execute(ctx, log, "shutdown", false,
-		func(ctx context.Context, err error) { state.setError(ctx, err) },
+	return state.execute(ctx, log, "shutdown", false,
 		func(nextIdx int) { state.nextStage(nextIdx) },
 		func(ctx context.Context, ep scheduler.ExecutionPlan) { state.finalize(ctx, log, ep) },
 	)
@@ -86,6 +77,4 @@ func (state *hibernatingState) finalize(ctx context.Context, log logr.Logger, _ 
 		NamespacedName: state.Key,
 		Mutate:         mutate,
 	})
-
-	state.dispatch(ctx)
 }

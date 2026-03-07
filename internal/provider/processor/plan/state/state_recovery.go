@@ -21,11 +21,12 @@ import (
 
 // recoveryState implements exponential-backoff retry for plans in PhaseError.
 type recoveryState struct {
-	*State
+	*state
 }
 
-func (state *recoveryState) Handle(ctx context.Context) {
+func (state *recoveryState) Handle(ctx context.Context) (StateResult, error) {
 	plan := state.plan()
+
 	log := state.Log.
 		WithName("recovery").
 		WithValues(
@@ -43,24 +44,20 @@ func (state *recoveryState) Handle(ctx context.Context) {
 
 	strategy := recovery.DetermineRecoveryStrategy(plan, state.Clock, lastErr)
 	if !strategy.ShouldRetry {
-		// Cancel any pending timer — no more auto-retries.
-		state.CancelRequeue()
-
 		// Check for manual retry via annotation.
-		if state.handleManualRetry(ctx, log) {
-			return
+		if handled, result, err := state.handleManualRetry(ctx, log); handled {
+			return result, err
 		}
 		log.Info("error recovery aborted, manual intervention required",
 			"classification", recovery.ClassifyError(lastErr),
 			"reason", strategy.Reason)
-		return
+		return StateResult{}, nil
 	}
 
 	if strategy.RetryAfter > 0 {
 		// Still within backoff — schedule a timer to re-drive this handler exactly when ready.
 		log.Info(strategy.Reason, "retryAfter", strategy.RetryAfter.String())
-		state.RequeueAfter(strategy.RetryAfter)
-		return
+		return StateResult{RequeueAfter: strategy.RetryAfter}, nil
 	}
 
 	log.Info("attempting error recovery",
@@ -70,19 +67,17 @@ func (state *recoveryState) Handle(ctx context.Context) {
 	)
 
 	// Ready to retry.
-	state.CancelRequeue()
 	state.clearRetryAtAnnotation(ctx, log, plan)
-
-	state.handleRetry(ctx, log, lastErr)
+	return state.handleRetry(ctx, log, lastErr)
 }
 
 // handleManualRetry checks for the retry-now annotation and resets retry state if found.
-// Returns true if a manual retry was triggered.
-func (state *recoveryState) handleManualRetry(ctx context.Context, log logr.Logger) bool {
+// Returns (handled, result, err) where handled=true means a manual retry was triggered.
+func (state *recoveryState) handleManualRetry(ctx context.Context, log logr.Logger) (bool, StateResult, error) {
 	plan := state.plan()
 	val, ok := plan.Annotations[wellknown.AnnotationRetryNow]
 	if !ok || val != "true" {
-		return false
+		return false, StateResult{}, nil
 	}
 
 	log.Info("manual retry triggered via annotation")
@@ -91,8 +86,7 @@ func (state *recoveryState) handleManualRetry(ctx context.Context, log logr.Logg
 	delete(plan.Annotations, wellknown.AnnotationRetryNow)
 	if err := state.patchPreservingStatus(ctx, plan, client.MergeFrom(orig)); err != nil {
 		log.Error(err, "failed to clear manual retry annotation")
-		state.RequeueAfter(wellknown.RequeueIntervalOnRecoveryError)
-		return false
+		return true, StateResult{RequeueAfter: wellknown.RequeueIntervalOnRecoveryError}, nil
 	}
 
 	mutate := func(st *hibernatorv1alpha1.HibernatePlanStatus) {
@@ -106,11 +100,10 @@ func (state *recoveryState) handleManualRetry(ctx context.Context, log logr.Logg
 		Mutate:         mutate,
 	})
 
-	state.dispatch(ctx)
-	return true
+	return true, StateResult{Requeue: true}, nil
 }
 
-func (state *recoveryState) handleRetry(ctx context.Context, log logr.Logger, lastErr error) {
+func (state *recoveryState) handleRetry(ctx context.Context, log logr.Logger, lastErr error) (StateResult, error) {
 	plan := state.plan()
 
 	shouldHibernate := false
@@ -126,8 +119,7 @@ func (state *recoveryState) handleRetry(ctx context.Context, log logr.Logger, la
 	execPlan, err := state.buildExecutionPlan(plan, operation == "wakeup")
 	if err != nil {
 		log.Error(err, "failed to rebuild execution plan during recovery, repeat may be attempted if this is a transient error")
-		state.RequeueAfter(wellknown.RequeueIntervalOnRecoveryError)
-		return
+		return StateResult{}, err
 	}
 
 	state.relabelStaleFailedJobs(ctx, log, plan, operation)
@@ -166,7 +158,7 @@ func (state *recoveryState) handleRetry(ctx context.Context, log logr.Logger, la
 	})
 
 	log.Info("transitioning on recovery", "phase", plan.Status.Phase, "attempt", plan.Status.RetryCount)
-	state.dispatch(ctx)
+	return StateResult{Requeue: true}, nil
 }
 
 func (state *recoveryState) clearRetryAtAnnotation(ctx context.Context, log logr.Logger, plan *hibernatorv1alpha1.HibernatePlan) {
@@ -177,7 +169,6 @@ func (state *recoveryState) clearRetryAtAnnotation(ctx context.Context, log logr
 	delete(plan.Annotations, wellknown.AnnotationRetryAt)
 	if err := state.patchPreservingStatus(ctx, plan, client.MergeFrom(orig)); err != nil && !apierrors.IsNotFound(err) {
 		log.Error(err, "failed to clear retry-at annotation (non-fatal)")
-		state.RequeueAfter(wellknown.RequeueIntervalOnRecoveryError)
 		return
 	}
 }
@@ -193,7 +184,6 @@ func (state *recoveryState) relabelStaleFailedJobs(ctx context.Context, log logr
 		},
 	); err != nil {
 		log.Error(err, "failed to list stale jobs for relabeling")
-		state.RequeueAfter(wellknown.RequeueIntervalOnRecoveryError)
 		return
 	}
 
@@ -216,7 +206,6 @@ func (state *recoveryState) relabelStaleFailedJobs(ctx context.Context, log logr
 		job.Labels[wellknown.LabelStaleReasonRunnerJob] = "retry-recovery"
 		if err := state.Patch(ctx, job, client.MergeFrom(orig)); err != nil {
 			log.Error(err, "failed to relabel stale job", "job", job.Name)
-			state.RequeueAfter(wellknown.RequeueIntervalOnRecoveryError)
 			return
 		} else {
 			count++

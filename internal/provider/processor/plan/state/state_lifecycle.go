@@ -17,31 +17,30 @@ import (
 	hibernatorv1alpha1 "github.com/ardikabs/hibernator/api/v1alpha1"
 	"github.com/ardikabs/hibernator/internal/message"
 	"github.com/ardikabs/hibernator/internal/wellknown"
+	"github.com/go-logr/logr"
 )
 
 // lifecycleState handles plan initialization (phase == "") and finalizer-based deletion.
 type lifecycleState struct {
-	*State
+	*state
 
 	delete bool
 }
 
-func (state *lifecycleState) Handle(ctx context.Context) {
+func (state *lifecycleState) Handle(ctx context.Context) (StateResult, error) {
 	plan := state.plan()
-
-	if state.delete {
-		state.handleDelete(ctx, plan)
-		return
-	}
-
-	state.handleInit(ctx, plan)
-}
-
-func (state *lifecycleState) handleDelete(ctx context.Context, plan *hibernatorv1alpha1.HibernatePlan) {
 	log := state.Log.
 		WithName("lifecycle").
 		WithValues("plan", state.Key.String())
 
+	if state.delete {
+		return state.handleDelete(ctx, log, plan)
+	}
+
+	return state.handle(ctx, log, plan)
+}
+
+func (state *lifecycleState) handleDelete(ctx context.Context, log logr.Logger, plan *hibernatorv1alpha1.HibernatePlan) (StateResult, error) {
 	log.V(1).Info("plan has deletion timestamp, handling deletion")
 
 	var jobList batchv1.JobList
@@ -49,7 +48,7 @@ func (state *lifecycleState) handleDelete(ctx context.Context, plan *hibernatorv
 		wellknown.LabelPlan: plan.Name,
 	}); err != nil {
 		log.Error(err, "failed to list jobs for cleanup")
-		return
+		return StateResult{}, err
 	}
 
 	propagation := metav1.DeletePropagationBackground
@@ -57,6 +56,7 @@ func (state *lifecycleState) handleDelete(ctx context.Context, plan *hibernatorv
 		job := &jobList.Items[i]
 		if err := state.Delete(ctx, job, &client.DeleteOptions{PropagationPolicy: &propagation}); err != nil && !apierrors.IsNotFound(err) {
 			log.Error(err, "failed to delete job during finalizer cleanup", "job", job.Name)
+			return StateResult{}, err
 		}
 	}
 
@@ -65,25 +65,23 @@ func (state *lifecycleState) handleDelete(ctx context.Context, plan *hibernatorv
 		controllerutil.RemoveFinalizer(plan, wellknown.PlanFinalizerName)
 		if err := state.Patch(ctx, plan, client.MergeFrom(orig)); err != nil && !apierrors.IsNotFound(err) {
 			log.Error(err, "failed to remove finalizer")
+			return StateResult{}, err
 		}
 
 		log.V(1).Info("removed finalizer")
 	}
+
+	return StateResult{}, nil
 }
 
-func (state *lifecycleState) handleInit(ctx context.Context, plan *hibernatorv1alpha1.HibernatePlan) {
-	log := state.Log.
-		WithName("lifecycle").
-		WithValues("plan", state.Key.String())
-
+func (state *lifecycleState) handle(ctx context.Context, log logr.Logger, plan *hibernatorv1alpha1.HibernatePlan) (StateResult, error) {
 	// Ensure finalizer exists before doing anything else.
 	// The provider informer will fire again with the updated plan; no local cascade needed.
 	if !controllerutil.ContainsFinalizer(plan, wellknown.PlanFinalizerName) {
 		orig := plan.DeepCopy()
 		controllerutil.AddFinalizer(plan, wellknown.PlanFinalizerName)
 		if err := state.Patch(ctx, plan, client.MergeFrom(orig)); err != nil {
-			log.Error(err, "failed to add finalizer")
-			return
+			return StateResult{}, err
 		}
 
 		log.V(1).Info("added finalizer")
@@ -109,5 +107,8 @@ func (state *lifecycleState) handleInit(ctx context.Context, plan *hibernatorv1a
 		}
 
 		log.V(1).Info("plan status initialized (Active)")
+		return StateResult{Requeue: true}, nil
 	}
+
+	return StateResult{}, nil
 }

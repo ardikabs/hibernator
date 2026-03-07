@@ -29,10 +29,10 @@ func TestSuspendedState_ShouldForceWakeUp_NoPriorPhase_ReturnsFalse(t *testing.T
 	plan := basePlanForState("p", hibernatorv1alpha1.PhaseSuspended)
 	// No suspended-at-phase annotation → no force wakeup.
 	c := newHandlerFakeClient(plan)
-	state := newHandlerState(plan, c, &timerTracker{})
+	st := newHandlerState(plan, c)
 
-	st := &suspendedState{State: state}
-	assert.False(t, st.shouldForceWakeUpOnResume())
+	h := &suspendedState{state: st}
+	assert.False(t, h.shouldForceWakeUpOnResume())
 }
 
 func TestSuspendedState_ShouldForceWakeUp_SuspendedAtActive_ReturnsFalse(t *testing.T) {
@@ -41,10 +41,10 @@ func TestSuspendedState_ShouldForceWakeUp_SuspendedAtActive_ReturnsFalse(t *test
 		wellknown.AnnotationSuspendedAtPhase: string(hibernatorv1alpha1.PhaseActive),
 	}
 	c := newHandlerFakeClient(plan)
-	state := newHandlerState(plan, c, &timerTracker{})
+	st := newHandlerState(plan, c)
 
-	st := &suspendedState{State: state}
-	assert.False(t, st.shouldForceWakeUpOnResume(), "suspended from Active → no forced wakeup")
+	h := &suspendedState{state: st}
+	assert.False(t, h.shouldForceWakeUpOnResume(), "suspended from Active → no forced wakeup")
 }
 
 func TestSuspendedState_ShouldForceWakeUp_NoRestoreData_ReturnsFalse(t *testing.T) {
@@ -53,11 +53,11 @@ func TestSuspendedState_ShouldForceWakeUp_NoRestoreData_ReturnsFalse(t *testing.
 		wellknown.AnnotationSuspendedAtPhase: string(hibernatorv1alpha1.PhaseHibernated),
 	}
 	c := newHandlerFakeClient(plan)
-	state := newHandlerState(plan, c, &timerTracker{})
+	st := newHandlerState(plan, c)
 	// HasRestoreData defaults to false.
 
-	st := &suspendedState{State: state}
-	assert.False(t, st.shouldForceWakeUpOnResume(), "no restore data → no forced wakeup")
+	h := &suspendedState{state: st}
+	assert.False(t, h.shouldForceWakeUpOnResume(), "no restore data → no forced wakeup")
 }
 
 func TestSuspendedState_ShouldForceWakeUp_AllConditionsMet_ReturnsTrue(t *testing.T) {
@@ -66,12 +66,12 @@ func TestSuspendedState_ShouldForceWakeUp_AllConditionsMet_ReturnsTrue(t *testin
 		wellknown.AnnotationSuspendedAtPhase: string(hibernatorv1alpha1.PhaseHibernated),
 	}
 	c := newHandlerFakeClient(plan)
-	state := newHandlerState(plan, c, &timerTracker{})
-	state.PlanCtx.HasRestoreData = true
-	state.PlanCtx.ScheduleResult = &message.ScheduleEvaluation{ShouldHibernate: false}
+	st := newHandlerState(plan, c)
+	st.PlanCtx.HasRestoreData = true
+	st.PlanCtx.ScheduleResult = &message.ScheduleEvaluation{ShouldHibernate: false}
 
-	st := &suspendedState{State: state}
-	assert.True(t, st.shouldForceWakeUpOnResume())
+	h := &suspendedState{state: st}
+	assert.True(t, h.shouldForceWakeUpOnResume())
 }
 
 // ---------------------------------------------------------------------------
@@ -89,13 +89,13 @@ func TestSuspendedState_Handle_SuspendUntilFuture_SchedulesDeadline(t *testing.T
 	}
 
 	c := newHandlerFakeClient(plan)
-	tt := &timerTracker{}
-	state := newHandlerState(plan, c, tt)
+	st := newHandlerState(plan, c)
 
-	h := &suspendedState{State: state}
-	h.Handle(context.Background())
+	h := &suspendedState{state: st}
+	result, err := h.Handle(context.Background())
+	require.NoError(t, err)
 
-	assert.True(t, tt.deadlineDuration > 0, "deadline timer should be scheduled")
+	assert.True(t, result.DeadlineAfter > 0, "deadline timer should be scheduled")
 }
 
 func TestSuspendedState_Handle_StillSuspended_NoOp(t *testing.T) {
@@ -103,15 +103,15 @@ func TestSuspendedState_Handle_StillSuspended_NoOp(t *testing.T) {
 	plan.Spec.Suspend = true
 	// No suspend-until → just stay suspended.
 	c := newHandlerFakeClient(plan)
-	tt := &timerTracker{}
-	state := newHandlerState(plan, c, tt)
+	st := newHandlerState(plan, c)
 
-	h := &suspendedState{State: state}
-	h.Handle(context.Background())
+	h := &suspendedState{state: st}
+	result, err := h.Handle(context.Background())
+	require.NoError(t, err)
 
 	// No timer, no status queue changes.
-	assert.Zero(t, tt.deadlineDuration)
-	assert.Zero(t, state.Statuses.PlanStatuses.Len())
+	assert.Zero(t, result.DeadlineAfter)
+	assert.Zero(t, st.Statuses.PlanStatuses.Len())
 }
 
 func TestSuspendedState_Handle_OnSuspendUntilPeriod(t *testing.T) {
@@ -125,22 +125,23 @@ func TestSuspendedState_Handle_OnSuspendUntilPeriod(t *testing.T) {
 	}
 
 	c := newHandlerFakeClient(plan)
-	tt := &timerTracker{}
-	state := newHandlerState(plan, c, tt)
-	state.Clock = clk
+	st := newHandlerState(plan, c)
+	st.Clock = clk
 
-	h := &suspendedState{State: state}
-	h.Handle(context.Background())
+	h := &suspendedState{state: st}
+	result1, err := h.Handle(context.Background())
+	require.NoError(t, err)
 
-	assert.NotZero(t, tt.deadlineDuration)
-	assert.False(t, tt.cancelDeadlineCalled)
+	assert.NotZero(t, result1.DeadlineAfter)
+	assert.False(t, result1.Requeue)
 
 	clk.SetTime(time.Date(2026, 5, 4, 22, 0, 0, 0, time.UTC))
-	h.Handle(context.Background())
+	result2, err := h.Handle(context.Background())
+	require.NoError(t, err)
 
-	// resume() queues the Active transition but does not mutate plan.Status in-memory.
-	assert.True(t, tt.cancelDeadlineCalled)
-	assert.GreaterOrEqual(t, state.Statuses.PlanStatuses.Len(), 1)
+	// resume() queues the Active transition; Requeue=true signals timer cancellation.
+	assert.True(t, result2.Requeue)
+	assert.GreaterOrEqual(t, st.Statuses.PlanStatuses.Len(), 1)
 	assert.Equal(t, hibernatorv1alpha1.PhaseActive, plan.Status.Phase)
 	assert.Empty(t, plan.Annotations[wellknown.AnnotationSuspendUntil])
 	assert.Empty(t, plan.Annotations[wellknown.AnnotationSuspendedAtPhase])
@@ -154,15 +155,15 @@ func TestSuspendedState_Handle_Resume(t *testing.T) {
 	}
 
 	c := newHandlerFakeClient(plan)
-	tt := &timerTracker{}
-	state := newHandlerState(plan, c, tt)
+	st := newHandlerState(plan, c)
 
-	h := &suspendedState{State: state}
-	h.Handle(context.Background())
+	h := &suspendedState{state: st}
+	result, err := h.Handle(context.Background())
+	require.NoError(t, err)
 
-	// resume() queues the Active transition but does not mutate plan.Status in-memory.
-	assert.True(t, tt.cancelDeadlineCalled)
-	assert.GreaterOrEqual(t, state.Statuses.PlanStatuses.Len(), 1)
+	// resume() queues the Active transition; Requeue=true signals timer cancellation.
+	assert.True(t, result.Requeue)
+	assert.GreaterOrEqual(t, st.Statuses.PlanStatuses.Len(), 1)
 }
 
 func TestSuspendedState_Handle_SuspendUntilExpired_PatchesPlanAndResumes(t *testing.T) {
@@ -175,16 +176,16 @@ func TestSuspendedState_Handle_SuspendUntilExpired_PatchesPlanAndResumes(t *test
 	}
 
 	c := newHandlerFakeClient(plan)
-	tt := &timerTracker{}
-	state := newHandlerState(plan, c, tt)
+	st := newHandlerState(plan, c)
 
-	h := &suspendedState{State: state}
-	h.Handle(context.Background())
+	h := &suspendedState{state: st}
+	_, err := h.Handle(context.Background())
+	require.NoError(t, err)
 
 	// Spec.Suspend should have been patched to false, then resume ran.
 	// resume() queues the Active transition but does not mutate plan.Status in-memory.
 	assert.False(t, plan.Spec.Suspend)
-	assert.GreaterOrEqual(t, state.Statuses.PlanStatuses.Len(), 1, "status update should be queued after resume")
+	assert.GreaterOrEqual(t, st.Statuses.PlanStatuses.Len(), 1, "status update should be queued after resume")
 }
 
 // ---------------------------------------------------------------------------
@@ -200,14 +201,14 @@ func TestSuspendedState_OnDeadline_PatchesPlanAndResumes(t *testing.T) {
 	}
 
 	c := newHandlerFakeClient(plan)
-	tt := &timerTracker{}
-	state := newHandlerState(plan, c, tt)
+	st := newHandlerState(plan, c)
 
-	h := &suspendedState{State: state}
+	h := &suspendedState{state: st}
 	err := c.Update(context.Background(), plan) // ensure object exists in fake store
 	require.NoError(t, err)
 
-	h.OnDeadline(context.Background())
+	_, err = h.OnDeadline(context.Background())
+	require.NoError(t, err)
 
 	assert.False(t, plan.Spec.Suspend, "Spec.Suspend should be cleared by OnDeadline")
 }
@@ -223,10 +224,12 @@ func TestResumeFromExecution_NotExecutionPhase_ReturnsFalse(t *testing.T) {
 		wellknown.AnnotationSuspendedAtPhase: string(hibernatorv1alpha1.PhaseHibernated),
 	}
 	c := newHandlerFakeClient(plan)
-	state := newHandlerState(plan, c, &timerTracker{})
+	st := newHandlerState(plan, c)
 
-	st := &suspendedState{State: state}
-	assert.False(t, st.resumeFromExecution(context.Background(), logr.Discard()))
+	h := &suspendedState{state: st}
+	_, handled, err := h.resumeFromExecution(context.Background(), logr.Discard())
+	require.NoError(t, err)
+	assert.False(t, handled)
 }
 
 func TestResumeFromExecution_NoScheduleResult_ReturnsFalse(t *testing.T) {
@@ -236,11 +239,13 @@ func TestResumeFromExecution_NoScheduleResult_ReturnsFalse(t *testing.T) {
 		wellknown.AnnotationSuspendedAtPhase: string(hibernatorv1alpha1.PhaseHibernating),
 	}
 	c := newHandlerFakeClient(plan)
-	state := newHandlerState(plan, c, &timerTracker{})
+	st := newHandlerState(plan, c)
 	// ScheduleResult is nil by default.
 
-	st := &suspendedState{State: state}
-	assert.False(t, st.resumeFromExecution(context.Background(), logr.Discard()))
+	h := &suspendedState{state: st}
+	_, handled, err := h.resumeFromExecution(context.Background(), logr.Discard())
+	require.NoError(t, err)
+	assert.False(t, handled)
 }
 
 func TestResumeFromExecution_Hibernating_SameWindow_ResumesToHibernating(t *testing.T) {
@@ -258,19 +263,19 @@ func TestResumeFromExecution_Hibernating_SameWindow_ResumesToHibernating(t *test
 	}
 
 	c := newHandlerFakeClient(plan)
-	state := newHandlerState(plan, c, &timerTracker{})
-	state.PlanCtx.ScheduleResult = &message.ScheduleEvaluation{ShouldHibernate: true}
+	st := newHandlerState(plan, c)
+	st.PlanCtx.ScheduleResult = &message.ScheduleEvaluation{ShouldHibernate: true}
 
-	st := &suspendedState{State: state}
-	result := st.resumeFromExecution(context.Background(), logr.Discard())
-
-	assert.True(t, result, "should be handled")
+	h := &suspendedState{state: st}
+	_, handled, err := h.resumeFromExecution(context.Background(), logr.Discard())
+	require.NoError(t, err)
+	assert.True(t, handled, "should be handled")
 
 	// Verify the status update that resumeFromExecution queued (the "K8s intent").
 	// We drain the first queue entry because dispatch() may chain further updates
 	// depending on the test plan's execution setup.
-	require.GreaterOrEqual(t, state.Statuses.PlanStatuses.Len(), 1, "status update must be queued")
-	firstUpdate := <-state.Statuses.PlanStatuses.C()
+	require.GreaterOrEqual(t, st.Statuses.PlanStatuses.Len(), 1, "status update must be queued")
+	firstUpdate := <-st.Statuses.PlanStatuses.C()
 	var committed hibernatorv1alpha1.HibernatePlanStatus
 	firstUpdate.Mutate(&committed)
 	assert.Equal(t, hibernatorv1alpha1.PhaseHibernating, committed.Phase, "queued mutation must set PhaseHibernating")
@@ -294,17 +299,17 @@ func TestResumeFromExecution_Hibernating_DifferentWindow_ResumesToActive(t *test
 	plan.Status.CurrentStageIndex = 1
 
 	c := newHandlerFakeClient(plan)
-	state := newHandlerState(plan, c, &timerTracker{})
-	state.PlanCtx.ScheduleResult = &message.ScheduleEvaluation{ShouldHibernate: false}
+	st := newHandlerState(plan, c)
+	st.PlanCtx.ScheduleResult = &message.ScheduleEvaluation{ShouldHibernate: false}
 
-	st := &suspendedState{State: state}
-	result := st.resumeFromExecution(context.Background(), logr.Discard())
-
-	assert.True(t, result)
+	h := &suspendedState{state: st}
+	_, handled, err := h.resumeFromExecution(context.Background(), logr.Discard())
+	require.NoError(t, err)
+	assert.True(t, handled)
 
 	// Verify the status update that resumeFromExecution queued (the "K8s intent").
-	require.GreaterOrEqual(t, state.Statuses.PlanStatuses.Len(), 1)
-	firstUpdate := <-state.Statuses.PlanStatuses.C()
+	require.GreaterOrEqual(t, st.Statuses.PlanStatuses.Len(), 1)
+	firstUpdate := <-st.Statuses.PlanStatuses.C()
 	var committed hibernatorv1alpha1.HibernatePlanStatus
 	firstUpdate.Mutate(&committed)
 	assert.Equal(t, hibernatorv1alpha1.PhaseActive, committed.Phase, "queued mutation must set PhaseActive")
@@ -329,17 +334,17 @@ func TestResumeFromExecution_WakingUp_SameWindow_ResumesToWakingUp(t *testing.T)
 	}
 
 	c := newHandlerFakeClient(plan)
-	state := newHandlerState(plan, c, &timerTracker{})
-	state.PlanCtx.ScheduleResult = &message.ScheduleEvaluation{ShouldHibernate: false}
+	st := newHandlerState(plan, c)
+	st.PlanCtx.ScheduleResult = &message.ScheduleEvaluation{ShouldHibernate: false}
 
-	st := &suspendedState{State: state}
-	result := st.resumeFromExecution(context.Background(), logr.Discard())
-
-	assert.True(t, result)
+	h := &suspendedState{state: st}
+	_, handled, err := h.resumeFromExecution(context.Background(), logr.Discard())
+	require.NoError(t, err)
+	assert.True(t, handled)
 
 	// Verify the status update that resumeFromExecution queued (the "K8s intent").
-	require.GreaterOrEqual(t, state.Statuses.PlanStatuses.Len(), 1)
-	firstUpdate := <-state.Statuses.PlanStatuses.C()
+	require.GreaterOrEqual(t, st.Statuses.PlanStatuses.Len(), 1)
+	firstUpdate := <-st.Statuses.PlanStatuses.C()
 	var committed hibernatorv1alpha1.HibernatePlanStatus
 	firstUpdate.Mutate(&committed)
 	assert.Equal(t, hibernatorv1alpha1.PhaseWakingUp, committed.Phase, "queued mutation must set PhaseWakingUp")
@@ -363,17 +368,17 @@ func TestResumeFromExecution_WakingUp_DifferentWindow_ResumesToHibernated(t *tes
 	plan.Status.CurrentStageIndex = 0
 
 	c := newHandlerFakeClient(plan)
-	state := newHandlerState(plan, c, &timerTracker{})
-	state.PlanCtx.ScheduleResult = &message.ScheduleEvaluation{ShouldHibernate: true}
+	st := newHandlerState(plan, c)
+	st.PlanCtx.ScheduleResult = &message.ScheduleEvaluation{ShouldHibernate: true}
 
-	st := &suspendedState{State: state}
-	result := st.resumeFromExecution(context.Background(), logr.Discard())
-
-	assert.True(t, result)
+	h := &suspendedState{state: st}
+	_, handled, err := h.resumeFromExecution(context.Background(), logr.Discard())
+	require.NoError(t, err)
+	assert.True(t, handled)
 
 	// Verify the status update that resumeFromExecution queued (the "K8s intent").
-	require.GreaterOrEqual(t, state.Statuses.PlanStatuses.Len(), 1)
-	firstUpdate := <-state.Statuses.PlanStatuses.C()
+	require.GreaterOrEqual(t, st.Statuses.PlanStatuses.Len(), 1)
+	firstUpdate := <-st.Statuses.PlanStatuses.C()
 	var committed hibernatorv1alpha1.HibernatePlanStatus
 	firstUpdate.Mutate(&committed)
 	assert.Equal(t, hibernatorv1alpha1.PhaseHibernated, committed.Phase, "queued mutation must set PhaseHibernated")

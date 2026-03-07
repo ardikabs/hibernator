@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/utils/ptr"
 
@@ -28,14 +29,14 @@ func TestRecoveryState_Handle_MaxRetriesExceeded_CancelsRetry(t *testing.T) {
 	plan.Status.ErrorMessage = "something went wrong"
 
 	c := newHandlerFakeClient(plan)
-	tt := &timerTracker{}
-	state := newHandlerState(plan, c, tt)
+	st := newHandlerState(plan, c)
 
-	h := &recoveryState{State: state}
-	h.Handle(context.Background())
+	h := &recoveryState{state: st}
+	result, err := h.Handle(context.Background())
+	require.NoError(t, err)
 
-	assert.True(t, tt.cancelRequeueCalled, "retry timer must be cancelled when max retries exhausted")
-	assert.Zero(t, tt.requeueDuration, "no retry should be scheduled")
+	assert.Zero(t, result.RequeueAfter, "no retry should be scheduled when max retries exhausted")
+	assert.False(t, result.Requeue)
 }
 
 func TestRecoveryState_Handle_BackoffPending_SchedulesRetryTimer(t *testing.T) {
@@ -47,11 +48,11 @@ func TestRecoveryState_Handle_BackoffPending_SchedulesRetryTimer(t *testing.T) {
 	plan.Status.LastRetryTime = ptr.To(now)
 
 	c := newHandlerFakeClient(plan)
-	tt := &timerTracker{}
-	state := newHandlerState(plan, c, tt)
+	st := newHandlerState(plan, c)
 
-	h := &recoveryState{State: state}
-	h.Handle(context.Background())
+	h := &recoveryState{state: st}
+	result, err := h.Handle(context.Background())
+	require.NoError(t, err)
 
-	assert.True(t, tt.requeueDuration > 0, "retry timer should be scheduled while within backoff window")
+	assert.True(t, result.RequeueAfter > 0, "retry timer should be scheduled while within backoff window")
 }

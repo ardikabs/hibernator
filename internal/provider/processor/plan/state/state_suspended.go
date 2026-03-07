@@ -26,10 +26,10 @@ import (
 //   - If Spec.Suspend is still true (no deadline or deadline future) → stay suspended.
 //   - If Spec.Suspend is false → resume (cancel deadlineTimer + resume()).
 type suspendedState struct {
-	*State
+	*state
 }
 
-func (state *suspendedState) Handle(ctx context.Context) {
+func (state *suspendedState) Handle(ctx context.Context) (StateResult, error) {
 	plan := state.plan()
 	log := state.Log.
 		WithName("suspended").
@@ -46,7 +46,7 @@ func (state *suspendedState) Handle(ctx context.Context) {
 		deadline, err := time.Parse(time.RFC3339, suspendUntilStr)
 		if err != nil {
 			log.Error(err, "invalid suspend-until annotation format, ignoring", "got", suspendUntilStr)
-			return
+			return StateResult{}, err
 		} else {
 			now := state.Clock.Now()
 			if !now.After(deadline) {
@@ -55,9 +55,7 @@ func (state *suspendedState) Handle(ctx context.Context) {
 				log.V(1).Info("suspend-until deadline pending, scheduling deadline timer",
 					"deadline", deadline.Format(time.RFC3339),
 					"remaining", remaining.Round(time.Second).String())
-
-				state.DeadlineAfter(remaining)
-				return
+				return StateResult{DeadlineAfter: remaining}, nil
 			}
 
 			// Deadline expired — patch Spec.Suspend=false.
@@ -67,7 +65,7 @@ func (state *suspendedState) Handle(ctx context.Context) {
 			delete(plan.Annotations, wellknown.AnnotationSuspendUntil)
 			if err := state.patchPreservingStatus(ctx, plan, client.MergeFrom(orig)); err != nil {
 				log.Error(err, "failed to auto-resume from suspension deadline")
-				return
+				return StateResult{}, err
 			}
 			// Fall through to resume logic below.
 		}
@@ -75,36 +73,35 @@ func (state *suspendedState) Handle(ctx context.Context) {
 
 	if plan.Spec.Suspend {
 		log.V(1).Info("plan still suspended, waiting for resume")
-		return
+		return StateResult{}, nil
 	}
 
-	// Spec.Suspend is false — cancel any pending deadline timer then resume.
-	state.CancelDeadline()
-	state.resume(ctx, log)
+	// Spec.Suspend is false — resume (timer cancellation implicit via Requeue result).
+	return state.resume(ctx, log)
 }
 
 // OnDeadline is called when the supervisor's deadlineTimer fires. It patches
 // Spec.Suspend=false and immediately processes the resume to avoid a full provider roundtrip.
-func (state *suspendedState) OnDeadline(ctx context.Context) {
+func (state *suspendedState) OnDeadline(ctx context.Context) (StateResult, error) {
 	plan := state.plan()
 
 	log := state.Log.
 		WithName("suspended").
 		WithValues("plan", state.Key.String())
 
-	log.Info("suspension deadline timer fired, revoking suspension")
+	log.Info("suspension deadline fired, revoking suspension")
 
 	orig := plan.DeepCopy()
 	plan.Spec.Suspend = false
 	delete(plan.Annotations, wellknown.AnnotationSuspendUntil)
 	if err := state.patchPreservingStatus(ctx, plan, client.MergeFrom(orig)); err != nil {
 		if !apierrors.IsNotFound(err) {
-			log.Error(err, "deadline timer: failed to patch Spec.Suspend=false")
+			log.Error(err, "deadline: failed to patch Spec.Suspend=false")
 		}
-		return
+		return StateResult{}, err
 	}
 
-	state.resume(ctx, log)
+	return state.resume(ctx, log)
 }
 
 // resume transitions the plan from Suspended back to the appropriate phase.
@@ -115,23 +112,22 @@ func (state *suspendedState) OnDeadline(ctx context.Context) {
 //  2. Suspended-mid-execution → resumeFromExecution() (continue or route to idle baseline)
 //  3. Force-wakeup conditions met → forceWakeUpOnResume()
 //  4. Default → PhaseActive
-func (state *suspendedState) resume(ctx context.Context, log logr.Logger) {
+func (state *suspendedState) resume(ctx context.Context, log logr.Logger) (StateResult, error) {
 	plan := state.plan()
 
 	log.Info("resuming plan from suspended state")
 
-	if state.resumeFromError(ctx, log) {
-		return
+	if result, handled, err := state.resumeFromError(ctx, log); handled {
+		return result, err
 	}
 
-	if state.resumeFromExecution(ctx, log) {
-		return
+	if result, handled, err := state.resumeFromExecution(ctx, log); handled {
+		return result, err
 	}
 
 	if state.shouldForceWakeUpOnResume() {
 		log.V(1).Info("force wakeup conditions met, transitioning to WakingUp")
-		state.forceWakeUpOnResume(ctx, log)
-		return
+		return state.forceWakeUpOnResume(ctx, log)
 	}
 
 	log.V(1).Info("normal resume, transitioning to Active")
@@ -148,7 +144,7 @@ func (state *suspendedState) resume(ctx context.Context, log logr.Logger) {
 	})
 
 	state.cleanupSuspensionAnnotations(ctx, log, plan)
-	state.dispatch(ctx)
+	return StateResult{Requeue: true}, nil
 }
 
 // resumeFromError handles resume when the plan was suspended while in PhaseError.
@@ -164,12 +160,12 @@ func (state *suspendedState) resume(ctx context.Context, log logr.Logger) {
 // (e.g. Active + ShouldHibernate=false is a no-op for idleState). idleState then
 // re-evaluates the schedule naturally from the correct baseline — no special retry routing
 // needed.
-func (state *suspendedState) resumeFromError(ctx context.Context, log logr.Logger) bool {
+func (state *suspendedState) resumeFromError(ctx context.Context, log logr.Logger) (StateResult, bool, error) {
 	plan := state.plan()
 	suspendedAtPhase := plan.Annotations[wellknown.AnnotationSuspendedAtPhase]
 
 	if suspendedAtPhase != string(hibernatorv1alpha1.PhaseError) {
-		return false
+		return StateResult{}, false, nil
 	}
 
 	log.Info("resuming from error-suspended state, routing via operation-aware idle phase")
@@ -211,11 +207,9 @@ func (state *suspendedState) resumeFromError(ctx context.Context, log logr.Logge
 	})
 
 	state.cleanupSuspensionAnnotations(ctx, log, plan)
-	state.dispatch(ctx)
-	return true
+	return StateResult{Requeue: true}, true, nil
 }
 
-// resumeFromExecution handles resume when the plan was suspended mid-execution
 // (PhaseHibernating or PhaseWakingUp). It uses the current schedule result to determine
 // whether the resume falls inside the same operation window or a different one:
 //
@@ -228,18 +222,18 @@ func (state *suspendedState) resumeFromError(ctx context.Context, log logr.Logge
 //     same bookmark-preservation semantics.
 //   - PhaseWakingUp   + ShouldHibernate=true  → now off-hours → route to PhaseHibernated;
 //     wakeup never completed, resource treated as still hibernated.
-func (state *suspendedState) resumeFromExecution(ctx context.Context, log logr.Logger) bool {
+func (state *suspendedState) resumeFromExecution(ctx context.Context, log logr.Logger) (StateResult, bool, error) {
 	plan := state.plan()
 	suspendedAtPhase := plan.Annotations[wellknown.AnnotationSuspendedAtPhase]
 
 	if suspendedAtPhase != string(hibernatorv1alpha1.PhaseHibernating) &&
 		suspendedAtPhase != string(hibernatorv1alpha1.PhaseWakingUp) {
-		return false
+		return StateResult{}, false, nil
 	}
 
 	planCtx := state.PlanCtx
 	if planCtx.ScheduleResult == nil {
-		return false
+		return StateResult{}, false, nil
 	}
 
 	shouldHibernate := planCtx.ScheduleResult.ShouldHibernate
@@ -283,8 +277,7 @@ func (state *suspendedState) resumeFromExecution(ctx context.Context, log logr.L
 	})
 
 	state.cleanupSuspensionAnnotations(ctx, log, plan)
-	state.dispatch(ctx)
-	return true
+	return StateResult{Requeue: true}, true, nil
 }
 
 func (state *suspendedState) shouldForceWakeUpOnResume() bool {
@@ -306,7 +299,7 @@ func (state *suspendedState) shouldForceWakeUpOnResume() bool {
 	return !planCtx.ScheduleResult.ShouldHibernate
 }
 
-func (state *suspendedState) forceWakeUpOnResume(ctx context.Context, log logr.Logger) {
+func (state *suspendedState) forceWakeUpOnResume(ctx context.Context, log logr.Logger) (StateResult, error) {
 	plan := state.plan()
 	suspendedAtPhase := plan.Annotations[wellknown.AnnotationSuspendedAtPhase]
 	log.Info("forcing wake-up after resume from suspension",
@@ -314,16 +307,16 @@ func (state *suspendedState) forceWakeUpOnResume(ctx context.Context, log logr.L
 		"reason", "restore data exists and schedule indicates active period")
 
 	// Transition to Hibernated rather than directly to WakingUp. This lets
-	// dispatch() route to idleState, which sees !ShouldHibernate + HasRestoreData
+	// the worker re-evaluate via idleState, which sees !ShouldHibernate + HasRestoreData
 	// and calls transitionToWakingUp() — the canonical path that correctly
 	// initialises Executions, CycleID, StageIndex, and CurrentOperation.
 	// Going directly to WakingUp would inherit stale execution state from
 	// the pre-suspension cycle.
 	plan.Status.Phase = hibernatorv1alpha1.PhaseHibernated
 
-	log.Info("plan resumed to Hibernated phase, dispatching to trigger wake-up flow", "targetPhase", plan.Status.Phase)
+	log.Info("plan resumed to Hibernated phase, returning Requeue to trigger wake-up flow", "targetPhase", plan.Status.Phase)
 	state.cleanupSuspensionAnnotations(ctx, log, plan)
-	state.dispatch(ctx)
+	return StateResult{Requeue: true}, nil
 }
 
 func (state *suspendedState) cleanupSuspensionAnnotations(ctx context.Context, log logr.Logger, plan *hibernatorv1alpha1.HibernatePlan) {

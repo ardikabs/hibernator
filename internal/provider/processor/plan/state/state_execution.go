@@ -9,6 +9,7 @@ import (
 	"context"
 	"fmt"
 	"sort"
+	"strings"
 
 	"github.com/go-logr/logr"
 	batchv1 "k8s.io/api/batch/v1"
@@ -33,32 +34,28 @@ import (
 
 // execute executes the given operation ("shutdown" or "wakeup")
 // starting from the current stage index in the plan status.
-func (s *State) execute(
+func (s *state) execute(
 	ctx context.Context,
 	log logr.Logger,
 	operation string,
 	reverse bool,
-	onErrorCallback func(context.Context, error),
 	onAdvanceStageCallback func(int),
 	onFinalizeCallback func(context.Context, scheduler.ExecutionPlan),
-) {
+) (StateResult, error) {
 	plan := s.plan()
 
 	jobs, err := s.getCurrentCycleJobs(ctx, plan)
 	if err != nil {
 		log.Error(err, "failed to get current cycle jobs")
-		return
+		return StateResult{}, err
 	}
 	log.V(1).Info("job list fetched", "operation", operation, "jobCount", len(jobs))
 
-	if err := s.updateExecutionStatuses(ctx, log, plan, jobs); err != nil {
-		log.Error(err, "failed to update execution statuses before executing stage, proceeding with best-effort status sync")
-	}
+	s.updateExecutionStatuses(ctx, log, plan, jobs)
 
 	execPlan, err := s.buildExecutionPlan(plan, reverse)
 	if err != nil {
-		onErrorCallback(ctx, fmt.Errorf("failed to build execution plan: %w", err))
-		return
+		return StateResult{}, AsPlanError(fmt.Errorf("failed to build execution plan: %w", err))
 	}
 
 	log.V(1).Info("execution plan built",
@@ -67,7 +64,7 @@ func (s *State) execute(
 
 	if plan.Status.CurrentStageIndex >= len(execPlan.Stages) {
 		onFinalizeCallback(ctx, execPlan)
-		return
+		return StateResult{}, nil
 	}
 
 	targetStage := execPlan.Stages[plan.Status.CurrentStageIndex]
@@ -87,8 +84,19 @@ func (s *State) execute(
 			"failedCount", stageStatus.FailedCount)
 
 		if stageStatus.FailedCount > 0 && plan.Spec.Behavior.Mode == hibernatorv1alpha1.BehaviorStrict {
-			onErrorCallback(ctx, fmt.Errorf("one or more targets in stage %d failed", plan.Status.CurrentStageIndex))
-			return
+			var failedTargets []string
+			for _, exec := range plan.Status.Executions {
+				if exec.State != hibernatorv1alpha1.StateFailed {
+					continue
+				}
+				for _, t := range targetStage.Targets {
+					if exec.Target == t {
+						failedTargets = append(failedTargets, exec.Target)
+						break
+					}
+				}
+			}
+			return StateResult{}, AsPlanError(fmt.Errorf("one or more targets failed: %s", strings.Join(failedTargets, ", ")))
 		}
 
 		nextStageIndex := plan.Status.CurrentStageIndex + 1
@@ -97,34 +105,33 @@ func (s *State) execute(
 			onAdvanceStageCallback(nextStageIndex)
 
 			targetStage = execPlan.Stages[nextStageIndex]
-			s.executeForStage(ctx, log, plan, jobs, targetStage, operation, onErrorCallback)
-			return
+			return s.executeForStage(ctx, log, plan, jobs, targetStage, operation)
 		}
 
 		onFinalizeCallback(ctx, execPlan)
-		return
+		return StateResult{}, nil
 	}
 
 	if stageStatus.HasPending {
 		log.V(1).Info("filling pending slots in current stage", "stageIndex", plan.Status.CurrentStageIndex, "targetStages", targetStage.Targets)
-		s.executeForStage(ctx, log, plan, jobs, targetStage, operation, onErrorCallback)
+		return s.executeForStage(ctx, log, plan, jobs, targetStage, operation)
 	}
+
+	return StateResult{RequeueAfter: wellknown.RequeueIntervalDuringStage}, nil
 }
 
 // executeForStage executes the operation for the targets in the given stage.
-func (s *State) executeForStage(
+func (s *state) executeForStage(
 	ctx context.Context,
 	log logr.Logger,
 	plan *hibernatorv1alpha1.HibernatePlan,
 	jobs []batchv1.Job,
 	stage scheduler.ExecutionStage,
 	operation string,
-	onErrorCallback func(ctx context.Context, err error),
-) {
+) (StateResult, error) {
 	if plan.Spec.Execution.Strategy.Type == hibernatorv1alpha1.StrategyDAG {
 		if failed := FindFailedDependencies(plan, plan.Spec.Execution.Strategy.Dependencies, stage); len(failed) > 0 {
-			onErrorCallback(ctx, fmt.Errorf("cannot execute stage: targets depend on failed targets: %v", failed))
-			return
+			return StateResult{}, AsPlanError(fmt.Errorf("cannot execute stage: targets depend on failed targets: %v", failed))
 		}
 	}
 
@@ -161,21 +168,21 @@ func (s *State) executeForStage(
 			metrics.JobFailuresTotal.WithLabelValues(plan.Name, targetName).Inc()
 
 			if plan.Spec.Behavior.Mode == hibernatorv1alpha1.BehaviorStrict && plan.Spec.Behavior.FailFast {
-				onErrorCallback(ctx, fmt.Errorf("failed to create job for target %s: %w", targetName, err))
-				return
+				return StateResult{}, AsPlanError(fmt.Errorf("failed to create job for target %s: %w", targetName, err))
 			}
 		} else {
 			metrics.JobsCreatedTotal.WithLabelValues(plan.Name, targetName).Inc()
 		}
 		jobsCreated++
 	}
+	return StateResult{}, nil
 }
 
 // getCurrentCycleJobs returns the runner Jobs for the current execution cycle of a plan.
 // It reads from the API server directly via client.Reader (typically mgr.GetAPIReader())
 // to avoid cache staleness that could cause phantom "job missing" resets during
 // informer re-list gaps. Returns nil if the plan has no active cycle.
-func (s *State) getCurrentCycleJobs(ctx context.Context, plan *hibernatorv1alpha1.HibernatePlan) ([]batchv1.Job, error) {
+func (s *state) getCurrentCycleJobs(ctx context.Context, plan *hibernatorv1alpha1.HibernatePlan) ([]batchv1.Job, error) {
 	if plan.Status.CurrentCycleID == "" || plan.Status.CurrentOperation == "" {
 		return nil, nil
 	}
@@ -212,11 +219,11 @@ func (s *State) getCurrentCycleJobs(ctx context.Context, plan *hibernatorv1alpha
 // persistence — and avoids redundant writes on poll ticks where nothing changed.
 //
 // onJobMissing and onJobFound are optional closures (nil disables the safeguard).
-func (s *State) updateExecutionStatuses(ctx context.Context,
+func (s *state) updateExecutionStatuses(ctx context.Context,
 	log logr.Logger,
 	plan *hibernatorv1alpha1.HibernatePlan,
 	jobs []batchv1.Job,
-) error {
+) {
 	prevSnapshot := snapshotExecutionStates(plan.Status.Executions)
 	log.V(1).Info("updating execution statuses", "totalExecutions", len(plan.Status.Executions))
 
@@ -338,12 +345,10 @@ func (s *State) updateExecutionStatuses(ctx context.Context,
 			},
 		})
 	}
-
-	return nil
 }
 
 // getDetailedErrorFromPod fetches the termination message from the failed pod of a job.
-func (s *State) getDetailedErrorFromPod(ctx context.Context, job *batchv1.Job) string {
+func (s *state) getDetailedErrorFromPod(ctx context.Context, job *batchv1.Job) string {
 	var podList corev1.PodList
 	if err := s.List(ctx, &podList,
 		client.InNamespace(job.Namespace),
@@ -371,7 +376,7 @@ func (s *State) getDetailedErrorFromPod(ctx context.Context, job *batchv1.Job) s
 }
 
 // buildExecutionPlan creates a scheduler.ExecutionPlan from the plan's strategy.
-func (s *State) buildExecutionPlan(plan *hibernatorv1alpha1.HibernatePlan, reverse bool) (scheduler.ExecutionPlan, error) {
+func (s *state) buildExecutionPlan(plan *hibernatorv1alpha1.HibernatePlan, reverse bool) (scheduler.ExecutionPlan, error) {
 	targets := make([]string, len(plan.Spec.Targets))
 	for i, t := range plan.Spec.Targets {
 		targets[i] = t.Name
@@ -435,7 +440,7 @@ func (s *State) buildExecutionPlan(plan *hibernatorv1alpha1.HibernatePlan, rever
 }
 
 // CreateRunnerJob creates a Kubernetes Job for executing a target.
-func (s *State) createRunnerJob(ctx context.Context, log logr.Logger, clk clock.Clock,
+func (s *state) createRunnerJob(ctx context.Context, log logr.Logger, clk clock.Clock,
 	plan *hibernatorv1alpha1.HibernatePlan, target *hibernatorv1alpha1.Target, operation string,
 	controlPlaneEndpoint, runnerImage, runnerServiceAccount string) error {
 

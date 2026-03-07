@@ -7,6 +7,7 @@ package state
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"time"
 
@@ -25,24 +26,210 @@ import (
 	"github.com/ardikabs/hibernator/internal/wellknown"
 )
 
+// StateResult carries the timer directives a handler returns to the worker.
+// The worker applies these after each Handle or OnDeadline call.
+//
+// Timer contract:
+//
+//	Requeue        — cancels BOTH timers and immediately re-invokes handle().
+//	                 Signals "this phase is done": any active watchdog (TimeoutAfter)
+//	                 is no longer relevant and must not fire on the next phase.
+//	                 The next phase arms its own timers via its first Handle() call.
+//
+//	RequeueAfter   — resets the poll timer to fire after d.
+//	                 Zero cancels the poll timer (no future poll tick).
+//
+//	TimeoutAfter   — arms a one-shot max-lifetime timer FROM THE FIRST CALL (idempotent).
+//	                 Safe to return on every poll tick — only the first value takes effect
+//	                 while the timer is already running. Scoped to the current phase:
+//	                 cancelled automatically when Requeue is returned.
+//	                 Zero cancels any active timeout timer.
+//
+//	DeadlineAfter  — sets or resets the deadline timer to fire after d from now, always
+//	                 replacing any previously active deadline. Use for precise
+//	                 schedule-driven wake-ups where the target time is recomputed on
+//	                 each delivery (e.g. suspend-until).
+//	                 Zero cancels any active deadline timer.
+//
+//	All zero       — cancels ALL timers. The handler is signalling "go quiet":
+//	                 no further polling or deadline will fire until the next slot delivery.
+type StateResult struct {
+	// Requeue cancels both timers and immediately re-invokes handle().
+	// Signals "this phase is done" — the active watchdog (TimeoutAfter) is cancelled
+	// so it cannot fire unexpectedly on the next phase, which arms its own timers.
+	Requeue bool
+
+	// RequeueAfter resets the poll timer to fire after d.
+	// Zero cancels the poll timer — no future poll tick will fire.
+	RequeueAfter time.Duration
+
+	// TimeoutAfter arms a one-shot max-lifetime timer if not already active
+	// (idempotent / arm-once). Safe to include on every poll tick.
+	// Zero cancels any active timeout timer.
+	TimeoutAfter time.Duration
+
+	// DeadlineAfter sets (or resets) the deadline timer to fire after d from now,
+	// always replacing any previously set deadline.
+	// Zero cancels any active deadline timer.
+	DeadlineAfter time.Duration
+}
+
+// PlanError wraps an error to indicate a plan-level failure. When a handler
+// returns a PlanError from Handle or OnDeadline, the default OnError
+// implementation transitions the plan to PhaseError. Use AsPlanError to
+// create one; detection is done with errors.As.
+type PlanError struct{ cause error }
+
+func (e *PlanError) Error() string { return e.cause.Error() }
+func (e *PlanError) Unwrap() error { return e.cause }
+
+// AsPlanError wraps err as a plan-level error. OnError will ingest it into
+// the Plan's status and move the plan to PhaseError. Use this in Handle or
+// OnDeadline when the failure reflects a problem with the plan itself, not
+// a transient infrastructure issue.
+func AsPlanError(err error) error {
+	if err == nil {
+		return nil
+	}
+	return &PlanError{cause: err}
+}
+
 // Handler is the interface each phase-specific handler must implement.
 type Handler interface {
-	Handle(ctx context.Context)
-	OnDeadline(ctx context.Context)
+	// Handle is invoked on every normal reconcile tick: slot delivery and poll
+	// timer fire. It drives the plan forward for its current phase and returns
+	// a StateResult that tells the worker how to schedule the next wake-up.
+	// A non-nil error is forwarded to OnError after the StateResult is applied.
+	Handle(ctx context.Context) (StateResult, error)
+
+	// OnDeadline is invoked when the deadline timer fires. Semantics are
+	// identical to Handle but signal that a time-bound operation (e.g. a
+	// suspend-until window or an execution drain timeout) has expired.
+	// Handlers that do not care about deadlines inherit a no-op from *state.
+	OnDeadline(ctx context.Context) (StateResult, error)
+
+	// OnError is called by the worker as a side-effect when Handle or OnDeadline
+	// returns a non-nil error. It decides only what to write to the Plan (e.g.
+	// transition to PhaseError for a PlanError, or just log for transient failures).
+	// Timer/requeue directives are owned by the StateResult already returned from
+	// Handle or OnDeadline — OnError does not influence them.
+	OnError(ctx context.Context, err error) StateResult
 }
 
 // HandlerFunc is an adapter that allows plain functions to satisfy Handler.
-type HandlerFunc func(ctx context.Context, onDeadline bool)
+type HandlerFunc func(ctx context.Context, onDeadline bool) (StateResult, error)
 
-func (f HandlerFunc) Handle(ctx context.Context) { f(ctx, false) }
+func (f HandlerFunc) Handle(ctx context.Context) (StateResult, error) { return f(ctx, false) }
 
-func (f HandlerFunc) OnDeadline(ctx context.Context) { f(ctx, true) }
+func (f HandlerFunc) OnDeadline(ctx context.Context) (StateResult, error) { return f(ctx, true) }
 
-// Config holds all the context and infrastructure a state handler needs.
-// It is constructed fresh on each handle() call from the supervisor's latest cached
-// PlanContext. Because PlanCtx is the same pointer stored in s.cachedCtx, mutations
-// to PlanCtx.Plan.Status.* propagate back to the supervisor's optimistic view automatically.
-type State struct {
+// OnError implements Handler for HandlerFunc. HandlerFunc shims are thin
+// infrastructure wrappers whose callers already log the error inside the
+// closure before returning it, so no further action is needed here.
+func (f HandlerFunc) OnError(_ context.Context, _ error) StateResult { return StateResult{} }
+
+// New creates a Handler for the given plan context. It constructs a fresh state
+// from the provided configuration and dispatches to the phase-appropriate handler.
+// Returns nil for unrecognised phases.
+//
+// The caller (Worker) is responsible for supplying a fresh Config on every
+// handle() call. Because planCtx.Plan is the same pointer stored in the worker's
+// cachedCtx, mutations to Plan.Status.* inside handlers propagate back to the
+// worker's optimistic view automatically.
+func New(key types.NamespacedName, planCtx *message.PlanContext, cfg *Config) Handler {
+	if planCtx == nil || planCtx.Plan == nil {
+		return nil
+	}
+	s := newState(key, planCtx, cfg)
+	return selectHandler(s)
+}
+
+// newState constructs a private state value from the given key, plan context, and config.
+func newState(key types.NamespacedName, planCtx *message.PlanContext, cfg *Config) *state {
+	return &state{
+		Key:                  key,
+		PlanCtx:              planCtx,
+		Log:                  cfg.Log,
+		Client:               cfg.Client,
+		APIReader:            cfg.APIReader,
+		Clock:                cfg.Clock,
+		Scheme:               cfg.Scheme,
+		Planner:              cfg.Planner,
+		Statuses:             cfg.Statuses,
+		RestoreManager:       cfg.RestoreManager,
+		ControlPlaneEndpoint: cfg.ControlPlaneEndpoint,
+		RunnerImage:          cfg.RunnerImage,
+		RunnerServiceAccount: cfg.RunnerServiceAccount,
+		OnJobMissing:         cfg.OnJobMissing,
+		OnJobFound:           cfg.OnJobFound,
+	}
+}
+
+// selectHandler returns the phase-appropriate Handler for the given state.
+// Dispatch follows a strict priority order:
+//
+//  1. Deletion in progress (DeletionTimestamp set) — returns a lifecycleState
+//     configured for finalizer cleanup, regardless of the current phase.
+//
+//  2. Suspension requested (Spec.Suspend=true) but not yet reflected in status —
+//     returns an inline handler that calls TransitionToSuspended, which drains
+//     any in-flight executions before writing PhaseSuspended.
+//
+//  3. Phase-based dispatch — maps Status.Phase to its dedicated handler:
+//     - ""               → lifecycleState (initialisation / first-time setup)
+//     - PhaseActive      → idleState (schedule evaluation, waiting for off-hours)
+//     - PhaseHibernated  → idleState (schedule evaluation, waiting for on-hours)
+//     - PhaseHibernating → hibernatingState (job orchestration for shutdown)
+//     - PhaseWakingUp    → wakingUpState (job orchestration for wakeup)
+//     - PhaseSuspended   → suspendedState (suspended until resume)
+//     - PhaseError       → recoveryState (retry / manual recovery)
+//     - unknown phase    → nil (caller should treat as a no-op)
+func selectHandler(s *state) Handler {
+	plan := s.plan()
+
+	// Deletion in progress — run finalizer cleanup regardless of phase.
+	if !plan.DeletionTimestamp.IsZero() {
+		return &lifecycleState{state: s, delete: true}
+	}
+
+	// Suspension requested but not yet in PhaseSuspended — transition first.
+	if plan.Spec.Suspend && plan.Status.Phase != hibernatorv1alpha1.PhaseSuspended {
+		return HandlerFunc(func(ctx context.Context, onDeadline bool) (StateResult, error) {
+			result, err := s.TransitionToSuspended(ctx, onDeadline)
+			if err != nil {
+				s.Log.Error(err, "failed to transition to Suspended")
+				return StateResult{}, err
+			}
+			return result, nil
+		})
+	}
+
+	switch plan.Status.Phase {
+	case "":
+		return &lifecycleState{state: s}
+	case hibernatorv1alpha1.PhaseActive, hibernatorv1alpha1.PhaseHibernated:
+		return &idleState{state: s}
+	case hibernatorv1alpha1.PhaseHibernating:
+		return &hibernatingState{state: s}
+	case hibernatorv1alpha1.PhaseWakingUp:
+		return &wakingUpState{state: s}
+	case hibernatorv1alpha1.PhaseSuspended:
+		return &suspendedState{state: s}
+	case hibernatorv1alpha1.PhaseError:
+		return &recoveryState{state: s}
+	default:
+		return nil
+	}
+}
+
+// state holds all context and infrastructure a handler needs for a single
+// handle() invocation. It is constructed fresh on each call via newState() and
+// is not cached between calls.
+//
+// Fields are capitalised so they are accessible within the package (e.g. from
+// handler types and tests). The type itself is unexported — callers outside the
+// package interact only through the Handler interface and the New() factory.
+type state struct {
 	client.Client
 
 	Key     types.NamespacedName
@@ -59,26 +246,34 @@ type State struct {
 	RunnerImage          string
 	RunnerServiceAccount string
 
-	// Timer controls — closures over the supervisor's timer methods so that state
-	// handlers can drive timing without knowing about PlanSupervisor internals.
-	DeadlineAfter  func(time.Duration)
-	CancelDeadline func()
-
-	RequeueAfter  func(time.Duration)
-	CancelRequeue func()
-
-	// Job-miss safeguard — closures owned by the Worker that track how many
-	// consecutive poll cycles a running target's Job has been absent.
-	// OnJobMissing increments the counter and returns true when the threshold is
-	// reached (job considered lost → reset target to StatePending).
-	// OnJobFound resets the counter when the job reappears.
-	// Both are nil-safe; passing nil disables the safeguard.
 	OnJobMissing func(target string) bool
 	OnJobFound   func(target string)
 }
 
-func (s *State) Handle(ctx context.Context)     {}
-func (s *State) OnDeadline(ctx context.Context) {}
+// Handle is a no-op so that handler types embedding *state inherit a default
+// implementation for the Handle method. Handler types with specific logic override it.
+func (s *state) Handle(ctx context.Context) (StateResult, error) { return StateResult{}, nil }
+
+// OnDeadline is a no-op so that handler types that do not handle deadline events
+// (all except suspendedState) inherit a default do-nothing implementation.
+func (s *state) OnDeadline(ctx context.Context) (StateResult, error) { return StateResult{}, nil }
+
+// OnError is the default error handler inherited by all phase handler types that
+// embed *state. It classifies the error and acts accordingly:
+//   - PlanError: ingested into Plan status via setError; plan transitions to PhaseError.
+//   - Any other error: treated as transient; logged only. The caller's StateResult
+//     (returned from Handle or OnDeadline) governs whether and when to requeue.
+func (s *state) OnError(ctx context.Context, err error) StateResult {
+	var pe *PlanError
+	if errors.As(err, &pe) {
+		s.Log.Error(err, "plan-level error, transitioning to PhaseError", "plan", s.Key)
+		s.setError(ctx, err)
+		return StateResult{Requeue: true}
+	}
+
+	s.Log.Error(err, "transient error during handler", "plan", s.Key)
+	return StateResult{RequeueAfter: wellknown.RequeueIntervalOnTransientError}
+}
 
 // patchPreservingStatus patches the plan object (typically to update annotations or
 // spec fields) while preserving the worker's optimistic in-memory status.
@@ -86,7 +281,7 @@ func (s *State) OnDeadline(ctx context.Context) {}
 // which overwrites Status with the server's (potentially stale) version. This helper
 // snapshots Status before the patch and restores it afterwards, so that status mutations
 // queued via PlanStatuses.Send are never silently reverted.
-func (s *State) patchPreservingStatus(ctx context.Context, plan *hibernatorv1alpha1.HibernatePlan, patch client.Patch) error {
+func (s *state) patchPreservingStatus(ctx context.Context, plan *hibernatorv1alpha1.HibernatePlan, patch client.Patch) error {
 	savedStatus := plan.Status.DeepCopy()
 	if err := s.Patch(ctx, plan, patch); err != nil {
 		return err
@@ -95,25 +290,13 @@ func (s *State) patchPreservingStatus(ctx context.Context, plan *hibernatorv1alp
 	return nil
 }
 
-// dispatch invokes the handlerFactory to construct the handler for the plan's
-// current phase and executes it synchronously within the same handle() call.
-// This allows a state to transition to a new phase and immediately drive its
-// execution without waiting for the next worker poll cycle.
-// (e.g. idleState transitions plan to Hibernating, then dispatches to construct
-// and run hibernatingState handler synchronously).
-func (s *State) dispatch(ctx context.Context) {
-	if st := Factory(s); st != nil {
-		st.Handle(ctx)
-	}
-}
-
 // plan is a convenience shortcut to the current HibernatePlan.
-func (b *State) plan() *hibernatorv1alpha1.HibernatePlan {
+func (b *state) plan() *hibernatorv1alpha1.HibernatePlan {
 	return b.PlanCtx.Plan
 }
 
 // nextStage moves the plan to the next execution stage.
-func (b *State) nextStage(nextStageIndex int) {
+func (b *state) nextStage(nextStageIndex int) {
 	mutate := func(st *hibernatorv1alpha1.HibernatePlanStatus) {
 		st.CurrentStageIndex = nextStageIndex
 	}
@@ -127,7 +310,7 @@ func (b *State) nextStage(nextStageIndex int) {
 }
 
 // setError transitions the plan to PhaseError.
-func (b *State) setError(ctx context.Context, phaseErr error) {
+func (b *state) setError(ctx context.Context, phaseErr error) {
 	errMsg := "unknown error"
 	if phaseErr != nil {
 		errMsg = phaseErr.Error()
@@ -146,8 +329,6 @@ func (b *State) setError(ctx context.Context, phaseErr error) {
 		NamespacedName: b.Key,
 		Mutate:         mutate,
 	})
-
-	b.dispatch(ctx)
 }
 
 // TransitionToSuspended records the current phase in an annotation and queues
@@ -164,17 +345,17 @@ func (b *State) setError(ctx context.Context, phaseErr error) {
 // holds at the current execution phase indefinitely. Use the Job TTL or manual Job
 // deletion to unblock. When the deadline fires (onDeadline=true) the drain is
 // bypassed and the suspension is written immediately.
-func (s *State) TransitionToSuspended(ctx context.Context, onDeadline bool) error {
+func (s *state) TransitionToSuspended(ctx context.Context, onDeadline bool) (StateResult, error) {
 	plan := s.plan()
 
 	if !onDeadline && (plan.Status.Phase == hibernatorv1alpha1.PhaseHibernating || plan.Status.Phase == hibernatorv1alpha1.PhaseWakingUp) {
-		drained, err := s.awaitExecutionDrain(ctx)
+		drained, result, err := s.awaitExecutionDrain(ctx)
 		if err != nil {
-			return err
+			return result, err
 		}
 
 		if !drained {
-			return nil
+			return result, nil
 		}
 	}
 
@@ -185,7 +366,7 @@ func (s *State) TransitionToSuspended(ctx context.Context, onDeadline bool) erro
 
 	plan.Annotations[wellknown.AnnotationSuspendedAtPhase] = string(plan.Status.Phase)
 	if err := s.patchPreservingStatus(ctx, plan, client.MergeFrom(orig)); err != nil {
-		return fmt.Errorf("failed to record suspended-at-phase annotation: %w", err)
+		return StateResult{}, fmt.Errorf("failed to record suspended-at-phase annotation: %w", err)
 	}
 
 	mutate := func(st *hibernatorv1alpha1.HibernatePlanStatus) {
@@ -200,7 +381,7 @@ func (s *State) TransitionToSuspended(ctx context.Context, onDeadline bool) erro
 		Mutate:         mutate,
 	})
 
-	return nil
+	return StateResult{Requeue: true}, nil
 }
 
 // awaitExecutionDrain blocks the transition to PhaseSuspended until all in-flight
@@ -213,22 +394,16 @@ func (s *State) TransitionToSuspended(ctx context.Context, onDeadline bool) erro
 // once all targets are terminal (caller should proceed with the suspension write).
 // Any API error is returned directly; the poll timer is always reset on error so the
 // supervisor keeps driving the drain.
-func (s *State) awaitExecutionDrain(ctx context.Context) (drained bool, err error) {
+func (s *state) awaitExecutionDrain(ctx context.Context) (drained bool, result StateResult, err error) {
 	log := s.Log.WithName("execution-drain")
-
-	defer s.DeadlineAfter(wellknown.DeadlineTransitionToSuspended)
 
 	plan := s.plan()
 	jobs, err := s.getCurrentCycleJobs(ctx, plan)
 	if err != nil {
-		s.RequeueAfter(wellknown.RequeueIntervalOnExecution)
-		return false, fmt.Errorf("failed to get current cycle jobs: %w", err)
+		return false, StateResult{}, fmt.Errorf("failed to get current cycle jobs: %w", err)
 	}
 
-	if err := s.updateExecutionStatuses(ctx, log, plan, jobs); err != nil {
-		s.RequeueAfter(wellknown.RequeueIntervalOnExecution)
-		return false, fmt.Errorf("failed to update execution statuses: %w", err)
-	}
+	s.updateExecutionStatuses(ctx, log, plan, jobs)
 
 	hasActiveExecution := false
 	countActiveExecution := 0
@@ -245,12 +420,12 @@ func (s *State) awaitExecutionDrain(ctx context.Context) (drained bool, err erro
 			"phase", plan.Status.Phase,
 			"executions", countActiveExecution,
 		)
-		s.RequeueAfter(wellknown.RequeueIntervalOnExecution)
-		return false, nil
+		return false, StateResult{
+			RequeueAfter: wellknown.RequeueIntervalOnExecution,
+			TimeoutAfter: wellknown.TimeoutTransitionToSuspended,
+		}, nil
 	}
 
-	// All targets are terminal — clean up drain state and cancel timers.
-	s.CancelRequeue()
-	s.CancelDeadline()
-	return true, nil
+	// All targets are terminal — drain complete.
+	return true, StateResult{}, nil
 }

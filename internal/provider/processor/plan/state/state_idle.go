@@ -19,10 +19,10 @@ import (
 // idleState handles the Active and Hibernated phases by evaluating the pre-computed
 // schedule result and driving Active→Hibernating and Hibernated→WakingUp transitions.
 type idleState struct {
-	*State
+	*state
 }
 
-func (state *idleState) Handle(ctx context.Context) {
+func (state *idleState) Handle(ctx context.Context) (StateResult, error) {
 	planCtx := state.PlanCtx
 	plan := planCtx.Plan
 	log := state.Log.
@@ -33,12 +33,12 @@ func (state *idleState) Handle(ctx context.Context) {
 
 	if plan.DeletionTimestamp != nil && !plan.DeletionTimestamp.IsZero() {
 		log.V(1).Info("plan has deletion timestamp, skipping schedule evaluation")
-		return
+		return StateResult{}, nil
 	}
 
 	if planCtx.ScheduleResult == nil {
 		log.V(1).Info("no schedule result available, skipping")
-		return
+		return StateResult{}, nil
 	}
 
 	shouldHibernate := planCtx.ScheduleResult.ShouldHibernate
@@ -47,9 +47,7 @@ func (state *idleState) Handle(ctx context.Context) {
 	case hibernatorv1alpha1.PhaseActive:
 		if shouldHibernate {
 			log.Info("schedule indicates hibernation, transitioning to Hibernating")
-
-			state.transitionToHibernating(ctx, log)
-			return
+			return state.transitionToHibernating(log)
 		}
 
 		log.V(1).Info("schedule indicates active period, no transition needed")
@@ -58,20 +56,19 @@ func (state *idleState) Handle(ctx context.Context) {
 		if !shouldHibernate {
 			if planCtx.HasRestoreData {
 				log.Info("schedule indicates wake-up, transitioning to WakingUp")
-
-				state.transitionToWakingUp(ctx, log)
-				return
+				return state.transitionToWakingUp(log)
 			}
 			log.Info("schedule indicates wake-up but no restore data found, skipping")
 		} else {
 			log.V(1).Info("schedule indicates hibernation period, staying Hibernated")
 		}
 	}
+	return StateResult{}, nil
 }
 
 // transitionToHibernating initialises the shutdown operation, queues a status update,
-// and immediately dispatches to the Hibernating phase handler.
-func (state *idleState) transitionToHibernating(ctx context.Context, log logr.Logger) {
+// and returns Requeue so the worker immediately drives the Hibernating phase handler.
+func (state *idleState) transitionToHibernating(log logr.Logger) (StateResult, error) {
 	plan := state.plan()
 	cycleID := uuid.New().String()[:8]
 	now := state.Clock.Now()
@@ -101,12 +98,12 @@ func (state *idleState) transitionToHibernating(ctx context.Context, log logr.Lo
 	})
 
 	log.V(1).Info("queued transition to Hibernating", "cycleID", cycleID)
-	state.dispatch(ctx)
+	return StateResult{Requeue: true}, nil
 }
 
 // transitionToWakingUp initialises the wakeup operation, queues a status update,
-// and immediately dispatches to the WakingUp phase handler.
-func (state *idleState) transitionToWakingUp(ctx context.Context, log logr.Logger) {
+// and returns Requeue so the worker immediately drives the WakingUp phase handler.
+func (state *idleState) transitionToWakingUp(log logr.Logger) (StateResult, error) {
 	plan := state.plan()
 	now := state.Clock.Now()
 
@@ -134,5 +131,5 @@ func (state *idleState) transitionToWakingUp(ctx context.Context, log logr.Logge
 	})
 
 	log.V(1).Info("queued transition to WakingUp")
-	state.dispatch(ctx)
+	return StateResult{Requeue: true}, nil
 }
