@@ -55,7 +55,11 @@ Works with both cluster resources and local YAML files:
 }
 
 func runPreview(ctx context.Context, opts *previewOptions, args []string) error {
-	var plan hibernatorv1alpha1.HibernatePlan
+	var (
+		plan       hibernatorv1alpha1.HibernatePlan
+		exception  *scheduler.Exception
+		exceptions []hibernatorv1alpha1.ExceptionReference
+	)
 
 	if opts.file != "" {
 		// Load from local YAML file
@@ -77,24 +81,23 @@ func runPreview(ctx context.Context, opts *previewOptions, args []string) error 
 		if err := c.Get(ctx, types.NamespacedName{Name: args[0], Namespace: ns}, &plan); err != nil {
 			return fmt.Errorf("failed to get HibernatePlan %q in namespace %q: %w", args[0], ns, err)
 		}
+
+		exceptions = plan.Status.ActiveExceptions
+		if exc, err := common.FetchActiveException(ctx, c, plan); err == nil && exc != nil {
+			exception = common.ConvertAPIException(*exc)
+		}
 	}
 
 	// Evaluate schedule
 	evaluator := scheduler.NewScheduleEvaluator(clock.RealClock{})
 	windows := common.ConvertAPIWindows(plan.Spec.Schedule.OffHours)
 
-	result, err := evaluator.Evaluate(windows, plan.Spec.Schedule.Timezone, nil)
+	result, err := evaluator.Evaluate(windows, plan.Spec.Schedule.Timezone, exception)
 	if err != nil {
 		return fmt.Errorf("failed to evaluate schedule: %w", err)
 	}
 
-	// Fetch active exceptions if from cluster
-	var exceptions []hibernatorv1alpha1.ExceptionReference
-	if opts.file == "" {
-		exceptions = plan.Status.ActiveExceptions
-	}
-
-	events, err := common.ComputeUpcomingEvents(plan.Spec.Schedule, opts.events)
+	events, err := common.ComputeUpcomingEvents(windows, plan.Spec.Schedule.Timezone, exception, opts.events)
 	if err != nil {
 		events = []common.ScheduleEvent{}
 	}
@@ -139,4 +142,5 @@ func loadPlanFromFile(path string, plan *hibernatorv1alpha1.HibernatePlan) error
 
 	return nil
 }
+
 

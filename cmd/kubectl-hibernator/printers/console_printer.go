@@ -45,8 +45,7 @@ func (p *ConsolePrinter) PrintObj(obj interface{}, w io.Writer) error {
 	}
 }
 
-// textWriter wraps tabwriter with convenient methods for building formatted text output.
-
+// printPlanListOutput renders the tabular plan list for `kubectl-hibernator list`.
 func (p *ConsolePrinter) printPlanListOutput(out *PlanListOutput, w io.Writer) error {
 	tw := newTextWriter(w)
 	tw.header("Name", "Namespace", "Phase", "Suspended", "Next Event", "Age")
@@ -68,6 +67,7 @@ func (p *ConsolePrinter) printPlanListOutput(out *PlanListOutput, w io.Writer) e
 	return tw.flush()
 }
 
+// printPlan renders full plan details (schedule, behavior, execution, targets, status) for `kubectl-hibernator describe`.
 func (p *ConsolePrinter) printPlan(plan hibernatorv1alpha1.HibernatePlan, w io.Writer) error {
 	tw := newTextWriter(w)
 
@@ -139,6 +139,7 @@ func (p *ConsolePrinter) printPlan(plan hibernatorv1alpha1.HibernatePlan, w io.W
 	return p.printStatus(&StatusOutput{Plan: plan}, w)
 }
 
+// printStatus renders the live status block (phase, executions, history, exceptions); called internally by printPlan.
 func (p *ConsolePrinter) printStatus(out *StatusOutput, w io.Writer) error {
 	plan := out.Plan
 
@@ -223,6 +224,7 @@ func (p *ConsolePrinter) printStatus(out *StatusOutput, w io.Writer) error {
 	return tw.flush()
 }
 
+// printOperationSummary renders a single shutdown/wakeup cycle summary line; called internally by printStatus.
 func (p *ConsolePrinter) printOperationSummary(tw *textWriter, prefix string, op *hibernatorv1alpha1.ExecutionOperationSummary) {
 	successStr := "failed"
 	if op.Success {
@@ -239,6 +241,7 @@ func (p *ConsolePrinter) printOperationSummary(tw *textWriter, prefix string, op
 	}
 }
 
+// printSchedule renders schedule evaluation, upcoming events, and active exceptions for `kubectl-hibernator preview`.
 func (p *ConsolePrinter) printSchedule(out *ScheduleOutput, w io.Writer) error {
 	plan := out.Plan
 	result := out.Result.(*scheduler.EvaluationResult)
@@ -275,7 +278,11 @@ func (p *ConsolePrinter) printSchedule(out *ScheduleOutput, w io.Writer) error {
 		evtw.header("", "Operation", "Time", "In")
 
 		for _, ev := range events {
-			evtw.row("", ev.Operation, ev.Time.Format(time.RFC3339), HumanDuration(time.Until(ev.Time)))
+			in := ev.In
+			if in == 0 {
+				in = time.Until(ev.Time)
+			}
+			evtw.row("", ev.Operation, ev.Time.Format(time.RFC3339), HumanDuration(in))
 		}
 
 		evtw.newline()
@@ -284,7 +291,7 @@ func (p *ConsolePrinter) printSchedule(out *ScheduleOutput, w io.Writer) error {
 	if len(exceptions) > 0 {
 		tw.line("Active Exceptions:")
 		for _, ex := range exceptions {
-			tw.line("  - %s (type=%s, until=%s, state=%s)\n",
+			tw.line("  - %s (type=%s, until=%s, state=%s)",
 				ex.Name, ex.Type, ex.ValidUntil.Format(time.RFC3339), ex.State)
 		}
 		tw.newline()
@@ -297,6 +304,7 @@ func (p *ConsolePrinter) printSchedule(out *ScheduleOutput, w io.Writer) error {
 	return nil
 }
 
+// printRestorePoint renders a summary table of all restore-point targets for `kubectl-hibernator restore show`.
 func (p *ConsolePrinter) printRestorePoint(cm corev1.ConfigMap, w io.Writer) error {
 	var totalResources int
 	var points []RestorePointData
@@ -345,6 +353,7 @@ func (p *ConsolePrinter) printRestorePoint(cm corev1.ConfigMap, w io.Writer) err
 	return tw.flush()
 }
 
+// printRestoreResources renders the flat resource list within a restore point for `kubectl-hibernator restore list`.
 func (p *ConsolePrinter) printRestoreResources(out *RestoreResourcesOutput, w io.Writer) error {
 	cm := out.ConfigMap
 	filterTarget := out.Target
@@ -395,6 +404,7 @@ func (p *ConsolePrinter) printRestoreResources(out *RestoreResourcesOutput, w io
 	return tw.flush()
 }
 
+// printRestoreDetail renders the full metadata and raw state of a single restore resource for `kubectl-hibernator restore inspect`.
 func (p *ConsolePrinter) printRestoreDetail(out *RestoreDetailOutput, w io.Writer) error {
 	data := out.TargetData.(restore.Data)
 	tw := newTextWriter(w)
