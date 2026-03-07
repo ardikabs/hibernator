@@ -16,6 +16,7 @@ import (
 	hibernatorv1alpha1 "github.com/ardikabs/hibernator/api/v1alpha1"
 	"github.com/ardikabs/hibernator/cmd/kubectl-hibernator/common"
 	"github.com/ardikabs/hibernator/cmd/kubectl-hibernator/printers"
+	"github.com/ardikabs/hibernator/internal/scheduler"
 )
 
 type listOptions struct {
@@ -71,7 +72,12 @@ func runList(ctx context.Context, opts *listOptions) error {
 		items[i].Plan = plan
 
 		if !plan.Spec.Suspend {
-			if event, err := common.ComputeNextEvent(plan.Spec.Schedule); err == nil {
+			var exception *scheduler.Exception
+			if exc, err := common.FetchActiveException(ctx, c, plan); err == nil && exc != nil {
+				exception = common.ConvertAPIException(*exc)
+			}
+
+			if event, err := common.ComputeNextEvent(plan.Spec.Schedule, exception); err == nil {
 				items[i].NextEvent = event
 			}
 		}
