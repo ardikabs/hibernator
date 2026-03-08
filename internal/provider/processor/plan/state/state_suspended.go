@@ -80,7 +80,7 @@ func (state *suspendedState) Handle(ctx context.Context) (StateResult, error) {
 	return state.resume(ctx, log)
 }
 
-// OnDeadline is called when the supervisor's deadlineTimer fires. It patches
+// OnDeadline is called when the worker's deadlineTimer fires. It patches
 // Spec.Suspend=false and immediately processes the resume to avoid a full provider roundtrip.
 func (state *suspendedState) OnDeadline(ctx context.Context) (StateResult, error) {
 	plan := state.plan()

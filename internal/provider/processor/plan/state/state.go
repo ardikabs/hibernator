@@ -390,7 +390,7 @@ func (s *state) TransitionToSuspended(ctx context.Context, onDeadline bool) (Sta
 // still running (caller should re-queue) or on the first arm cycle, and (true, nil)
 // once all targets are terminal (caller should proceed with the suspension write).
 // Any API error is returned directly; the poll timer is always reset on error so the
-// supervisor keeps driving the drain.
+// worker keeps driving the drain.
 func (s *state) awaitExecutionDrain(ctx context.Context) (drained bool, result StateResult, err error) {
 	log := s.Log.WithName("execution-drain")
 

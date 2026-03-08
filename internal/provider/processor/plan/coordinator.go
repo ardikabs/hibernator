@@ -3,11 +3,11 @@ Copyright 2026 Ardika Saputro.
 Licensed under the Apache License, Version 2.0.
 */
 
-// Package supervisor provides the Coordinator and Worker types that implement
+// Package plan provides the Coordinator and Worker types that implement
 // per-plan goroutine-based execution. Each HibernatePlan is managed by a dedicated
-// Worker goroutine (the Actor), orchestrated by a single Coordinator Runnable
-// (the Reactor/Factory). This eliminates the sequential HandleSubscription bottleneck
-// present in the previous processor-per-phase model.
+// Worker goroutine, orchestrated by a single Coordinator Runnable. This eliminates
+// the sequential HandleSubscription bottleneck present in the previous
+// processor-per-phase model.
 package plan
 
 import (
@@ -36,7 +36,7 @@ import (
 //
 // It implements manager.Runnable and can be registered with mgr.Add().
 type Coordinator struct {
-	// Infrastructure dependencies — union of all former plan processors.
+	// Infrastructure dependencies.
 	Client               client.Client
 	APIReader            client.Reader
 	Clock                clock.Clock

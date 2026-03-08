@@ -29,7 +29,7 @@ import (
 )
 
 // ---------------------------------------------------------------------------
-// Stage execution engine
+// Stage execution
 // ---------------------------------------------------------------------------
 
 // execute executes the given operation (hibernatorv1alpha1.OperationHibernate or hibernatorv1alpha1.OperationWakeUp)

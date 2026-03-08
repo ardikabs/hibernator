@@ -45,7 +45,8 @@ const (
 
 // Worker is a long-lived goroutine that manages every phase of a single
 // HibernatePlan's lifecycle. It receives updates from the Coordinator via a
-// latest-wins planContextSlot and manages internal timers for re-driving execution as needed.
+// latest-wins slot (keyedworker.Slot[*message.PlanContext]) and manages internal
+// timers for re-driving execution as needed.
 //
 //   - requeueTimer  — re-drives execution while runner Jobs are in-flight, and
 //     fires after exponential backoff when the plan is in PhaseError.
@@ -71,11 +72,11 @@ type Worker struct {
 	RunnerImage          string
 	RunnerServiceAccount string
 
-	// cachedCtx is the most-recent PlanContext delivered by the engine.
+	// cachedCtx is the most-recent PlanContext delivered by the Coordinator.
 	// Mutated in-place for optimistic local updates.
 	cachedCtx *message.PlanContext
 
-	// Inbound context slot from the engine — latest-wins delivery.
+	// Inbound context slot from the Coordinator — latest-wins delivery.
 	slot keyedworker.Slot[*message.PlanContext]
 
 	// Timers — nil means inactive.
