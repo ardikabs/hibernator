@@ -43,6 +43,18 @@ const (
 	PhaseError       PlanPhase = "Error"
 )
 
+// PlanOperation identifies the type of operation a HibernatePlan is currently executing.
+// Stored in HibernatePlanStatus.CurrentOperation and used as the LabelOperation value on runner Jobs.
+type PlanOperation = string
+
+const (
+	// OperationHibernate is the operation value for a hibernate (shutdown) cycle.
+	OperationHibernate PlanOperation = "shutdown"
+
+	// OperationWakeUp is the operation value for a wakeup cycle.
+	OperationWakeUp PlanOperation = "wakeup"
+)
+
 // ExecutionState represents per-target execution state.
 // +kubebuilder:validation:Enum=Pending;Running;Completed;Failed
 type ExecutionState string

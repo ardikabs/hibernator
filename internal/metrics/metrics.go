@@ -85,4 +85,87 @@ var (
 		},
 		[]string{"plan", "target"},
 	)
+
+	// StatusQueueDroppedTotal counts status updates dropped because the queue was full.
+	// A non-zero value indicates the queue capacity (statusQueueCapacity) should be raised
+	// or the writer worker pool should be enlarged.
+	StatusQueueDroppedTotal = promauto.NewCounterVec(
+		prometheus.CounterOpts{
+			Name: "hibernator_status_queue_dropped_total",
+			Help: "Total number of status updates dropped due to a full status queue",
+		},
+		[]string{"queue"}, // "plan" or "exception"
+	)
+
+	// WatchableSubscribeTotal counts per-handler invocations on the internal watchable message bus.
+	WatchableSubscribeTotal = promauto.NewCounterVec(
+		prometheus.CounterOpts{
+			Name: "hibernator_watchable_subscribe_total",
+			Help: "Total number of watchable subscription handler invocations",
+		},
+		[]string{"runner", "message", "status"}, // status: success | error | panic
+	)
+
+	// WatchableSubscribeDuration tracks watchable handler processing time.
+	WatchableSubscribeDuration = promauto.NewHistogramVec(
+		prometheus.HistogramOpts{
+			Name:    "hibernator_watchable_subscribe_duration_seconds",
+			Help:    "Duration of watchable subscription handler processing",
+			Buckets: prometheus.DefBuckets,
+		},
+		[]string{"runner", "message"},
+	)
+
+	// WorkerGoroutinesGauge tracks the number of live Worker goroutines in the Coordinator.
+	// Essential for capacity planning and debugging goroutine leaks.
+	WorkerGoroutinesGauge = promauto.NewGauge(
+		prometheus.GaugeOpts{
+			Name: "hibernator_worker_goroutines",
+			Help: "Number of live plan Worker goroutines managed by the Coordinator",
+		},
+	)
+
+	// StatusWriterActiveGauge tracks how many objects currently have a live
+	// status-writer goroutine. Labels: type (HibernatePlan | ScheduleException),
+	// key (namespace/name). Drops to 0 after the idle-TTL grace period expires
+	// and auto-removal reclaims the entry.
+	StatusWriterActiveGauge = promauto.NewGaugeVec(
+		prometheus.GaugeOpts{
+			Name: "hibernator_status_writer_active_objects",
+			Help: "Number of objects with an active status-writer goroutine",
+		},
+		[]string{"type", "key"},
+	)
+
+	// StatusWriterUpdatesTotal counts status writes that actually changed the
+	// object (non-no-op). Labels: type.
+	StatusWriterUpdatesTotal = promauto.NewCounterVec(
+		prometheus.CounterOpts{
+			Name: "hibernator_status_writer_updates_total",
+			Help: "Total number of status updates successfully written to the API server",
+		},
+		[]string{"type"},
+	)
+
+	// StatusWriterNoopTotal counts status write attempts that were skipped
+	// because the computed status was identical to the current server state.
+	// Labels: type.
+	StatusWriterNoopTotal = promauto.NewCounterVec(
+		prometheus.CounterOpts{
+			Name: "hibernator_status_writer_noop_total",
+			Help: "Total number of status update attempts skipped due to unchanged status",
+		},
+		[]string{"type"},
+	)
+
+	// StatusWriterErrorsTotal counts errors encountered during status writes,
+	// broken down by the phase where the error occurred.
+	// Labels: type, phase (pre_hook | apply | post_hook).
+	StatusWriterErrorsTotal = promauto.NewCounterVec(
+		prometheus.CounterOpts{
+			Name: "hibernator_status_writer_errors_total",
+			Help: "Total number of errors during status write operations, by phase",
+		},
+		[]string{"type", "phase"},
+	)
 )

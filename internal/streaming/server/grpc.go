@@ -34,7 +34,7 @@ type GRPCServer struct {
 // NewServer creates a new streaming server.
 func NewServer(
 	address string,
-	clientset *kubernetes.Clientset,
+	clientset kubernetes.Interface,
 	execService *ExecutionServiceServer,
 	log logr.Logger,
 ) *GRPCServer {

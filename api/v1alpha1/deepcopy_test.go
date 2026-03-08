@@ -7,6 +7,7 @@ package v1alpha1
 
 import (
 	"testing"
+	"time"
 
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 )
@@ -476,5 +477,612 @@ func TestBehavior_DeepCopy(t *testing.T) {
 	}
 	if copy.Retries != original.Retries {
 		t.Errorf("DeepCopy Retries: got %d, want %d", copy.Retries, original.Retries)
+	}
+}
+
+// ---- AWSAuth ----
+
+func TestAWSAuth_DeepCopy_NonNil(t *testing.T) {
+	in := &AWSAuth{
+		ServiceAccount: &ServiceAccountAuth{},
+	}
+	out := in.DeepCopy()
+	if out == nil {
+		t.Fatal("DeepCopy returned nil")
+	}
+	if out.ServiceAccount == nil {
+		t.Error("DeepCopy did not copy ServiceAccount")
+	}
+}
+
+func TestAWSAuth_DeepCopy_Nil(t *testing.T) {
+	var in *AWSAuth
+	if in.DeepCopy() != nil {
+		t.Error("nil.DeepCopy() should return nil")
+	}
+}
+
+// ---- AWSConfig ----
+
+func TestAWSConfig_DeepCopy_NonNil(t *testing.T) {
+	in := &AWSConfig{
+		AccountId: "123456789012",
+		Region:    "us-east-1",
+		Auth:      AWSAuth{ServiceAccount: &ServiceAccountAuth{}},
+	}
+	out := in.DeepCopy()
+	if out == nil {
+		t.Fatal("DeepCopy returned nil")
+	}
+	if out.AccountId != in.AccountId {
+		t.Errorf("AccountId mismatch: got %q want %q", out.AccountId, in.AccountId)
+	}
+}
+
+func TestAWSConfig_DeepCopy_Nil(t *testing.T) {
+	var in *AWSConfig
+	if in.DeepCopy() != nil {
+		t.Error("nil.DeepCopy() should return nil")
+	}
+}
+
+// ---- CloudProviderList.DeepCopyObject ----
+
+func TestCloudProviderList_DeepCopyObject(t *testing.T) {
+	in := &CloudProviderList{}
+	obj := in.DeepCopyObject()
+	if obj == nil {
+		t.Fatal("DeepCopyObject returned nil")
+	}
+	if _, ok := obj.(*CloudProviderList); !ok {
+		t.Errorf("DeepCopyObject type mismatch: got %T", obj)
+	}
+}
+
+// ---- CloudProviderSpec ----
+
+func TestCloudProviderSpec_DeepCopy_NonNil(t *testing.T) {
+	in := &CloudProviderSpec{
+		Type: CloudProviderAWS,
+		AWS: &AWSConfig{
+			AccountId: "000000000000",
+			Region:    "us-west-2",
+			Auth:      AWSAuth{},
+		},
+	}
+	out := in.DeepCopy()
+	if out == nil {
+		t.Fatal("DeepCopy returned nil")
+	}
+	if out.Type != in.Type {
+		t.Errorf("Type mismatch: got %q want %q", out.Type, in.Type)
+	}
+}
+
+func TestCloudProviderSpec_DeepCopy_Nil(t *testing.T) {
+	var in *CloudProviderSpec
+	if in.DeepCopy() != nil {
+		t.Error("nil.DeepCopy() should return nil")
+	}
+}
+
+// ---- CloudProviderStatus ----
+
+func TestCloudProviderStatus_DeepCopy_NonNil(t *testing.T) {
+	ts := metav1.NewTime(time.Now())
+	in := &CloudProviderStatus{
+		Ready:         true,
+		Message:       "ok",
+		LastValidated: &ts,
+	}
+	out := in.DeepCopy()
+	if out == nil {
+		t.Fatal("DeepCopy returned nil")
+	}
+	if out.Message != in.Message {
+		t.Errorf("Message mismatch: got %q want %q", out.Message, in.Message)
+	}
+}
+
+func TestCloudProviderStatus_DeepCopy_Nil(t *testing.T) {
+	var in *CloudProviderStatus
+	if in.DeepCopy() != nil {
+		t.Error("nil.DeepCopy() should return nil")
+	}
+}
+
+// ---- ConnectorRef ----
+
+func TestConnectorRef_DeepCopy_NonNil(t *testing.T) {
+	in := &ConnectorRef{Kind: "CloudProvider", Name: "aws-prod", Namespace: "infra"}
+	out := in.DeepCopy()
+	if out == nil {
+		t.Fatal("DeepCopy returned nil")
+	}
+	if out.Kind != in.Kind || out.Name != in.Name {
+		t.Errorf("ConnectorRef mismatch: got %+v want %+v", out, in)
+	}
+}
+
+func TestConnectorRef_DeepCopy_Nil(t *testing.T) {
+	var in *ConnectorRef
+	if in.DeepCopy() != nil {
+		t.Error("nil.DeepCopy() should return nil")
+	}
+}
+
+// ---- Dependency ----
+
+func TestDependency_DeepCopy_NonNil(t *testing.T) {
+	in := &Dependency{From: "database", To: "app"}
+	out := in.DeepCopy()
+	if out == nil {
+		t.Fatal("DeepCopy returned nil")
+	}
+	if out.From != in.From || out.To != in.To {
+		t.Errorf("Dependency mismatch: got %+v want %+v", out, in)
+	}
+}
+
+func TestDependency_DeepCopy_Nil(t *testing.T) {
+	var in *Dependency
+	if in.DeepCopy() != nil {
+		t.Error("nil.DeepCopy() should return nil")
+	}
+}
+
+// ---- EKSConfig ----
+
+func TestEKSConfig_DeepCopy_NonNil(t *testing.T) {
+	in := &EKSConfig{Name: "my-cluster", Region: "us-east-1"}
+	out := in.DeepCopy()
+	if out == nil {
+		t.Fatal("DeepCopy returned nil")
+	}
+	if out.Name != in.Name {
+		t.Errorf("Name mismatch: got %q want %q", out.Name, in.Name)
+	}
+}
+
+func TestEKSConfig_DeepCopy_Nil(t *testing.T) {
+	var in *EKSConfig
+	if in.DeepCopy() != nil {
+		t.Error("nil.DeepCopy() should return nil")
+	}
+}
+
+// ---- ExceptionReference ----
+
+func TestExceptionReference_DeepCopy_NonNil(t *testing.T) {
+	applied := metav1.NewTime(time.Now())
+	in := &ExceptionReference{
+		Name:       "my-exception",
+		Type:       ExceptionExtend,
+		State:      ExceptionStatePending,
+		ValidFrom:  metav1.NewTime(time.Now()),
+		ValidUntil: metav1.NewTime(time.Now().Add(time.Hour)),
+		AppliedAt:  &applied,
+	}
+	out := in.DeepCopy()
+	if out == nil {
+		t.Fatal("DeepCopy returned nil")
+	}
+	if out.Name != in.Name {
+		t.Errorf("Name mismatch: got %q want %q", out.Name, in.Name)
+	}
+	if out.AppliedAt == nil {
+		t.Error("AppliedAt should not be nil after DeepCopy")
+	}
+}
+
+func TestExceptionReference_DeepCopy_Nil(t *testing.T) {
+	var in *ExceptionReference
+	if in.DeepCopy() != nil {
+		t.Error("nil.DeepCopy() should return nil")
+	}
+}
+
+// ---- Execution ----
+
+func TestExecution_DeepCopy_NonNil(t *testing.T) {
+	in := &Execution{
+		Strategy: ExecutionStrategy{Type: StrategySequential},
+	}
+	out := in.DeepCopy()
+	if out == nil {
+		t.Fatal("DeepCopy returned nil")
+	}
+	if out.Strategy.Type != in.Strategy.Type {
+		t.Errorf("Strategy.Type mismatch: got %q want %q", out.Strategy.Type, in.Strategy.Type)
+	}
+}
+
+func TestExecution_DeepCopy_Nil(t *testing.T) {
+	var in *Execution
+	if in.DeepCopy() != nil {
+		t.Error("nil.DeepCopy() should return nil")
+	}
+}
+
+// ---- ExecutionCycle ----
+
+func TestExecutionCycle_DeepCopy_NonNil(t *testing.T) {
+	in := &ExecutionCycle{CycleID: "cycle-001"}
+	out := in.DeepCopy()
+	if out == nil {
+		t.Fatal("DeepCopy returned nil")
+	}
+	if out.CycleID != in.CycleID {
+		t.Errorf("CycleID mismatch: got %q want %q", out.CycleID, in.CycleID)
+	}
+}
+
+func TestExecutionCycle_DeepCopy_Nil(t *testing.T) {
+	var in *ExecutionCycle
+	if in.DeepCopy() != nil {
+		t.Error("nil.DeepCopy() should return nil")
+	}
+}
+
+// ---- ExecutionOperationSummary ----
+
+func TestExecutionOperationSummary_DeepCopy_NonNil(t *testing.T) {
+	end := metav1.NewTime(time.Now())
+	in := &ExecutionOperationSummary{
+		Operation: "shutdown",
+		StartTime: metav1.NewTime(time.Now()),
+		EndTime:   &end,
+		Success:   true,
+	}
+	out := in.DeepCopy()
+	if out == nil {
+		t.Fatal("DeepCopy returned nil")
+	}
+	if out.Operation != in.Operation {
+		t.Errorf("Operation mismatch: got %q want %q", out.Operation, in.Operation)
+	}
+	if out.EndTime == nil {
+		t.Error("EndTime should not be nil after DeepCopy")
+	}
+}
+
+func TestExecutionOperationSummary_DeepCopy_Nil(t *testing.T) {
+	var in *ExecutionOperationSummary
+	if in.DeepCopy() != nil {
+		t.Error("nil.DeepCopy() should return nil")
+	}
+}
+
+// ---- GKEConfig ----
+
+func TestGKEConfig_DeepCopy_NonNil(t *testing.T) {
+	in := &GKEConfig{Name: "my-gke", Project: "my-project", Location: "us-central1"}
+	out := in.DeepCopy()
+	if out == nil {
+		t.Fatal("DeepCopy returned nil")
+	}
+	if out.Name != in.Name {
+		t.Errorf("Name mismatch: got %q want %q", out.Name, in.Name)
+	}
+}
+
+func TestGKEConfig_DeepCopy_Nil(t *testing.T) {
+	var in *GKEConfig
+	if in.DeepCopy() != nil {
+		t.Error("nil.DeepCopy() should return nil")
+	}
+}
+
+// ---- K8SClusterList.DeepCopyObject ----
+
+func TestK8SClusterList_DeepCopyObject(t *testing.T) {
+	in := &K8SClusterList{}
+	obj := in.DeepCopyObject()
+	if obj == nil {
+		t.Fatal("DeepCopyObject returned nil")
+	}
+	if _, ok := obj.(*K8SClusterList); !ok {
+		t.Errorf("DeepCopyObject type mismatch: got %T", obj)
+	}
+}
+
+// ---- K8SAccessConfig ----
+
+func TestK8SAccessConfig_DeepCopy_NonNil(t *testing.T) {
+	in := &K8SAccessConfig{
+		KubeconfigRef: &KubeconfigRef{Name: "my-kubeconfig", Namespace: "default"},
+		InCluster:     false,
+	}
+	out := in.DeepCopy()
+	if out == nil {
+		t.Fatal("DeepCopy returned nil")
+	}
+	if out.KubeconfigRef == nil || out.KubeconfigRef.Name != in.KubeconfigRef.Name {
+		t.Error("KubeconfigRef not deep copied")
+	}
+}
+
+func TestK8SAccessConfig_DeepCopy_Nil(t *testing.T) {
+	var in *K8SAccessConfig
+	if in.DeepCopy() != nil {
+		t.Error("nil.DeepCopy() should return nil")
+	}
+}
+
+// ---- PlanReference ----
+
+func TestPlanReference_DeepCopy_NonNil(t *testing.T) {
+	in := &PlanReference{Name: "my-plan", Namespace: "default"}
+	out := in.DeepCopy()
+	if out == nil {
+		t.Fatal("DeepCopy returned nil")
+	}
+	if out.Name != in.Name {
+		t.Errorf("Name mismatch: got %q want %q", out.Name, in.Name)
+	}
+}
+
+func TestPlanReference_DeepCopy_Nil(t *testing.T) {
+	var in *PlanReference
+	if in.DeepCopy() != nil {
+		t.Error("nil.DeepCopy() should return nil")
+	}
+}
+
+// ---- ProviderRef ----
+
+func TestProviderRef_DeepCopy_NonNil(t *testing.T) {
+	in := &ProviderRef{Name: "aws-prod", Namespace: "infra"}
+	out := in.DeepCopy()
+	if out == nil {
+		t.Fatal("DeepCopy returned nil")
+	}
+	if out.Name != in.Name {
+		t.Errorf("Name mismatch: got %q want %q", out.Name, in.Name)
+	}
+}
+
+func TestProviderRef_DeepCopy_Nil(t *testing.T) {
+	var in *ProviderRef
+	if in.DeepCopy() != nil {
+		t.Error("nil.DeepCopy() should return nil")
+	}
+}
+
+// ---- Schedule ----
+
+func TestSchedule_DeepCopy_NonNil(t *testing.T) {
+	in := &Schedule{
+		Timezone: "America/New_York",
+		OffHours: []OffHourWindow{{Start: "22:00", End: "06:00", DaysOfWeek: []string{"MON"}}},
+	}
+	out := in.DeepCopy()
+	if out == nil {
+		t.Fatal("DeepCopy returned nil")
+	}
+	if out.Timezone != in.Timezone {
+		t.Errorf("Timezone mismatch: got %q want %q", out.Timezone, in.Timezone)
+	}
+	if len(out.OffHours) != len(in.OffHours) {
+		t.Errorf("OffHours length mismatch: got %d want %d", len(out.OffHours), len(in.OffHours))
+	}
+}
+
+func TestSchedule_DeepCopy_Nil(t *testing.T) {
+	var in *Schedule
+	if in.DeepCopy() != nil {
+		t.Error("nil.DeepCopy() should return nil")
+	}
+}
+
+// ---- ScheduleException ----
+
+func TestScheduleException_DeepCopy_NonNil(t *testing.T) {
+	in := &ScheduleException{
+		ObjectMeta: metav1.ObjectMeta{Name: "my-exception", Namespace: "default"},
+	}
+	out := in.DeepCopy()
+	if out == nil {
+		t.Fatal("DeepCopy returned nil")
+	}
+	if out.Name != in.Name {
+		t.Errorf("Name mismatch: got %q want %q", out.Name, in.Name)
+	}
+}
+
+func TestScheduleException_DeepCopy_Nil(t *testing.T) {
+	var in *ScheduleException
+	if in.DeepCopy() != nil {
+		t.Error("nil.DeepCopy() should return nil")
+	}
+}
+
+func TestScheduleException_DeepCopyObject(t *testing.T) {
+	in := &ScheduleException{
+		ObjectMeta: metav1.ObjectMeta{Name: "my-exception"},
+	}
+	obj := in.DeepCopyObject()
+	if obj == nil {
+		t.Fatal("DeepCopyObject returned nil")
+	}
+	if _, ok := obj.(*ScheduleException); !ok {
+		t.Errorf("DeepCopyObject type mismatch: got %T", obj)
+	}
+}
+
+// ---- ScheduleExceptionList ----
+
+func TestScheduleExceptionList_DeepCopyObject(t *testing.T) {
+	in := &ScheduleExceptionList{}
+	obj := in.DeepCopyObject()
+	if obj == nil {
+		t.Fatal("DeepCopyObject returned nil")
+	}
+	if _, ok := obj.(*ScheduleExceptionList); !ok {
+		t.Errorf("DeepCopyObject type mismatch: got %T", obj)
+	}
+}
+
+// ---- ScheduleExceptionSpec ----
+
+func TestScheduleExceptionSpec_DeepCopy_NonNil(t *testing.T) {
+	in := &ScheduleExceptionSpec{
+		Type:       ExceptionSuspend,
+		PlanRef:    PlanReference{Name: "my-plan", Namespace: "default"},
+		ValidFrom:  metav1.NewTime(time.Date(2026, 1, 1, 20, 0, 0, 0, time.UTC)),
+		ValidUntil: metav1.NewTime(time.Date(2026, 1, 2, 6, 0, 0, 0, time.UTC)),
+		Windows:    []OffHourWindow{{Start: "22:00", End: "06:00"}},
+	}
+	out := in.DeepCopy()
+	if out == nil {
+		t.Fatal("DeepCopy returned nil")
+	}
+	if out.Type != in.Type {
+		t.Errorf("Type mismatch: got %q want %q", out.Type, in.Type)
+	}
+	if out.PlanRef.Name != in.PlanRef.Name {
+		t.Errorf("PlanRef.Name mismatch: got %q want %q", out.PlanRef.Name, in.PlanRef.Name)
+	}
+}
+
+func TestScheduleExceptionSpec_DeepCopy_Nil(t *testing.T) {
+	var in *ScheduleExceptionSpec
+	if in.DeepCopy() != nil {
+		t.Error("nil.DeepCopy() should return nil")
+	}
+}
+
+// ---- ScheduleExceptionStatus ----
+
+func TestScheduleExceptionStatus_DeepCopy_NonNil(t *testing.T) {
+	in := &ScheduleExceptionStatus{
+		State: ExceptionStateActive,
+	}
+	out := in.DeepCopy()
+	if out == nil {
+		t.Fatal("DeepCopy returned nil")
+	}
+	if out.State != in.State {
+		t.Errorf("State mismatch: got %q want %q", out.State, in.State)
+	}
+}
+
+func TestScheduleExceptionStatus_DeepCopy_Nil(t *testing.T) {
+	var in *ScheduleExceptionStatus
+	if in.DeepCopy() != nil {
+		t.Error("nil.DeepCopy() should return nil")
+	}
+}
+
+// ---- SecretReference ----
+
+func TestSecretReference_DeepCopy_NonNil(t *testing.T) {
+	in := &SecretReference{Name: "my-secret", Namespace: "default"}
+	out := in.DeepCopy()
+	if out == nil {
+		t.Fatal("DeepCopy returned nil")
+	}
+	if out.Name != in.Name {
+		t.Errorf("Name mismatch: got %q want %q", out.Name, in.Name)
+	}
+}
+
+func TestSecretReference_DeepCopy_Nil(t *testing.T) {
+	var in *SecretReference
+	if in.DeepCopy() != nil {
+		t.Error("nil.DeepCopy() should return nil")
+	}
+}
+
+// ---- ServiceAccountAuth ----
+
+func TestServiceAccountAuth_DeepCopy_NonNil(t *testing.T) {
+	in := &ServiceAccountAuth{}
+	out := in.DeepCopy()
+	if out == nil {
+		t.Fatal("DeepCopy returned nil")
+	}
+}
+
+func TestServiceAccountAuth_DeepCopy_Nil(t *testing.T) {
+	var in *ServiceAccountAuth
+	if in.DeepCopy() != nil {
+		t.Error("nil.DeepCopy() should return nil")
+	}
+}
+
+// ---- Stage ----
+
+func TestStage_DeepCopy_NonNil(t *testing.T) {
+	in := &Stage{
+		Name:     "db-tier",
+		Parallel: true,
+		Targets:  []string{"rds-1", "rds-2"},
+	}
+	out := in.DeepCopy()
+	if out == nil {
+		t.Fatal("DeepCopy returned nil")
+	}
+	if out.Name != in.Name {
+		t.Errorf("Name mismatch: got %q want %q", out.Name, in.Name)
+	}
+	if len(out.Targets) != len(in.Targets) {
+		t.Errorf("Targets length mismatch: got %d want %d", len(out.Targets), len(in.Targets))
+	}
+}
+
+func TestStage_DeepCopy_Nil(t *testing.T) {
+	var in *Stage
+	if in.DeepCopy() != nil {
+		t.Error("nil.DeepCopy() should return nil")
+	}
+}
+
+// ---- StaticAuth ----
+
+func TestStaticAuth_DeepCopy_NonNil(t *testing.T) {
+	in := &StaticAuth{SecretRef: SecretReference{Name: "creds", Namespace: "default"}}
+	out := in.DeepCopy()
+	if out == nil {
+		t.Fatal("DeepCopy returned nil")
+	}
+	if out.SecretRef.Name != in.SecretRef.Name {
+		t.Errorf("SecretRef.Name mismatch: got %q want %q", out.SecretRef.Name, in.SecretRef.Name)
+	}
+}
+
+func TestStaticAuth_DeepCopy_Nil(t *testing.T) {
+	var in *StaticAuth
+	if in.DeepCopy() != nil {
+		t.Error("nil.DeepCopy() should return nil")
+	}
+}
+
+// ---- TargetExecutionResult ----
+
+func TestTargetExecutionResult_DeepCopy_NonNil(t *testing.T) {
+	started := metav1.NewTime(time.Now())
+	in := &TargetExecutionResult{
+		Target:    "eks/my-cluster",
+		State:     StateCompleted,
+		Attempts:  2,
+		StartedAt: &started,
+	}
+	out := in.DeepCopy()
+	if out == nil {
+		t.Fatal("DeepCopy returned nil")
+	}
+	if out.Target != in.Target {
+		t.Errorf("Target mismatch: got %q want %q", out.Target, in.Target)
+	}
+	if out.StartedAt == nil {
+		t.Error("StartedAt should not be nil after DeepCopy")
+	}
+}
+
+func TestTargetExecutionResult_DeepCopy_Nil(t *testing.T) {
+	var in *TargetExecutionResult
+	if in.DeepCopy() != nil {
+		t.Error("nil.DeepCopy() should return nil")
 	}
 }

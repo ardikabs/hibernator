@@ -36,7 +36,7 @@ func (r *Reconciler) handleErrorRecovery(ctx context.Context, log logr.Logger, p
 	}
 
 	// Determine recovery strategy
-	strategy := recovery.DetermineRecoveryStrategy(plan, lastErr)
+	strategy := recovery.DetermineRecoveryStrategy(plan, r.Clock, lastErr)
 
 	log.Info("recovery strategy determined",
 		"shouldRetry", strategy.ShouldRetry,

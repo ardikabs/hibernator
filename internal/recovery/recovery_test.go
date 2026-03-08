@@ -18,6 +18,10 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+var (
+	fakeClock = testingclock.NewFakeClock(time.Now())
+)
+
 func TestErrorClassification_Constants(t *testing.T) {
 	if string(ErrorTransient) != "Transient" {
 		t.Errorf("ErrorTransient: got %q, want Transient", ErrorTransient)
@@ -118,7 +122,7 @@ func TestDetermineRecoveryStrategy_FirstRetry(t *testing.T) {
 		},
 	}
 
-	strategy := DetermineRecoveryStrategy(plan, errors.New("connection timeout"))
+	strategy := DetermineRecoveryStrategy(plan, fakeClock, errors.New("connection timeout"))
 
 	if !strategy.ShouldRetry {
 		t.Error("ShouldRetry should be true for first retry")
@@ -138,7 +142,7 @@ func TestDetermineRecoveryStrategy_MaxRetries(t *testing.T) {
 		},
 	}
 
-	strategy := DetermineRecoveryStrategy(plan, errors.New("connection timeout"))
+	strategy := DetermineRecoveryStrategy(plan, fakeClock, errors.New("connection timeout"))
 
 	if strategy.ShouldRetry {
 		t.Error("ShouldRetry should be false when max retries exceeded")
@@ -155,7 +159,7 @@ func TestDetermineRecoveryStrategy_PermanentError(t *testing.T) {
 		},
 	}
 
-	strategy := DetermineRecoveryStrategy(plan, errors.New("resource not found"))
+	strategy := DetermineRecoveryStrategy(plan, fakeClock, errors.New("resource not found"))
 
 	if strategy.ShouldRetry {
 		t.Error("ShouldRetry should be false for permanent errors")
@@ -176,7 +180,7 @@ func TestDetermineRecoveryStrategy_WithinBackoff(t *testing.T) {
 		},
 	}
 
-	strategy := DetermineRecoveryStrategy(plan, errors.New("timeout"))
+	strategy := DetermineRecoveryStrategy(plan, fakeClock, errors.New("timeout"))
 
 	if !strategy.ShouldRetry {
 		t.Error("ShouldRetry should be true")
