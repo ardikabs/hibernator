@@ -7,11 +7,11 @@ package state
 
 import (
 	"context"
+	"fmt"
 
 	hibernatorv1alpha1 "github.com/ardikabs/hibernator/api/v1alpha1"
-	"github.com/ardikabs/hibernator/internal/message"
+	statusprocessor "github.com/ardikabs/hibernator/internal/provider/processor/status"
 	"github.com/ardikabs/hibernator/internal/scheduler"
-	"github.com/ardikabs/hibernator/internal/wellknown"
 	"github.com/go-logr/logr"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/utils/ptr"
@@ -32,19 +32,19 @@ func (state *hibernatingState) Handle(ctx context.Context) (StateResult, error) 
 			"cycleID", plan.Status.CurrentCycleID,
 			"stage", plan.Status.CurrentStageIndex)
 
-	if plan.Status.CurrentOperation != "shutdown" {
+	if plan.Status.CurrentOperation != hibernatorv1alpha1.OperationHibernate {
 		log.V(1).Info("Hibernating but currentOperation != shutdown, skipping",
 			"currentOperation", plan.Status.CurrentOperation)
-		return StateResult{RequeueAfter: wellknown.RequeueIntervalDuringStage}, nil
+		return StateResult{}, AsPlanError(fmt.Errorf("mismatch between phase and operation: phase=%s operation=%s", plan.Status.Phase, plan.Status.CurrentOperation))
 	}
 
-	return state.execute(ctx, log, "shutdown", false,
+	return state.execute(ctx, log, hibernatorv1alpha1.OperationHibernate, false,
 		func(nextIdx int) { state.nextStage(nextIdx) },
 		func(ctx context.Context, ep scheduler.ExecutionPlan) { state.finalize(ctx, log, ep) },
 	)
 }
 
-func (state *hibernatingState) finalize(ctx context.Context, log logr.Logger, _ scheduler.ExecutionPlan) {
+func (state *hibernatingState) finalize(_ context.Context, log logr.Logger, _ scheduler.ExecutionPlan) {
 	plan := state.plan()
 
 	if !IsOperationComplete(plan) {
@@ -54,27 +54,25 @@ func (state *hibernatingState) finalize(ctx context.Context, log logr.Logger, _ 
 
 	log.Info("all stages completed, finalizing shutdown operation")
 
-	summary := BuildOperationSummary(state.Clock, plan, "shutdown")
+	summary := BuildOperationSummary(state.Clock, plan, hibernatorv1alpha1.OperationHibernate)
 	currentCycleID := plan.Status.CurrentCycleID
 
-	mutate := func(st *hibernatorv1alpha1.HibernatePlanStatus) {
-		st.Phase = hibernatorv1alpha1.PhaseHibernated
-		st.LastTransitionTime = ptr.To(metav1.NewTime(state.Clock.Now()))
-
-		cycleIdx := findOrAppendCycle(st, currentCycleID)
-		if st.ExecutionHistory[cycleIdx].ShutdownExecution == nil {
-			st.ExecutionHistory[cycleIdx].ShutdownExecution = summary
-		}
-		pruneCycleHistory(st)
-
-		st.RetryCount = 0
-		st.LastRetryTime = nil
-		st.ErrorMessage = ""
-	}
-
-	mutate(&plan.Status)
-	state.Statuses.PlanStatuses.Send(&message.PlanStatusUpdate{
+	state.Statuses.PlanStatuses.Send(statusprocessor.Update[*hibernatorv1alpha1.HibernatePlan]{
 		NamespacedName: state.Key,
-		Mutate:         mutate,
+		Resource:       plan,
+		Mutator: statusprocessor.MutatorFunc[*hibernatorv1alpha1.HibernatePlan](func(p *hibernatorv1alpha1.HibernatePlan) {
+			p.Status.Phase = hibernatorv1alpha1.PhaseHibernated
+			p.Status.LastTransitionTime = ptr.To(metav1.NewTime(state.Clock.Now()))
+
+			cycleIdx := findOrAppendCycle(&p.Status, currentCycleID)
+			if p.Status.ExecutionHistory[cycleIdx].ShutdownExecution == nil {
+				p.Status.ExecutionHistory[cycleIdx].ShutdownExecution = summary
+			}
+			pruneCycleHistory(&p.Status)
+
+			p.Status.RetryCount = 0
+			p.Status.LastRetryTime = nil
+			p.Status.ErrorMessage = ""
+		}),
 	})
 }

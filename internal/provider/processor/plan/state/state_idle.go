@@ -9,7 +9,7 @@ import (
 	"context"
 
 	hibernatorv1alpha1 "github.com/ardikabs/hibernator/api/v1alpha1"
-	"github.com/ardikabs/hibernator/internal/message"
+	statusprocessor "github.com/ardikabs/hibernator/internal/provider/processor/status"
 	"github.com/go-logr/logr"
 	"github.com/google/uuid"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -30,11 +30,6 @@ func (state *idleState) Handle(ctx context.Context) (StateResult, error) {
 		WithValues(
 			"plan", state.Key.String(),
 			"phase", plan.Status.Phase)
-
-	if plan.DeletionTimestamp != nil && !plan.DeletionTimestamp.IsZero() {
-		log.V(1).Info("plan has deletion timestamp, skipping schedule evaluation")
-		return StateResult{}, nil
-	}
 
 	if planCtx.ScheduleResult == nil {
 		log.V(1).Info("no schedule result available, skipping")
@@ -82,19 +77,17 @@ func (state *idleState) transitionToHibernating(log logr.Logger) (StateResult, e
 		}
 	}
 
-	mutate := func(st *hibernatorv1alpha1.HibernatePlanStatus) {
-		st.Phase = hibernatorv1alpha1.PhaseHibernating
-		st.CurrentCycleID = cycleID
-		st.CurrentStageIndex = 0
-		st.CurrentOperation = "shutdown"
-		st.Executions = executions
-		st.LastTransitionTime = ptr.To(metav1.NewTime(now))
-	}
-
-	mutate(&plan.Status)
-	state.Statuses.PlanStatuses.Send(&message.PlanStatusUpdate{
+	state.Statuses.PlanStatuses.Send(statusprocessor.Update[*hibernatorv1alpha1.HibernatePlan]{
 		NamespacedName: state.Key,
-		Mutate:         mutate,
+		Resource:       plan,
+		Mutator: statusprocessor.MutatorFunc[*hibernatorv1alpha1.HibernatePlan](func(p *hibernatorv1alpha1.HibernatePlan) {
+			p.Status.Phase = hibernatorv1alpha1.PhaseHibernating
+			p.Status.CurrentCycleID = cycleID
+			p.Status.CurrentStageIndex = 0
+			p.Status.CurrentOperation = hibernatorv1alpha1.OperationHibernate
+			p.Status.Executions = executions
+			p.Status.LastTransitionTime = ptr.To(metav1.NewTime(now))
+		}),
 	})
 
 	log.V(1).Info("queued transition to Hibernating", "cycleID", cycleID)
@@ -116,18 +109,16 @@ func (state *idleState) transitionToWakingUp(log logr.Logger) (StateResult, erro
 		}
 	}
 
-	mutate := func(st *hibernatorv1alpha1.HibernatePlanStatus) {
-		st.Phase = hibernatorv1alpha1.PhaseWakingUp
-		st.CurrentStageIndex = 0
-		st.CurrentOperation = "wakeup"
-		st.Executions = executions
-		st.LastTransitionTime = ptr.To(metav1.NewTime(now))
-	}
-
-	mutate(&plan.Status)
-	state.Statuses.PlanStatuses.Send(&message.PlanStatusUpdate{
+	state.Statuses.PlanStatuses.Send(statusprocessor.Update[*hibernatorv1alpha1.HibernatePlan]{
 		NamespacedName: state.Key,
-		Mutate:         mutate,
+		Resource:       plan,
+		Mutator: statusprocessor.MutatorFunc[*hibernatorv1alpha1.HibernatePlan](func(p *hibernatorv1alpha1.HibernatePlan) {
+			p.Status.Phase = hibernatorv1alpha1.PhaseWakingUp
+			p.Status.CurrentStageIndex = 0
+			p.Status.CurrentOperation = hibernatorv1alpha1.OperationWakeUp
+			p.Status.Executions = executions
+			p.Status.LastTransitionTime = ptr.To(metav1.NewTime(now))
+		}),
 	})
 
 	log.V(1).Info("queued transition to WakingUp")

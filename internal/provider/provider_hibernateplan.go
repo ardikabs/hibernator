@@ -10,9 +10,11 @@ import (
 	"fmt"
 	"maps"
 	"sort"
+	"sync/atomic"
 	"time"
 
 	"github.com/go-logr/logr"
+	"github.com/samber/lo"
 	batchv1 "k8s.io/api/batch/v1"
 	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
@@ -54,6 +56,8 @@ type PlanReconciler struct {
 	ScheduleEvaluator *scheduler.ScheduleEvaluator
 	RestoreManager    *restore.Manager
 	Planner           *scheduler.Planner
+
+	deliveryNonce atomic.Int64
 }
 
 // +kubebuilder:rbac:groups=hibernator.ardikabs.com,resources=hibernateplans,verbs=get;list;watch;create;update;patch;delete
@@ -98,7 +102,15 @@ func (r *PlanReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.
 		// Continue without exceptions -- don't fail the whole reconcile
 	}
 
-	schedResult, err := r.evaluateSchedule(log, plan, exceptionList.Items)
+	// Filter to Active exceptions only — Pending and Expired exceptions carry no
+	// actionable information for schedule evaluation or Worker phase decisions.
+	// Excluding them prevents spurious watchable re-delivery when the exception
+	// controller writes status updates (e.g. ExpiredAt) to non-active exceptions.
+	activeExceptions := lo.Filter(exceptionList.Items, func(exc hibernatorv1alpha1.ScheduleException, idx int) bool {
+		return exc.Status.State == hibernatorv1alpha1.ExceptionStateActive
+	})
+
+	schedResult, err := r.evaluateSchedule(log, plan, activeExceptions)
 	if err != nil {
 		log.Error(err, "failed to evaluate schedule")
 		return ctrl.Result{RequeueAfter: wellknown.RequeueIntervalOnScheduleError}, nil
@@ -112,24 +124,21 @@ func (r *PlanReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.
 		hasRestoreData = ok
 	}
 
-	execProgress := r.computeExecutionProgress(ctx, log, plan)
-
-	// Bundle into PlanContext and store in watchable map
+	// Bundle into PlanContext and store in watchable map.
 	planCtx := &message.PlanContext{
-		Plan:              plan,
-		Exceptions:        exceptionList.Items,
-		ScheduleResult:    schedResult,
-		HasRestoreData:    hasRestoreData,
-		ExecutionProgress: execProgress,
+		Plan:           plan,
+		Exceptions:     activeExceptions,
+		ScheduleResult: schedResult,
+		HasRestoreData: hasRestoreData,
+		DeliveryNonce:  r.deliveryNonce.Add(1),
 	}
 
 	r.Resources.PlanResources.Store(key, planCtx)
 
 	log.V(1).Info("stored plan context",
 		"phase", plan.Status.Phase,
-		"exceptionsCount", len(exceptionList.Items),
+		"activeExceptionsCount", len(activeExceptions),
 		"hasRestoreData", hasRestoreData,
-		"executionProgress", execProgress,
 		"nextEvent", schedResult.RequeueAfter.String(),
 	)
 
@@ -139,11 +148,7 @@ func (r *PlanReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.
 // evaluateSchedule checks if we should be in hibernation based on schedule and active exceptions.
 func (r *PlanReconciler) evaluateSchedule(log logr.Logger, plan *hibernatorv1alpha1.HibernatePlan, exceptions []hibernatorv1alpha1.ScheduleException) (*message.ScheduleEvaluation, error) {
 	if r.ScheduleEvaluator == nil {
-		// Fallback: always active if no evaluator
-		return &message.ScheduleEvaluation{
-			ShouldHibernate: false,
-			RequeueAfter:    wellknown.RequeueIntervalOnScheduleError,
-		}, nil
+		return nil, fmt.Errorf("no schedule evaluator configured")
 	}
 
 	// Convert OffHourWindows to scheduler format
@@ -157,7 +162,7 @@ func (r *PlanReconciler) evaluateSchedule(log logr.Logger, plan *hibernatorv1alp
 	}
 
 	// Query for active exception
-	exception, err := r.getActiveException(log, plan, exceptions)
+	exception, err := r.selectActiveException(log, plan, exceptions)
 	if err != nil {
 		log.Error(err, "failed to get active exception, evaluating base schedule only")
 
@@ -185,8 +190,8 @@ func (r *PlanReconciler) evaluateSchedule(log logr.Logger, plan *hibernatorv1alp
 	}, nil
 }
 
-// getActiveException finds the newest active ScheduleException from a list.
-func (r *PlanReconciler) getActiveException(log logr.Logger, plan *hibernatorv1alpha1.HibernatePlan, exceptions []hibernatorv1alpha1.ScheduleException) (*scheduler.Exception, error) {
+// selectActiveException selects the newest active ScheduleException from a list.
+func (r *PlanReconciler) selectActiveException(log logr.Logger, plan *hibernatorv1alpha1.HibernatePlan, exceptions []hibernatorv1alpha1.ScheduleException) (*scheduler.Exception, error) {
 	now := r.Clock.Now()
 
 	var activeExceptions []hibernatorv1alpha1.ScheduleException
@@ -245,42 +250,6 @@ func (r *PlanReconciler) getActiveException(log logr.Logger, plan *hibernatorv1a
 		LeadTime:   leadTime,
 		Windows:    windows,
 	}, nil
-}
-
-// computeExecutionProgress counts terminal jobs for the current cycle.
-// The result is used purely as a watchable change signal — when a job completes or
-// fails the counts change, PlanContext.Equal() returns false, and the worker gets an
-// event-driven wake-up instead of waiting for the poll timer.
-func (r *PlanReconciler) computeExecutionProgress(ctx context.Context, log logr.Logger, plan *hibernatorv1alpha1.HibernatePlan) *message.ExecutionProgress {
-	if plan.Status.CurrentCycleID == "" || plan.Status.CurrentOperation == "" {
-		return nil
-	}
-
-	var jobList batchv1.JobList
-	if err := r.List(ctx, &jobList,
-		client.InNamespace(plan.Namespace),
-		client.MatchingLabels{
-			wellknown.LabelPlan:      plan.Name,
-			wellknown.LabelCycleID:   plan.Status.CurrentCycleID,
-			wellknown.LabelOperation: plan.Status.CurrentOperation,
-		},
-	); err != nil {
-		log.Error(err, "failed to list cycle jobs for execution progress")
-		return nil
-	}
-
-	ep := message.ExecutionProgress{CycleID: plan.Status.CurrentCycleID}
-	for _, job := range jobList.Items {
-		if _, stale := job.Labels[wellknown.LabelStaleRunnerJob]; stale {
-			continue
-		}
-		if job.Status.Succeeded > 0 {
-			ep.Completed++
-		} else if job.Status.Failed > 0 {
-			ep.Failed++
-		}
-	}
-	return &ep
 }
 
 // findPlansForException returns reconcile requests for HibernatePlans when a ScheduleException changes.

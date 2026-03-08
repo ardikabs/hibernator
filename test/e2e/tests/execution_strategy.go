@@ -276,18 +276,18 @@ var _ = Describe("Execution Strategy E2E", func() {
 			testutil.EventuallyPhase(ctx, k8sClient, plan, hibernatorv1alpha1.PhaseHibernating)
 
 			By("[Shutdown] Verifying only 'web' Job is created first (top of DAG)")
-			jobWeb := testutil.EventuallyJobCreated(ctx, k8sClient, testNamespace, plan.Name, "shutdown", "web")
+			jobWeb := testutil.EventuallyJobCreated(ctx, k8sClient, testNamespace, plan.Name, hibernatorv1alpha1.OperationHibernate, "web")
 			_ = k8sClient.Get(ctx, client.ObjectKeyFromObject(jobWeb), jobWeb) // Ensure latest
 
 			By("[Shutdown] Simulating 'web' success, verifying 'app' Job creation")
 			testutil.SimulateJobSuccess(ctx, k8sClient, jobWeb, fakeClock.Now())
-			jobApp := testutil.EventuallyJobCreated(ctx, k8sClient, testNamespace, plan.Name, "shutdown", "app")
+			jobApp := testutil.EventuallyJobCreated(ctx, k8sClient, testNamespace, plan.Name, hibernatorv1alpha1.OperationHibernate, "app")
 			_ = k8sClient.Get(ctx, client.ObjectKeyFromObject(jobApp), jobApp) // Ensure latest
 
 			By("[Shutdown] Simulating 'app' success, verifying 'db' Job creation")
 			_ = k8sClient.Get(ctx, client.ObjectKeyFromObject(jobApp), jobApp) // Ensure latest
 			testutil.SimulateJobSuccess(ctx, k8sClient, jobApp, fakeClock.Now())
-			jobDB := testutil.EventuallyJobCreated(ctx, k8sClient, testNamespace, plan.Name, "shutdown", "db")
+			jobDB := testutil.EventuallyJobCreated(ctx, k8sClient, testNamespace, plan.Name, hibernatorv1alpha1.OperationHibernate, "db")
 
 			By("[Shutdown] Triggering 'db' success")
 			testutil.SimulateJobSuccess(ctx, k8sClient, jobDB, fakeClock.Now())
@@ -314,17 +314,17 @@ var _ = Describe("Execution Strategy E2E", func() {
 			testutil.EventuallyPhase(ctx, k8sClient, plan, hibernatorv1alpha1.PhaseWakingUp)
 
 			By("[Wakeup] Verifying 'db' Job is created first (reverse order)")
-			jobDBWake := testutil.EventuallyJobCreated(ctx, k8sClient, testNamespace, plan.Name, "wakeup", "db")
+			jobDBWake := testutil.EventuallyJobCreated(ctx, k8sClient, testNamespace, plan.Name, hibernatorv1alpha1.OperationWakeUp, "db")
 			_ = k8sClient.Get(ctx, client.ObjectKeyFromObject(jobDBWake), jobDBWake) // Ensure latest
 
 			By("[Wakeup] Simulating 'db' success, verifying 'app' Job creation")
 			testutil.SimulateJobSuccess(ctx, k8sClient, jobDBWake, fakeClock.Now())
-			jobAppWake := testutil.EventuallyJobCreated(ctx, k8sClient, testNamespace, plan.Name, "wakeup", "app")
+			jobAppWake := testutil.EventuallyJobCreated(ctx, k8sClient, testNamespace, plan.Name, hibernatorv1alpha1.OperationWakeUp, "app")
 			_ = k8sClient.Get(ctx, client.ObjectKeyFromObject(jobAppWake), jobAppWake) // Ensure latest
 
 			By("[Wakeup] Simulating 'app' success, verifying 'web' Job creation")
 			testutil.SimulateJobSuccess(ctx, k8sClient, jobAppWake, fakeClock.Now())
-			jobWebWake := testutil.EventuallyJobCreated(ctx, k8sClient, testNamespace, plan.Name, "wakeup", "web")
+			jobWebWake := testutil.EventuallyJobCreated(ctx, k8sClient, testNamespace, plan.Name, hibernatorv1alpha1.OperationWakeUp, "web")
 			_ = k8sClient.Get(ctx, client.ObjectKeyFromObject(jobWebWake), jobWebWake) // Ensure latest
 
 			By("Verifying plan returns to Active phase")
@@ -373,11 +373,11 @@ var _ = Describe("Execution Strategy E2E", func() {
 
 			// --- First attempt: web succeeds, app fails ---
 			By("[Attempt-1] Simulating 'web' success")
-			jobWeb1 := testutil.EventuallyJobCreated(ctx, k8sClient, testNamespace, plan.Name, "shutdown", "web")
+			jobWeb1 := testutil.EventuallyJobCreated(ctx, k8sClient, testNamespace, plan.Name, hibernatorv1alpha1.OperationHibernate, "web")
 			testutil.SimulateJobSuccess(ctx, k8sClient, jobWeb1, fakeClock.Now())
 
 			By("[Attempt-1] Simulating 'app' failure — 'db' must not be scheduled")
-			jobApp1 := testutil.EventuallyJobCreated(ctx, k8sClient, testNamespace, plan.Name, "shutdown", "app")
+			jobApp1 := testutil.EventuallyJobCreated(ctx, k8sClient, testNamespace, plan.Name, hibernatorv1alpha1.OperationHibernate, "app")
 			testutil.SimulateJobFailure(ctx, k8sClient, jobApp1, fakeClock.Now())
 
 			By("[Attempt-1] Verifying 'db' Job is not created (Strict mode skips downstream)")
@@ -397,11 +397,11 @@ var _ = Describe("Execution Strategy E2E", func() {
 
 			// --- Retry attempt: web succeeds again, app fails again ---
 			By("[Attempt-2] Simulating 'web' success")
-			jobWeb2 := testutil.EventuallyJobCreated(ctx, k8sClient, testNamespace, plan.Name, "shutdown", "web")
+			jobWeb2 := testutil.EventuallyJobCreated(ctx, k8sClient, testNamespace, plan.Name, hibernatorv1alpha1.OperationHibernate, "web")
 			testutil.SimulateJobSuccess(ctx, k8sClient, jobWeb2, fakeClock.Now())
 
 			By("[Attempt-2] Simulating 'app' failure again — retries exhausted")
-			jobApp2 := testutil.EventuallyJobCreated(ctx, k8sClient, testNamespace, plan.Name, "shutdown", "app")
+			jobApp2 := testutil.EventuallyJobCreated(ctx, k8sClient, testNamespace, plan.Name, hibernatorv1alpha1.OperationHibernate, "app")
 			testutil.SimulateJobFailure(ctx, k8sClient, jobApp2, fakeClock.Now())
 
 			By("Verifying plan enters PhaseError (retries exhausted, 'db' was never scheduled)")
@@ -461,11 +461,11 @@ var _ = Describe("Execution Strategy E2E", func() {
 			testutil.EventuallyPhase(ctx, k8sClient, plan, hibernatorv1alpha1.PhaseHibernating)
 
 			By("Verifying stage-1 Job is created")
-			jobFirstStage := testutil.EventuallyJobCreated(ctx, k8sClient, testNamespace, plan.Name, "shutdown", "s-target-1")
+			jobFirstStage := testutil.EventuallyJobCreated(ctx, k8sClient, testNamespace, plan.Name, hibernatorv1alpha1.OperationHibernate, "s-target-1")
 
 			By("Simulating success for stage-1, verifying stage-2 Jobs creation")
 			testutil.SimulateJobSuccess(ctx, k8sClient, jobFirstStage, fakeClock.Now())
-			jobsSecondStage := testutil.EventuallyMultiJobsCreated(ctx, k8sClient, testNamespace, plan.Name, "shutdown", "s-target-2", "s-target-3")
+			jobsSecondStage := testutil.EventuallyMultiJobsCreated(ctx, k8sClient, testNamespace, plan.Name, hibernatorv1alpha1.OperationHibernate, "s-target-2", "s-target-3")
 
 			By("Simulating success for stage-2")
 			testutil.SimulateJobSuccess(ctx, k8sClient, jobsSecondStage[0], fakeClock.Now())
@@ -513,11 +513,11 @@ var _ = Describe("Execution Strategy E2E", func() {
 			testutil.EventuallyPhase(ctx, k8sClient, plan, hibernatorv1alpha1.PhaseHibernating)
 
 			By("[Shutdown] Completing stage-1 (sw-target-1)")
-			jobStage1 := testutil.EventuallyJobCreated(ctx, k8sClient, testNamespace, plan.Name, "shutdown", "sw-target-1")
+			jobStage1 := testutil.EventuallyJobCreated(ctx, k8sClient, testNamespace, plan.Name, hibernatorv1alpha1.OperationHibernate, "sw-target-1")
 			testutil.SimulateJobSuccess(ctx, k8sClient, jobStage1, fakeClock.Now())
 
 			By("[Shutdown] Completing stage-2 (sw-target-2 and sw-target-3 in parallel)")
-			jobsStage2 := testutil.EventuallyMultiJobsCreated(ctx, k8sClient, testNamespace, plan.Name, "shutdown", "sw-target-2", "sw-target-3")
+			jobsStage2 := testutil.EventuallyMultiJobsCreated(ctx, k8sClient, testNamespace, plan.Name, hibernatorv1alpha1.OperationHibernate, "sw-target-2", "sw-target-3")
 			testutil.SimulateJobSuccess(ctx, k8sClient, jobsStage2[0], fakeClock.Now())
 			testutil.SimulateJobSuccess(ctx, k8sClient, jobsStage2[1], fakeClock.Now())
 
@@ -540,14 +540,14 @@ var _ = Describe("Execution Strategy E2E", func() {
 			testutil.EventuallyPhase(ctx, k8sClient, plan, hibernatorv1alpha1.PhaseWakingUp)
 
 			By("[Wakeup] Verifying stage-2 Jobs are created first (reverse order: sw-target-2 + sw-target-3)")
-			wakeStage2Jobs := testutil.EventuallyMultiJobsCreated(ctx, k8sClient, testNamespace, plan.Name, "wakeup", "sw-target-2", "sw-target-3")
+			wakeStage2Jobs := testutil.EventuallyMultiJobsCreated(ctx, k8sClient, testNamespace, plan.Name, hibernatorv1alpha1.OperationWakeUp, "sw-target-2", "sw-target-3")
 
 			By("[Wakeup] Confirming sw-target-1 Job is NOT yet created while stage-2 is in progress")
 			Consistently(func() int {
 				var jl batchv1.JobList
 				_ = k8sClient.List(ctx, &jl, client.InNamespace(testNamespace), client.MatchingLabels{
 					wellknown.LabelPlan:      plan.Name,
-					wellknown.LabelOperation: "wakeup",
+					wellknown.LabelOperation: hibernatorv1alpha1.OperationWakeUp,
 					wellknown.LabelTarget:    "sw-target-1",
 				})
 				return len(jl.Items)
@@ -558,7 +558,7 @@ var _ = Describe("Execution Strategy E2E", func() {
 			testutil.SimulateJobSuccess(ctx, k8sClient, wakeStage2Jobs[1], fakeClock.Now())
 
 			By("[Wakeup] Verifying stage-1 Job is now created (sw-target-1)")
-			wakeStage1Job := testutil.EventuallyJobCreated(ctx, k8sClient, testNamespace, plan.Name, "wakeup", "sw-target-1")
+			wakeStage1Job := testutil.EventuallyJobCreated(ctx, k8sClient, testNamespace, plan.Name, hibernatorv1alpha1.OperationWakeUp, "sw-target-1")
 			testutil.SimulateJobSuccess(ctx, k8sClient, wakeStage1Job, fakeClock.Now())
 
 			By("[Wakeup] Verifying plan returns to Active phase")

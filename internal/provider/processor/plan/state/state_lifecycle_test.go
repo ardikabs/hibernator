@@ -52,7 +52,7 @@ func TestLifecycleState_HandleInit_SetsActivePhaseWhenFinalizerPresent(t *testin
 
 	// In-memory plan should be Active; queue should have a status update.
 	assert.Equal(t, hibernatorv1alpha1.PhaseActive, st.plan().Status.Phase)
-	assert.GreaterOrEqual(t, st.Statuses.PlanStatuses.Len(), 1)
+	assert.GreaterOrEqual(t, planStatuses(st).Len(), 1)
 }
 
 // ---------------------------------------------------------------------------

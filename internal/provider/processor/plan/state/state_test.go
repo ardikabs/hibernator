@@ -26,6 +26,7 @@ import (
 
 	hibernatorv1alpha1 "github.com/ardikabs/hibernator/api/v1alpha1"
 	"github.com/ardikabs/hibernator/internal/message"
+	statusprocessor "github.com/ardikabs/hibernator/internal/provider/processor/status"
 	"github.com/ardikabs/hibernator/internal/restore"
 	"github.com/ardikabs/hibernator/internal/scheduler"
 	"github.com/ardikabs/hibernator/internal/wellknown"
@@ -52,13 +53,17 @@ func newHandlerFakeClient(objs ...client.Object) client.Client {
 // buildTestConfig constructs a Config wired to the supplied fake client.
 func buildTestConfig(c client.Client) *Config {
 	return &Config{
-		Log:            logr.Discard(),
-		Client:         c,
-		APIReader:      c,
-		Clock:          clocktesting.NewFakeClock(time.Now()),
-		Scheme:         newHandlerScheme(),
-		Planner:        scheduler.NewPlanner(),
-		Statuses:       message.NewControllerStatuses(),
+		Log:       logr.Discard(),
+		Client:    c,
+		APIReader: c,
+		Clock:     clocktesting.NewFakeClock(time.Now()),
+		Scheme:    newHandlerScheme(),
+		Planner:   scheduler.NewPlanner(),
+		Resources: new(message.ControllerResources),
+		Statuses: &statusprocessor.ControllerStatuses{
+			PlanStatuses:      newCaptureUpdater[*hibernatorv1alpha1.HibernatePlan](64),
+			ExceptionStatuses: newCaptureUpdater[*hibernatorv1alpha1.ScheduleException](16),
+		},
 		RestoreManager: restore.NewManager(c),
 		OnJobMissing:   func(target string) bool { return false },
 		OnJobFound:     func(target string) {},
@@ -261,7 +266,7 @@ func TestState_NextStage_UpdatesInMemoryAndQueues(t *testing.T) {
 	st.nextStage(1)
 
 	assert.Equal(t, 1, plan.Status.CurrentStageIndex)
-	assert.GreaterOrEqual(t, st.Statuses.PlanStatuses.Len(), 1)
+	assert.GreaterOrEqual(t, planStatuses(st).Len(), 1)
 }
 
 // ---------------------------------------------------------------------------
@@ -317,7 +322,7 @@ func TestState_TransitionToSuspended_PatchesAnnotationAndQueuesStatus(t *testing
 	assert.Equal(t, string(hibernatorv1alpha1.PhaseActive),
 		plan.Annotations[wellknown.AnnotationSuspendedAtPhase])
 	assert.Equal(t, hibernatorv1alpha1.PhaseSuspended, plan.Status.Phase)
-	assert.GreaterOrEqual(t, st.Statuses.PlanStatuses.Len(), 1)
+	assert.GreaterOrEqual(t, planStatuses(st).Len(), 1)
 }
 
 // ---------------------------------------------------------------------------

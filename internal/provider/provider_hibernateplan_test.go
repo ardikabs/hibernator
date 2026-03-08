@@ -87,29 +87,6 @@ func simplePlan(name, namespace string) *hibernatorv1alpha1.HibernatePlan {
 	}
 }
 
-// planWithCycle returns a plan whose status already carries a running cycle.
-func planWithCycle(name, namespace, cycleID, operation string) *hibernatorv1alpha1.HibernatePlan {
-	p := simplePlan(name, namespace)
-	p.Status.CurrentCycleID = cycleID
-	p.Status.CurrentOperation = operation
-	return p
-}
-
-// jobForPlan builds a batchv1.Job tagged with plan/cycle/operation labels.
-func jobForPlan(name, namespace, planName, cycleID, operation string) *batchv1.Job {
-	return &batchv1.Job{
-		ObjectMeta: metav1.ObjectMeta{
-			Name:      name,
-			Namespace: namespace,
-			Labels: map[string]string{
-				wellknown.LabelPlan:      planName,
-				wellknown.LabelCycleID:   cycleID,
-				wellknown.LabelOperation: operation,
-			},
-		},
-	}
-}
-
 // ---------------------------------------------------------------------------
 // PlanReconciler.Reconcile
 // ---------------------------------------------------------------------------
@@ -142,7 +119,6 @@ func TestPlanReconciler_Reconcile_PlanFound_StoresPlanContext(t *testing.T) {
 	require.True(t, ok, "plan should be stored in watchable map")
 	assert.NotNil(t, stored.Plan)
 	assert.Equal(t, "my-plan", stored.Plan.Name)
-	assert.Nil(t, stored.ExecutionProgress, "no running cycle → ExecutionProgress should be nil")
 }
 
 func TestPlanReconciler_Reconcile_WithException_PopulatesExceptions(t *testing.T) {
@@ -160,6 +136,9 @@ func TestPlanReconciler_Reconcile_WithException_PopulatesExceptions(t *testing.T
 			ValidUntil: metav1.NewTime(clk.Now().Add(1 * time.Hour)),
 			Type:       hibernatorv1alpha1.ExceptionSuspend,
 		},
+		Status: hibernatorv1alpha1.ScheduleExceptionStatus{
+			State: hibernatorv1alpha1.ExceptionStateActive,
+		},
 	}
 	r, resources := newPlanReconciler(clk, plan, exception)
 
@@ -172,156 +151,21 @@ func TestPlanReconciler_Reconcile_WithException_PopulatesExceptions(t *testing.T
 	assert.Len(t, stored.Exceptions, 1, "one exception should be attached to PlanContext")
 }
 
-func TestPlanReconciler_Reconcile_ActiveCycleWithSucceededJobs_SetsExecutionProgress(t *testing.T) {
-	clk := clocktesting.NewFakeClock(time.Now())
-	plan := planWithCycle("my-plan", "default", "cycle-001", "shutdown")
-	job := jobForPlan("runner-1", "default", "my-plan", "cycle-001", "shutdown")
-	job.Status.Succeeded = 1
-
-	r, resources := newPlanReconciler(clk, plan, job)
-
-	key := types.NamespacedName{Name: "my-plan", Namespace: "default"}
-	_, err := r.Reconcile(context.Background(), ctrl.Request{NamespacedName: key})
-	require.NoError(t, err)
-
-	stored, ok := resources.PlanResources.Load(key)
-	require.True(t, ok)
-	require.NotNil(t, stored.ExecutionProgress)
-	assert.Equal(t, "cycle-001", stored.ExecutionProgress.CycleID)
-	assert.Equal(t, 1, stored.ExecutionProgress.Completed)
-	assert.Equal(t, 0, stored.ExecutionProgress.Failed)
-}
-
-func TestPlanReconciler_Reconcile_ActiveCycleWithFailedJobs_SetsExecutionProgress(t *testing.T) {
-	clk := clocktesting.NewFakeClock(time.Now())
-	plan := planWithCycle("my-plan", "default", "cycle-001", "shutdown")
-	job := jobForPlan("runner-1", "default", "my-plan", "cycle-001", "shutdown")
-	job.Status.Failed = 1
-
-	r, resources := newPlanReconciler(clk, plan, job)
-
-	key := types.NamespacedName{Name: "my-plan", Namespace: "default"}
-	_, err := r.Reconcile(context.Background(), ctrl.Request{NamespacedName: key})
-	require.NoError(t, err)
-
-	stored, ok := resources.PlanResources.Load(key)
-	require.True(t, ok)
-	require.NotNil(t, stored.ExecutionProgress)
-	assert.Equal(t, 0, stored.ExecutionProgress.Completed)
-	assert.Equal(t, 1, stored.ExecutionProgress.Failed)
-}
-
 // ---------------------------------------------------------------------------
-// PlanReconciler.computeExecutionProgress
+// PlanReconciler.selectActiveException
 // ---------------------------------------------------------------------------
 
-func TestComputeExecutionProgress_NoCycleID_ReturnsNil(t *testing.T) {
-	clk := clocktesting.NewFakeClock(time.Now())
-	r, _ := newPlanReconciler(clk)
-
-	plan := simplePlan("p", "default") // no CurrentCycleID
-	result := r.computeExecutionProgress(context.Background(), logr.Discard(), plan)
-	assert.Nil(t, result)
-}
-
-func TestComputeExecutionProgress_NoJobs_ReturnsZeroCounts(t *testing.T) {
-	clk := clocktesting.NewFakeClock(time.Now())
-	plan := planWithCycle("p", "default", "c1", "shutdown")
-	r, _ := newPlanReconciler(clk, plan) // no jobs in cluster
-
-	result := r.computeExecutionProgress(context.Background(), logr.Discard(), plan)
-	require.NotNil(t, result)
-	assert.Equal(t, "c1", result.CycleID)
-	assert.Equal(t, 0, result.Completed)
-	assert.Equal(t, 0, result.Failed)
-}
-
-func TestComputeExecutionProgress_SucceededJobs_CountsCompleted(t *testing.T) {
-	clk := clocktesting.NewFakeClock(time.Now())
-	plan := planWithCycle("p", "default", "c1", "shutdown")
-	job1 := jobForPlan("j1", "default", "p", "c1", "shutdown")
-	job1.Status.Succeeded = 1
-	job2 := jobForPlan("j2", "default", "p", "c1", "shutdown")
-	job2.Status.Succeeded = 1
-
-	r, _ := newPlanReconciler(clk, plan, job1, job2)
-	result := r.computeExecutionProgress(context.Background(), logr.Discard(), plan)
-
-	require.NotNil(t, result)
-	assert.Equal(t, 2, result.Completed)
-	assert.Equal(t, 0, result.Failed)
-}
-
-func TestComputeExecutionProgress_FailedJobs_CountsFailed(t *testing.T) {
-	clk := clocktesting.NewFakeClock(time.Now())
-	plan := planWithCycle("p", "default", "c1", "shutdown")
-	job := jobForPlan("j1", "default", "p", "c1", "shutdown")
-	job.Status.Failed = 3
-
-	r, _ := newPlanReconciler(clk, plan, job)
-	result := r.computeExecutionProgress(context.Background(), logr.Discard(), plan)
-
-	require.NotNil(t, result)
-	assert.Equal(t, 0, result.Completed)
-	assert.Equal(t, 1, result.Failed, "failed counted per-job, not per-attempt")
-}
-
-func TestComputeExecutionProgress_StaleJobsAreExcluded(t *testing.T) {
-	clk := clocktesting.NewFakeClock(time.Now())
-	plan := planWithCycle("p", "default", "c1", "shutdown")
-
-	// Normal job
-	normal := jobForPlan("j1", "default", "p", "c1", "shutdown")
-	normal.Status.Succeeded = 1
-
-	// Stale job — should not be counted
-	stale := jobForPlan("j2", "default", "p", "c1", "shutdown")
-	stale.Labels[wellknown.LabelStaleRunnerJob] = "true"
-	stale.Status.Succeeded = 1
-
-	r, _ := newPlanReconciler(clk, plan, normal, stale)
-	result := r.computeExecutionProgress(context.Background(), logr.Discard(), plan)
-
-	require.NotNil(t, result)
-	assert.Equal(t, 1, result.Completed, "stale job should be excluded from count")
-}
-
-func TestComputeExecutionProgress_MixedJobs(t *testing.T) {
-	clk := clocktesting.NewFakeClock(time.Now())
-	plan := planWithCycle("p", "default", "c1", "wakeup")
-
-	succeeded := jobForPlan("j1", "default", "p", "c1", "wakeup")
-	succeeded.Status.Succeeded = 1
-
-	failed := jobForPlan("j2", "default", "p", "c1", "wakeup")
-	failed.Status.Failed = 1
-
-	running := jobForPlan("j3", "default", "p", "c1", "wakeup")
-	running.Status.Active = 1 // not terminal — should not affect counts
-
-	r, _ := newPlanReconciler(clk, plan, succeeded, failed, running)
-	result := r.computeExecutionProgress(context.Background(), logr.Discard(), plan)
-
-	require.NotNil(t, result)
-	assert.Equal(t, 1, result.Completed)
-	assert.Equal(t, 1, result.Failed)
-}
-
-// ---------------------------------------------------------------------------
-// PlanReconciler.getActiveException
-// ---------------------------------------------------------------------------
-
-func TestGetActiveException_NoExceptions_ReturnsNil(t *testing.T) {
+func TestSelectActiveException_NoExceptions_ReturnsNil(t *testing.T) {
 	clk := clocktesting.NewFakeClock(time.Now())
 	r, _ := newPlanReconciler(clk)
 	plan := simplePlan("p", "default")
 
-	exc, err := r.getActiveException(logr.Discard(), plan, nil)
+	exc, err := r.selectActiveException(logr.Discard(), plan, nil)
 	require.NoError(t, err)
 	assert.Nil(t, exc)
 }
 
-func TestGetActiveException_ActiveMatchingException_ReturnsException(t *testing.T) {
+func TestSelectActiveException_ActiveMatchingException_ReturnsException(t *testing.T) {
 	now := time.Date(2026, 3, 4, 10, 0, 0, 0, time.UTC)
 	clk := clocktesting.NewFakeClock(now)
 	r, _ := newPlanReconciler(clk)
@@ -343,12 +187,12 @@ func TestGetActiveException_ActiveMatchingException_ReturnsException(t *testing.
 		},
 	}
 
-	exc, err := r.getActiveException(logr.Discard(), plan, exceptions)
+	exc, err := r.selectActiveException(logr.Discard(), plan, exceptions)
 	require.NoError(t, err)
 	require.NotNil(t, exc)
 }
 
-func TestGetActiveException_PendingException_IsIgnored(t *testing.T) {
+func TestSelectActiveException_PendingException_IsIgnored(t *testing.T) {
 	now := time.Date(2026, 3, 4, 10, 0, 0, 0, time.UTC)
 	clk := clocktesting.NewFakeClock(now)
 	r, _ := newPlanReconciler(clk)
@@ -368,12 +212,12 @@ func TestGetActiveException_PendingException_IsIgnored(t *testing.T) {
 		},
 	}
 
-	exc, err := r.getActiveException(logr.Discard(), plan, exceptions)
+	exc, err := r.selectActiveException(logr.Discard(), plan, exceptions)
 	require.NoError(t, err)
 	assert.Nil(t, exc, "pending exception should be ignored")
 }
 
-func TestGetActiveException_ExpiredTimeWindow_IsIgnored(t *testing.T) {
+func TestSelectActiveException_ExpiredTimeWindow_IsIgnored(t *testing.T) {
 	now := time.Date(2026, 3, 4, 10, 0, 0, 0, time.UTC)
 	clk := clocktesting.NewFakeClock(now)
 	r, _ := newPlanReconciler(clk)
@@ -393,12 +237,12 @@ func TestGetActiveException_ExpiredTimeWindow_IsIgnored(t *testing.T) {
 		},
 	}
 
-	exc, err := r.getActiveException(logr.Discard(), plan, exceptions)
+	exc, err := r.selectActiveException(logr.Discard(), plan, exceptions)
 	require.NoError(t, err)
 	assert.Nil(t, exc, "exception past ValidUntil should be ignored")
 }
 
-func TestGetActiveException_MultipleActive_PicksNewest(t *testing.T) {
+func TestSelectActiveException_MultipleActive_PicksNewest(t *testing.T) {
 	now := time.Date(2026, 3, 4, 10, 0, 0, 0, time.UTC)
 	clk := clocktesting.NewFakeClock(now)
 	r, _ := newPlanReconciler(clk)
@@ -433,7 +277,7 @@ func TestGetActiveException_MultipleActive_PicksNewest(t *testing.T) {
 		Status: hibernatorv1alpha1.ScheduleExceptionStatus{State: hibernatorv1alpha1.ExceptionStateActive},
 	}
 
-	exc, err := r.getActiveException(logr.Discard(), plan, []hibernatorv1alpha1.ScheduleException{older, newer})
+	exc, err := r.selectActiveException(logr.Discard(), plan, []hibernatorv1alpha1.ScheduleException{older, newer})
 	require.NoError(t, err)
 	require.NotNil(t, exc)
 	// The newer exception has ExceptionExtend type; verify correct exception was picked.

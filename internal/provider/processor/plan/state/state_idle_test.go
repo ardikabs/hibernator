@@ -42,7 +42,7 @@ func TestIdleState_Handle_NoScheduleResult_NoTransition(t *testing.T) {
 
 	// No schedule result → no phase transition.
 	assert.Equal(t, hibernatorv1alpha1.PhaseActive, plan.Status.Phase)
-	assert.Zero(t, st.Statuses.PlanStatuses.Len())
+	assert.Zero(t, planStatuses(st).Len())
 }
 
 func TestIdleState_Handle_ActiveShouldHibernate_TransitionsToHibernating(t *testing.T) {
@@ -61,7 +61,7 @@ func TestIdleState_Handle_ActiveShouldHibernate_TransitionsToHibernating(t *test
 		"phase should be Hibernating or Hibernated after transition; got %s", plan.Status.Phase)
 
 	// At least one status update must have been queued (Hibernating transition, possibly also Hibernated).
-	assert.GreaterOrEqual(t, st.Statuses.PlanStatuses.Len(), 1)
+	assert.GreaterOrEqual(t, planStatuses(st).Len(), 1)
 }
 
 func TestIdleState_Handle_ActiveShouldNotHibernate_NoTransition(t *testing.T) {
@@ -73,7 +73,7 @@ func TestIdleState_Handle_ActiveShouldNotHibernate_NoTransition(t *testing.T) {
 	h.Handle(context.Background())
 
 	assert.Equal(t, hibernatorv1alpha1.PhaseActive, plan.Status.Phase)
-	assert.Zero(t, st.Statuses.PlanStatuses.Len())
+	assert.Zero(t, planStatuses(st).Len())
 }
 
 func TestIdleState_Handle_HibernatedNoRestoreData_NoWakeUp(t *testing.T) {
@@ -86,7 +86,7 @@ func TestIdleState_Handle_HibernatedNoRestoreData_NoWakeUp(t *testing.T) {
 
 	// No restore data → no wakeup even though schedule says so.
 	assert.Equal(t, hibernatorv1alpha1.PhaseHibernated, plan.Status.Phase)
-	assert.Zero(t, st.Statuses.PlanStatuses.Len())
+	assert.Zero(t, planStatuses(st).Len())
 }
 
 func TestIdleState_Handle_HibernatedShouldStayHibernated(t *testing.T) {
@@ -98,5 +98,5 @@ func TestIdleState_Handle_HibernatedShouldStayHibernated(t *testing.T) {
 	h.Handle(context.Background())
 
 	assert.Equal(t, hibernatorv1alpha1.PhaseHibernated, plan.Status.Phase)
-	assert.Zero(t, st.Statuses.PlanStatuses.Len())
+	assert.Zero(t, planStatuses(st).Len())
 }

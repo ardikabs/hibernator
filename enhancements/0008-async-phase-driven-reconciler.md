@@ -526,7 +526,7 @@ Multiple layers of protection:
 | **Status writer RetryOnConflict** | Fetches fresh plan before applying mutation | Handles concurrent writes safely |
 | **`isPlanStatusEqual` guard** | `cmp.Equal` with IgnoreFields | Skips no-op status writes |
 | **`mergeIncoming()`** | Carries forward optimistic Status on watchable delivery | Prevents informer-lag from reverting in-memory mutations |
-| **`reconcileTruth()`** | Every 5th poll cycle, fetch from APIReader | Bounds optimistic/persisted divergence to ~25s |
+| **`reconcileTruth()`** | ⚠️ Designed but not implemented — see [F1](../docs/findings/async-reconciler-review.md) | Optimistic/persisted divergence has no correction path yet |
 
 ---
 
@@ -549,7 +549,7 @@ No separate timers needed in Workers during execution. During idle phases, the p
 | **`planContextSlot` (latest-wins slot)** | Non-blocking single-value channel avoids queue buildup. Mutex + separate signal channel is correct for "latest overwrites" semantic. |
 | **`patchPreservingStatus()`** | controller-runtime's `Patch()` deserialises the API response back into the live object, overwriting Status. Snapshot + restore preserves optimistic mutations. Applied at all 7 Patch call sites in state handlers. |
 | **`mergeIncoming()`** | On every watchable delivery, accept incoming Spec/ObjectMeta/provider fields but carry forward optimistic `plan.Status`. Prevents informer-lag from reverting pending phase transitions. |
-| **`reconcileTruth()`** | Every 5th poll cycle, fetch from `APIReader` and replace cached plan on divergence. Bounds the optimistic-vs-persisted divergence window without new plumbing. |
+| **`reconcileTruth()`** | ⚠️ Designed but not implemented. The divergence correction path is absent from the current implementation — see [docs/findings/async-reconciler-review.md F1](../docs/findings/async-reconciler-review.md) for analysis and remediation options. |
 | **Worker idle reaping** | `workerIdleTimeout = 30m` + fifth select case. Prevents O(plans) goroutines for large deployments. |
 | **`StatusQueue` drop-on-full** | Combined with `isPlanStatusEqual` guard and `RetryOnConflict`, dropped updates are safe — the next poll cycle re-derives current state. `StatusQueueDroppedTotal` metric provides visibility. |
 | **`updateExecutionStatuses` drift detection** | Snapshot execution states before mutation; only `Send()` when drift is detected. Eliminates redundant writes on poll ticks where jobs haven't progressed. |
@@ -657,7 +657,7 @@ Scope: ~5,300 new lines across 29 files. Branch `feat/async-reconciler`, single 
 |----|-------|--------|
 | H1 | Worker goroutines never reaped for idle plans — O(plans) goroutines at scale | ✅ Fixed: `workerIdleTimeout = 30m` + fifth idle `select` case + `reap()` callback |
 | H2 | Potential hot loop from ResourceVersion-based equality | ✅ Not a Bug: `planPredicate` (`GenerationChangedPredicate \| AnnotationChangedPredicate`) filters status-only updates at informer level |
-| H3 | No divergence detection between optimistic and persisted state | ✅ Fixed: `reconcileTruth()` every 5th poll cycle |
+| H3 | No divergence detection between optimistic and persisted state | ⚠️ Not Implemented: `reconcileTruth()` was designed but never shipped — see [docs/findings F1](../docs/findings/async-reconciler-review.md) |
 | H4 | No graceful drain of `StatusQueue` on shutdown | ✅ Fixed: `Writer.drain()` with 5s background-context deadline |
 | H5 | `FetchCurrentCycleJobs` used cached client (informer lag) instead of `APIReader` | ✅ Fixed: `APIReader` threaded through provider → Coordinator → Worker → Config → `FetchCurrentCycleJobs` |
 
@@ -665,17 +665,17 @@ Scope: ~5,300 new lines across 29 files. Branch `feat/async-reconciler`, single 
 
 | ID | Issue | Status |
 |----|-------|--------|
-| M1 | `dispatch()` creates potential unbounded call-depth | Open (Low Risk): Max depth ~4 in practice; chains are terminating by construction |
+| M1 | Recursive `handle()` on `StateResult.Requeue` — unbounded call-depth possible | Open (Low Risk): `dispatch()` replaced by `StateResult{Requeue: true}`; max depth ~4 in practice; chains are terminating by construction |
 | M2 | `handleRetry` doesn't reset `CurrentStageIndex` | ✅ Not a Bug: Retry-from-current-stage is correct; only `handleManualRetry` resets to stage 0 |
 | M3 | Exception `LifecycleProcessor` is single-threaded — may bottleneck at scale | Open (Low Risk): Bottleneck unlikely below ~100 concurrent exceptions |
 | M4 | No worker goroutine count metric | ✅ Fixed: `WorkerGoroutinesGauge` added in `metrics.go` |
-| M5 | `buildConfig()` allocates new `Config` on every `handle()` call | ✅ Fixed: `cachedConfig` lazily initialised on first call, only `PlanCtx` updated per call |
+| M5 | `buildConfig()` allocates new `Config` on every `handle()` call | ↩️ Reverted: a fresh `Config` per `handle()` call is now the intentional design — handlers are fully stateless with respect to the Worker |
 
 #### Low / Nits
 
 | ID | Issue | Status |
 |----|-------|--------|
-| L1 | `forceWakeUpOnResume` transitioned directly to `PhaseWakingUp` with stale execution state | ✅ Fixed: Routes to `PhaseHibernated` + `dispatch()` → `idleState` → canonical `transitionToWakingUp()` |
+| L1 | `forceWakeUpOnResume` transitioned directly to `PhaseWakingUp` with stale execution state | ✅ Fixed: Transitions to `PhaseHibernated` + returns `StateResult{Requeue: true}` → Worker immediately re-evaluates via `idleState` → canonical `transitionToWakingUp()` |
 | L2 | Magic number `5` in `pruneCycleHistory` | ✅ Fixed: Extracted as `maxCycleHistorySize = 5` |
 | L3 | `mapsEqual` reimplements `maps.Equal` (stdlib since Go 1.21) | ✅ Fixed: Replaced with `maps.Equal` |
 | L4 | Design doc directory structure doesn't match implementation | Open (Cosmetic): `internal/processor/plan/...` → actual: `internal/provider/processor/plan/...` |
@@ -688,7 +688,7 @@ Four additional fixes closed race conditions in the optimistic status pipeline t
 | ID | Fix |
 |----|-----|
 | PR1 | `patchPreservingStatus()` — snapshot Status before `client.Patch()`, restore after; applied at all 7 Patch call sites in state handlers |
-| PR2 | `mergeIncoming()` — carry forward optimistic Status on every watchable delivery; correction path via `reconcileTruth()` |
+| PR2 | `mergeIncoming()` — carry forward optimistic Status on every watchable delivery (divergence correction path `reconcileTruth()` designed but not implemented — see F1) |
 | PR3 | `updateExecutionStatuses` — refactored to route through StatusWriter with drift detection via `snapshotExecutionStates` / `executionStatesEqual` |
 | PR4 | Execution status cascade pattern — `StartedAt` hoisted with idempotent guard; `Active > 0` → `StateRunning`; `JobComplete`/`JobFailed` conditions loop with `break`; metrics on first terminal transition |
 

@@ -102,7 +102,7 @@ var _ = Describe("Schedule Boundary E2E - 1-Minute Buffer Workaround", func() {
 		Expect(plan.Status.Executions[0].State).To(Equal(hibernatorv1alpha1.StatePending))
 
 		By("Verifying runner Job creation and simulating success")
-		hibernationJob := testutil.EventuallyJobCreated(ctx, k8sClient, testNamespace, plan.Name, "shutdown", "database")
+		hibernationJob := testutil.EventuallyJobCreated(ctx, k8sClient, testNamespace, plan.Name, hibernatorv1alpha1.OperationHibernate, "database")
 		testutil.SimulateJobSuccess(ctx, k8sClient, hibernationJob, fakeClock.Now())
 
 		By("Verifying plan transitions to Hibernated and saves restore data")

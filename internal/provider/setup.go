@@ -6,11 +6,11 @@ Licensed under the Apache License, Version 2.0.
 package provider
 
 import (
-	"context"
 	"fmt"
 
 	"k8s.io/utils/clock"
 	ctrl "sigs.k8s.io/controller-runtime"
+	"sigs.k8s.io/controller-runtime/pkg/manager"
 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
 
 	"github.com/ardikabs/hibernator/internal/message"
@@ -20,6 +20,8 @@ import (
 	"github.com/ardikabs/hibernator/internal/restore"
 	"github.com/ardikabs/hibernator/internal/scheduler"
 	"github.com/go-logr/logr"
+
+	hibernatorv1alpha1 "github.com/ardikabs/hibernator/api/v1alpha1"
 )
 
 // ProviderOptions contains the configuration needed to wire the full async reconciler pipeline.
@@ -61,7 +63,21 @@ func Setup(mgr ctrl.Manager, clk clock.Clock, opts ProviderOptions) error {
 
 	// Shared message bus between providers and processors.
 	resources := new(message.ControllerResources)
-	statuses := message.NewControllerStatuses()
+
+	planStatusProcessor := statusprocessor.NewUpdateProcessor[*hibernatorv1alpha1.HibernatePlan](
+		opts.Logger.WithName("processor").WithName("plan-status"),
+		mgr.GetClient(),
+		mgr.GetAPIReader())
+
+	exceptionStatusProcessor := statusprocessor.NewUpdateProcessor[*hibernatorv1alpha1.ScheduleException](
+		opts.Logger.WithName("processor").WithName("exception-status"),
+		mgr.GetClient(),
+		mgr.GetAPIReader())
+
+	statuses := &statusprocessor.ControllerStatuses{
+		PlanStatuses:      planStatusProcessor.Writer(),
+		ExceptionStatuses: exceptionStatusProcessor.Writer(),
+	}
 
 	// --- Providers (K8s reconciler → watchable map) ---
 
@@ -112,10 +128,7 @@ func Setup(mgr ctrl.Manager, clk clock.Clock, opts ProviderOptions) error {
 
 	processors := []struct {
 		name     string
-		runnable interface {
-			Start(context.Context) error
-			NeedLeaderElection() bool
-		}
+		runnable manager.Runnable
 	}{
 		{
 			name: "hibernateplan.coordinator",
@@ -146,14 +159,12 @@ func Setup(mgr ctrl.Manager, clk clock.Clock, opts ProviderOptions) error {
 			},
 		},
 		{
-			name: "status.writer",
-			runnable: &statusprocessor.Writer{
-				Client:    mgr.GetClient(),
-				APIReader: mgr.GetAPIReader(),
-				Log:       opts.Logger.WithName("processor").WithName("status"),
-				Statuses:  statuses,
-				Resources: resources,
-			},
+			name:     "plan.status",
+			runnable: planStatusProcessor,
+		},
+		{
+			name:     "exception.status",
+			runnable: exceptionStatusProcessor,
 		},
 	}
 

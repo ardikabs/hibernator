@@ -15,7 +15,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
 	hibernatorv1alpha1 "github.com/ardikabs/hibernator/api/v1alpha1"
-	"github.com/ardikabs/hibernator/internal/message"
+	statusprocessor "github.com/ardikabs/hibernator/internal/provider/processor/status"
 	"github.com/ardikabs/hibernator/internal/wellknown"
 	"github.com/go-logr/logr"
 )
@@ -132,15 +132,13 @@ func (state *suspendedState) resume(ctx context.Context, log logr.Logger) (State
 
 	log.V(1).Info("normal resume, transitioning to Active")
 
-	mutate := func(st *hibernatorv1alpha1.HibernatePlanStatus) {
-		st.Phase = hibernatorv1alpha1.PhaseActive
-		st.LastTransitionTime = ptr.To(metav1.NewTime(state.Clock.Now()))
-	}
-
-	mutate(&plan.Status)
-	state.Statuses.PlanStatuses.Send(&message.PlanStatusUpdate{
+	state.Statuses.PlanStatuses.Send(statusprocessor.Update[*hibernatorv1alpha1.HibernatePlan]{
 		NamespacedName: state.Key,
-		Mutate:         mutate,
+		Resource:       plan,
+		Mutator: statusprocessor.MutatorFunc[*hibernatorv1alpha1.HibernatePlan](func(p *hibernatorv1alpha1.HibernatePlan) {
+			p.Status.Phase = hibernatorv1alpha1.PhaseActive
+			p.Status.LastTransitionTime = ptr.To(metav1.NewTime(state.Clock.Now()))
+		}),
 	})
 
 	state.cleanupSuspensionAnnotations(ctx, log, plan)
@@ -151,8 +149,8 @@ func (state *suspendedState) resume(ctx context.Context, log logr.Logger) (State
 // Rather than routing back through the error/retry machinery, it resolves to the
 // correct idle phase based on which operation was in-flight when the error occurred:
 //
-//   - CurrentOperation == "shutdown" → the resource was never shut down → PhaseActive
-//   - CurrentOperation == "wakeup"   → the resource was never woken up  → PhaseHibernated
+//   - CurrentOperation == OperationShutdown → the resource was never shut down → PhaseActive
+//   - CurrentOperation == OperationWakeUp   → the resource was never woken up  → PhaseHibernated
 //
 // The status is persisted (ErrorMessage, RetryCount cleared, Phase set to baseline) to
 // acknowledge the operator's manual intervention. A guaranteed PlanStatuses.Send is issued
@@ -173,7 +171,7 @@ func (state *suspendedState) resumeFromError(ctx context.Context, log logr.Logge
 	// Determine baseline phase from the failed operation.
 	// Default to PhaseActive (safe: treats resource as never shut down).
 	targetPhase := hibernatorv1alpha1.PhaseActive
-	if plan.Status.CurrentOperation == "wakeup" {
+	if plan.Status.CurrentOperation == hibernatorv1alpha1.OperationWakeUp {
 		// Wakeup never completed → resource is still hibernated.
 		targetPhase = hibernatorv1alpha1.PhaseHibernated
 	}
@@ -192,18 +190,16 @@ func (state *suspendedState) resumeFromError(ctx context.Context, log logr.Logge
 	// KeyedWorkerPool processes updates FIFO, so the baseline write lands first and is
 	// immediately followed by the correct next-phase write — both are visible in order.
 	now := state.Clock.Now()
-	mutate := func(st *hibernatorv1alpha1.HibernatePlanStatus) {
-		st.Phase = targetPhase
-		st.RetryCount = 0
-		st.ErrorMessage = ""
-		st.LastRetryTime = nil
-		st.LastTransitionTime = ptr.To(metav1.NewTime(now))
-	}
-
-	mutate(&plan.Status)
-	state.Statuses.PlanStatuses.Send(&message.PlanStatusUpdate{
+	state.Statuses.PlanStatuses.Send(statusprocessor.Update[*hibernatorv1alpha1.HibernatePlan]{
 		NamespacedName: state.Key,
-		Mutate:         mutate,
+		Resource:       plan,
+		Mutator: statusprocessor.MutatorFunc[*hibernatorv1alpha1.HibernatePlan](func(p *hibernatorv1alpha1.HibernatePlan) {
+			p.Status.Phase = targetPhase
+			p.Status.RetryCount = 0
+			p.Status.ErrorMessage = ""
+			p.Status.LastRetryTime = nil
+			p.Status.LastTransitionTime = ptr.To(metav1.NewTime(now))
+		}),
 	})
 
 	state.cleanupSuspensionAnnotations(ctx, log, plan)
@@ -265,15 +261,13 @@ func (state *suspendedState) resumeFromExecution(ctx context.Context, log logr.L
 		"shouldHibernate", shouldHibernate)
 
 	now := state.Clock.Now()
-	mutate := func(st *hibernatorv1alpha1.HibernatePlanStatus) {
-		st.Phase = targetPhase
-		st.LastTransitionTime = ptr.To(metav1.NewTime(now))
-	}
-
-	mutate(&plan.Status)
-	state.Statuses.PlanStatuses.Send(&message.PlanStatusUpdate{
+	state.Statuses.PlanStatuses.Send(statusprocessor.Update[*hibernatorv1alpha1.HibernatePlan]{
 		NamespacedName: state.Key,
-		Mutate:         mutate,
+		Resource:       plan,
+		Mutator: statusprocessor.MutatorFunc[*hibernatorv1alpha1.HibernatePlan](func(p *hibernatorv1alpha1.HibernatePlan) {
+			p.Status.Phase = targetPhase
+			p.Status.LastTransitionTime = ptr.To(metav1.NewTime(now))
+		}),
 	})
 
 	state.cleanupSuspensionAnnotations(ctx, log, plan)

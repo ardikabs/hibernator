@@ -16,11 +16,38 @@ import (
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	clocktesting "k8s.io/utils/clock/testing"
+	"sigs.k8s.io/controller-runtime/pkg/client"
 
 	hibernatorv1alpha1 "github.com/ardikabs/hibernator/api/v1alpha1"
+	statusprocessor "github.com/ardikabs/hibernator/internal/provider/processor/status"
 	"github.com/ardikabs/hibernator/internal/scheduler"
 	"github.com/ardikabs/hibernator/internal/wellknown"
 )
+
+// captureUpdater is a test helper that buffers statusprocessor.Update[T] values
+// sent via Send so that tests can inspect Len() or drain the channel.
+type captureUpdater[T client.Object] struct {
+	ch chan statusprocessor.Update[T]
+}
+
+func newCaptureUpdater[T client.Object](cap int) *captureUpdater[T] {
+	return &captureUpdater[T]{ch: make(chan statusprocessor.Update[T], cap)}
+}
+
+func (u *captureUpdater[T]) Send(upd statusprocessor.Update[T]) {
+	if upd.Mutator != nil {
+		upd.Mutator.Mutate(upd.Resource)
+	}
+	u.ch <- upd
+}
+func (u *captureUpdater[T]) Len() int                           { return len(u.ch) }
+func (u *captureUpdater[T]) C() <-chan statusprocessor.Update[T] { return u.ch }
+
+// planStatuses returns the captureUpdater for plan statuses from the given state,
+// providing Len() and C() methods for use in tests.
+func planStatuses(st *state) *captureUpdater[*hibernatorv1alpha1.HibernatePlan] {
+	return st.Statuses.PlanStatuses.(*captureUpdater[*hibernatorv1alpha1.HibernatePlan])
+}
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -248,18 +275,18 @@ func makeTestJob(target, operation, cycleID string, stale bool) batchv1.Job {
 }
 
 func TestJobExistsForTarget_Exists_True(t *testing.T) {
-	jobs := []batchv1.Job{makeTestJob("app", "shutdown", "c1", false)}
-	assert.True(t, JobExistsForTarget(jobs, "app", "shutdown", "c1"))
+	jobs := []batchv1.Job{makeTestJob("app", hibernatorv1alpha1.OperationHibernate, "c1", false)}
+	assert.True(t, JobExistsForTarget(jobs, "app", hibernatorv1alpha1.OperationHibernate, "c1"))
 }
 
 func TestJobExistsForTarget_WrongCycle_False(t *testing.T) {
-	jobs := []batchv1.Job{makeTestJob("app", "shutdown", "c1", false)}
-	assert.False(t, JobExistsForTarget(jobs, "app", "shutdown", "c2"))
+	jobs := []batchv1.Job{makeTestJob("app", hibernatorv1alpha1.OperationHibernate, "c1", false)}
+	assert.False(t, JobExistsForTarget(jobs, "app", hibernatorv1alpha1.OperationHibernate, "c2"))
 }
 
 func TestJobExistsForTarget_StaleIgnored(t *testing.T) {
-	jobs := []batchv1.Job{makeTestJob("app", "shutdown", "c1", true)}
-	assert.False(t, JobExistsForTarget(jobs, "app", "shutdown", "c1"),
+	jobs := []batchv1.Job{makeTestJob("app", hibernatorv1alpha1.OperationHibernate, "c1", true)}
+	assert.False(t, JobExistsForTarget(jobs, "app", hibernatorv1alpha1.OperationHibernate, "c1"),
 		"stale job should not count as existing")
 }
 
@@ -269,9 +296,9 @@ func TestJobExistsForTarget_StaleIgnored(t *testing.T) {
 
 func TestFilterJobsForStage_FiltersCorrectly(t *testing.T) {
 	jobs := []batchv1.Job{
-		makeTestJob("t1", "shutdown", "c1", false),
-		makeTestJob("t2", "shutdown", "c1", false),
-		makeTestJob("t3", "shutdown", "c1", false),
+		makeTestJob("t1", hibernatorv1alpha1.OperationHibernate, "c1", false),
+		makeTestJob("t2", hibernatorv1alpha1.OperationHibernate, "c1", false),
+		makeTestJob("t3", hibernatorv1alpha1.OperationHibernate, "c1", false),
 	}
 
 	filtered := FilterJobsForStage(jobs, targetStage("t1", "t3"))
@@ -295,9 +322,9 @@ func TestBuildOperationSummary_SuccessPath(t *testing.T) {
 		execSt("t2", hibernatorv1alpha1.StateCompleted),
 	)
 
-	summary := BuildOperationSummary(clk, plan, "shutdown")
+	summary := BuildOperationSummary(clk, plan, hibernatorv1alpha1.OperationHibernate)
 
-	assert.Equal(t, "shutdown", summary.Operation)
+	assert.Equal(t, hibernatorv1alpha1.OperationHibernate, summary.Operation)
 	assert.True(t, summary.Success)
 	assert.Len(t, summary.TargetResults, 2)
 }
@@ -309,7 +336,7 @@ func TestBuildOperationSummary_FailedTarget_SetsSuccessFalse(t *testing.T) {
 		execSt("t2", hibernatorv1alpha1.StateFailed),
 	)
 
-	summary := BuildOperationSummary(clk, plan, "wakeup")
+	summary := BuildOperationSummary(clk, plan, hibernatorv1alpha1.OperationWakeUp)
 
 	assert.False(t, summary.Success)
 }

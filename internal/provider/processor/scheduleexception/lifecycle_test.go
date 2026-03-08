@@ -22,6 +22,7 @@ import (
 
 	hibernatorv1alpha1 "github.com/ardikabs/hibernator/api/v1alpha1"
 	"github.com/ardikabs/hibernator/internal/message"
+	statusprocessor "github.com/ardikabs/hibernator/internal/provider/processor/status"
 	"github.com/ardikabs/hibernator/internal/wellknown"
 )
 
@@ -35,7 +36,7 @@ func newLifecycleScheme() *runtime.Scheme {
 	return s
 }
 
-func newTestProcessor(t *testing.T, objs ...client.Object) (*LifecycleProcessor, *message.ControllerStatuses) {
+func newTestProcessor(t *testing.T, objs ...client.Object) (*LifecycleProcessor, *statusprocessor.ControllerStatuses) {
 	t.Helper()
 	scheme := newLifecycleScheme()
 	c := fake.NewClientBuilder().
@@ -47,7 +48,12 @@ func newTestProcessor(t *testing.T, objs ...client.Object) (*LifecycleProcessor,
 		WithObjects(objs...).
 		Build()
 
-	statuses := message.NewControllerStatuses()
+	planUpdater := newCaptureUpdater[*hibernatorv1alpha1.HibernatePlan](64)
+	exceptionUpdater := newCaptureUpdater[*hibernatorv1alpha1.ScheduleException](64)
+	statuses := &statusprocessor.ControllerStatuses{
+		PlanStatuses:      planUpdater,
+		ExceptionStatuses: exceptionUpdater,
+	}
 	p := &LifecycleProcessor{
 		Client:    c,
 		APIReader: c,
@@ -59,6 +65,25 @@ func newTestProcessor(t *testing.T, objs ...client.Object) (*LifecycleProcessor,
 	}
 	return p, statuses
 }
+
+// captureUpdater is a test helper that buffers statusprocessor.Update[T] values
+// sent via Send so that tests can inspect Len() or drain the channel.
+type captureUpdater[T client.Object] struct {
+	ch chan statusprocessor.Update[T]
+}
+
+func newCaptureUpdater[T client.Object](cap int) *captureUpdater[T] {
+	return &captureUpdater[T]{ch: make(chan statusprocessor.Update[T], cap)}
+}
+
+func (u *captureUpdater[T]) Send(upd statusprocessor.Update[T]) {
+	if upd.Mutator != nil {
+		upd.Mutator.Mutate(upd.Resource)
+	}
+	u.ch <- upd
+}
+func (u *captureUpdater[T]) Len() int                            { return len(u.ch) }
+func (u *captureUpdater[T]) C() <-chan statusprocessor.Update[T] { return u.ch }
 
 // zeroLP returns a LifecycleProcessor with no fields set, usable only for pure methods.
 func zeroLP() *LifecycleProcessor { return &LifecycleProcessor{} }
@@ -287,6 +312,7 @@ func TestRemoveFromPlanStatus_QueuesStatusUpdate(t *testing.T) {
 	err := p.removeFromPlanStatus(context.Background(), logr.Discard(), ex)
 	require.NoError(t, err)
 
-	assert.Equal(t, 1, statuses.PlanStatuses.Len(),
+	planUpdater := statuses.PlanStatuses.(*captureUpdater[*hibernatorv1alpha1.HibernatePlan])
+	assert.Equal(t, 1, planUpdater.Len(),
 		"should have queued one plan status update")
 }

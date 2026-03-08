@@ -97,7 +97,7 @@ var _ = Describe("Error Recovery E2E", func() {
 		testutil.EventuallyPhase(ctx, k8sClient, plan, hibernatorv1alpha1.PhaseHibernating)
 
 		By("Waiting for shutdown Job and simulating failure")
-		hibernationJob := testutil.EventuallyJobCreated(ctx, k8sClient, testNamespace, plan.Name, "shutdown", "database")
+		hibernationJob := testutil.EventuallyJobCreated(ctx, k8sClient, testNamespace, plan.Name, hibernatorv1alpha1.OperationHibernate, "database")
 		testutil.SimulateJobFailure(ctx, k8sClient, hibernationJob, fakeClock.Now())
 
 		By("Verifying ErrorMessage is set in plan status")
@@ -111,7 +111,7 @@ var _ = Describe("Error Recovery E2E", func() {
 		testutil.EventuallyPhase(ctx, k8sClient, plan, hibernatorv1alpha1.PhaseHibernating)
 
 		By("Verifying a new shutdown Job was created for the retry")
-		testutil.EventuallyJobCreated(ctx, k8sClient, testNamespace, plan.Name, "shutdown", "database")
+		testutil.EventuallyJobCreated(ctx, k8sClient, testNamespace, plan.Name, hibernatorv1alpha1.OperationHibernate, "database")
 	})
 
 	It("RetryNow: should allow manual retry via retry-now annotation when automatic retries are exhausted", func() {
@@ -143,7 +143,7 @@ var _ = Describe("Error Recovery E2E", func() {
 		testutil.EventuallyPhase(ctx, k8sClient, plan, hibernatorv1alpha1.PhaseHibernating)
 
 		By("Simulating initial job failure to trigger retry attempts")
-		hibernationJob := testutil.EventuallyJobCreated(ctx, k8sClient, testNamespace, plan.Name, "shutdown", "database")
+		hibernationJob := testutil.EventuallyJobCreated(ctx, k8sClient, testNamespace, plan.Name, hibernatorv1alpha1.OperationHibernate, "database")
 		testutil.SimulateJobFailure(ctx, k8sClient, hibernationJob, fakeClock.Now())
 		Eventually(func() string {
 			_ = k8sClient.Get(ctx, client.ObjectKeyFromObject(plan), plan)
@@ -151,7 +151,7 @@ var _ = Describe("Error Recovery E2E", func() {
 		}, testutil.DefaultTimeout, testutil.DefaultInterval).ShouldNot(BeEmpty())
 
 		By("Simulating failure on retry job to enter PhaseError")
-		retryJob := testutil.EventuallyJobCreated(ctx, k8sClient, testNamespace, plan.Name, "shutdown", "database")
+		retryJob := testutil.EventuallyJobCreated(ctx, k8sClient, testNamespace, plan.Name, hibernatorv1alpha1.OperationHibernate, "database")
 		testutil.SimulateJobFailure(ctx, k8sClient, retryJob, fakeClock.Now())
 
 		By("Verifying plan stays in PhaseError (no more auto-retries available)")
@@ -212,7 +212,7 @@ var _ = Describe("Error Recovery E2E", func() {
 		testutil.EventuallyPhase(ctx, k8sClient, plan, hibernatorv1alpha1.PhaseHibernating)
 
 		By("Simulating job failure — plan enters PhaseError")
-		hibernationJob := testutil.EventuallyJobCreated(ctx, k8sClient, testNamespace, plan.Name, "shutdown", "database")
+		hibernationJob := testutil.EventuallyJobCreated(ctx, k8sClient, testNamespace, plan.Name, hibernatorv1alpha1.OperationHibernate, "database")
 		testutil.SimulateJobFailure(ctx, k8sClient, hibernationJob, fakeClock.Now())
 		Eventually(func() string {
 			_ = k8sClient.Get(ctx, client.ObjectKeyFromObject(plan), plan)
@@ -221,7 +221,7 @@ var _ = Describe("Error Recovery E2E", func() {
 
 		By("Waiting for plan to auto-retry — new Job created as part of auto-recovery")
 		testutil.EventuallyPhase(ctx, k8sClient, plan, hibernatorv1alpha1.PhaseHibernating)
-		retryJob := testutil.EventuallyJobCreated(ctx, k8sClient, testNamespace, plan.Name, "shutdown", "database")
+		retryJob := testutil.EventuallyJobCreated(ctx, k8sClient, testNamespace, plan.Name, hibernatorv1alpha1.OperationHibernate, "database")
 
 		By("Simulating retry Job success — plan should complete shutdown")
 		testutil.SimulateJobSuccess(ctx, k8sClient, retryJob, fakeClock.Now())
@@ -240,7 +240,7 @@ var _ = Describe("Error Recovery E2E", func() {
 
 		By("Verifying plan transitions to WakingUp and completes cycle")
 		testutil.EventuallyPhase(ctx, k8sClient, plan, hibernatorv1alpha1.PhaseWakingUp)
-		wakeupJob := testutil.EventuallyJobCreated(ctx, k8sClient, testNamespace, plan.Name, "wakeup", "database")
+		wakeupJob := testutil.EventuallyJobCreated(ctx, k8sClient, testNamespace, plan.Name, hibernatorv1alpha1.OperationWakeUp, "database")
 		testutil.SimulateJobSuccess(ctx, k8sClient, wakeupJob, fakeClock.Now())
 		testutil.EventuallyPhase(ctx, k8sClient, plan, hibernatorv1alpha1.PhaseActive)
 	})
@@ -286,7 +286,7 @@ var _ = Describe("Error Recovery E2E", func() {
 		testutil.EventuallyPhase(ctx, k8sClient, plan, hibernatorv1alpha1.PhaseHibernating)
 
 		By("Waiting for both parallel shutdown Jobs")
-		jobs := testutil.EventuallyMultiJobsCreated(ctx, k8sClient, testNamespace, plan.Name, "shutdown", "app", "database")
+		jobs := testutil.EventuallyMultiJobsCreated(ctx, k8sClient, testNamespace, plan.Name, hibernatorv1alpha1.OperationHibernate, "app", "database")
 
 		By("Simulating success for 'app' and failure for 'database'")
 		for _, job := range jobs {
@@ -346,7 +346,7 @@ var _ = Describe("Error Recovery E2E", func() {
 		testutil.EventuallyPhase(ctx, k8sClient, plan, hibernatorv1alpha1.PhaseHibernating)
 
 		By("Simulating successful shutdown to advance plan to Hibernated")
-		hibernationJob := testutil.EventuallyJobCreated(ctx, k8sClient, testNamespace, plan.Name, "shutdown", "database")
+		hibernationJob := testutil.EventuallyJobCreated(ctx, k8sClient, testNamespace, plan.Name, hibernatorv1alpha1.OperationHibernate, "database")
 		testutil.SimulateJobSuccess(ctx, k8sClient, hibernationJob, fakeClock.Now())
 		testutil.EventuallyRestoreDataSaved(ctx, k8sClient, plan, 0)
 		Expect(restoreManager.Save(ctx, plan.Namespace, plan.Name, "database", &restore.Data{
@@ -361,7 +361,7 @@ var _ = Describe("Error Recovery E2E", func() {
 		testutil.EventuallyPhase(ctx, k8sClient, plan, hibernatorv1alpha1.PhaseWakingUp)
 
 		By("Simulating initial wakeup Job failure")
-		wakeupJob := testutil.EventuallyJobCreated(ctx, k8sClient, testNamespace, plan.Name, "wakeup", "database")
+		wakeupJob := testutil.EventuallyJobCreated(ctx, k8sClient, testNamespace, plan.Name, hibernatorv1alpha1.OperationWakeUp, "database")
 		testutil.SimulateJobFailure(ctx, k8sClient, wakeupJob, fakeClock.Now())
 		Eventually(func() string {
 			_ = k8sClient.Get(ctx, client.ObjectKeyFromObject(plan), plan)
@@ -369,7 +369,7 @@ var _ = Describe("Error Recovery E2E", func() {
 		}, testutil.DefaultTimeout, testutil.DefaultInterval).ShouldNot(BeEmpty())
 
 		By("Waiting for auto-retry wakeup Job (Retries=1 allows one retry) and simulating failure again")
-		retryWakeupJob := testutil.EventuallyJobCreated(ctx, k8sClient, testNamespace, plan.Name, "wakeup", "database")
+		retryWakeupJob := testutil.EventuallyJobCreated(ctx, k8sClient, testNamespace, plan.Name, hibernatorv1alpha1.OperationWakeUp, "database")
 		testutil.SimulateJobFailure(ctx, k8sClient, retryWakeupJob, fakeClock.Now())
 
 		By("Verifying plan enters PhaseError (all retries exhausted)")
@@ -396,6 +396,6 @@ var _ = Describe("Error Recovery E2E", func() {
 		}, testutil.DefaultTimeout, testutil.DefaultInterval).Should(BeTrue(), "retry-now annotation should be cleared after processing")
 
 		By("Verifying a new wakeup Job was created for the recovery attempt")
-		testutil.EventuallyJobCreated(ctx, k8sClient, testNamespace, plan.Name, "wakeup", "database")
+		testutil.EventuallyJobCreated(ctx, k8sClient, testNamespace, plan.Name, hibernatorv1alpha1.OperationWakeUp, "database")
 	})
 })

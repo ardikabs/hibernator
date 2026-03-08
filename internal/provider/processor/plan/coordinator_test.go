@@ -11,14 +11,13 @@ import (
 	"time"
 
 	hibernatorv1alpha1 "github.com/ardikabs/hibernator/api/v1alpha1"
-	"github.com/ardikabs/hibernator/pkg/conflate"
 	"github.com/go-logr/logr"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
-	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
 
 	"github.com/ardikabs/hibernator/internal/message"
+	"github.com/ardikabs/hibernator/pkg/keyedworker"
 )
 
 // ---------------------------------------------------------------------------
@@ -28,173 +27,120 @@ import (
 func newTestCoordinator() *Coordinator {
 	return &Coordinator{
 		Log:      logr.Discard(),
-		Statuses: message.NewControllerStatuses(),
+		Statuses: newTestStatuses(),
 	}
-}
-
-func TestCoordinator_Spawn_CreatesEntry(t *testing.T) {
-	c := newTestCoordinator()
-	key := types.NamespacedName{Name: "plan-a", Namespace: "default"}
-
-	// Use a pre-cancelled context so the spawned goroutine exits immediately
-	// on ctx.Done() without ever calling handle() (which requires non-nil deps).
-	ctx, cancel := context.WithCancel(context.Background())
-	cancel()
-
-	c.mu.Lock()
-	entry := c.spawn(ctx, key)
-	c.mu.Unlock()
-
-	require.NotNil(t, entry)
-	require.NotNil(t, entry.slot)
-	assert.Len(t, c.workers, 1)
-
-	c.shutdownAll()
-}
-
-func TestCoordinator_Despawn_RemovesEntry(t *testing.T) {
-	c := newTestCoordinator()
-	key := types.NamespacedName{Name: "plan-a", Namespace: "default"}
-
-	ctx, cancel := context.WithCancel(context.Background())
-	cancel() // pre-cancel so goroutine exits immediately
-
-	c.mu.Lock()
-	c.spawn(ctx, key)
-	c.mu.Unlock()
-
-	c.despawn(key)
-
-	c.mu.Lock()
-	_, exists := c.workers[key]
-	c.mu.Unlock()
-	assert.False(t, exists)
-}
-
-func TestCoordinator_Despawn_UnknownKey_IsNoop(t *testing.T) {
-	c := newTestCoordinator()
-	// Must not panic.
-	c.despawn(types.NamespacedName{Name: "unknown", Namespace: "default"})
-}
-
-func TestCoordinator_Reap_RemovesEntry(t *testing.T) {
-	c := newTestCoordinator()
-	key := types.NamespacedName{Name: "plan-b", Namespace: "default"}
-
-	ctx, cancel := context.WithCancel(context.Background())
-	cancel() // pre-cancel so goroutine exits immediately
-
-	c.mu.Lock()
-	c.spawn(ctx, key)
-	c.mu.Unlock()
-
-	c.reap(key)
-
-	c.mu.Lock()
-	_, exists := c.workers[key]
-	c.mu.Unlock()
-	assert.False(t, exists)
-}
-
-func TestCoordinator_ShutdownAll_ClearsAllWorkers(t *testing.T) {
-	c := newTestCoordinator()
-
-	// Pre-cancel context so spawned goroutines exit without calling handle().
-	ctx, cancel := context.WithCancel(context.Background())
-	cancel()
-
-	keys := []types.NamespacedName{
-		{Name: "p1", Namespace: "default"},
-		{Name: "p2", Namespace: "default"},
-		{Name: "p3", Namespace: "default"},
-	}
-	c.mu.Lock()
-	for _, k := range keys {
-		c.spawn(ctx, k)
-	}
-	c.mu.Unlock()
-
-	c.shutdownAll()
-
-	c.mu.Lock()
-	count := len(c.workers)
-	c.mu.Unlock()
-	assert.Equal(t, 0, count)
-}
-
-func TestCoordinator_Delivery_SpawnsWorkerOnFirstDelivery(t *testing.T) {
-	c := newTestCoordinator()
-	key := types.NamespacedName{Name: "plan-c", Namespace: "default"}
-
-	// Insert a pre-existing entry directly to avoid starting a real goroutine.
-	// This tests the data-structure invariant of delivery(): entry is present afterward.
-	cancelCtx, cancelFn := context.WithCancel(context.Background())
-	cancelFn() // already cancelled — no goroutine will call handle()
-
-	c.mu.Lock()
-	if c.workers == nil {
-		c.workers = make(map[types.NamespacedName]*workerEntry)
-	}
-	slot := conflate.New[*message.PlanContext]()
-	c.workers[key] = &workerEntry{cancel: cancelFn, slot: slot}
-	c.mu.Unlock()
-
-	// Simulate what delivery would do on second call (reuse path).
-	plan := &hibernatorv1alpha1.HibernatePlan{
-		ObjectMeta: metav1.ObjectMeta{Name: "plan-c", Namespace: "default"},
-	}
-	planCtx := &message.PlanContext{Plan: plan}
-	slot.Send(planCtx)
-
-	// Entry must still be present.
-	c.mu.Lock()
-	entry, exists := c.workers[key]
-	c.mu.Unlock()
-
-	require.True(t, exists, "worker entry should be present")
-	require.NotNil(t, entry.slot)
-	_ = cancelCtx
-}
-
-func TestCoordinator_Delivery_ReusesExistingWorker(t *testing.T) {
-	c := newTestCoordinator()
-	key := types.NamespacedName{Name: "plan-d", Namespace: "default"}
-
-	_, cancelFn := context.WithCancel(context.Background())
-	cancelFn()
-
-	// Insert entry manually — simulates an already-spawned worker.
-	c.mu.Lock()
-	if c.workers == nil {
-		c.workers = make(map[types.NamespacedName]*workerEntry)
-	}
-	firstSlot := conflate.New[*message.PlanContext]()
-	c.workers[key] = &workerEntry{cancel: cancelFn, slot: firstSlot}
-	c.mu.Unlock()
-
-	// A second send to the same slot should land on the same slot pointer.
-	plan := &hibernatorv1alpha1.HibernatePlan{
-		ObjectMeta: metav1.ObjectMeta{Name: "plan-d", Namespace: "default"},
-	}
-	firstSlot.Send(&message.PlanContext{Plan: plan, HasRestoreData: true})
-
-	c.mu.Lock()
-	secondSlot := c.workers[key].slot
-	c.mu.Unlock()
-
-	assert.Same(t, firstSlot, secondSlot, "second delivery should reuse the existing worker slot")
 }
 
 // ---------------------------------------------------------------------------
-// Worker  — pure / in-memory methods
+// workerFactory — unit-level tests
+// ---------------------------------------------------------------------------
+
+// TestCoordinator_WorkerFactory_ReturnsNonNilRunFn verifies that workerFactory
+// returns a non-nil goroutine body for any key/slot combination.
+func TestCoordinator_WorkerFactory_ReturnsNonNilRunFn(t *testing.T) {
+	c := newTestCoordinator()
+	key := types.NamespacedName{Name: "plan-a", Namespace: "default"}
+	slot := keyedworker.LatestWinsSlot[*message.PlanContext]()()
+
+	fn := c.workerFactory(key, slot)
+	require.NotNil(t, fn, "workerFactory should return a non-nil goroutine body")
+}
+
+// TestCoordinator_WorkerFactory_GoroutineExitsOnCtxCancel verifies that the
+// goroutine body returned by workerFactory respects context cancellation and
+// returns promptly when the context is cancelled (without calling handle, since
+// no real deps are wired).
+func TestCoordinator_WorkerFactory_GoroutineExitsOnCtxCancel(t *testing.T) {
+	c := newTestCoordinator()
+	key := types.NamespacedName{Name: "plan-b", Namespace: "default"}
+	slot := keyedworker.LatestWinsSlot[*message.PlanContext]()()
+
+	fn := c.workerFactory(key, slot)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan struct{})
+	go func() {
+		fn(ctx) // Worker.run — blocks until ctx is cancelled or idle timeout
+		close(done)
+	}()
+
+	cancel()
+
+	select {
+	case <-done:
+		// OK — goroutine exited on context cancellation.
+	case <-time.After(2 * time.Second):
+		t.Fatal("goroutine did not exit after context cancellation")
+	}
+}
+
+// ---------------------------------------------------------------------------
+// Coordinator.Start — integration-level tests via pool behaviour
+// ---------------------------------------------------------------------------
+
+// TestCoordinator_Start_StartsAndStopsCleanly verifies that the coordinator
+// starts successfully, subscribes to the watchable map, and shuts down cleanly
+// on context cancellation without requiring fully-wired infrastructure deps.
+func TestCoordinator_Start_StartsAndStopsCleanly(t *testing.T) {
+	c := newTestCoordinator()
+	c.Resources = new(message.ControllerResources)
+
+	ctx, cancel := context.WithCancel(context.Background())
+
+	coordDone := make(chan error, 1)
+	go func() { coordDone <- c.Start(ctx) }()
+
+	// Give the coordinator time to enter its HandleSubscription loop.
+	time.Sleep(20 * time.Millisecond)
+
+	// Cancel and verify clean shutdown.
+	cancel()
+	select {
+	case err := <-coordDone:
+		assert.NoError(t, err)
+	case <-time.After(2 * time.Second):
+		t.Fatal("coordinator did not stop after context cancellation")
+	}
+}
+
+// TestCoordinator_Start_DeleteUnknownKey_IsNoop verifies that a delete event
+// for a key that was never upserted is handled safely (pool.Remove on an
+// unknown key must not panic or block).
+func TestCoordinator_Start_DeleteUnknownKey_IsNoop(t *testing.T) {
+	c := newTestCoordinator()
+	c.Resources = new(message.ControllerResources)
+
+	ctx, cancel := context.WithCancel(context.Background())
+
+	coordDone := make(chan error, 1)
+	go func() { coordDone <- c.Start(ctx) }()
+
+	// Trigger a delete for a key that was never stored.
+	// The watchable map emits a delete-only update; the coordinator must handle it gracefully.
+	key := types.NamespacedName{Name: "ghost-plan", Namespace: "default"}
+	c.Resources.PlanResources.Delete(key)
+
+	time.Sleep(20 * time.Millisecond)
+
+	cancel()
+	select {
+	case err := <-coordDone:
+		assert.NoError(t, err)
+	case <-time.After(2 * time.Second):
+		t.Fatal("coordinator did not stop after context cancellation")
+	}
+}
+
+// ---------------------------------------------------------------------------
+// Worker — pure / in-memory methods
 // ---------------------------------------------------------------------------
 
 func newTestWorker() *Worker {
 	return &Worker{
 		key:      types.NamespacedName{Name: "p", Namespace: "default"},
 		log:      logr.Discard(),
-		slot:     conflate.New[*message.PlanContext](),
-		Statuses: message.NewControllerStatuses(),
+		slot:     keyedworker.LatestWinsSlot[*message.PlanContext]()(),
+		Statuses: newTestStatuses(),
 	}
 }
 

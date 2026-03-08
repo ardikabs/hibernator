@@ -6,7 +6,6 @@ Licensed under the Apache License, Version 2.0.
 package message
 
 import (
-	"context"
 	"time"
 
 	"k8s.io/apimachinery/pkg/types"
@@ -26,24 +25,6 @@ type ControllerResources struct {
 	ExceptionResources watchable.Map[types.NamespacedName, *hibernatorv1alpha1.ScheduleException]
 }
 
-// ControllerStatuses holds the status update queues for processor-to-status-writer communication.
-// Processors call Send() on these queues; a worker pool in the status writer drains them.
-type ControllerStatuses struct {
-	// PlanStatuses is the queue of pending status updates for HibernatePlans.
-	PlanStatuses *StatusQueue[*PlanStatusUpdate]
-
-	// ExceptionStatuses is the queue of pending status updates for ScheduleExceptions.
-	ExceptionStatuses *StatusQueue[*ExceptionStatusUpdate]
-}
-
-// NewControllerStatuses initialises a ControllerStatuses with ready-to-use queues.
-func NewControllerStatuses() *ControllerStatuses {
-	return &ControllerStatuses{
-		PlanStatuses:      newStatusQueue[*PlanStatusUpdate]("plan"),
-		ExceptionStatuses: newStatusQueue[*ExceptionStatusUpdate]("exception"),
-	}
-}
-
 // PlanContext contains all data needed by processors to make decisions for a single HibernatePlan.
 // It is the value stored in PlanResources and represents the provider's enriched view of the plan.
 type PlanContext struct {
@@ -60,22 +41,11 @@ type PlanContext struct {
 	// HasRestoreData indicates whether restore data exists for this plan.
 	HasRestoreData bool
 
-	// ExecutionProgress summarises terminal job counts for the current execution cycle.
-	// It serves purely as a change signal for watchable equality — when a job reaches
-	// a terminal state the counts change, PlanContext.Equal() returns false, and the
-	// watchable map delivers to the worker immediately instead of waiting for the poll timer.
-	// Workers never read this field; they perform their own authoritative APIReader.List.
-	// Nil when no execution cycle is active.
-	ExecutionProgress *ExecutionProgress
-}
-
-// ExecutionProgress is a lightweight summary of terminal job outcomes for the current
-// execution cycle. It exists solely to break watchable equality when jobs complete or
-// fail, giving the worker an event-driven wake-up signal for the finalize step.
-type ExecutionProgress struct {
-	CycleID   string
-	Completed int
-	Failed    int
+	// DeliveryNonce is a monotonically increasing counter set by the provider on every
+	// reconcile. It guarantees that watchable.Map.Store() always detects a change and
+	// re-delivers the context to subscribers, even when no other field has changed.
+	// Workers never read this field; it exists solely as a change-detection signal.
+	DeliveryNonce int64
 }
 
 // DeepCopy creates a deep copy of PlanContext.
@@ -85,6 +55,7 @@ func (pc *PlanContext) DeepCopy() *PlanContext {
 	}
 	result := &PlanContext{
 		HasRestoreData: pc.HasRestoreData,
+		DeliveryNonce:  pc.DeliveryNonce,
 	}
 	if pc.Plan != nil {
 		result.Plan = pc.Plan.DeepCopy()
@@ -101,10 +72,6 @@ func (pc *PlanContext) DeepCopy() *PlanContext {
 			RequeueAfter:    pc.ScheduleResult.RequeueAfter,
 		}
 	}
-	if pc.ExecutionProgress != nil {
-		ep := *pc.ExecutionProgress
-		result.ExecutionProgress = &ep
-	}
 	return result
 }
 
@@ -119,6 +86,9 @@ func (pc *PlanContext) Equal(other *PlanContext) bool {
 	}
 	// Compare fields using basic equality and deep comparison where needed
 	if pc.HasRestoreData != other.HasRestoreData {
+		return false
+	}
+	if pc.DeliveryNonce != other.DeliveryNonce {
 		return false
 	}
 	if (pc.Plan == nil) != (other.Plan == nil) {
@@ -147,23 +117,7 @@ func (pc *PlanContext) Equal(other *PlanContext) bool {
 		// nothing meaningful has changed. Including it would cause spurious watchable
 		// re-delivery on every provider reconcile.
 	}
-	if !executionProgressEqual(pc.ExecutionProgress, other.ExecutionProgress) {
-		return false
-	}
 	return true
-}
-
-// executionProgressEqual compares two ExecutionProgress pointers for value equality.
-func executionProgressEqual(a, b *ExecutionProgress) bool {
-	if a == b {
-		return true
-	}
-	if (a == nil) != (b == nil) {
-		return false
-	}
-	return a.CycleID == b.CycleID &&
-		a.Completed == b.Completed &&
-		a.Failed == b.Failed
 }
 
 // Helper functions for equality comparisons
@@ -192,7 +146,7 @@ func exceptionsEqual(a, b *hibernatorv1alpha1.ScheduleException) bool {
 	if a == nil || b == nil {
 		return false
 	}
-	return a.Name == b.Name && a.Namespace == b.Namespace && a.UID == b.UID
+	return a.Name == b.Name && a.Namespace == b.Namespace && a.UID == b.UID && a.ResourceVersion == b.ResourceVersion
 }
 
 // ScheduleEvaluation contains the result of schedule evaluation by the provider.
@@ -202,43 +156,4 @@ type ScheduleEvaluation struct {
 
 	// RequeueAfter is the suggested requeue duration based on schedule evaluation.
 	RequeueAfter time.Duration
-}
-
-// PhaseTransitionHookFn is a function invoked around a plan status write by the StatusWriter.
-//
-// For a PreHook the plan reflects the current (pre-mutation) K8s state.
-// Returning a non-nil error from a PreHook aborts the transition — nothing is written to K8s.
-//
-// For a PostHook the plan reflects the successfully-persisted state after the write.
-// Errors from a PostHook are logged but do not roll back the transition.
-type PhaseTransitionHookFn func(ctx context.Context, plan *hibernatorv1alpha1.HibernatePlan) error
-
-// PlanStatusUpdate represents a status mutation queued for the status writer.
-// The Mutate function applies changes to the plan's status.
-type PlanStatusUpdate struct {
-	// NamespacedName identifies the target HibernatePlan.
-	NamespacedName types.NamespacedName
-
-	// Mutate is a function that applies status changes.
-	// It receives the current status and modifies it in place.
-	Mutate func(*hibernatorv1alpha1.HibernatePlanStatus)
-
-	// PreHook is called once with the current (pre-mutation) plan before Mutate is applied.
-	// If it returns a non-nil error the transition is aborted with no write to K8s.
-	// Optional.
-	PreHook PhaseTransitionHookFn
-
-	// PostHook is called once with the successfully-written plan after the status lands in K8s.
-	// Errors are logged but do not roll back the transition.
-	// Optional.
-	PostHook PhaseTransitionHookFn
-}
-
-// ExceptionStatusUpdate represents a status mutation queued for the status writer.
-type ExceptionStatusUpdate struct {
-	// NamespacedName identifies the target ScheduleException.
-	NamespacedName types.NamespacedName
-
-	// Mutate is a function that applies status changes.
-	Mutate func(*hibernatorv1alpha1.ScheduleExceptionStatus)
 }

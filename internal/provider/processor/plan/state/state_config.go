@@ -12,6 +12,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
 	"github.com/ardikabs/hibernator/internal/message"
+	statusprocessor "github.com/ardikabs/hibernator/internal/provider/processor/status"
 	"github.com/ardikabs/hibernator/internal/restore"
 	"github.com/ardikabs/hibernator/internal/scheduler"
 )
@@ -30,7 +31,8 @@ type Config struct {
 	Clock                clock.Clock
 	Scheme               *runtime.Scheme
 	Planner              *scheduler.Planner
-	Statuses             *message.ControllerStatuses
+	Resources            *message.ControllerResources
+	Statuses             *statusprocessor.ControllerStatuses
 	RestoreManager       *restore.Manager
 	ControlPlaneEndpoint string
 	RunnerImage          string
@@ -45,34 +47,3 @@ type Config struct {
 	OnJobMissing func(target string) bool
 	OnJobFound   func(target string)
 }
-
-// NewConfig returns an empty Config ready for builder-method chaining.
-func NewConfig() *Config {
-	return &Config{}
-}
-
-func (c *Config) WithLog(log logr.Logger) *Config { c.Log = log; return c }
-
-func (c *Config) WithClient(cl client.Client) *Config { c.Client = cl; return c }
-
-func (c *Config) WithAPIReader(r client.Reader) *Config { c.APIReader = r; return c }
-
-func (c *Config) WithClock(clk clock.Clock) *Config { c.Clock = clk; return c }
-
-func (c *Config) WithScheme(s *runtime.Scheme) *Config { c.Scheme = s; return c }
-
-func (c *Config) WithPlanner(p *scheduler.Planner) *Config { c.Planner = p; return c }
-
-func (c *Config) WithStatuses(st *message.ControllerStatuses) *Config { c.Statuses = st; return c }
-
-func (c *Config) WithRestoreManager(rm *restore.Manager) *Config { c.RestoreManager = rm; return c }
-
-func (c *Config) WithControlPlaneEndpoint(ep string) *Config { c.ControlPlaneEndpoint = ep; return c }
-
-func (c *Config) WithRunnerImage(img string) *Config { c.RunnerImage = img; return c }
-
-func (c *Config) WithRunnerServiceAccount(sa string) *Config { c.RunnerServiceAccount = sa; return c }
-
-func (c *Config) WithOnJobMissingFunc(fn func(string) bool) *Config { c.OnJobMissing = fn; return c }
-
-func (c *Config) WithOnJobFoundFunc(fn func(string)) *Config { c.OnJobFound = fn; return c }

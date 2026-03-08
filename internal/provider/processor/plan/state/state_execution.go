@@ -20,8 +20,8 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
 
 	hibernatorv1alpha1 "github.com/ardikabs/hibernator/api/v1alpha1"
-	"github.com/ardikabs/hibernator/internal/message"
 	"github.com/ardikabs/hibernator/internal/metrics"
+	statusprocessor "github.com/ardikabs/hibernator/internal/provider/processor/status"
 	"github.com/ardikabs/hibernator/internal/restore"
 	"github.com/ardikabs/hibernator/internal/scheduler"
 	"github.com/ardikabs/hibernator/internal/wellknown"
@@ -32,7 +32,7 @@ import (
 // Stage execution engine
 // ---------------------------------------------------------------------------
 
-// execute executes the given operation ("shutdown" or "wakeup")
+// execute executes the given operation (hibernatorv1alpha1.OperationHibernate or hibernatorv1alpha1.OperationWakeUp)
 // starting from the current stage index in the plan status.
 func (s *state) execute(
 	ctx context.Context,
@@ -152,14 +152,17 @@ func (s *state) executeForStage(
 		if target == nil {
 			continue
 		}
-		if int32(runningCount+jobsCreated) >= maxConcurrency {
-			log.V(1).Info("reached maxConcurrency limit", "maxConcurrency", maxConcurrency)
-			break
-		}
+
 		if JobExistsForTarget(jobs, targetName, operation, plan.Status.CurrentCycleID) {
 			log.V(1).Info("job already exists for target, skipping", "target", targetName)
 			continue
 		}
+
+		if int32(runningCount+jobsCreated) >= maxConcurrency {
+			log.V(1).Info("reached maxConcurrency limit", "maxConcurrency", maxConcurrency)
+			break
+		}
+
 		log.Info("dispatching job for target", "target", targetName, "operation", operation)
 		if err := s.createRunnerJob(ctx, log,
 			s.Clock, plan, target, operation,
@@ -175,7 +178,7 @@ func (s *state) executeForStage(
 		}
 		jobsCreated++
 	}
-	return StateResult{}, nil
+	return StateResult{RequeueAfter: wellknown.RequeueIntervalDuringStage}, nil
 }
 
 // getCurrentCycleJobs returns the runner Jobs for the current execution cycle of a plan.
@@ -338,11 +341,12 @@ func (s *state) updateExecutionStatuses(ctx context.Context,
 		executions := make([]hibernatorv1alpha1.ExecutionStatus, len(plan.Status.Executions))
 		copy(executions, plan.Status.Executions)
 
-		s.Statuses.PlanStatuses.Send(&message.PlanStatusUpdate{
+		s.Statuses.PlanStatuses.Send(statusprocessor.Update[*hibernatorv1alpha1.HibernatePlan]{
 			NamespacedName: s.Key,
-			Mutate: func(st *hibernatorv1alpha1.HibernatePlanStatus) {
-				st.Executions = executions
-			},
+			Resource:       s.plan(),
+			Mutator: statusprocessor.MutatorFunc[*hibernatorv1alpha1.HibernatePlan](func(p *hibernatorv1alpha1.HibernatePlan) {
+				p.Status.Executions = executions
+			}),
 		})
 	}
 }

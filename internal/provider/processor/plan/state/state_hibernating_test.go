@@ -7,6 +7,7 @@ package state
 
 import (
 	"context"
+	"errors"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -17,17 +18,16 @@ import (
 
 func TestHibernatingState_Handle_WrongOperation_IsNoop(t *testing.T) {
 	plan := basePlanForState("p", hibernatorv1alpha1.PhaseHibernating)
-	// CurrentOperation is not "shutdown" → handler should be a no-op (no status changes).
-	plan.Status.CurrentOperation = "wakeup"
+	// CurrentOperation is not "shutdown" → handler should return a PlanError to
+	// surface the mismatch and break any potential infinite loop.
+	plan.Status.CurrentOperation = hibernatorv1alpha1.OperationWakeUp
 	plan.Spec.Execution.Strategy.Type = hibernatorv1alpha1.StrategySequential
 	c := newHandlerFakeClient(plan)
 	st := newHandlerState(plan, c)
 
 	h := &hibernatingState{state: st}
-	result, err := h.Handle(context.Background())
-	require.NoError(t, err)
-
-	// No status queued; poll timer reset as the phase is still Hibernating.
-	assert.Zero(t, st.Statuses.PlanStatuses.Len())
-	assert.True(t, result.RequeueAfter > 0, "poll timer should be reset while phase is still Hibernating")
+	_, err := h.Handle(context.Background())
+	require.Error(t, err)
+	var pe *PlanError
+	assert.True(t, errors.As(err, &pe), "expected a PlanError for operation mismatch, got: %v", err)
 }

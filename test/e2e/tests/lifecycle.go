@@ -113,7 +113,7 @@ var _ = Describe("Lifecycle E2E", func() {
 		Expect(plan.Status.Executions[0].State).To(Equal(hibernatorv1alpha1.StatePending))
 
 		By("Verifying runner Job creation and simulating success")
-		hibernationJob := testutil.EventuallyJobCreated(ctx, k8sClient, testNamespace, plan.Name, "shutdown", "database")
+		hibernationJob := testutil.EventuallyJobCreated(ctx, k8sClient, testNamespace, plan.Name, hibernatorv1alpha1.OperationHibernate, "database")
 		testutil.SimulateJobSuccess(ctx, k8sClient, hibernationJob, fakeClock.Now())
 
 		By("Verifying plan transitions to Hibernated and saves restore data")
@@ -138,7 +138,7 @@ var _ = Describe("Lifecycle E2E", func() {
 		testutil.EventuallyPhase(ctx, k8sClient, plan, hibernatorv1alpha1.PhaseWakingUp)
 
 		By("Verifying wakeup Job creation and simulating success")
-		wakeupJob := testutil.EventuallyJobCreated(ctx, k8sClient, testNamespace, plan.Name, "wakeup", "database")
+		wakeupJob := testutil.EventuallyJobCreated(ctx, k8sClient, testNamespace, plan.Name, hibernatorv1alpha1.OperationWakeUp, "database")
 		testutil.SimulateJobSuccess(ctx, k8sClient, wakeupJob, fakeClock.Now())
 
 		By("Verifying plan returns to Active phase")
@@ -207,7 +207,7 @@ var _ = Describe("Lifecycle E2E", func() {
 
 		By("Advancing clock to 23:01 UTC (= 06:01 WIB next day — wakeup window for Jakarta)")
 		fakeClock.SetTime(time.Date(2026, 3, 9, 23, 1, 10, 0, time.UTC))
-		hibernationJob := testutil.EventuallyJobCreated(ctx, k8sClient, testNamespace, plan.Name, "shutdown", "database")
+		hibernationJob := testutil.EventuallyJobCreated(ctx, k8sClient, testNamespace, plan.Name, hibernatorv1alpha1.OperationHibernate, "database")
 		testutil.SimulateJobSuccess(ctx, k8sClient, hibernationJob, fakeClock.Now())
 		testutil.EventuallyRestoreDataSaved(ctx, k8sClient, plan, 0)
 		Expect(restoreManager.Save(ctx, plan.Namespace, plan.Name, "database", &restore.Data{
@@ -251,7 +251,7 @@ var _ = Describe("Lifecycle E2E", func() {
 		testutil.TriggerReconcile(ctx, k8sClient, plan)
 		testutil.EventuallyPhase(ctx, k8sClient, plan, hibernatorv1alpha1.PhaseHibernating)
 
-		shutdownJob1 := testutil.EventuallyJobCreated(ctx, k8sClient, testNamespace, plan.Name, "shutdown", "database")
+		shutdownJob1 := testutil.EventuallyJobCreated(ctx, k8sClient, testNamespace, plan.Name, hibernatorv1alpha1.OperationHibernate, "database")
 		testutil.SimulateJobSuccess(ctx, k8sClient, shutdownJob1, fakeClock.Now())
 		testutil.EventuallyRestoreDataSaved(ctx, k8sClient, plan, 0)
 		Expect(restoreManager.Save(ctx, plan.Namespace, plan.Name, "database", &restore.Data{
@@ -263,7 +263,7 @@ var _ = Describe("Lifecycle E2E", func() {
 		testutil.TriggerReconcile(ctx, k8sClient, plan)
 		testutil.EventuallyPhase(ctx, k8sClient, plan, hibernatorv1alpha1.PhaseWakingUp)
 
-		wakeupJob1 := testutil.EventuallyJobCreated(ctx, k8sClient, testNamespace, plan.Name, "wakeup", "database")
+		wakeupJob1 := testutil.EventuallyJobCreated(ctx, k8sClient, testNamespace, plan.Name, hibernatorv1alpha1.OperationWakeUp, "database")
 		testutil.SimulateJobSuccess(ctx, k8sClient, wakeupJob1, fakeClock.Now())
 		testutil.EventuallyPhase(ctx, k8sClient, plan, hibernatorv1alpha1.PhaseActive)
 
@@ -274,7 +274,7 @@ var _ = Describe("Lifecycle E2E", func() {
 		testutil.EventuallyPhase(ctx, k8sClient, plan, hibernatorv1alpha1.PhaseHibernating)
 
 		By("[Cycle-2] Verifying a fresh shutdown Job is created without conflicts from the prior cycle")
-		shutdownJob2 := testutil.EventuallyJobCreated(ctx, k8sClient, testNamespace, plan.Name, "shutdown", "database")
+		shutdownJob2 := testutil.EventuallyJobCreated(ctx, k8sClient, testNamespace, plan.Name, hibernatorv1alpha1.OperationHibernate, "database")
 		Expect(shutdownJob2.Name).NotTo(Equal(shutdownJob1.Name), "second cycle must create a distinct Job")
 		testutil.SimulateJobSuccess(ctx, k8sClient, shutdownJob2, fakeClock.Now())
 		testutil.EventuallyPhase(ctx, k8sClient, plan, hibernatorv1alpha1.PhaseHibernated)
@@ -313,7 +313,7 @@ var _ = Describe("Lifecycle E2E", func() {
 			var jl batchv1.JobList
 			_ = k8sClient.List(ctx, &jl, client.InNamespace(testNamespace), client.MatchingLabels{
 				wellknown.LabelPlan:      plan.Name,
-				wellknown.LabelOperation: "shutdown",
+				wellknown.LabelOperation: hibernatorv1alpha1.OperationHibernate,
 				wellknown.LabelTarget:    "database",
 			})
 			active := 0

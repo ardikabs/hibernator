@@ -111,7 +111,7 @@ func TestSuspendedState_Handle_StillSuspended_NoOp(t *testing.T) {
 
 	// No timer, no status queue changes.
 	assert.Zero(t, result.DeadlineAfter)
-	assert.Zero(t, st.Statuses.PlanStatuses.Len())
+	assert.Zero(t, planStatuses(st).Len())
 }
 
 func TestSuspendedState_Handle_OnSuspendUntilPeriod(t *testing.T) {
@@ -141,7 +141,7 @@ func TestSuspendedState_Handle_OnSuspendUntilPeriod(t *testing.T) {
 
 	// resume() queues the Active transition; Requeue=true signals timer cancellation.
 	assert.True(t, result2.Requeue)
-	assert.GreaterOrEqual(t, st.Statuses.PlanStatuses.Len(), 1)
+	assert.GreaterOrEqual(t, planStatuses(st).Len(), 1)
 	assert.Equal(t, hibernatorv1alpha1.PhaseActive, plan.Status.Phase)
 	assert.Empty(t, plan.Annotations[wellknown.AnnotationSuspendUntil])
 	assert.Empty(t, plan.Annotations[wellknown.AnnotationSuspendedAtPhase])
@@ -163,7 +163,7 @@ func TestSuspendedState_Handle_Resume(t *testing.T) {
 
 	// resume() queues the Active transition; Requeue=true signals timer cancellation.
 	assert.True(t, result.Requeue)
-	assert.GreaterOrEqual(t, st.Statuses.PlanStatuses.Len(), 1)
+	assert.GreaterOrEqual(t, planStatuses(st).Len(), 1)
 }
 
 func TestSuspendedState_Handle_SuspendUntilExpired_PatchesPlanAndResumes(t *testing.T) {
@@ -185,7 +185,7 @@ func TestSuspendedState_Handle_SuspendUntilExpired_PatchesPlanAndResumes(t *test
 	// Spec.Suspend should have been patched to false, then resume ran.
 	// resume() queues the Active transition but does not mutate plan.Status in-memory.
 	assert.False(t, plan.Spec.Suspend)
-	assert.GreaterOrEqual(t, st.Statuses.PlanStatuses.Len(), 1, "status update should be queued after resume")
+	assert.GreaterOrEqual(t, planStatuses(st).Len(), 1, "status update should be queued after resume")
 }
 
 // ---------------------------------------------------------------------------
@@ -256,7 +256,7 @@ func TestResumeFromExecution_Hibernating_SameWindow_ResumesToHibernating(t *test
 		wellknown.AnnotationSuspendedAtPhase: string(hibernatorv1alpha1.PhaseHibernating),
 	}
 	plan.Status.CurrentCycleID = "abc123"
-	plan.Status.CurrentOperation = "shutdown"
+	plan.Status.CurrentOperation = hibernatorv1alpha1.OperationHibernate
 	plan.Status.CurrentStageIndex = 1
 	plan.Status.Executions = []hibernatorv1alpha1.ExecutionStatus{
 		{Target: "db", State: hibernatorv1alpha1.StateCompleted},
@@ -274,15 +274,15 @@ func TestResumeFromExecution_Hibernating_SameWindow_ResumesToHibernating(t *test
 	// Verify the status update that resumeFromExecution queued (the "K8s intent").
 	// We drain the first queue entry because dispatch() may chain further updates
 	// depending on the test plan's execution setup.
-	require.GreaterOrEqual(t, st.Statuses.PlanStatuses.Len(), 1, "status update must be queued")
-	firstUpdate := <-st.Statuses.PlanStatuses.C()
-	var committed hibernatorv1alpha1.HibernatePlanStatus
-	firstUpdate.Mutate(&committed)
-	assert.Equal(t, hibernatorv1alpha1.PhaseHibernating, committed.Phase, "queued mutation must set PhaseHibernating")
+	require.GreaterOrEqual(t, planStatuses(st).Len(), 1, "status update must be queued")
+	firstUpdate := <-planStatuses(st).C()
+	committed := &hibernatorv1alpha1.HibernatePlan{}
+	firstUpdate.Mutator.Mutate(committed)
+	assert.Equal(t, hibernatorv1alpha1.PhaseHibernating, committed.Status.Phase, "queued mutation must set PhaseHibernating")
 
 	// Execution bookmarks must be preserved in the in-memory plan (resumeFromExecution does not clear them).
 	assert.Equal(t, "abc123", plan.Status.CurrentCycleID)
-	assert.Equal(t, "shutdown", plan.Status.CurrentOperation)
+	assert.Equal(t, hibernatorv1alpha1.OperationHibernate, plan.Status.CurrentOperation)
 	assert.Equal(t, 1, plan.Status.CurrentStageIndex)
 	assert.Len(t, plan.Status.Executions, 1)
 }
@@ -295,7 +295,7 @@ func TestResumeFromExecution_Hibernating_DifferentWindow_ResumesToActive(t *test
 		wellknown.AnnotationSuspendedAtPhase: string(hibernatorv1alpha1.PhaseHibernating),
 	}
 	plan.Status.CurrentCycleID = "abc123"
-	plan.Status.CurrentOperation = "shutdown"
+	plan.Status.CurrentOperation = hibernatorv1alpha1.OperationHibernate
 	plan.Status.CurrentStageIndex = 1
 
 	c := newHandlerFakeClient(plan)
@@ -308,15 +308,15 @@ func TestResumeFromExecution_Hibernating_DifferentWindow_ResumesToActive(t *test
 	assert.True(t, handled)
 
 	// Verify the status update that resumeFromExecution queued (the "K8s intent").
-	require.GreaterOrEqual(t, st.Statuses.PlanStatuses.Len(), 1)
-	firstUpdate := <-st.Statuses.PlanStatuses.C()
-	var committed hibernatorv1alpha1.HibernatePlanStatus
-	firstUpdate.Mutate(&committed)
-	assert.Equal(t, hibernatorv1alpha1.PhaseActive, committed.Phase, "queued mutation must set PhaseActive")
+	require.GreaterOrEqual(t, planStatuses(st).Len(), 1)
+	firstUpdate := <-planStatuses(st).C()
+	committed := &hibernatorv1alpha1.HibernatePlan{}
+	firstUpdate.Mutator.Mutate(committed)
+	assert.Equal(t, hibernatorv1alpha1.PhaseActive, committed.Status.Phase, "queued mutation must set PhaseActive")
 
 	// Execution bookmarks are preserved in the in-memory plan (resumeFromExecution does not clear them).
 	assert.Equal(t, "abc123", plan.Status.CurrentCycleID)
-	assert.Equal(t, "shutdown", plan.Status.CurrentOperation)
+	assert.Equal(t, hibernatorv1alpha1.OperationHibernate, plan.Status.CurrentOperation)
 	assert.Equal(t, 1, plan.Status.CurrentStageIndex)
 }
 
@@ -327,7 +327,7 @@ func TestResumeFromExecution_WakingUp_SameWindow_ResumesToWakingUp(t *testing.T)
 		wellknown.AnnotationSuspendedAtPhase: string(hibernatorv1alpha1.PhaseWakingUp),
 	}
 	plan.Status.CurrentCycleID = "def456"
-	plan.Status.CurrentOperation = "wakeup"
+	plan.Status.CurrentOperation = hibernatorv1alpha1.OperationWakeUp
 	plan.Status.CurrentStageIndex = 0
 	plan.Status.Executions = []hibernatorv1alpha1.ExecutionStatus{
 		{Target: "app", State: hibernatorv1alpha1.StateRunning},
@@ -343,15 +343,15 @@ func TestResumeFromExecution_WakingUp_SameWindow_ResumesToWakingUp(t *testing.T)
 	assert.True(t, handled)
 
 	// Verify the status update that resumeFromExecution queued (the "K8s intent").
-	require.GreaterOrEqual(t, st.Statuses.PlanStatuses.Len(), 1)
-	firstUpdate := <-st.Statuses.PlanStatuses.C()
-	var committed hibernatorv1alpha1.HibernatePlanStatus
-	firstUpdate.Mutate(&committed)
-	assert.Equal(t, hibernatorv1alpha1.PhaseWakingUp, committed.Phase, "queued mutation must set PhaseWakingUp")
+	require.GreaterOrEqual(t, planStatuses(st).Len(), 1)
+	firstUpdate := <-planStatuses(st).C()
+	committed := &hibernatorv1alpha1.HibernatePlan{}
+	firstUpdate.Mutator.Mutate(committed)
+	assert.Equal(t, hibernatorv1alpha1.PhaseWakingUp, committed.Status.Phase, "queued mutation must set PhaseWakingUp")
 
 	// Execution bookmarks must be preserved in the in-memory plan.
 	assert.Equal(t, "def456", plan.Status.CurrentCycleID)
-	assert.Equal(t, "wakeup", plan.Status.CurrentOperation)
+	assert.Equal(t, hibernatorv1alpha1.OperationWakeUp, plan.Status.CurrentOperation)
 	assert.Zero(t, plan.Status.CurrentStageIndex)
 	assert.Len(t, plan.Status.Executions, 1)
 }
@@ -364,7 +364,7 @@ func TestResumeFromExecution_WakingUp_DifferentWindow_ResumesToHibernated(t *tes
 		wellknown.AnnotationSuspendedAtPhase: string(hibernatorv1alpha1.PhaseWakingUp),
 	}
 	plan.Status.CurrentCycleID = "def456"
-	plan.Status.CurrentOperation = "wakeup"
+	plan.Status.CurrentOperation = hibernatorv1alpha1.OperationWakeUp
 	plan.Status.CurrentStageIndex = 0
 
 	c := newHandlerFakeClient(plan)
@@ -377,14 +377,14 @@ func TestResumeFromExecution_WakingUp_DifferentWindow_ResumesToHibernated(t *tes
 	assert.True(t, handled)
 
 	// Verify the status update that resumeFromExecution queued (the "K8s intent").
-	require.GreaterOrEqual(t, st.Statuses.PlanStatuses.Len(), 1)
-	firstUpdate := <-st.Statuses.PlanStatuses.C()
-	var committed hibernatorv1alpha1.HibernatePlanStatus
-	firstUpdate.Mutate(&committed)
-	assert.Equal(t, hibernatorv1alpha1.PhaseHibernated, committed.Phase, "queued mutation must set PhaseHibernated")
+	require.GreaterOrEqual(t, planStatuses(st).Len(), 1)
+	firstUpdate := <-planStatuses(st).C()
+	committed := &hibernatorv1alpha1.HibernatePlan{}
+	firstUpdate.Mutator.Mutate(committed)
+	assert.Equal(t, hibernatorv1alpha1.PhaseHibernated, committed.Status.Phase, "queued mutation must set PhaseHibernated")
 
 	// Execution bookmarks are preserved in the in-memory plan (resumeFromExecution does not clear them).
 	assert.Equal(t, "def456", plan.Status.CurrentCycleID)
-	assert.Equal(t, "wakeup", plan.Status.CurrentOperation)
+	assert.Equal(t, hibernatorv1alpha1.OperationWakeUp, plan.Status.CurrentOperation)
 	assert.Zero(t, plan.Status.CurrentStageIndex)
 }

@@ -10,7 +10,7 @@ import (
 	"fmt"
 
 	hibernatorv1alpha1 "github.com/ardikabs/hibernator/api/v1alpha1"
-	"github.com/ardikabs/hibernator/internal/message"
+	statusprocessor "github.com/ardikabs/hibernator/internal/provider/processor/status"
 	"github.com/ardikabs/hibernator/internal/recovery"
 	"github.com/ardikabs/hibernator/internal/wellknown"
 	"github.com/go-logr/logr"
@@ -89,15 +89,13 @@ func (state *recoveryState) handleManualRetry(ctx context.Context, log logr.Logg
 		return true, StateResult{RequeueAfter: wellknown.RequeueIntervalOnRecoveryError}, nil
 	}
 
-	mutate := func(st *hibernatorv1alpha1.HibernatePlanStatus) {
-		st.RetryCount = 0
-		st.LastRetryTime = nil
-	}
-
-	mutate(&plan.Status)
-	state.Statuses.PlanStatuses.Send(&message.PlanStatusUpdate{
+	state.Statuses.PlanStatuses.Send(statusprocessor.Update[*hibernatorv1alpha1.HibernatePlan]{
 		NamespacedName: state.Key,
-		Mutate:         mutate,
+		Resource:       plan,
+		Mutator: statusprocessor.MutatorFunc[*hibernatorv1alpha1.HibernatePlan](func(p *hibernatorv1alpha1.HibernatePlan) {
+			p.Status.RetryCount = 0
+			p.Status.LastRetryTime = nil
+		}),
 	})
 
 	return true, StateResult{Requeue: true}, nil
@@ -106,17 +104,10 @@ func (state *recoveryState) handleManualRetry(ctx context.Context, log logr.Logg
 func (state *recoveryState) handleRetry(ctx context.Context, log logr.Logger, lastErr error) (StateResult, error) {
 	plan := state.plan()
 
-	shouldHibernate := false
-	if state.PlanCtx.ScheduleResult != nil {
-		shouldHibernate = state.PlanCtx.ScheduleResult.ShouldHibernate
-	}
+	operation := state.determineRetryOperation(log, plan)
+	shouldHibernate := operation == hibernatorv1alpha1.OperationHibernate
 
-	operation := "wakeup"
-	if shouldHibernate {
-		operation = "shutdown"
-	}
-
-	execPlan, err := state.buildExecutionPlan(plan, operation == "wakeup")
+	execPlan, err := state.buildExecutionPlan(plan, operation == hibernatorv1alpha1.OperationWakeUp)
 	if err != nil {
 		log.Error(err, "failed to rebuild execution plan during recovery, repeat may be attempted if this is a transient error")
 		return StateResult{}, err
@@ -124,41 +115,87 @@ func (state *recoveryState) handleRetry(ctx context.Context, log logr.Logger, la
 
 	state.relabelStaleFailedJobs(ctx, log, plan, operation)
 
-	mutate := func(st *hibernatorv1alpha1.HibernatePlanStatus) {
-		if lastErr == nil {
-			lastErr = fmt.Errorf("unknown error (no error message in status)")
-		}
+	state.Statuses.PlanStatuses.Send(statusprocessor.Update[*hibernatorv1alpha1.HibernatePlan]{
+		NamespacedName: state.Key,
+		Resource:       plan,
+		Mutator: statusprocessor.MutatorFunc[*hibernatorv1alpha1.HibernatePlan](func(p *hibernatorv1alpha1.HibernatePlan) {
+			if lastErr == nil {
+				lastErr = fmt.Errorf("unknown error (no error message in status)")
+			}
 
-		if ok := recovery.RecordRetryAttemptOnStatus(st, state.Clock, lastErr); !ok {
-			log.V(1).Info("retry attempt not recorded", "error", lastErr)
-			return
-		}
+			if ok := recovery.RecordRetryAttemptOnStatus(&p.Status, state.Clock, lastErr); !ok {
+				log.V(1).Info("retry attempt not recorded", "error", lastErr)
+				return
+			}
 
-		currentStage := execPlan.Stages[plan.Status.CurrentStageIndex]
-		for _, targetName := range currentStage.Targets {
-			for i, exec := range st.Executions {
-				if exec.Target == targetName && exec.State == hibernatorv1alpha1.StateFailed {
-					st.Executions[i].State = hibernatorv1alpha1.StatePending
-					st.Executions[i].Message = "State reset for retry (on error recovery)"
+			currentStage := execPlan.Stages[plan.Status.CurrentStageIndex]
+			for _, targetName := range currentStage.Targets {
+				for i, exec := range p.Status.Executions {
+					if exec.Target == targetName && exec.State == hibernatorv1alpha1.StateFailed {
+						p.Status.Executions[i].State = hibernatorv1alpha1.StatePending
+						p.Status.Executions[i].Message = "State reset for retry (on error recovery)"
+					}
 				}
 			}
-		}
 
-		if shouldHibernate {
-			st.Phase = hibernatorv1alpha1.PhaseHibernating
-		} else {
-			st.Phase = hibernatorv1alpha1.PhaseWakingUp
-		}
-	}
-
-	mutate(&plan.Status)
-	state.Statuses.PlanStatuses.Send(&message.PlanStatusUpdate{
-		NamespacedName: state.Key,
-		Mutate:         mutate,
+			if shouldHibernate {
+				p.Status.Phase = hibernatorv1alpha1.PhaseHibernating
+			} else {
+				p.Status.Phase = hibernatorv1alpha1.PhaseWakingUp
+			}
+		}),
 	})
 
-	log.Info("transitioning on recovery", "phase", plan.Status.Phase, "attempt", plan.Status.RetryCount)
+	log.Info("transitioning on recovery", "operation", operation, "attempt", plan.Status.RetryCount)
 	return StateResult{Requeue: true}, nil
+}
+
+// determineRetryOperation determines which operation should be retried.
+//
+// It reads plan.Status.CurrentOperation as the source of truth — the plan
+// failed mid-operation and the retry must resume from that same operation,
+// regardless of where the schedule window currently sits. Dispatching the
+// opposite operation would corrupt resource state (e.g. waking up resources
+// that were never fully hibernated).
+//
+// If CurrentOperation is absent (edge case for very old plans that pre-date
+// the field), it falls back to the current schedule as a best-effort.
+// When the persisted operation conflicts with the current schedule window, a
+// structured warning is logged to guide the operator.
+func (state *recoveryState) determineRetryOperation(log logr.Logger, plan *hibernatorv1alpha1.HibernatePlan) hibernatorv1alpha1.PlanOperation {
+	operation := hibernatorv1alpha1.PlanOperation(plan.Status.CurrentOperation)
+	if operation == "" {
+		if state.PlanCtx.ScheduleResult != nil && state.PlanCtx.ScheduleResult.ShouldHibernate {
+			operation = hibernatorv1alpha1.OperationHibernate
+		} else {
+			operation = hibernatorv1alpha1.OperationWakeUp
+		}
+		log.Info("CurrentOperation is absent, falling back to schedule-derived operation", "operation", operation)
+		return operation
+	}
+
+	scheduledShouldHibernate := state.PlanCtx.ScheduleResult != nil && state.PlanCtx.ScheduleResult.ShouldHibernate
+	operationShouldHibernate := operation == hibernatorv1alpha1.OperationHibernate
+	if operationShouldHibernate != scheduledShouldHibernate {
+		// The failed operation no longer aligns with the current schedule window.
+		// We still retry the original operation as-is: a recovery attempt must
+		// resume from the point of failure. If the operator wants the plan to
+		// follow the current schedule instead, they should suspend the plan and
+		// perform manual intervention, or delete and resubmit it to reset the
+		// status entirely.
+		scheduleOperation := hibernatorv1alpha1.OperationWakeUp
+		if scheduledShouldHibernate {
+			scheduleOperation = hibernatorv1alpha1.OperationHibernate
+		}
+		log.Info("retrying failed operation that conflicts with current schedule window — "+
+			"proceeding with original operation; to follow the current schedule, "+
+			"suspend the plan and perform manual intervention or resubmit the plan",
+			"failedOperation", operation,
+			"scheduleOperation", scheduleOperation,
+		)
+	}
+
+	return operation
 }
 
 func (state *recoveryState) clearRetryAtAnnotation(ctx context.Context, log logr.Logger, plan *hibernatorv1alpha1.HibernatePlan) {
@@ -173,14 +210,14 @@ func (state *recoveryState) clearRetryAtAnnotation(ctx context.Context, log logr
 	}
 }
 
-func (state *recoveryState) relabelStaleFailedJobs(ctx context.Context, log logr.Logger, plan *hibernatorv1alpha1.HibernatePlan, operation string) {
+func (state *recoveryState) relabelStaleFailedJobs(ctx context.Context, log logr.Logger, plan *hibernatorv1alpha1.HibernatePlan, operation hibernatorv1alpha1.PlanOperation) {
 	var jobList batchv1.JobList
 	if err := state.List(ctx, &jobList,
 		client.InNamespace(plan.Namespace),
 		client.MatchingLabels{
 			wellknown.LabelPlan:      plan.Name,
 			wellknown.LabelCycleID:   plan.Status.CurrentCycleID,
-			wellknown.LabelOperation: operation,
+			wellknown.LabelOperation: string(operation),
 		},
 	); err != nil {
 		log.Error(err, "failed to list stale jobs for relabeling")

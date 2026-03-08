@@ -1,4 +1,8 @@
-> **⚠️ ARCHIVED** — This document has been superseded by [RFC-0008](../../enhancements/0008-async-phase-driven-reconciler.md). Do not modify. Preserved for historical reference only.
+> **⚠️ ARCHIVED** — This document has been superseded by [RFC-0008](../../enhancements/0008-async-phase-driven-reconciler.md). Preserved for historical reference only.
+>
+> **Retractions (two items listed as ✅ Fixed were subsequently reverted in later refactoring):**
+> - **H3 / PR2**: `reconcileTruth()` was designed and documented here as fixed, but was **never implemented** in the codebase. The divergence-correction path is absent. See [docs/findings/async-reconciler-review.md F1](../findings/async-reconciler-review.md) for analysis.
+> - **M5**: The `cachedConfig` optimisation was **reverted**. `buildConfig()` intentionally constructs a fresh `Config` on every `handle()` call to keep handlers fully stateless with respect to the Worker.
 
 # Async Phase-Driven Reconciler — Code Review
 
@@ -180,6 +184,8 @@ The local in-memory state and the K8s-persisted state can diverge if the status 
 
 **Fix Applied**: Added `reconcileTruth()` method to Worker. Every 5th poll-timer cycle (`truthCheckInterval`), the Worker fetches the plan from `APIReader` and compares persisted phase with cached phase. On divergence it replaces the cached plan pointer and resets the `consecutiveJobMisses` map. This bounds the divergence window to ~25s at the default 5s poll interval without adding new plumbing.
 
+> **⚠️ Retraction**: `reconcileTruth()` was **never implemented** despite being listed as fixed here. See [docs/findings/async-reconciler-review.md F1](../findings/async-reconciler-review.md).
+
 ---
 
 #### H4. No Graceful Drain in `StatusQueue`
@@ -212,11 +218,11 @@ Using the cached client means the Job list may be stale (informer lag). Combined
 
 ### Medium (Consider)
 
-#### M1. `dispatch()` Creates Potential Unbounded Call-Depth
+#### M1. Recursive `handle()` on `StateResult.Requeue` — Unbounded Call-Depth Possible
 
-`Config.dispatch(ctx)` re-creates a new state handler and calls `Handle(ctx)`. If a chain like idle→hibernating→error→recovery all dispatch synchronously, the call stack grows linearly. In practice the chain is short (<4 levels), but there's no guard against cycles (e.g., a bug causing recovery→hibernating→error→recovery).
+`dispatch()` was removed and replaced by `StateResult{Requeue: true}`, which causes `Worker.handle()` to call itself synchronously. If a chain like idle→hibernating→error→recovery all return `Requeue: true`, the call stack grows linearly. In practice the chain is short (<4 levels), but there's no guard against cycles (e.g., a bug causing recovery→hibernating→error→recovery).
 
-**File**: `internal/provider/processor/plan/state/state.go`, `dispatch()`.
+**File**: `internal/provider/processor/plan/worker.go`, `handle()`.
 
 **Suggestion**: Add a `maxDispatchDepth` counter and log a warning if it exceeds 4.
 
@@ -268,6 +274,8 @@ Each `handle()` allocates a fresh `Config` struct with a dozen fields. This is f
 
 **Fix Applied**: `buildConfig()` now lazily initialises `cachedConfig` on first call and reuses it on subsequent calls. Only the per-call `PlanCtx` field is updated in place.
 
+> **⚠️ Retraction**: The `cachedConfig` optimisation was **reverted** in later refactoring. `buildConfig()` intentionally constructs a fresh `Config` on every `handle()` call to keep handlers fully stateless with respect to the Worker.
+
 ---
 
 ### Low / Nits
@@ -280,7 +288,7 @@ Each `handle()` allocates a fresh `Config` struct with a dozen fields. This is f
 
 **File**: `internal/provider/processor/plan/state/state_suspended.go`, `forceWakeUpOnResume()`.
 
-**Fix Applied**: Instead of transitioning directly to `PhaseWakingUp`, `forceWakeUpOnResume` now transitions to `PhaseHibernated` and calls `dispatch()`. This routes to `idleState`, which sees `!ShouldHibernate` + `HasRestoreData` and calls the canonical `transitionToWakingUp()` path — correctly initialising fresh `Executions` (all `StatePending`), a new `CycleID`, `StageIndex=0`, and `CurrentOperation="wakeup"`. Suspension annotations are cleaned up before dispatch.
+**Fix Applied**: Instead of transitioning directly to `PhaseWakingUp`, `forceWakeUpOnResume` now transitions to `PhaseHibernated` and returns `StateResult{Requeue: true}`. The Worker immediately re-invokes `handle()`, which selects `idleState` for `PhaseHibernated`. `idleState` sees `!ShouldHibernate` + `HasRestoreData` and calls the canonical `transitionToWakingUp()` path — correctly initialising fresh `Executions` (all `StatePending`), a new `CycleID`, `StageIndex=0`, and `CurrentOperation="wakeup"`. Suspension annotations are cleaned up before the requeue.
 
 ---
 
@@ -354,7 +362,7 @@ Two lifecycle Patch calls (AddFinalizer, RemoveFinalizer) intentionally use plai
 
 When the watchable map delivers a fresh `PlanContext` to the worker via `slot.ready`, the informer-sourced plan carries the **last-persisted** status, which lags behind the worker's optimistic in-memory mutations by at least one StatusWriter round-trip. The original code unconditionally replaced `cachedCtx`, silently reverting optimistic phase transitions (e.g., Active→Hibernating would revert to Active).
 
-**Fix**: Added `mergeIncoming()` method to Worker. On every `slot.ready` delivery (except the first), it accepts the incoming PlanContext's Spec, ObjectMeta, and provider-computed fields (Exceptions, ScheduleResult, HasRestoreData) but **carries forward** the optimistic `plan.Status` from the previous `cachedCtx`. `reconcileTruth()` provides the correction path if the optimistic status genuinely diverges.
+**Fix**: Added `mergeIncoming()` method to Worker. On every `slot.ready` delivery (except the first), it accepts the incoming PlanContext's Spec, ObjectMeta, and provider-computed fields (Exceptions, ScheduleResult, HasRestoreData) but **carries forward** the optimistic `plan.Status` from the previous `cachedCtx`. A corresponding `reconcileTruth()` correction path was designed but not implemented (see F1).
 
 **File**: `worker.go`, `mergeIncoming()`.
 
@@ -465,7 +473,7 @@ Two attack vectors identified and mitigated:
 |--------|------------|----------|
 | `client.Patch()` deserialises API response into live object | `patchPreservingStatus()` snapshots + restores Status | ✅ (7 call sites) |
 | Watchable delivery carries informer's stale Status | `mergeIncoming()` carries forward optimistic Status | ✅ |
-| Genuine divergence (dropped status writes) | `reconcileTruth()` every 5 poll cycles | ✅ |
+| Genuine divergence (dropped status writes) | `reconcileTruth()` ⚠️ designed but not implemented | ⚠️ Gap |
 
 Patch call sites **correctly using plain Patch** (no optimistic status to preserve):
 
@@ -493,13 +501,13 @@ Patch call sites **correctly using plain Patch** (no optimistic status to preser
 
 | Check | Status |
 |-------|--------|
-| 5 select cases: slot.ready, pollTimer, retryTimer, deadlineTimer, idleTimer | ✅ |
+| 5 select cases: slot.ready, requeueTimer (poll+retry), deadlineTimer, idleTimer | ✅ |
 | `mergeIncoming()` on every slot delivery | ✅ |
-| `reconcileTruth()` every 5th poll cycle | ✅ |
+| `reconcileTruth()` every 5th poll cycle | ⚠️ Not implemented — see F1 |
 | Worker idle reaping (30m timeout) | ✅ |
 | All timers reset on meaningful events | ✅ |
 | `cleanup()` cancels all timers on worker exit | ✅ |
-| `cachedConfig` reused, only `PlanCtx` updated per handle() | ✅ |
+| `cachedConfig` reused, only `PlanCtx` updated per handle() | ⚠️ Reverted — fresh Config per call is now intentional |
 
 ### 5. Coordinator Lifecycle
 
@@ -578,14 +586,14 @@ Patch call sites **correctly using plain Patch** (no optimistic status to preser
 | C3 | **Critical** | Exception Lifecycle | Stale object used for finalizer patch in delete handler | ✅ Fixed |
 | H1 | High | Worker Lifecycle | No idle reaping of Worker goroutines | ✅ Fixed |
 | H2 | High | Provider/Watchable | Potential hot loop from ResourceVersion-based equality | ✅ Not a Bug |
-| H3 | High | State Machine | No divergence detection between optimistic and persisted state | ✅ Fixed |
+| H3 | High | State Machine | No divergence detection between optimistic and persisted state | ⚠️ Not Implemented (`reconcileTruth()` designed but never shipped — see F1) |
 | H4 | High | Status Writer | No graceful drain of queued updates on shutdown | ✅ Fixed |
 | H5 | High | Execution | `FetchCurrentCycleJobs` uses cached client, may see stale Jobs | ✅ Fixed |
-| M1 | Medium | State Dispatch | Unbounded dispatch depth possible | Open (Low Risk) |
+| M1 | Medium | State Dispatch | Recursive `handle()` on `StateResult.Requeue` — unbounded depth possible | Open (Low Risk) |
 | M2 | Medium | Recovery | `CurrentStageIndex` not reset in `handleRetry` mutate | ✅ Not a Bug |
 | M3 | Medium | Exception Processor | Serial processing may bottleneck at scale | Open (Low Risk) |
 | M4 | Medium | Coordinator | No worker goroutine count metric | ✅ Fixed |
-| M5 | Medium | Worker | Config allocation per `handle()` call | ✅ Fixed |
+| M5 | Medium | Worker | Config allocation per `handle()` call | ↩️ Reverted (fresh Config per call is intentional) |
 | L1 | Low | Suspended | `forceWakeUpOnResume` stale execution state on resume | ✅ Fixed |
 | L2 | Low | Utils | Magic number for cycle history pruning | ✅ Fixed |
 | L3 | Low | Provider | `mapsEqual` reimplements stdlib | ✅ Fixed |
@@ -604,7 +612,7 @@ The architecture is **sound** and the implementation quality is **high**. The Co
 
 ### Resolved
 
-All **Critical** findings resolved (C1 ✅, C3 ✅, C2 ⏳ deferred — functional with poll timer). All **High** findings resolved (H1–H5 ✅). Four additional post-review fixes (PR1–PR4) closed race conditions in the optimistic status pipeline that would have been difficult to diagnose in production.
+All **Critical** findings resolved (C1 ✅, C3 ✅, C2 ⏳ deferred — functional with poll timer). High findings H1, H2, H4, H5 resolved ✅; **H3 (`reconcileTruth()`) was listed as fixed here but was never implemented** — see [docs/findings/async-reconciler-review.md F1](../findings/async-reconciler-review.md). Four additional post-review fixes (PR1–PR4) closed race conditions in the optimistic status pipeline that would have been difficult to diagnose in production.
 
 ### Merge Readiness: **Ready with Conditions**
 

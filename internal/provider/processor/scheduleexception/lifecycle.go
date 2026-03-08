@@ -21,6 +21,7 @@ import (
 
 	hibernatorv1alpha1 "github.com/ardikabs/hibernator/api/v1alpha1"
 	"github.com/ardikabs/hibernator/internal/message"
+	statusprocessor "github.com/ardikabs/hibernator/internal/provider/processor/status"
 	"github.com/ardikabs/hibernator/internal/wellknown"
 )
 
@@ -45,7 +46,7 @@ type LifecycleProcessor struct {
 	Scheme    *runtime.Scheme
 
 	Resources *message.ControllerResources
-	Statuses  *message.ControllerStatuses
+	Statuses  *statusprocessor.ControllerStatuses
 }
 
 // NeedLeaderElection returns true since this processor modifies resources.
@@ -161,28 +162,29 @@ func (p *LifecycleProcessor) transitionState(ctx context.Context, log logr.Logge
 
 	nn := types.NamespacedName{Name: exception.Name, Namespace: exception.Namespace}
 
-	// Queue status update via status writer
-	p.Statuses.ExceptionStatuses.Send(&message.ExceptionStatusUpdate{
+	// Queue status update via status processor
+	p.Statuses.ExceptionStatuses.Send(statusprocessor.Update[*hibernatorv1alpha1.ScheduleException]{
 		NamespacedName: nn,
-		Mutate: func(status *hibernatorv1alpha1.ScheduleExceptionStatus) {
-			status.State = desiredState
+		Resource:       exception,
+		Mutator: statusprocessor.MutatorFunc[*hibernatorv1alpha1.ScheduleException](func(e *hibernatorv1alpha1.ScheduleException) {
+			e.Status.State = desiredState
 
 			switch desiredState {
 			case hibernatorv1alpha1.ExceptionStatePending:
-				status.AppliedAt = nil
-				status.ExpiredAt = nil
-				status.Message = "Exception pending"
+				e.Status.AppliedAt = nil
+				e.Status.ExpiredAt = nil
+				e.Status.Message = "Exception pending"
 			case hibernatorv1alpha1.ExceptionStateActive:
 				nowTime := now
-				status.AppliedAt = &metav1.Time{Time: nowTime}
-				status.ExpiredAt = nil
-				status.Message = "Exception activated"
+				e.Status.AppliedAt = &metav1.Time{Time: nowTime}
+				e.Status.ExpiredAt = nil
+				e.Status.Message = "Exception activated"
 			case hibernatorv1alpha1.ExceptionStateExpired:
 				nowTime := now
-				status.ExpiredAt = &metav1.Time{Time: nowTime}
-				status.Message = "Exception expired"
+				e.Status.ExpiredAt = &metav1.Time{Time: nowTime}
+				e.Status.Message = "Exception expired"
 			}
-		},
+		}),
 	})
 
 	log.Info("queued exception state transition", "from", string(oldState), "to", string(desiredState))
@@ -214,11 +216,12 @@ func (p *LifecycleProcessor) updateMessage(ctx context.Context, log logr.Logger,
 		"newMessage", newMessage)
 
 	nn := types.NamespacedName{Name: exception.Name, Namespace: exception.Namespace}
-	p.Statuses.ExceptionStatuses.Send(&message.ExceptionStatusUpdate{
+	p.Statuses.ExceptionStatuses.Send(statusprocessor.Update[*hibernatorv1alpha1.ScheduleException]{
 		NamespacedName: nn,
-		Mutate: func(status *hibernatorv1alpha1.ScheduleExceptionStatus) {
-			status.Message = newMessage
-		},
+		Resource:       exception,
+		Mutator: statusprocessor.MutatorFunc[*hibernatorv1alpha1.ScheduleException](func(e *hibernatorv1alpha1.ScheduleException) {
+			e.Status.Message = newMessage
+		}),
 	})
 }
 
@@ -334,17 +337,18 @@ func (p *LifecycleProcessor) removeFromPlanStatus(_ context.Context, log logr.Lo
 	}
 
 	exceptionName := exception.Name
-	p.Statuses.PlanStatuses.Send(&message.PlanStatusUpdate{
+	p.Statuses.PlanStatuses.Send(statusprocessor.Update[*hibernatorv1alpha1.HibernatePlan]{
 		NamespacedName: planKey,
-		Mutate: func(st *hibernatorv1alpha1.HibernatePlanStatus) {
+		Resource:       new(hibernatorv1alpha1.HibernatePlan),
+		Mutator: statusprocessor.MutatorFunc[*hibernatorv1alpha1.HibernatePlan](func(p *hibernatorv1alpha1.HibernatePlan) {
 			var updated []hibernatorv1alpha1.ExceptionReference
-			for _, ref := range st.ActiveExceptions {
+			for _, ref := range p.Status.ActiveExceptions {
 				if ref.Name != exceptionName {
 					updated = append(updated, ref)
 				}
 			}
-			st.ActiveExceptions = updated
-		},
+			p.Status.ActiveExceptions = updated
+		}),
 	})
 
 	log.V(1).Info("queued removal of exception from plan status", "plan", planKey.Name)

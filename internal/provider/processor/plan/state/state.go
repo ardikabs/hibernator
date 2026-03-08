@@ -21,6 +21,7 @@ import (
 
 	hibernatorv1alpha1 "github.com/ardikabs/hibernator/api/v1alpha1"
 	"github.com/ardikabs/hibernator/internal/message"
+	statusprocessor "github.com/ardikabs/hibernator/internal/provider/processor/status"
 	"github.com/ardikabs/hibernator/internal/restore"
 	"github.com/ardikabs/hibernator/internal/scheduler"
 	"github.com/ardikabs/hibernator/internal/wellknown"
@@ -155,6 +156,7 @@ func newState(key types.NamespacedName, planCtx *message.PlanContext, cfg *Confi
 		Clock:                cfg.Clock,
 		Scheme:               cfg.Scheme,
 		Planner:              cfg.Planner,
+		Resources:            cfg.Resources,
 		Statuses:             cfg.Statuses,
 		RestoreManager:       cfg.RestoreManager,
 		ControlPlaneEndpoint: cfg.ControlPlaneEndpoint,
@@ -240,7 +242,8 @@ type state struct {
 	Clock                clock.Clock
 	Scheme               *runtime.Scheme
 	Planner              *scheduler.Planner
-	Statuses             *message.ControllerStatuses
+	Resources            *message.ControllerResources
+	Statuses             *statusprocessor.ControllerStatuses
 	RestoreManager       *restore.Manager
 	ControlPlaneEndpoint string
 	RunnerImage          string
@@ -297,15 +300,13 @@ func (b *state) plan() *hibernatorv1alpha1.HibernatePlan {
 
 // nextStage moves the plan to the next execution stage.
 func (b *state) nextStage(nextStageIndex int) {
-	mutate := func(st *hibernatorv1alpha1.HibernatePlanStatus) {
-		st.CurrentStageIndex = nextStageIndex
-	}
-
 	plan := b.plan()
-	mutate(&plan.Status)
-	b.Statuses.PlanStatuses.Send(&message.PlanStatusUpdate{
+	b.Statuses.PlanStatuses.Send(statusprocessor.Update[*hibernatorv1alpha1.HibernatePlan]{
 		NamespacedName: b.Key,
-		Mutate:         mutate,
+		Resource:       plan,
+		Mutator: statusprocessor.MutatorFunc[*hibernatorv1alpha1.HibernatePlan](func(p *hibernatorv1alpha1.HibernatePlan) {
+			p.Status.CurrentStageIndex = nextStageIndex
+		}),
 	})
 }
 
@@ -317,17 +318,15 @@ func (b *state) setError(ctx context.Context, phaseErr error) {
 	}
 	b.Log.V(1).Info("transitioning plan to error state", "error", errMsg)
 
-	mutate := func(s *hibernatorv1alpha1.HibernatePlanStatus) {
-		s.Phase = hibernatorv1alpha1.PhaseError
-		s.LastTransitionTime = ptr.To(metav1.NewTime(b.Clock.Now()))
-		s.ErrorMessage = errMsg
-	}
-
 	plan := b.plan()
-	mutate(&plan.Status)
-	b.Statuses.PlanStatuses.Send(&message.PlanStatusUpdate{
+	b.Statuses.PlanStatuses.Send(statusprocessor.Update[*hibernatorv1alpha1.HibernatePlan]{
 		NamespacedName: b.Key,
-		Mutate:         mutate,
+		Resource:       plan,
+		Mutator: statusprocessor.MutatorFunc[*hibernatorv1alpha1.HibernatePlan](func(p *hibernatorv1alpha1.HibernatePlan) {
+			p.Status.Phase = hibernatorv1alpha1.PhaseError
+			p.Status.LastTransitionTime = ptr.To(metav1.NewTime(b.Clock.Now()))
+			p.Status.ErrorMessage = errMsg
+		}),
 	})
 }
 
@@ -369,16 +368,14 @@ func (s *state) TransitionToSuspended(ctx context.Context, onDeadline bool) (Sta
 		return StateResult{}, fmt.Errorf("failed to record suspended-at-phase annotation: %w", err)
 	}
 
-	mutate := func(st *hibernatorv1alpha1.HibernatePlanStatus) {
-		st.Phase = hibernatorv1alpha1.PhaseSuspended
-		st.ErrorMessage = ""
-		st.LastTransitionTime = ptr.To(metav1.NewTime(s.Clock.Now()))
-	}
-
-	mutate(&plan.Status)
-	s.Statuses.PlanStatuses.Send(&message.PlanStatusUpdate{
+	s.Statuses.PlanStatuses.Send(statusprocessor.Update[*hibernatorv1alpha1.HibernatePlan]{
 		NamespacedName: s.Key,
-		Mutate:         mutate,
+		Resource:       plan,
+		Mutator: statusprocessor.MutatorFunc[*hibernatorv1alpha1.HibernatePlan](func(p *hibernatorv1alpha1.HibernatePlan) {
+			p.Status.Phase = hibernatorv1alpha1.PhaseSuspended
+			p.Status.ErrorMessage = ""
+			p.Status.LastTransitionTime = ptr.To(metav1.NewTime(s.Clock.Now()))
+		}),
 	})
 
 	return StateResult{Requeue: true}, nil

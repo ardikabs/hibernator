@@ -19,27 +19,36 @@ import (
 	"github.com/ardikabs/hibernator/internal/message"
 	"github.com/ardikabs/hibernator/internal/metrics"
 	"github.com/ardikabs/hibernator/internal/provider/processor/plan/state"
+	statusprocessor "github.com/ardikabs/hibernator/internal/provider/processor/status"
 	"github.com/ardikabs/hibernator/internal/restore"
 	"github.com/ardikabs/hibernator/internal/scheduler"
-	"github.com/ardikabs/hibernator/pkg/conflate"
+	"github.com/ardikabs/hibernator/pkg/keyedworker"
 )
 
-// consecutiveJobMissThreshold is the number of consecutive poll cycles a running
-// target's Job must be absent before it is considered genuinely lost and the target
-// is reset to StatePending for re-dispatch.
-const consecutiveJobMissThreshold = 3
+const (
+	// consecutiveJobMissThreshold is the number of consecutive poll cycles a running
+	// target's Job must be absent before it is considered genuinely lost and the target
+	// is reset to StatePending for re-dispatch.
+	consecutiveJobMissThreshold = 3
 
-// workerIdleTimeout is the duration after which a Worker that has received no slot
-// delivery and no timer event self-terminates. The Coordinator re-spawns it on
-// the next delivery, keeping the goroutine pool bounded.
-const workerIdleTimeout = 30 * time.Minute
+	// workerIdleTimeout is the duration after which a Worker that has received no slot
+	// delivery and no timer event self-terminates. The Coordinator re-spawns it on
+	// the next delivery, keeping the goroutine pool bounded.
+	workerIdleTimeout = 30 * time.Minute
+
+	// maxHandleDepth is the maximum allowed depth of recursive handle() calls due to Requeue=true results.
+	// This prevents unbounded recursion in the case of a misbehaving handler that always returns Requeue=true.
+	// If this depth is exceeded, the worker will log an error and stop processing further events for the current plan
+	// until the next slot delivery or timer event, which resets the depth counter.
+	maxHandleDepth = 5
+)
 
 // Worker is a long-lived goroutine that manages every phase of a single
 // HibernatePlan's lifecycle. It receives updates from the Coordinator via a
 // latest-wins planContextSlot and manages internal timers for re-driving execution as needed.
 //
-//   - pollTimer   — re-drives execution while runner Jobs are in-flight.
-//   - retryTimer  — fires after exponential backoff when in PhaseError.
+//   - requeueTimer  — re-drives execution while runner Jobs are in-flight, and
+//     fires after exponential backoff when the plan is in PhaseError.
 //   - deadlineTimer — fires when a suspend-until deadline expires.
 //
 // Optimistic state: the worker mutates s.cachedCtx.Plan.Status.* in-place so that
@@ -56,7 +65,7 @@ type Worker struct {
 	Scheme               *k8sutil.Scheme
 	Planner              *scheduler.Planner
 	Resources            *message.ControllerResources
-	Statuses             *message.ControllerStatuses
+	Statuses             *statusprocessor.ControllerStatuses
 	RestoreManager       *restore.Manager
 	ControlPlaneEndpoint string
 	RunnerImage          string
@@ -67,7 +76,7 @@ type Worker struct {
 	cachedCtx *message.PlanContext
 
 	// Inbound context slot from the engine — latest-wins delivery.
-	slot *conflate.Pipeline[*message.PlanContext]
+	slot keyedworker.Slot[*message.PlanContext]
 
 	// Timers — nil means inactive.
 	requeueTimer  *time.Timer
@@ -77,19 +86,15 @@ type Worker struct {
 	// runner Job has been absent while still in StateRunning. Lazily initialised
 	// on the first execution-phase handle() call. Resets when the job reappears.
 	consecutiveJobMisses map[string]int
-
-	// onIdleReap is a callback to the Coordinator's reap() method.
-	// Called when the idle timer fires so the coordinator can clean up the entry.
-	onIdleReap func()
 }
 
 // run is the worker's event loop. It blocks on five event sources:
 //
-//   - slot.ready     — a new PlanContext was delivered by the coordinator (latest-wins).
-//   - pollTimer      — re-drives the current phase while runner Jobs are in-flight.
-//   - retryTimer     — fires after exponential backoff when the plan is in PhaseError.
-//   - deadlineTimer  — fires when a suspend-until deadline expires.
-//   - idleTimer      — fires when the worker has been idle for workerIdleTimeout.
+//   - slot.ready    — a new PlanContext was delivered by the coordinator (latest-wins).
+//   - requeueTimer  — re-drives the current phase while runner Jobs are in-flight, and
+//     fires after exponential backoff when the plan is in PhaseError.
+//   - deadlineTimer — fires when a suspend-until deadline expires.
+//   - idleTimer     — fires when the worker has been idle for workerIdleTimeout.
 //
 // On each event the worker builds a fresh planState for the current phase and calls
 // Handle(ctx). A nil timer channel never fires, so inactive timers are represented as nil.
@@ -129,9 +134,6 @@ func (s *Worker) run(ctx context.Context) {
 
 		case <-workerIdleTimer.C:
 			s.log.V(1).Info("worker idle timeout reached, self-terminating", "plan", s.key)
-			if s.onIdleReap != nil {
-				s.onIdleReap()
-			}
 			return
 		}
 	}
@@ -141,24 +143,37 @@ func (s *Worker) run(ctx context.Context) {
 // dependencies and timer-control closures. A fresh Config is constructed on
 // every handle() call so handlers are fully stateless with respect to the worker.
 func (s *Worker) buildConfig() *state.Config {
-	return state.NewConfig().
-		WithLog(s.log).
-		WithClient(s.Client).
-		WithAPIReader(s.APIReader).
-		WithClock(s.Clock).
-		WithScheme(s.Scheme).
-		WithPlanner(s.Planner).
-		WithStatuses(s.Statuses).
-		WithRestoreManager(s.RestoreManager).
-		WithControlPlaneEndpoint(s.ControlPlaneEndpoint).
-		WithRunnerImage(s.RunnerImage).
-		WithRunnerServiceAccount(s.RunnerServiceAccount).
-		WithOnJobMissingFunc(s.trackConsecutiveJobMiss).
-		WithOnJobFoundFunc(s.resetConsecutiveJobMiss)
+	return &state.Config{
+		Log:                  s.log,
+		Client:               s.Client,
+		APIReader:            s.APIReader,
+		Clock:                s.Clock,
+		Scheme:               s.Scheme,
+		Planner:              s.Planner,
+		Resources:            s.Resources,
+		Statuses:             s.Statuses,
+		RestoreManager:       s.RestoreManager,
+		ControlPlaneEndpoint: s.ControlPlaneEndpoint,
+		RunnerImage:          s.RunnerImage,
+		RunnerServiceAccount: s.RunnerServiceAccount,
+		OnJobMissing:         s.trackConsecutiveJobMiss,
+		OnJobFound:           s.resetConsecutiveJobMiss,
+	}
+}
+
+func (s *Worker) handle(ctx context.Context, planCtx *message.PlanContext, onDeadline bool) {
+	s.handleWithDepth(ctx, planCtx, onDeadline, 0)
 }
 
 // handle dispatches the plan to the appropriate state handler based on its current phase.
-func (s *Worker) handle(ctx context.Context, planCtx *message.PlanContext, onDeadline bool) {
+func (s *Worker) handleWithDepth(ctx context.Context, planCtx *message.PlanContext, onDeadline bool, depth int) {
+	if depth >= maxHandleDepth {
+		s.log.Error(nil, "handle() recursion depth exceeded; possible phase loop",
+			"plan", s.key,
+			"phase", planCtx.Plan.Status.Phase)
+		return
+	}
+
 	if planCtx == nil || planCtx.Plan == nil {
 		return
 	}
@@ -211,7 +226,7 @@ func (s *Worker) handle(ctx context.Context, planCtx *message.PlanContext, onDea
 		// The next phase arms its own timers via its first Handle() call.
 		s.stopRequeueTimer()
 		s.stopDeadlineTimer()
-		s.handle(ctx, planCtx, false)
+		s.handleWithDepth(ctx, planCtx, false, depth+1)
 		return
 	}
 
@@ -261,9 +276,16 @@ func (s *Worker) resetConsecutiveJobMiss(target string) {
 // forward the worker's in-memory Status onto the incoming plan whenever there is
 // a prior cached context. This is safe because the StatusWriter is the ONLY
 // component that writes to the status sub-resource, and the worker is the sole
-// producer for that plan's status mutations. reconcileTruth() provides the
-// correction path if the optimistic status ever genuinely diverges from the
-// persisted state.
+// producer for that plan's status mutations.
+//
+// The reconciler is the source of truth for status correction. The Provider
+// reconciles on every schedule tick and object change, delivering a fresh informer
+// snapshot on each cycle. Once the StatusWriter successfully persists a status
+// mutation, the next delivery carries the correct persisted status — naturally
+// collapsing any optimistic-vs-persisted divergence window. On operator restart,
+// cachedCtx is nil and the first delivery unconditionally adopts the informer
+// snapshot, so cold-start divergence cannot occur. Residual divergence risk on
+// StatusWriter failure is accepted and bounded by the StatusWriter's retry logic.
 func (s *Worker) mergeIncoming(incoming *message.PlanContext) {
 	if s.cachedCtx == nil || s.cachedCtx.Plan == nil {
 		// First delivery — no optimistic state to preserve.

@@ -15,7 +15,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
 
 	hibernatorv1alpha1 "github.com/ardikabs/hibernator/api/v1alpha1"
-	"github.com/ardikabs/hibernator/internal/message"
+	statusprocessor "github.com/ardikabs/hibernator/internal/provider/processor/status"
 	"github.com/ardikabs/hibernator/internal/wellknown"
 	"github.com/go-logr/logr"
 )
@@ -71,6 +71,10 @@ func (state *lifecycleState) handleDelete(ctx context.Context, log logr.Logger, 
 		log.V(1).Info("removed finalizer")
 	}
 
+	// At this point, the plan should be deleted.
+	// In case it's not yet gone, we can just return and wait for the next event.
+	log.V(1).Info("finalizer cleanup complete, dropping plan watchable.Map")
+	state.Resources.PlanResources.Delete(state.Key)
 	return StateResult{}, nil
 }
 
@@ -91,15 +95,13 @@ func (state *lifecycleState) handle(ctx context.Context, log logr.Logger, plan *
 	if plan.Status.Phase == "" {
 		log.Info("initializing plan status")
 
-		mutate := func(st *hibernatorv1alpha1.HibernatePlanStatus) {
-			st.Phase = hibernatorv1alpha1.PhaseActive
-			st.ObservedGeneration = plan.Generation
-		}
-
-		mutate(&plan.Status)
-		state.Statuses.PlanStatuses.Send(&message.PlanStatusUpdate{
+		state.Statuses.PlanStatuses.Send(statusprocessor.Update[*hibernatorv1alpha1.HibernatePlan]{
 			NamespacedName: state.Key,
-			Mutate:         mutate,
+			Resource:       plan,
+			Mutator: statusprocessor.MutatorFunc[*hibernatorv1alpha1.HibernatePlan](func(p *hibernatorv1alpha1.HibernatePlan) {
+				p.Status.Phase = hibernatorv1alpha1.PhaseActive
+				p.Status.ObservedGeneration = plan.Generation
+			}),
 		})
 
 		if err := state.RestoreManager.PrepareRestorePoint(ctx, plan.Namespace, plan.Name); err != nil {
