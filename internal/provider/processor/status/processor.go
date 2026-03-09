@@ -102,7 +102,8 @@ type UpdateProcessor[T client.Object] struct {
 // inside RetryOnConflict always see the true server state rather than a potentially
 // stale informer-cache snapshot.
 func NewUpdateProcessor[T client.Object](log logr.Logger, c client.Client, apiReader client.Reader) *UpdateProcessor[T] {
-	kind := hibernatorv1alpha1.KindOf(new(T))
+	var zero T
+	kind := hibernatorv1alpha1.KindOf(zero)
 	u := &UpdateProcessor[T]{
 		log:       log,
 		kind:      kind,
@@ -166,10 +167,12 @@ func (u *UpdateProcessor[T]) Start(ctx context.Context) error {
 // via isStatusEqual, then calls Status().Update with RetryOnConflict.
 func (u *UpdateProcessor[T]) apply(ctx context.Context, update Update[T]) error {
 	startTime := time.Now()
+	key := update.NamespacedName.String()
 	obj := update.Resource
 	objKind := hibernatorv1alpha1.KindOf(obj)
 
-	log := u.log.WithValues("key", update.NamespacedName.String(), "kind", objKind)
+	log := u.log.WithValues("key", key, "kind", objKind)
+	log.V(1).Info("processing status update")
 	defer func() {
 		log.Info("finished processing status update", "duration", time.Since(startTime).String())
 	}()
@@ -187,7 +190,7 @@ func (u *UpdateProcessor[T]) apply(ctx context.Context, update Update[T]) error 
 
 		if err := update.PreHook(ctx, current); err != nil {
 			log.Error(err, "pre-hook failed, aborting update")
-			metrics.StatusWriterErrorsTotal.WithLabelValues(objKind, "pre_hook").Inc()
+			metrics.StatusWriterErrorsTotal.WithLabelValues(objKind, key, "pre_hook").Inc()
 			return err
 		}
 	}
@@ -217,7 +220,7 @@ func (u *UpdateProcessor[T]) apply(ctx context.Context, update Update[T]) error 
 		update.Mutator.Mutate(fresh)
 		if isStatusEqual(before, fresh) {
 			log.V(1).Info("status unchanged, bypassing update")
-			metrics.StatusWriterNoopTotal.WithLabelValues(objKind).Inc()
+			metrics.StatusWriterNoopTotal.WithLabelValues(objKind, key).Inc()
 			return nil
 		}
 
@@ -225,20 +228,20 @@ func (u *UpdateProcessor[T]) apply(ctx context.Context, update Update[T]) error 
 			return err
 		}
 
-		metrics.StatusWriterUpdatesTotal.WithLabelValues(objKind).Inc()
+		metrics.StatusWriterUpdatesTotal.WithLabelValues(objKind, key).Inc()
 		written = fresh
 		didWrite = true
 		return nil
 	}); err != nil {
 		log.Error(err, "unable to update status")
-		metrics.StatusWriterErrorsTotal.WithLabelValues(objKind, "apply").Inc()
+		metrics.StatusWriterErrorsTotal.WithLabelValues(objKind, key, "apply").Inc()
 		return err
 	}
 
 	if update.PostHook != nil && didWrite {
 		if err := update.PostHook(ctx, written); err != nil {
 			log.Error(err, "post-transition hook failed (non-fatal)")
-			metrics.StatusWriterErrorsTotal.WithLabelValues(objKind, "post_hook").Inc()
+			metrics.StatusWriterErrorsTotal.WithLabelValues(objKind, key, "post_hook").Inc()
 		}
 	}
 

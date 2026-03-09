@@ -6,8 +6,10 @@ Licensed under the Apache License, Version 2.0.
 package metrics
 
 import (
+	"errors"
 	"testing"
 
+	"github.com/prometheus/client_golang/prometheus"
 	ctrlmetrics "sigs.k8s.io/controller-runtime/pkg/metrics"
 )
 
@@ -35,12 +37,6 @@ func TestReconcileDuration_Defined(t *testing.T) {
 	}
 }
 
-func TestRestoreDataSize_Defined(t *testing.T) {
-	if RestoreDataSize == nil {
-		t.Error("RestoreDataSize should not be nil")
-	}
-}
-
 func TestActivePlanGauge_Defined(t *testing.T) {
 	if ActivePlanGauge == nil {
 		t.Error("ActivePlanGauge should not be nil")
@@ -61,7 +57,7 @@ func TestJobFailuresTotal_Defined(t *testing.T) {
 
 func TestExecutionDuration_Labels(t *testing.T) {
 	// Test that we can observe with the correct labels
-	observer, err := ExecutionDuration.GetMetricWithLabelValues("shutdown", "eks", "success")
+	observer, err := ExecutionDuration.GetMetricWithLabelValues("my-plan", "shutdown", "eks", "success")
 	if err != nil {
 		t.Fatalf("Failed to get metric with labels: %v", err)
 	}
@@ -74,7 +70,7 @@ func TestExecutionDuration_Labels(t *testing.T) {
 }
 
 func TestExecutionTotal_Labels(t *testing.T) {
-	counter, err := ExecutionTotal.GetMetricWithLabelValues("wakeup", "rds", "failed")
+	counter, err := ExecutionTotal.GetMetricWithLabelValues("my-plan", "wakeup", "rds", "failed")
 	if err != nil {
 		t.Fatalf("Failed to get metric with labels: %v", err)
 	}
@@ -104,19 +100,6 @@ func TestReconcileDuration_Labels(t *testing.T) {
 	if observer == nil {
 		t.Error("Observer should not be nil")
 	}
-}
-
-func TestRestoreDataSize_Labels(t *testing.T) {
-	observer, err := RestoreDataSize.GetMetricWithLabelValues("ec2")
-	if err != nil {
-		t.Fatalf("Failed to get metric with labels: %v", err)
-	}
-	if observer == nil {
-		t.Error("Observer should not be nil")
-	}
-
-	// Observe a value
-	observer.Observe(1024)
 }
 
 func TestActivePlanGauge_Labels(t *testing.T) {
@@ -153,32 +136,40 @@ func TestJobFailuresTotal_Labels(t *testing.T) {
 }
 
 func TestMetricsRegistration(t *testing.T) {
-	// Verify metrics are registered with controller-runtime's registry.
-	metricFamilies, err := ctrlmetrics.Registry.Gather()
-	if err != nil {
-		t.Fatalf("Failed to gather metrics: %v", err)
+	// Verify every metric is registered with controller-runtime's registry.
+	//
+	// Gather() only returns Vec metrics that have had at least one observation,
+	// so we probe via Registry.Register(): if it returns AlreadyRegisteredError
+	// the metric was pre-registered by promauto.With(ctrlmetrics.Registry) at
+	// init time. A nil error means the metric was absent (we unregister the
+	// accidental registration and fail the test).
+	collectors := []prometheus.Collector{
+		ExecutionDuration,
+		ExecutionTotal,
+		ReconcileTotal,
+		ReconcileDuration,
+		ActivePlanGauge,
+		JobsCreatedTotal,
+		JobFailuresTotal,
+		WatchableSubscribeTotal,
+		WatchableSubscribeDuration,
+		WorkerGoroutinesGauge,
+		StatusWriterActiveGauge,
+		StatusWriterUpdatesTotal,
+		StatusWriterNoopTotal,
+		StatusWriterErrorsTotal,
 	}
 
-	expectedMetrics := map[string]bool{
-		"hibernator_execution_duration_seconds": false,
-		"hibernator_execution_total":            false,
-		"hibernator_reconcile_total":            false,
-		"hibernator_reconcile_duration_seconds": false,
-		"hibernator_restore_data_size_bytes":    false,
-		"hibernator_active_plans":               false,
-		"hibernator_jobs_created_total":         false,
-		"hibernator_job_failures_total":         false,
-	}
-
-	for _, mf := range metricFamilies {
-		if _, ok := expectedMetrics[mf.GetName()]; ok {
-			expectedMetrics[mf.GetName()] = true
+	for _, c := range collectors {
+		err := ctrlmetrics.Registry.Register(c)
+		if err == nil {
+			t.Errorf("collector %T was not pre-registered in ctrlmetrics.Registry", c)
+			ctrlmetrics.Registry.Unregister(c)
+			continue
 		}
-	}
-
-	for metric, found := range expectedMetrics {
-		if !found {
-			t.Errorf("Expected metric %q to be registered", metric)
+		var are prometheus.AlreadyRegisteredError
+		if !errors.As(err, &are) {
+			t.Errorf("unexpected error registering %T: %v", c, err)
 		}
 	}
 }
@@ -186,7 +177,7 @@ func TestMetricsRegistration(t *testing.T) {
 func TestExecutionDuration_Buckets(t *testing.T) {
 	// Verify the histogram works with labels
 	// ExponentialBuckets(1, 2, 10) = 1, 2, 4, 8, 16, 32, 64, 128, 256, 512
-	observer, err := ExecutionDuration.GetMetricWithLabelValues("test", "test", "test")
+	observer, err := ExecutionDuration.GetMetricWithLabelValues("my-plan", "test", "test", "test")
 	if err != nil {
 		t.Errorf("Should be able to get metric with labels: %v", err)
 	}
