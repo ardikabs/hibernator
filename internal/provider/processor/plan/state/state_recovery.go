@@ -56,7 +56,7 @@ func (state *recoveryState) Handle(ctx context.Context) (StateResult, error) {
 
 	if strategy.RetryAfter > 0 {
 		// Still within backoff — schedule a timer to re-drive this handler exactly when ready.
-		log.Info(strategy.Reason, "retryAfter", strategy.RetryAfter.String())
+		log.Info("backoff in progress", "reason", strategy.Reason, "retryAfter", strategy.RetryAfter.String())
 		return StateResult{RequeueAfter: strategy.RetryAfter}, nil
 	}
 
@@ -115,6 +115,12 @@ func (state *recoveryState) handleRetry(ctx context.Context, log logr.Logger, la
 
 	state.relabelStaleFailedJobs(ctx, log, plan, operation)
 
+	currentPhase := plan.Status.Phase
+	targetPhase := hibernatorv1alpha1.PhaseHibernating
+	if !shouldHibernate {
+		targetPhase = hibernatorv1alpha1.PhaseWakingUp
+	}
+
 	state.Statuses.PlanStatuses.Send(statusprocessor.Update[*hibernatorv1alpha1.HibernatePlan]{
 		NamespacedName: state.Key,
 		Resource:       plan,
@@ -138,15 +144,16 @@ func (state *recoveryState) handleRetry(ctx context.Context, log logr.Logger, la
 				}
 			}
 
-			if shouldHibernate {
-				p.Status.Phase = hibernatorv1alpha1.PhaseHibernating
-			} else {
-				p.Status.Phase = hibernatorv1alpha1.PhaseWakingUp
-			}
+			p.Status.Phase = targetPhase
 		}),
 	})
 
-	log.Info("transitioning on recovery", "operation", operation, "attempt", plan.Status.RetryCount)
+	log.Info("transitioning on recovery",
+		"fromPhase", currentPhase,
+		"toPhase", targetPhase,
+		"operation", operation,
+		"attempt", plan.Status.RetryCount,
+	)
 	return StateResult{Requeue: true}, nil
 }
 
