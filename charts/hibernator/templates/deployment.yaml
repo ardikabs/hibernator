@@ -40,6 +40,9 @@ spec:
           imagePullPolicy: {{ .Values.image.controller.pullPolicy }}
 
           args:
+            {{- if not .Values.controlPlane.useLegacyReconciler }}
+            --legacy-reconciler=false
+            {{- end }}
             {{- if .Values.controlPlane.logging }}
             - --zap-log-level={{ .Values.controlPlane.logging.level | default "info" }}
             - --zap-encoder={{ .Values.controlPlane.logging.format | default "json" }}
