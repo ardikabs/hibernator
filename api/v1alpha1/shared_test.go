@@ -52,6 +52,55 @@ func TestKindOf_NilHibernatePlan(t *testing.T) {
 	}
 }
 
+// kindOfGeneric mimics the generic pattern used in NewUpdateProcessor:
+//
+//	var zero T
+//	kind := KindOf(zero)
+//
+// When T is a pointer type (e.g. *HibernatePlan), `var zero T` yields a typed nil
+// that the type switch correctly matches. By contrast, `new(T)` would yield a
+// **HibernatePlan double-pointer that falls to the "Unknown" default branch.
+func kindOfGeneric[T any]() string {
+	var zero T
+	return KindOf(zero)
+}
+
+func TestKindOf_ViaGeneric_HibernatePlan(t *testing.T) {
+	if got := kindOfGeneric[*HibernatePlan](); got != "HibernatePlan" {
+		t.Errorf("kindOfGeneric[*HibernatePlan]() = %q, want %q", got, "HibernatePlan")
+	}
+}
+
+func TestKindOf_ViaGeneric_ScheduleException(t *testing.T) {
+	if got := kindOfGeneric[*ScheduleException](); got != "ScheduleException" {
+		t.Errorf("kindOfGeneric[*ScheduleException]() = %q, want %q", got, "ScheduleException")
+	}
+}
+
+func TestKindOf_ViaGeneric_CloudProvider(t *testing.T) {
+	if got := kindOfGeneric[*CloudProvider](); got != "CloudProvider" {
+		t.Errorf("kindOfGeneric[*CloudProvider]() = %q, want %q", got, "CloudProvider")
+	}
+}
+
+func TestKindOf_ViaGeneric_K8SCluster(t *testing.T) {
+	if got := kindOfGeneric[*K8SCluster](); got != "K8SCluster" {
+		t.Errorf("kindOfGeneric[*K8SCluster]() = %q, want %q", got, "K8SCluster")
+	}
+}
+
+// TestKindOf_DoublePointer_IsUnknown documents the broken behaviour that would
+// result from calling KindOf(new(T)) inside a generic function where T is already
+// a pointer type. new(T) allocates a **HibernatePlan, which the type switch cannot
+// match, so it must return "Unknown".
+func TestKindOf_DoublePointer_IsUnknown(t *testing.T) {
+	// Simulate new(T) where T = *HibernatePlan → produces **HibernatePlan.
+	p := new(*HibernatePlan)
+	if got := KindOf(p); got != "Unknown" {
+		t.Errorf("KindOf(**HibernatePlan) = %q, want %q (double-pointer must not match)", got, "Unknown")
+	}
+}
+
 // ExceptionReferencesEqual tests
 
 func newExceptionRef(name string) ExceptionReference {

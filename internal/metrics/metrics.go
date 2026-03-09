@@ -25,7 +25,7 @@ var (
 			Help:    "Duration of hibernation and wakeup operations",
 			Buckets: prometheus.ExponentialBuckets(1, 2, 10), // 1s to ~17m
 		},
-		[]string{"operation", "target_type", "status"},
+		[]string{"plan", "operation", "target_type", "status"},
 	)
 
 	// ExecutionTotal counts total executions by operation and status
@@ -34,7 +34,7 @@ var (
 			Name: "hibernator_execution_total",
 			Help: "Total number of hibernation and wakeup operations",
 		},
-		[]string{"operation", "target_type", "status"},
+		[]string{"plan", "operation", "target_type", "status"},
 	)
 
 	// ReconcileTotal counts HibernatePlan reconciliation loops
@@ -54,16 +54,6 @@ var (
 			Buckets: prometheus.DefBuckets,
 		},
 		[]string{"plan", "phase"},
-	)
-
-	// RestoreDataSize tracks the size of restore data
-	RestoreDataSize = factory.NewHistogramVec(
-		prometheus.HistogramOpts{
-			Name:    "hibernator_restore_data_size_bytes",
-			Help:    "Size of restore data in bytes",
-			Buckets: prometheus.ExponentialBuckets(100, 2, 10), // 100B to ~100KB
-		},
-		[]string{"target_type"},
 	)
 
 	// ActivePlanGauge tracks the number of active HibernatePlans
@@ -91,17 +81,6 @@ var (
 			Help: "Total number of runner Job failures",
 		},
 		[]string{"plan", "target"},
-	)
-
-	// StatusQueueDroppedTotal counts status updates dropped because the queue was full.
-	// A non-zero value indicates the queue capacity (statusQueueCapacity) should be raised
-	// or the writer worker pool should be enlarged.
-	StatusQueueDroppedTotal = factory.NewCounterVec(
-		prometheus.CounterOpts{
-			Name: "hibernator_status_queue_dropped_total",
-			Help: "Total number of status updates dropped due to a full status queue",
-		},
-		[]string{"queue"}, // "plan" or "exception"
 	)
 
 	// WatchableSubscribeTotal counts per-handler invocations on the internal watchable message bus.
@@ -151,7 +130,7 @@ var (
 			Name: "hibernator_status_writer_updates_total",
 			Help: "Total number of status updates successfully written to the API server",
 		},
-		[]string{"type"},
+		[]string{"type", "key"},
 	)
 
 	// StatusWriterNoopTotal counts status write attempts that were skipped
@@ -162,17 +141,17 @@ var (
 			Name: "hibernator_status_writer_noop_total",
 			Help: "Total number of status update attempts skipped due to unchanged status",
 		},
-		[]string{"type"},
+		[]string{"type", "key"},
 	)
 
 	// StatusWriterErrorsTotal counts errors encountered during status writes,
-	// broken down by the phase where the error occurred.
-	// Labels: type, phase (pre_hook | apply | post_hook).
+	// broken down by the event where the error occurred.
+	// Labels: type, key, event (pre_hook | apply | post_hook).
 	StatusWriterErrorsTotal = factory.NewCounterVec(
 		prometheus.CounterOpts{
 			Name: "hibernator_status_writer_errors_total",
 			Help: "Total number of errors during status write operations, by phase",
 		},
-		[]string{"type", "phase"},
+		[]string{"type", "key", "event"},
 	)
 )

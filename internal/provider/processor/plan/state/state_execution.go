@@ -167,14 +167,15 @@ func (s *state) executeForStage(
 		if err := s.createRunnerJob(ctx, log,
 			s.Clock, plan, target, operation,
 			s.ControlPlaneEndpoint, s.RunnerImage, s.RunnerServiceAccount); err != nil {
+
 			log.Error(err, "failed to create runner job", "target", targetName)
-			metrics.JobFailuresTotal.WithLabelValues(plan.Name, targetName).Inc()
+			metrics.JobFailuresTotal.WithLabelValues(s.Key.String(), targetName).Inc()
 
 			if plan.Spec.Behavior.Mode == hibernatorv1alpha1.BehaviorStrict && plan.Spec.Behavior.FailFast {
 				return StateResult{}, AsPlanError(fmt.Errorf("failed to create job for target %s: %w", targetName, err))
 			}
 		} else {
-			metrics.JobsCreatedTotal.WithLabelValues(plan.Name, targetName).Inc()
+			metrics.JobsCreatedTotal.WithLabelValues(s.Key.String(), targetName).Inc()
 		}
 		jobsCreated++
 	}
@@ -295,10 +296,10 @@ func (s *state) updateExecutionStatuses(ctx context.Context,
 				if exec.State == hibernatorv1alpha1.StateFailed {
 					status = "failed"
 				}
-				metrics.ExecutionTotal.WithLabelValues(operation, exec.Executor, status).Inc()
+				metrics.ExecutionTotal.WithLabelValues(s.Key.String(), operation, exec.Executor, status).Inc()
 				if exec.StartedAt != nil && exec.FinishedAt != nil {
 					duration := exec.FinishedAt.Sub(exec.StartedAt.Time).Seconds()
-					metrics.ExecutionDuration.WithLabelValues(operation, exec.Executor, status).Observe(duration)
+					metrics.ExecutionDuration.WithLabelValues(s.Key.String(), operation, exec.Executor, status).Observe(duration)
 				}
 			}
 
