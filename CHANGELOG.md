@@ -1,3 +1,13 @@
+<a name="v1.3.1"></a>
+
+## [v1.3.1](https://github.com/ardikabs/hibernator/compare/v1.3.0...v1.3.1) (2026-03-09)
+
+### 🐛 Bug Fixes
+
+* schedule evaluation off the evaluation for suspend exception ([#61](https://github.com/ardikabs/hibernator/issues/61))
+* **cmd:** list and preview subcommand should consider exception ([#62](https://github.com/ardikabs/hibernator/issues/62))
+
+
 <a name="v1.3.0"></a>
 
 ## [v1.3.0](https://github.com/ardikabs/hibernator/compare/v1.2.1...v1.3.0) (2026-02-27)
