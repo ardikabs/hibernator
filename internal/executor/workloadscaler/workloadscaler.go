@@ -310,6 +310,11 @@ func (e *Executor) scaleDownWorkloads(ctx context.Context,
 	// List all resources of this type in the namespace
 	list, err := client.ListWorkloads(ctx, gvr, namespace, selector.String())
 	if err != nil {
+		if apierrors.IsNotFound(err) {
+			log.Info("no resources found, skipping", "namespace", namespace, "resource", gvr.Resource)
+			return 0, nil
+		}
+
 		return 0, fmt.Errorf("list resources: %w", err)
 	}
 
