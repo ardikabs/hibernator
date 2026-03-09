@@ -1,3 +1,12 @@
+<a name="v1.4.1"></a>
+
+## [v1.4.1](https://github.com/ardikabs/hibernator/compare/v1.4.0...v1.4.1) (2026-03-09)
+
+### 🐛 Bug Fixes
+
+* **executor:** ignore notfound error on List API ([#70](https://github.com/ardikabs/hibernator/issues/70))
+
+
 <a name="v1.4.0"></a>
 
 ## [v1.4.0](https://github.com/ardikabs/hibernator/compare/v1.3.1...v1.4.0) (2026-03-09)
