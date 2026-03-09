@@ -8,11 +8,18 @@ package metrics
 import (
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/promauto"
+
+	ctrlmetrics "sigs.k8s.io/controller-runtime/pkg/metrics"
 )
+
+// factory registers all hibernator metrics with controller-runtime's registry.
+// The manager's metrics server (/metrics) serves this registry automatically
+// based on the --metrics-bind-address flag.
+var factory = promauto.With(ctrlmetrics.Registry)
 
 var (
 	// ExecutionDuration tracks the duration of hibernation/wakeup operations
-	ExecutionDuration = promauto.NewHistogramVec(
+	ExecutionDuration = factory.NewHistogramVec(
 		prometheus.HistogramOpts{
 			Name:    "hibernator_execution_duration_seconds",
 			Help:    "Duration of hibernation and wakeup operations",
@@ -22,7 +29,7 @@ var (
 	)
 
 	// ExecutionTotal counts total executions by operation and status
-	ExecutionTotal = promauto.NewCounterVec(
+	ExecutionTotal = factory.NewCounterVec(
 		prometheus.CounterOpts{
 			Name: "hibernator_execution_total",
 			Help: "Total number of hibernation and wakeup operations",
@@ -31,7 +38,7 @@ var (
 	)
 
 	// ReconcileTotal counts HibernatePlan reconciliation loops
-	ReconcileTotal = promauto.NewCounterVec(
+	ReconcileTotal = factory.NewCounterVec(
 		prometheus.CounterOpts{
 			Name: "hibernator_reconcile_total",
 			Help: "Total number of HibernatePlan reconciliations",
@@ -40,7 +47,7 @@ var (
 	)
 
 	// ReconcileDuration tracks reconciliation duration
-	ReconcileDuration = promauto.NewHistogramVec(
+	ReconcileDuration = factory.NewHistogramVec(
 		prometheus.HistogramOpts{
 			Name:    "hibernator_reconcile_duration_seconds",
 			Help:    "Duration of HibernatePlan reconciliation",
@@ -50,7 +57,7 @@ var (
 	)
 
 	// RestoreDataSize tracks the size of restore data
-	RestoreDataSize = promauto.NewHistogramVec(
+	RestoreDataSize = factory.NewHistogramVec(
 		prometheus.HistogramOpts{
 			Name:    "hibernator_restore_data_size_bytes",
 			Help:    "Size of restore data in bytes",
@@ -60,7 +67,7 @@ var (
 	)
 
 	// ActivePlanGauge tracks the number of active HibernatePlans
-	ActivePlanGauge = promauto.NewGaugeVec(
+	ActivePlanGauge = factory.NewGaugeVec(
 		prometheus.GaugeOpts{
 			Name: "hibernator_active_plans",
 			Help: "Number of active HibernatePlans by phase",
@@ -69,7 +76,7 @@ var (
 	)
 
 	// JobsCreatedTotal counts Jobs created by the controller
-	JobsCreatedTotal = promauto.NewCounterVec(
+	JobsCreatedTotal = factory.NewCounterVec(
 		prometheus.CounterOpts{
 			Name: "hibernator_jobs_created_total",
 			Help: "Total number of runner Jobs created",
@@ -78,7 +85,7 @@ var (
 	)
 
 	// JobFailuresTotal counts Job failures
-	JobFailuresTotal = promauto.NewCounterVec(
+	JobFailuresTotal = factory.NewCounterVec(
 		prometheus.CounterOpts{
 			Name: "hibernator_job_failures_total",
 			Help: "Total number of runner Job failures",
@@ -89,7 +96,7 @@ var (
 	// StatusQueueDroppedTotal counts status updates dropped because the queue was full.
 	// A non-zero value indicates the queue capacity (statusQueueCapacity) should be raised
 	// or the writer worker pool should be enlarged.
-	StatusQueueDroppedTotal = promauto.NewCounterVec(
+	StatusQueueDroppedTotal = factory.NewCounterVec(
 		prometheus.CounterOpts{
 			Name: "hibernator_status_queue_dropped_total",
 			Help: "Total number of status updates dropped due to a full status queue",
@@ -98,7 +105,7 @@ var (
 	)
 
 	// WatchableSubscribeTotal counts per-handler invocations on the internal watchable message bus.
-	WatchableSubscribeTotal = promauto.NewCounterVec(
+	WatchableSubscribeTotal = factory.NewCounterVec(
 		prometheus.CounterOpts{
 			Name: "hibernator_watchable_subscribe_total",
 			Help: "Total number of watchable subscription handler invocations",
@@ -107,7 +114,7 @@ var (
 	)
 
 	// WatchableSubscribeDuration tracks watchable handler processing time.
-	WatchableSubscribeDuration = promauto.NewHistogramVec(
+	WatchableSubscribeDuration = factory.NewHistogramVec(
 		prometheus.HistogramOpts{
 			Name:    "hibernator_watchable_subscribe_duration_seconds",
 			Help:    "Duration of watchable subscription handler processing",
@@ -118,7 +125,7 @@ var (
 
 	// WorkerGoroutinesGauge tracks the number of live Worker goroutines in the Coordinator.
 	// Essential for capacity planning and debugging goroutine leaks.
-	WorkerGoroutinesGauge = promauto.NewGauge(
+	WorkerGoroutinesGauge = factory.NewGauge(
 		prometheus.GaugeOpts{
 			Name: "hibernator_worker_goroutines",
 			Help: "Number of live plan Worker goroutines managed by the Coordinator",
@@ -129,7 +136,7 @@ var (
 	// status-writer goroutine. Labels: type (HibernatePlan | ScheduleException),
 	// key (namespace/name). Drops to 0 after the idle-TTL grace period expires
 	// and auto-removal reclaims the entry.
-	StatusWriterActiveGauge = promauto.NewGaugeVec(
+	StatusWriterActiveGauge = factory.NewGaugeVec(
 		prometheus.GaugeOpts{
 			Name: "hibernator_status_writer_active_objects",
 			Help: "Number of objects with an active status-writer goroutine",
@@ -139,7 +146,7 @@ var (
 
 	// StatusWriterUpdatesTotal counts status writes that actually changed the
 	// object (non-no-op). Labels: type.
-	StatusWriterUpdatesTotal = promauto.NewCounterVec(
+	StatusWriterUpdatesTotal = factory.NewCounterVec(
 		prometheus.CounterOpts{
 			Name: "hibernator_status_writer_updates_total",
 			Help: "Total number of status updates successfully written to the API server",
@@ -150,7 +157,7 @@ var (
 	// StatusWriterNoopTotal counts status write attempts that were skipped
 	// because the computed status was identical to the current server state.
 	// Labels: type.
-	StatusWriterNoopTotal = promauto.NewCounterVec(
+	StatusWriterNoopTotal = factory.NewCounterVec(
 		prometheus.CounterOpts{
 			Name: "hibernator_status_writer_noop_total",
 			Help: "Total number of status update attempts skipped due to unchanged status",
@@ -161,7 +168,7 @@ var (
 	// StatusWriterErrorsTotal counts errors encountered during status writes,
 	// broken down by the phase where the error occurred.
 	// Labels: type, phase (pre_hook | apply | post_hook).
-	StatusWriterErrorsTotal = promauto.NewCounterVec(
+	StatusWriterErrorsTotal = factory.NewCounterVec(
 		prometheus.CounterOpts{
 			Name: "hibernator_status_writer_errors_total",
 			Help: "Total number of errors during status write operations, by phase",
