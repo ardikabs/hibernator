@@ -5,7 +5,7 @@ info:
   repository_url: https://github.com/ardikabs/hibernator
 options:
   tag_filter_pattern: '^v'
-  sort: "date"
+  sort: "semver"
   commits:
     filters:
       Type:

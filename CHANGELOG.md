@@ -9,7 +9,7 @@
 
 <a name="v1.4.0"></a>
 
-## [v1.4.0](https://github.com/ardikabs/hibernator/compare/v1.3.1...v1.4.0) (2026-03-09)
+## [v1.4.0](https://github.com/ardikabs/hibernator/compare/v1.3.2...v1.4.0) (2026-03-09)
 
 ### ✨ Features
 
@@ -24,6 +24,15 @@
 
 * **controller:** remove unused metrics and better labeling ([#66](https://github.com/ardikabs/hibernator/issues/66))
 * **controller:** integrate metrics to the controller ([#65](https://github.com/ardikabs/hibernator/issues/65))
+
+<a name="v1.3.2"></a>
+
+## [v1.3.2](https://github.com/ardikabs/hibernator/compare/v1.3.1...v1.3.2) (2026-03-09)
+
+### 🐛 Bug Fixes
+
+* **executor:** ignore notfound error on List API ([#70](https://github.com/ardikabs/hibernator/issues/70))
+
 
 <a name="v1.3.1"></a>
 
