@@ -8,7 +8,7 @@ package metrics
 import (
 	"testing"
 
-	"github.com/prometheus/client_golang/prometheus"
+	ctrlmetrics "sigs.k8s.io/controller-runtime/pkg/metrics"
 )
 
 func TestExecutionDuration_Defined(t *testing.T) {
@@ -153,9 +153,8 @@ func TestJobFailuresTotal_Labels(t *testing.T) {
 }
 
 func TestMetricsRegistration(t *testing.T) {
-	// Verify metrics are registered with default registry
-	// promauto automatically registers with the default registry
-	metricFamilies, err := prometheus.DefaultGatherer.Gather()
+	// Verify metrics are registered with controller-runtime's registry.
+	metricFamilies, err := ctrlmetrics.Registry.Gather()
 	if err != nil {
 		t.Fatalf("Failed to gather metrics: %v", err)
 	}
