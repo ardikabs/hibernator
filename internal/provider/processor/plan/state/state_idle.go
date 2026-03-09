@@ -121,6 +121,6 @@ func (state *idleState) transitionToWakingUp(log logr.Logger) (StateResult, erro
 		}),
 	})
 
-	log.V(1).Info("queued transition to WakingUp")
+	log.V(1).Info("queued transition to WakingUp", "cycleID", plan.Status.CurrentCycleID)
 	return StateResult{Requeue: true}, nil
 }
