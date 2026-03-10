@@ -50,7 +50,9 @@ func (e *Executor) Validate(spec executor.Spec) error {
 
 // Shutdown stops a Cloud SQL instance.
 func (e *Executor) Shutdown(ctx context.Context, log logr.Logger, spec executor.Spec) error {
-	_ = log
+	log = log.WithName("cloudsql").WithValues("target", spec.TargetName, "targetType", spec.TargetType)
+	log.Info("executor starting shutdown")
+
 	var params executorparams.CloudSQLParameters
 	if err := json.Unmarshal(spec.Parameters, &params); err != nil {
 		return fmt.Errorf("parse parameters: %w", err)
@@ -58,12 +60,16 @@ func (e *Executor) Shutdown(ctx context.Context, log logr.Logger, spec executor.
 
 	// TODO: Implement actual Cloud SQL API calls using google.golang.org/api/sqladmin/v1
 	// For now, return a placeholder implementation
+
+	log.Info("shutdown completed")
 	return nil
 }
 
 // WakeUp starts a Cloud SQL instance.
 func (e *Executor) WakeUp(ctx context.Context, log logr.Logger, spec executor.Spec, restore executor.RestoreData) error {
-	_ = log
+	log = log.WithName("cloudsql").WithValues("target", spec.TargetName, "targetType", spec.TargetType)
+	log.Info("executor starting wakeup")
+
 	if len(restore.Data) == 0 {
 		return fmt.Errorf("restore data is required for wake-up")
 	}
@@ -80,6 +86,7 @@ func (e *Executor) WakeUp(ctx context.Context, log logr.Logger, spec executor.Sp
 		_ = state
 	}
 
+	log.Info("wakeup completed", "instanceCount", len(restore.Data))
 	return nil
 }
 

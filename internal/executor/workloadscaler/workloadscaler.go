@@ -128,12 +128,21 @@ type RestoreState struct {
 
 // Shutdown scales down all matched workloads to zero replicas.
 func (e *Executor) Shutdown(ctx context.Context, log logr.Logger, spec executor.Spec) error {
+	log = log.WithName("workloadscaler").WithValues("target", spec.TargetName, "targetType", spec.TargetType)
+	log.Info("executor starting shutdown")
+
 	var params executorparams.WorkloadScalerParameters
 	if len(spec.Parameters) > 0 {
 		if err := json.Unmarshal(spec.Parameters, &params); err != nil {
 			return fmt.Errorf("parse parameters: %w", err)
 		}
 	}
+
+	log.Info("parameters parsed",
+		"hasNamespaceLiterals", len(params.Namespace.Literals) > 0,
+		"hasNamespaceSelector", len(params.Namespace.Selector) > 0,
+		"awaitCompletion", params.AwaitCompletion.Enabled,
+	)
 
 	// Default includedGroups to Deployment if not specified
 	includedGroups := params.IncludedGroups
@@ -156,6 +165,8 @@ func (e *Executor) Shutdown(ctx context.Context, log logr.Logger, spec executor.
 	if len(targetNamespaces) == 0 {
 		return fmt.Errorf("no namespaces found matching selector")
 	}
+
+	log.Info("target namespaces discovered", "count", len(targetNamespaces), "namespaces", strings.Join(targetNamespaces, ", "))
 
 	totalWorkloadscaled := 0
 	for _, ns := range targetNamespaces {
@@ -198,23 +209,30 @@ func (e *Executor) Shutdown(ctx context.Context, log logr.Logger, spec executor.
 		e.completionWg.Wait()
 	}
 
-	log.Info("hibernation completed", "numberOfWorkloadsScaled", totalWorkloadscaled)
+	log.Info("shutdown completed", "numberOfWorkloadsScaled", totalWorkloadscaled)
 
 	return nil
 }
 
 // WakeUp restores all workloads to their previous replica counts.
 func (e *Executor) WakeUp(ctx context.Context, log logr.Logger, spec executor.Spec, restore executor.RestoreData) error {
+	log = log.WithName("workloadscaler").WithValues("target", spec.TargetName, "targetType", spec.TargetType)
+	log.Info("executor starting wakeup")
+
 	var params executorparams.WorkloadScalerParameters
+
+	if len(restore.Data) == 0 {
+		log.Info("no restore data available, wakeup operation is no-op")
+		return nil
+	}
+
 	if len(spec.Parameters) > 0 {
 		if err := json.Unmarshal(spec.Parameters, &params); err != nil {
 			return fmt.Errorf("parse parameters: %w", err)
 		}
 	}
 
-	if len(restore.Data) == 0 {
-		return fmt.Errorf("restore data is required for wake-up")
-	}
+	log.Info("restore state loaded", "workloadCount", len(restore.Data))
 
 	// Build clients using injected factory
 	client, err := e.clientFactory(ctx, &spec)
@@ -255,6 +273,8 @@ func (e *Executor) WakeUp(ctx context.Context, log logr.Logger, spec executor.Sp
 
 		e.completionWg.Wait()
 	}
+
+	log.Info("wakeup completed", "workloadCount", len(restore.Data))
 
 	return nil
 }

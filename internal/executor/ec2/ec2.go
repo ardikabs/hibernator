@@ -94,10 +94,8 @@ func (e *Executor) Validate(spec executor.Spec) error {
 
 // Shutdown stops EC2 instances matching the selector.
 func (e *Executor) Shutdown(ctx context.Context, log logr.Logger, spec executor.Spec) error {
-	log.Info("EC2 executor starting shutdown",
-		"target", spec.TargetName,
-		"targetType", spec.TargetType,
-	)
+	log = log.WithName("ec2").WithValues("target", spec.TargetName, "targetType", spec.TargetType)
+	log.Info("executor starting shutdown")
 
 	params, err := e.parseParams(spec.Parameters)
 	if err != nil {
@@ -196,7 +194,7 @@ func (e *Executor) Shutdown(ctx context.Context, log logr.Logger, spec executor.
 		log.Info("no running instances to stop, all already at desired state")
 	}
 
-	log.Info("EC2 shutdown completed successfully",
+	log.Info("shutdown completed",
 		"totalInstances", len(instances),
 		"stoppedInstances", len(instancesToStop),
 		"isLive", hasRunningInstances,
@@ -207,10 +205,13 @@ func (e *Executor) Shutdown(ctx context.Context, log logr.Logger, spec executor.
 
 // WakeUp starts previously running EC2 instances.
 func (e *Executor) WakeUp(ctx context.Context, log logr.Logger, spec executor.Spec, restore executor.RestoreData) error {
-	log.Info("EC2 executor starting wakeup",
-		"target", spec.TargetName,
-		"targetType", spec.TargetType,
-	)
+	log = log.WithName("ec2").WithValues("target", spec.TargetName, "targetType", spec.TargetType)
+	log.Info("executor starting wakeup")
+
+	if len(restore.Data) == 0 {
+		log.Info("no restore data available, wakeup operation is no-op")
+		return nil
+	}
 
 	params, err := e.parseParams(spec.Parameters)
 	if err != nil {
@@ -218,7 +219,7 @@ func (e *Executor) WakeUp(ctx context.Context, log logr.Logger, spec executor.Sp
 		return fmt.Errorf("parse parameters: %w", err)
 	}
 
-	log.Info("restore state loaded", "totalInstances", len(restore.Data))
+	log.Info("restore state loaded", "instanceCount", len(restore.Data))
 
 	cfg, err := e.loadAWSConfig(ctx, spec)
 	if err != nil {
@@ -271,7 +272,8 @@ func (e *Executor) WakeUp(ctx context.Context, log logr.Logger, spec executor.Sp
 		log.Info("no instances to start")
 	}
 
-	log.Info("EC2 wakeup completed successfully")
+	log.Info("wakeup completed", "instanceCount", len(instancesToStart))
+
 	return nil
 }
 
