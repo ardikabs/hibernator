@@ -206,16 +206,25 @@ func selectHandler(s *state) Handler {
 		})
 	}
 
-	// Manual force-action override — only applies when the plan is in an idle phase
-	// (Active or Hibernated). Execution phases (Hibernating, WakingUp) run to completion
-	// naturally; Error and Suspended phases are unaffected.
-	// The annotation is persistent: forceActionState does nothing when the plan is already
-	// in the target phase, preventing loops without needing to delete the annotation.
+	// Manual override — only applies at idle phases (Active or Hibernated).
+	// Execution phases (Hibernating, WakingUp) run to completion naturally;
+	// Error and Suspended phases are unaffected.
+	// override-action=true suppresses the schedule; override-phase-target specifies direction.
 	// Spec.Suspend=true always takes precedence (checked above).
-	if _, hasForceAction := plan.Annotations[wellknown.AnnotationForceAction]; hasForceAction {
+	if plan.Annotations[wellknown.AnnotationOverrideAction] == "true" {
 		switch plan.Status.Phase {
 		case hibernatorv1alpha1.PhaseActive, hibernatorv1alpha1.PhaseHibernated:
-			return &forceActionState{idleState: &idleState{state: s}}
+			return &overrideActionState{idleState: &idleState{state: s}}
+		}
+	}
+
+	// Standalone restart — re-triggers the last executor operation based on
+	// .Status.CurrentOperation. Fires only when override-action is absent (or plan
+	// phase falls outside {Active,Hibernated} for that check). One-shot: consumed atomically.
+	if plan.Annotations[wellknown.AnnotationRestart] == "true" {
+		switch plan.Status.Phase {
+		case hibernatorv1alpha1.PhaseActive, hibernatorv1alpha1.PhaseHibernated:
+			return &restartState{idleState: &idleState{state: s}}
 		}
 	}
 

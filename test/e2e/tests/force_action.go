@@ -33,7 +33,7 @@ import (
 	"github.com/ardikabs/hibernator/test/e2e/testutil"
 )
 
-var _ = Describe("Force-Action E2E", func() {
+var _ = Describe("Override-Action E2E", func() {
 	var (
 		plan          *hibernatorv1alpha1.HibernatePlan
 		cloudProvider *hibernatorv1alpha1.CloudProvider
@@ -43,7 +43,7 @@ var _ = Describe("Force-Action E2E", func() {
 		By("Creating mock CloudProvider")
 		cloudProvider = &hibernatorv1alpha1.CloudProvider{
 			ObjectMeta: metav1.ObjectMeta{
-				Name:      "force-action-aws",
+				Name:      "override-action-aws",
 				Namespace: testNamespace,
 			},
 			Spec: hibernatorv1alpha1.CloudProviderSpec{
@@ -69,20 +69,20 @@ var _ = Describe("Force-Action E2E", func() {
 	})
 
 	// -----------------------------------------------------------------------
-	// Test 1: force-action=hibernate during active window
+	// Test 1: override-action + override-phase-target=hibernate during active window
 	//
 	// Validates that:
-	//   a) force-action=hibernate overrides the schedule (ShouldHibernate=false) and triggers
-	//      immediate hibernation from PhaseActive.
-	//   b) Once Hibernated, the annotation suppresses the schedule's wakeup signal —
+	//   a) override-action=true + override-phase-target=hibernate overrides the schedule
+	//      (ShouldHibernate=false) and triggers immediate hibernation from PhaseActive.
+	//   b) Once Hibernated, the annotations suppress the schedule's wakeup signal —
 	//      the plan stays Hibernated through the entire active window.
 	// -----------------------------------------------------------------------
-	It("ForceHibernate: should hibernate during active window and suppress schedule-driven wakeup", func() {
+	It("OverrideHibernate: should hibernate during active window and suppress schedule-driven wakeup", func() {
 		// Monday 08:00 UTC — on-hours (schedule ShouldHibernate=false).
 		fakeClock.SetTime(time.Date(2026, 6, 1, 8, 0, 0, 0, time.UTC))
 
 		By("Creating plan with 20:00-06:00 off-hours; clock is in the active window")
-		plan, _ = testutil.NewHibernatePlanBuilder("force-hib-active-test", testNamespace).
+		plan, _ = testutil.NewHibernatePlanBuilder("override-hib-active-test", testNamespace).
 			WithSchedule("20:00", "06:00", "MON", "TUE", "WED", "THU", "FRI", "SAT", "SUN").
 			WithExecutionStrategy(hibernatorv1alpha1.ExecutionStrategy{
 				Type: hibernatorv1alpha1.StrategySequential,
@@ -90,7 +90,7 @@ var _ = Describe("Force-Action E2E", func() {
 			WithTarget(hibernatorv1alpha1.Target{
 				Name:         "database",
 				Type:         "rds",
-				ConnectorRef: hibernatorv1alpha1.ConnectorRef{Kind: "CloudProvider", Name: "force-action-aws"},
+				ConnectorRef: hibernatorv1alpha1.ConnectorRef{Kind: "CloudProvider", Name: "override-action-aws"},
 			}).
 			Build()
 		Expect(k8sClient.Create(ctx, plan)).To(Succeed())
@@ -98,16 +98,17 @@ var _ = Describe("Force-Action E2E", func() {
 		By("Verifying plan initialises to Active (on-hours)")
 		testutil.EventuallyPhase(ctx, k8sClient, plan, hibernatorv1alpha1.PhaseActive)
 
-		By("Setting force-action=hibernate while still in the active window")
+		By("Setting override-action=true + override-phase-target=hibernate while still in the active window")
 		Expect(k8sClient.Get(ctx, client.ObjectKeyFromObject(plan), plan)).To(Succeed())
 		orig := plan.DeepCopy()
 		if plan.Annotations == nil {
 			plan.Annotations = make(map[string]string)
 		}
-		plan.Annotations[wellknown.AnnotationForceAction] = wellknown.ForceActionHibernate
+		plan.Annotations[wellknown.AnnotationOverrideAction] = "true"
+		plan.Annotations[wellknown.AnnotationOverridePhaseTarget] = wellknown.OverridePhaseTargetHibernate
 		Expect(k8sClient.Patch(ctx, plan, client.MergeFrom(orig))).To(Succeed())
 
-		By("Verifying plan transitions to Hibernating (force-action overrides the schedule)")
+		By("Verifying plan transitions to Hibernating (override overrides the schedule)")
 		testutil.EventuallyPhase(ctx, k8sClient, plan, hibernatorv1alpha1.PhaseHibernating)
 
 		By("Simulating successful hibernation job")
@@ -124,22 +125,22 @@ var _ = Describe("Force-Action E2E", func() {
 		By("Triggering reconcile (clock still at 08:00, schedule says wake up)")
 		testutil.TriggerReconcile(ctx, k8sClient, plan)
 
-		By("Asserting plan stays Hibernated: annotation suppresses the schedule wakeup signal")
+		By("Asserting plan stays Hibernated: override annotations suppress the schedule wakeup signal")
 		testutil.ConsistentllyAtPhase(ctx, k8sClient, plan, hibernatorv1alpha1.PhaseHibernated, 3*time.Second)
 	})
 
 	// -----------------------------------------------------------------------
-	// Test 2: Removing the annotation restores schedule control
+	// Test 2: Removing the override annotations restores schedule control
 	//
-	// Continues from a force-hibernated Active-window state. After removing the
-	// annotation, idleState takes over and the schedule's wakeup signal proceeds.
+	// Continues from an override-hibernated Active-window state. After removing
+	// the annotations, idleState takes over and the schedule's wakeup signal proceeds.
 	// -----------------------------------------------------------------------
-	It("ForceHibernate: removing the annotation restores schedule-driven wakeup", func() {
+	It("OverrideHibernate: removing the annotations restores schedule-driven wakeup", func() {
 		// Monday 08:00 UTC — active window.
 		fakeClock.SetTime(time.Date(2026, 6, 8, 8, 0, 0, 0, time.UTC))
 
 		By("Creating plan and letting it initialise to Active")
-		plan, _ = testutil.NewHibernatePlanBuilder("force-hib-remove-test", testNamespace).
+		plan, _ = testutil.NewHibernatePlanBuilder("override-hib-remove-test", testNamespace).
 			WithSchedule("20:00", "06:00", "MON", "TUE", "WED", "THU", "FRI", "SAT", "SUN").
 			WithExecutionStrategy(hibernatorv1alpha1.ExecutionStrategy{
 				Type: hibernatorv1alpha1.StrategySequential,
@@ -147,19 +148,20 @@ var _ = Describe("Force-Action E2E", func() {
 			WithTarget(hibernatorv1alpha1.Target{
 				Name:         "app",
 				Type:         "rds",
-				ConnectorRef: hibernatorv1alpha1.ConnectorRef{Kind: "CloudProvider", Name: "force-action-aws"},
+				ConnectorRef: hibernatorv1alpha1.ConnectorRef{Kind: "CloudProvider", Name: "override-action-aws"},
 			}).
 			Build()
 		Expect(k8sClient.Create(ctx, plan)).To(Succeed())
 		testutil.EventuallyPhase(ctx, k8sClient, plan, hibernatorv1alpha1.PhaseActive)
 
-		By("Force-hibernating the plan")
+		By("Override-hibernating the plan")
 		Expect(k8sClient.Get(ctx, client.ObjectKeyFromObject(plan), plan)).To(Succeed())
 		orig := plan.DeepCopy()
 		if plan.Annotations == nil {
 			plan.Annotations = make(map[string]string)
 		}
-		plan.Annotations[wellknown.AnnotationForceAction] = wellknown.ForceActionHibernate
+		plan.Annotations[wellknown.AnnotationOverrideAction] = "true"
+		plan.Annotations[wellknown.AnnotationOverridePhaseTarget] = wellknown.OverridePhaseTargetHibernate
 		Expect(k8sClient.Patch(ctx, plan, client.MergeFrom(orig))).To(Succeed())
 		testutil.EventuallyPhase(ctx, k8sClient, plan, hibernatorv1alpha1.PhaseHibernating)
 
@@ -173,10 +175,11 @@ var _ = Describe("Force-Action E2E", func() {
 		testutil.TriggerReconcile(ctx, k8sClient, plan)
 		testutil.ConsistentllyAtPhase(ctx, k8sClient, plan, hibernatorv1alpha1.PhaseHibernated, 2*time.Second)
 
-		By("Removing the force-action annotation")
+		By("Removing the override annotations")
 		Expect(k8sClient.Get(ctx, client.ObjectKeyFromObject(plan), plan)).To(Succeed())
 		orig = plan.DeepCopy()
-		delete(plan.Annotations, wellknown.AnnotationForceAction)
+		delete(plan.Annotations, wellknown.AnnotationOverrideAction)
+		delete(plan.Annotations, wellknown.AnnotationOverridePhaseTarget)
 		Expect(k8sClient.Patch(ctx, plan, client.MergeFrom(orig))).To(Succeed())
 
 		By("Triggering reconcile at 08:00 — schedule now has control and wakeup should proceed")
@@ -191,18 +194,18 @@ var _ = Describe("Force-Action E2E", func() {
 	})
 
 	// -----------------------------------------------------------------------
-	// Test 3: force-action=wakeup during the hibernated window
+	// Test 3: override-action + override-phase-target=wakeup during the hibernated window
 	//
 	// Plan hibernates via the schedule. While still inside the off-hours window
-	// (ShouldHibernate=true), force-action=wakeup is set. The plan must wake up
-	// despite the schedule saying it should stay hibernated.
+	// (ShouldHibernate=true), the override annotations are set to wakeup. The plan
+	// must wake up despite the schedule saying it should stay hibernated.
 	// -----------------------------------------------------------------------
-	It("ForceWakeup: should wake up during the hibernated window, overriding the schedule", func() {
+	It("OverrideWakeup: should wake up during the hibernated window, overriding the schedule", func() {
 		// Monday 20:05 UTC — off-hours (schedule ShouldHibernate=true).
 		fakeClock.SetTime(time.Date(2026, 6, 15, 20, 5, 0, 0, time.UTC))
 
 		By("Creating plan in the off-hours window; should start hibernating immediately")
-		plan, _ = testutil.NewHibernatePlanBuilder("force-wake-offhours-test", testNamespace).
+		plan, _ = testutil.NewHibernatePlanBuilder("override-wake-offhours-test", testNamespace).
 			WithSchedule("20:00", "06:00", "MON", "TUE", "WED", "THU", "FRI", "SAT", "SUN").
 			WithExecutionStrategy(hibernatorv1alpha1.ExecutionStrategy{
 				Type: hibernatorv1alpha1.StrategySequential,
@@ -210,7 +213,7 @@ var _ = Describe("Force-Action E2E", func() {
 			WithTarget(hibernatorv1alpha1.Target{
 				Name:         "cache",
 				Type:         "rds",
-				ConnectorRef: hibernatorv1alpha1.ConnectorRef{Kind: "CloudProvider", Name: "force-action-aws"},
+				ConnectorRef: hibernatorv1alpha1.ConnectorRef{Kind: "CloudProvider", Name: "override-action-aws"},
 			}).
 			Build()
 		Expect(k8sClient.Create(ctx, plan)).To(Succeed())
@@ -227,7 +230,7 @@ var _ = Describe("Force-Action E2E", func() {
 			IsLive: true,
 		})).To(Succeed())
 
-		By("Setting force-action=wakeup while still in the off-hours window")
+		By("Setting override-action=true + override-phase-target=wakeup while still in the off-hours window")
 		Expect(k8sClient.Get(ctx, client.ObjectKeyFromObject(plan), plan)).To(Succeed())
 		Expect(plan.Status.Phase).To(Equal(hibernatorv1alpha1.PhaseHibernated))
 
@@ -235,10 +238,11 @@ var _ = Describe("Force-Action E2E", func() {
 		if plan.Annotations == nil {
 			plan.Annotations = make(map[string]string)
 		}
-		plan.Annotations[wellknown.AnnotationForceAction] = wellknown.ForceActionWakeup
+		plan.Annotations[wellknown.AnnotationOverrideAction] = "true"
+		plan.Annotations[wellknown.AnnotationOverridePhaseTarget] = wellknown.OverridePhaseTargetWakeup
 		Expect(k8sClient.Patch(ctx, plan, client.MergeFrom(orig))).To(Succeed())
 
-		By("Verifying plan transitions to WakingUp (force-action overrides the hibernated-window signal)")
+		By("Verifying plan transitions to WakingUp (override overrides the hibernated-window signal)")
 		testutil.EventuallyPhase(ctx, k8sClient, plan, hibernatorv1alpha1.PhaseWakingUp)
 
 		wakeupJob := testutil.EventuallyJobCreated(ctx, k8sClient, testNamespace, plan.Name, hibernatorv1alpha1.OperationWakeUp, "cache")
@@ -247,34 +251,35 @@ var _ = Describe("Force-Action E2E", func() {
 		By("Verifying plan reaches Active despite the hibernated window (schedule overridden)")
 		testutil.EventuallyPhase(ctx, k8sClient, plan, hibernatorv1alpha1.PhaseActive)
 
-		By("Asserting plan stays Active: force-action=wakeup from Active is a no-op (loop prevention)")
+		By("Asserting plan stays Active: override-phase-target=wakeup from Active is a no-op (loop prevention)")
 		testutil.ConsistentllyAtPhase(ctx, k8sClient, plan, hibernatorv1alpha1.PhaseActive, 3*time.Second)
 	})
 
 	// -----------------------------------------------------------------------
-	// Test 4: force-action on Error — recovery drives the plan; annotation fires afterwards
+	// Test 4: override-action on Error — recovery drives the plan; annotation fires afterwards
 	//
 	// Validates that:
-	//   a) When the plan enters PhaseError (hibernation job failure), force-action
-	//      does NOT intercept the error recovery (recoveryState is selected, not forceActionState).
+	//   a) When the plan enters PhaseError (hibernation job failure), override-action
+	//      does NOT intercept the error recovery (recoveryState is selected, not overrideActionState).
 	//   b) After recovery succeeds (new job completes), the plan reaches PhaseHibernated,
-	//      and force-action=hibernate is then a harmless no-op (already at target).
+	//      and override-action=hibernate is then a harmless no-op (already at target).
 	// -----------------------------------------------------------------------
-	It("ForceAction on Error: recovery proceeds normally; annotation is invisible to recoveryState", func() {
-		// Monday 20:05 UTC — off-hours; schedule and force-action agree: hibernate.
+	It("OverrideAction on Error: recovery proceeds normally; annotation is invisible to recoveryState", func() {
+		// Monday 20:05 UTC — off-hours; schedule and override agree: hibernate.
 		fakeClock.SetTime(time.Date(2026, 6, 22, 20, 5, 0, 0, time.UTC))
 
-		By("Creating plan with force-action=hibernate pre-set")
-		plan, _ = testutil.NewHibernatePlanBuilder("force-hib-error-test", testNamespace).
+		By("Creating plan with override-action=true + override-phase-target=hibernate pre-set")
+		plan, _ = testutil.NewHibernatePlanBuilder("override-hib-error-test", testNamespace).
 			WithSchedule("20:00", "06:00", "MON", "TUE", "WED", "THU", "FRI", "SAT", "SUN").
 			WithExecutionStrategy(hibernatorv1alpha1.ExecutionStrategy{
 				Type: hibernatorv1alpha1.StrategySequential,
 			}).
-			WithAnnotation(wellknown.AnnotationForceAction, wellknown.ForceActionHibernate).
+			WithAnnotation(wellknown.AnnotationOverrideAction, "true").
+			WithAnnotation(wellknown.AnnotationOverridePhaseTarget, wellknown.OverridePhaseTargetHibernate).
 			WithTarget(hibernatorv1alpha1.Target{
 				Name:         "database",
 				Type:         "rds",
-				ConnectorRef: hibernatorv1alpha1.ConnectorRef{Kind: "CloudProvider", Name: "force-action-aws"},
+				ConnectorRef: hibernatorv1alpha1.ConnectorRef{Kind: "CloudProvider", Name: "override-action-aws"},
 			}).
 			Build()
 		Expect(k8sClient.Create(ctx, plan)).To(Succeed())
@@ -284,14 +289,14 @@ var _ = Describe("Force-Action E2E", func() {
 		hibernationJob := testutil.EventuallyJobCreated(ctx, k8sClient, testNamespace, plan.Name, hibernatorv1alpha1.OperationHibernate, "database")
 		testutil.SimulateJobFailure(ctx, k8sClient, hibernationJob, fakeClock.Now())
 
-		By("Verifying plan enters PhaseError (force-action does not block error detection)")
+		By("Verifying plan enters PhaseError (override-action does not block error detection)")
 		Eventually(func() string {
 			_ = k8sClient.Get(ctx, client.ObjectKeyFromObject(plan), plan)
 			return plan.Status.ErrorMessage
 		}, testutil.DefaultTimeout, testutil.DefaultInterval).ShouldNot(BeEmpty(),
 			"plan must surface an ErrorMessage when hibernation fails")
 
-		By("Verifying plan auto-retries: recoveryState drives the retry, not forceActionState")
+		By("Verifying plan auto-retries: recoveryState drives the retry, not overrideActionState")
 		// RetryCount=0 on first error → immediate auto-retry (no backoff).
 		testutil.EventuallyPhase(ctx, k8sClient, plan, hibernatorv1alpha1.PhaseHibernating)
 
@@ -302,24 +307,24 @@ var _ = Describe("Force-Action E2E", func() {
 		By("Verifying plan reaches Hibernated after recovery")
 		testutil.EventuallyRestoreDataSaved(ctx, k8sClient, plan, 0)
 
-		By("Asserting force-action=hibernate is a silent no-op once Hibernated (target already reached)")
+		By("Asserting override-action=hibernate is a silent no-op once Hibernated (target already reached)")
 		testutil.ConsistentllyAtPhase(ctx, k8sClient, plan, hibernatorv1alpha1.PhaseHibernated, 2*time.Second)
 	})
 
 	// -----------------------------------------------------------------------
-	// Test 5: Spec.Suspend=true beats force-action; force-action fires after resume
+	// Test 5: Spec.Suspend=true beats override-action; override-action fires after resume
 	//
 	// Validates that:
-	//   a) When Spec.Suspend=true and force-action=hibernate are set simultaneously,
+	//   a) When Spec.Suspend=true and override-action=hibernate are set simultaneously,
 	//      suspension takes priority (selectHandler Priority 2 > Priority 3).
-	//   b) After un-suspending, force-action fires and the plan hibernates.
+	//   b) After un-suspending, override-action fires and the plan hibernates.
 	// -----------------------------------------------------------------------
-	It("SuspendBeatsForceAction: suspension wins; force-action re-activates after resume", func() {
+	It("SuspendBeatsOverrideAction: suspension wins; override-action re-activates after resume", func() {
 		// Monday 08:00 UTC — active window.
 		fakeClock.SetTime(time.Date(2026, 6, 29, 8, 0, 0, 0, time.UTC))
 
 		By("Creating plan at Active phase in the active window")
-		plan, _ = testutil.NewHibernatePlanBuilder("force-hib-suspend-test", testNamespace).
+		plan, _ = testutil.NewHibernatePlanBuilder("override-hib-suspend-test", testNamespace).
 			WithSchedule("20:00", "06:00", "MON", "TUE", "WED", "THU", "FRI", "SAT", "SUN").
 			WithExecutionStrategy(hibernatorv1alpha1.ExecutionStrategy{
 				Type: hibernatorv1alpha1.StrategySequential,
@@ -327,23 +332,24 @@ var _ = Describe("Force-Action E2E", func() {
 			WithTarget(hibernatorv1alpha1.Target{
 				Name:         "service",
 				Type:         "rds",
-				ConnectorRef: hibernatorv1alpha1.ConnectorRef{Kind: "CloudProvider", Name: "force-action-aws"},
+				ConnectorRef: hibernatorv1alpha1.ConnectorRef{Kind: "CloudProvider", Name: "override-action-aws"},
 			}).
 			Build()
 		Expect(k8sClient.Create(ctx, plan)).To(Succeed())
 		testutil.EventuallyPhase(ctx, k8sClient, plan, hibernatorv1alpha1.PhaseActive)
 
-		By("Setting BOTH Spec.Suspend=true AND force-action=hibernate at the same time")
+		By("Setting BOTH Spec.Suspend=true AND override-action=hibernate at the same time")
 		Expect(k8sClient.Get(ctx, client.ObjectKeyFromObject(plan), plan)).To(Succeed())
 		orig := plan.DeepCopy()
 		plan.Spec.Suspend = true
 		if plan.Annotations == nil {
 			plan.Annotations = make(map[string]string)
 		}
-		plan.Annotations[wellknown.AnnotationForceAction] = wellknown.ForceActionHibernate
+		plan.Annotations[wellknown.AnnotationOverrideAction] = "true"
+		plan.Annotations[wellknown.AnnotationOverridePhaseTarget] = wellknown.OverridePhaseTargetHibernate
 		Expect(k8sClient.Patch(ctx, plan, client.MergeFrom(orig))).To(Succeed())
 
-		By("Verifying plan transitions to PhaseSuspended, NOT PhaseHibernating (Suspend beats force-action)")
+		By("Verifying plan transitions to PhaseSuspended, NOT PhaseHibernating (Suspend beats override-action)")
 		testutil.EventuallyPhase(ctx, k8sClient, plan, hibernatorv1alpha1.PhaseSuspended)
 
 		// Allow a brief window to confirm it never enters Hibernating during the suspension.
@@ -355,8 +361,8 @@ var _ = Describe("Force-Action E2E", func() {
 		plan.Spec.Suspend = false
 		Expect(k8sClient.Patch(ctx, plan, client.MergeFrom(orig))).To(Succeed())
 
-		By("Verifying force-action=hibernate fires immediately after resume: plan transitions to Hibernating")
-		// Do NOT assert PhaseActive here. The unsuspend → Active and the force-action → Hibernating
+		By("Verifying override-action=hibernate fires immediately after resume: plan transitions to Hibernating")
+		// Do NOT assert PhaseActive here. The unsuspend → Active and the override-action → Hibernating
 		// transitions may be dispatched in the same reconcile pass (or back-to-back passes that settle
 		// before the poll window). Asserting Active first would be a flaky race; assert Hibernating directly.
 		testutil.EventuallyPhase(ctx, k8sClient, plan, hibernatorv1alpha1.PhaseHibernating)
@@ -367,19 +373,19 @@ var _ = Describe("Force-Action E2E", func() {
 	})
 
 	// -----------------------------------------------------------------------
-	// Test 6: Full CI pipeline pattern — force hibernate then force wakeup
+	// Test 6: Full CI pipeline pattern — override hibernate then override wakeup
 	//
 	// Validates a complete CI lifecycle:
-	//   1. force-action=hibernate: drives hibernation outside the schedule (active window).
-	//   2. Override with force-action=wakeup: drives wakeup while still in the off-hours window.
-	//   3. Remove annotation: schedule resumes.
+	//   1. override-action + override-phase-target=hibernate: drives hibernation outside the schedule.
+	//   2. Switch to override-phase-target=wakeup: drives wakeup while still in the off-hours window.
+	//   3. Remove annotations: schedule resumes.
 	// -----------------------------------------------------------------------
-	It("CI pipeline: force hibernate → override with force wakeup → restore schedule", func() {
+	It("CI pipeline: override hibernate → switch to override wakeup → restore schedule", func() {
 		// Monday 08:00 UTC — active window; neither operation is schedule-driven.
 		fakeClock.SetTime(time.Date(2026, 7, 6, 8, 0, 0, 0, time.UTC))
 
 		By("Creating plan; starts in Active (on-hours)")
-		plan, _ = testutil.NewHibernatePlanBuilder("force-ci-pipeline-test", testNamespace).
+		plan, _ = testutil.NewHibernatePlanBuilder("override-ci-pipeline-test", testNamespace).
 			WithSchedule("20:00", "06:00", "MON", "TUE", "WED", "THU", "FRI", "SAT", "SUN").
 			WithExecutionStrategy(hibernatorv1alpha1.ExecutionStrategy{
 				Type: hibernatorv1alpha1.StrategySequential,
@@ -387,20 +393,21 @@ var _ = Describe("Force-Action E2E", func() {
 			WithTarget(hibernatorv1alpha1.Target{
 				Name:         "worker",
 				Type:         "rds",
-				ConnectorRef: hibernatorv1alpha1.ConnectorRef{Kind: "CloudProvider", Name: "force-action-aws"},
+				ConnectorRef: hibernatorv1alpha1.ConnectorRef{Kind: "CloudProvider", Name: "override-action-aws"},
 			}).
 			Build()
 		Expect(k8sClient.Create(ctx, plan)).To(Succeed())
 		testutil.EventuallyPhase(ctx, k8sClient, plan, hibernatorv1alpha1.PhaseActive)
 
-		// ── Step 1: force hibernate ───────────────────────────────────────
-		By("Setting force-action=hibernate (CI pipeline initiates shutdown)")
+		// ── Step 1: override hibernate ────────────────────────────────────
+		By("Setting override-action=true + override-phase-target=hibernate (CI pipeline initiates shutdown)")
 		Expect(k8sClient.Get(ctx, client.ObjectKeyFromObject(plan), plan)).To(Succeed())
 		orig := plan.DeepCopy()
 		if plan.Annotations == nil {
 			plan.Annotations = make(map[string]string)
 		}
-		plan.Annotations[wellknown.AnnotationForceAction] = wellknown.ForceActionHibernate
+		plan.Annotations[wellknown.AnnotationOverrideAction] = "true"
+		plan.Annotations[wellknown.AnnotationOverridePhaseTarget] = wellknown.OverridePhaseTargetHibernate
 		Expect(k8sClient.Patch(ctx, plan, client.MergeFrom(orig))).To(Succeed())
 
 		testutil.EventuallyPhase(ctx, k8sClient, plan, hibernatorv1alpha1.PhaseHibernating)
@@ -412,13 +419,13 @@ var _ = Describe("Force-Action E2E", func() {
 			IsLive: true,
 		})).To(Succeed())
 
-		// ── Step 2: force wakeup (CI pipeline teardown complete, deploy starts) ──
-		By("Overriding to force-action=wakeup (CI pipeline needs resources back)")
+		// ── Step 2: switch to override wakeup (CI pipeline teardown complete, deploy starts) ──
+		By("Switching to override-phase-target=wakeup (CI pipeline needs resources back)")
 		Expect(k8sClient.Get(ctx, client.ObjectKeyFromObject(plan), plan)).To(Succeed())
 		Expect(plan.Status.Phase).To(Equal(hibernatorv1alpha1.PhaseHibernated))
 
 		orig = plan.DeepCopy()
-		plan.Annotations[wellknown.AnnotationForceAction] = wellknown.ForceActionWakeup
+		plan.Annotations[wellknown.AnnotationOverridePhaseTarget] = wellknown.OverridePhaseTargetWakeup
 		Expect(k8sClient.Patch(ctx, plan, client.MergeFrom(orig))).To(Succeed())
 
 		testutil.EventuallyPhase(ctx, k8sClient, plan, hibernatorv1alpha1.PhaseWakingUp)
@@ -426,14 +433,15 @@ var _ = Describe("Force-Action E2E", func() {
 		testutil.SimulateJobSuccess(ctx, k8sClient, wakeupJob, fakeClock.Now())
 		testutil.EventuallyPhase(ctx, k8sClient, plan, hibernatorv1alpha1.PhaseActive)
 
-		By("Asserting plan stays Active: force-action=wakeup from Active is a no-op (loop prevention)")
+		By("Asserting plan stays Active: override-phase-target=wakeup from Active is a no-op (loop prevention)")
 		testutil.ConsistentllyAtPhase(ctx, k8sClient, plan, hibernatorv1alpha1.PhaseActive, 3*time.Second)
 
-		// ── Step 3: remove annotation; advance into hibernation window ───
-		By("Removing annotation to restore schedule control")
+		// ── Step 3: remove override annotations; advance into hibernation window ──
+		By("Removing override annotations to restore schedule control")
 		Expect(k8sClient.Get(ctx, client.ObjectKeyFromObject(plan), plan)).To(Succeed())
 		orig = plan.DeepCopy()
-		delete(plan.Annotations, wellknown.AnnotationForceAction)
+		delete(plan.Annotations, wellknown.AnnotationOverrideAction)
+		delete(plan.Annotations, wellknown.AnnotationOverridePhaseTarget)
 		Expect(k8sClient.Patch(ctx, plan, client.MergeFrom(orig))).To(Succeed())
 
 		By("Advancing clock into the hibernation window (20:05) and triggering reconcile")

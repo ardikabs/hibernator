@@ -30,22 +30,50 @@ const (
 	// AnnotationSuspendReason is the annotation key for recording the reason for suspension.
 	AnnotationSuspendReason = "hibernator.ardikabs.com/suspend-reason"
 
-	// AnnotationForceAction is the annotation key for manually overriding schedule-driven phase
-	// transitions. While present, the schedule evaluator result is ignored and the annotated
-	// direction is applied instead. The annotation is persistent — the controller never removes
-	// it; the user is responsible for deleting it to restore normal schedule control.
+	// AnnotationOverrideAction is the annotation key that enables manual phase override mode.
+	// While set to "true", schedule-driven phase transitions are suppressed and the direction
+	// specified by AnnotationOverridePhaseTarget is applied instead.
 	//
-	// Valid values: ForceActionHibernate, ForceActionWakeup.
+	// The annotation is persistent — the controller never removes it; the user is responsible
+	// for deleting it (along with AnnotationOverridePhaseTarget) to restore normal schedule
+	// control.
+	//
+	// Must be accompanied by AnnotationOverridePhaseTarget to specify the direction.
 	//
 	// Priority: Spec.Suspend=true always takes precedence over this annotation.
-	AnnotationForceAction = "hibernator.ardikabs.com/force-action"
+	AnnotationOverrideAction = "hibernator.ardikabs.com/override-action"
+
+	// AnnotationOverridePhaseTarget is the companion to AnnotationOverrideAction.
+	// It specifies which phase the override should target.
+	//
+	// Valid values: OverridePhaseTargetHibernate, OverridePhaseTargetWakeup.
+	AnnotationOverridePhaseTarget = "hibernator.ardikabs.com/override-phase-target"
+
+	// AnnotationRestart is a one-shot annotation that re-triggers the last executor operation
+	// as recorded in .Status.CurrentOperation, even when the plan is already at a stable
+	// resting phase (which would normally be a no-op).
+	//
+	// The controller consumes (deletes) this annotation in a single atomic patch before
+	// re-executing the operation, so it is safe to use without causing loops.
+	//
+	// Works standalone (without AnnotationOverrideAction) or alongside it — when both are
+	// present, AnnotationOverrideAction captures the tick and handles restart internally.
+	//
+	// Value: must be "true" — any other value is treated as absent.
+	//
+	//   # Re-run wakeup executor while plan is already Active
+	//   kubectl annotate hibernateplan <name> hibernator.ardikabs.com/restart=true
+	//
+	//   # Re-run hibernation executor while plan is already Hibernated
+	//   kubectl annotate hibernateplan <name> hibernator.ardikabs.com/restart=true
+	AnnotationRestart = "hibernator.ardikabs.com/restart"
 )
 
-// Force-action annotation values for AnnotationForceAction.
+// Override phase target values for AnnotationOverridePhaseTarget.
 const (
-	// ForceActionHibernate forces the plan to hibernate regardless of schedule.
-	ForceActionHibernate = "hibernate"
+	// OverridePhaseTargetHibernate targets the Hibernated phase (forces plan to hibernate).
+	OverridePhaseTargetHibernate = "hibernate"
 
-	// ForceActionWakeup forces the plan to wake up regardless of schedule.
-	ForceActionWakeup = "wakeup"
+	// OverridePhaseTargetWakeup targets the Active phase (forces plan to wake up).
+	OverridePhaseTargetWakeup = "wakeup"
 )
