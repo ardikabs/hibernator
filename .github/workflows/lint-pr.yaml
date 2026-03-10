@@ -26,6 +26,7 @@ jobs:
             api
             cmd
             controller
+            runner
             deps
             executor
             scheduler
