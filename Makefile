@@ -38,7 +38,7 @@ COVERAGE_HTML ?= $(COVERAGE_DIR)/coverage.html
 COVERAGE_THRESHOLD ?= 50
 
 # Unit test packages (exclude e2e, cmd, and generated files)
-UNIT_TEST_PKGS ?= $(shell go list ./... | grep -vE '(/cmd/|/mocks|/test/e2e)')
+UNIT_TEST_PKGS ?= $(shell go list ./... | grep -vE '(/cmd/controller|/cmd/kubectl-hibernator|/mocks|/test/e2e)')
 
 # Colors for output
 CYAN := \033[36m
