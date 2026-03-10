@@ -95,10 +95,9 @@ func (e *Executor) Validate(spec executor.Spec) error {
 
 // Shutdown scales Karpenter NodePools to zero by setting disruption budgets and resource limits.
 func (e *Executor) Shutdown(ctx context.Context, log logr.Logger, spec executor.Spec) error {
-	log.Info("Karpenter executor starting shutdown",
-		"target", spec.TargetName,
-		"targetType", spec.TargetType,
-	)
+
+	log = log.WithName("karpenter").WithValues("target", spec.TargetName, "targetType", spec.TargetType)
+	log.Info("executor starting shutdown")
 
 	var params executorparams.KarpenterParameters
 	if len(spec.Parameters) > 0 {
@@ -170,32 +169,27 @@ func (e *Executor) Shutdown(ctx context.Context, log logr.Logger, spec executor.
 		e.completionWg.Wait()
 	}
 
-	log.Info("Karpenter shutdown completed successfully",
-		"nodePoolCount", len(targetNodePools),
-	)
+	log.Info("shutdown completed", "nodePoolCount", len(targetNodePools))
 
 	return nil
 }
 
 // WakeUp restores Karpenter NodePools from hibernation.
 func (e *Executor) WakeUp(ctx context.Context, log logr.Logger, spec executor.Spec, restore executor.RestoreData) error {
-	log.Info("Karpenter executor starting wakeup",
-		"target", spec.TargetName,
-		"targetType", spec.TargetType,
-	)
+	log = log.WithName("karpenter").WithValues("target", spec.TargetName, "targetType", spec.TargetType)
+	log.Info("executor starting wakeup")
+
+	if len(restore.Data) == 0 {
+		log.Info("no restore data available, wakeup operation is no-op")
+		return nil
+	}
 
 	// Parse parameters
 	var params executorparams.KarpenterParameters
 	if len(spec.Parameters) > 0 {
 		if err := json.Unmarshal(spec.Parameters, &params); err != nil {
-			log.Error(err, "failed to parse parameters")
 			return fmt.Errorf("parse parameters: %w", err)
 		}
-	}
-
-	if len(restore.Data) == 0 {
-		log.Error(nil, "restore data is empty")
-		return fmt.Errorf("restore data is required for wake-up")
 	}
 
 	log.Info("restore state loaded", "nodePoolCount", len(restore.Data))
@@ -203,7 +197,6 @@ func (e *Executor) WakeUp(ctx context.Context, log logr.Logger, spec executor.Sp
 	// Build clients using injected factory
 	client, err := e.clientFactory(ctx, &spec)
 	if err != nil {
-		log.Error(err, "failed to build kubernetes client")
 		return fmt.Errorf("build kubernetes client: %w", err)
 	}
 
@@ -211,7 +204,6 @@ func (e *Executor) WakeUp(ctx context.Context, log logr.Logger, spec executor.Sp
 	for nodePoolName, stateBytes := range restore.Data {
 		var state NodePoolState
 		if err := json.Unmarshal(stateBytes, &state); err != nil {
-			log.Error(err, "failed to unmarshal NodePool state", "nodePool", nodePoolName)
 			return fmt.Errorf("unmarshal NodePool state %s: %w", nodePoolName, err)
 		}
 
@@ -221,7 +213,6 @@ func (e *Executor) WakeUp(ctx context.Context, log logr.Logger, spec executor.Sp
 			"hasLabels", len(state.Labels) > 0,
 		)
 		if err := e.restoreNodePool(ctx, log, client, nodePoolName, state, params); err != nil {
-			log.Error(err, "failed to restore NodePool", "nodePool", nodePoolName)
 			return fmt.Errorf("restore NodePool %s: %w", nodePoolName, err)
 		}
 	}
@@ -247,9 +238,7 @@ func (e *Executor) WakeUp(ctx context.Context, log logr.Logger, spec executor.Sp
 		e.completionWg.Wait()
 	}
 
-	log.Info("Karpenter wakeup completed successfully",
-		"nodePoolCount", len(restore.Data),
-	)
+	log.Info("wakeup completed", "nodePoolCount", len(restore.Data))
 	return nil
 }
 
