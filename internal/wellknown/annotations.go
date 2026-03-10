@@ -29,4 +29,23 @@ const (
 
 	// AnnotationSuspendReason is the annotation key for recording the reason for suspension.
 	AnnotationSuspendReason = "hibernator.ardikabs.com/suspend-reason"
+
+	// AnnotationForceAction is the annotation key for manually overriding schedule-driven phase
+	// transitions. While present, the schedule evaluator result is ignored and the annotated
+	// direction is applied instead. The annotation is persistent — the controller never removes
+	// it; the user is responsible for deleting it to restore normal schedule control.
+	//
+	// Valid values: ForceActionHibernate, ForceActionWakeup.
+	//
+	// Priority: Spec.Suspend=true always takes precedence over this annotation.
+	AnnotationForceAction = "hibernator.ardikabs.com/force-action"
+)
+
+// Force-action annotation values for AnnotationForceAction.
+const (
+	// ForceActionHibernate forces the plan to hibernate regardless of schedule.
+	ForceActionHibernate = "hibernate"
+
+	// ForceActionWakeup forces the plan to wake up regardless of schedule.
+	ForceActionWakeup = "wakeup"
 )

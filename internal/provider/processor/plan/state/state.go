@@ -206,6 +206,19 @@ func selectHandler(s *state) Handler {
 		})
 	}
 
+	// Manual force-action override — only applies when the plan is in an idle phase
+	// (Active or Hibernated). Execution phases (Hibernating, WakingUp) run to completion
+	// naturally; Error and Suspended phases are unaffected.
+	// The annotation is persistent: forceActionState does nothing when the plan is already
+	// in the target phase, preventing loops without needing to delete the annotation.
+	// Spec.Suspend=true always takes precedence (checked above).
+	if _, hasForceAction := plan.Annotations[wellknown.AnnotationForceAction]; hasForceAction {
+		switch plan.Status.Phase {
+		case hibernatorv1alpha1.PhaseActive, hibernatorv1alpha1.PhaseHibernated:
+			return &forceActionState{idleState: &idleState{state: s}}
+		}
+	}
+
 	switch plan.Status.Phase {
 	case "":
 		return &lifecycleState{state: s}
