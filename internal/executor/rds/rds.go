@@ -144,14 +144,11 @@ func (e *Executor) Validate(spec executor.Spec) error {
 
 // Shutdown stops RDS instances/clusters with optional snapshot.
 func (e *Executor) Shutdown(ctx context.Context, log logr.Logger, spec executor.Spec) error {
-	log.Info("RDS executor starting shutdown",
-		"target", spec.TargetName,
-		"targetType", spec.TargetType,
-	)
+	log = log.WithName("rds").WithValues("target", spec.TargetName, "targetType", spec.TargetType)
+	log.Info("executor starting shutdown")
 
 	params, err := e.parseParams(spec.Parameters)
 	if err != nil {
-		log.Error(err, "failed to parse parameters")
 		return fmt.Errorf("parse parameters: %w", err)
 	}
 
@@ -266,7 +263,7 @@ func (e *Executor) Shutdown(ctx context.Context, log logr.Logger, spec executor.
 		e.completionWg.Wait()
 	}
 
-	log.Info("RDS shutdown completed successfully",
+	log.Info("shutdown completed",
 		"totalInstances", len(instances),
 		"totalClusters", len(clusters),
 	)
@@ -276,10 +273,13 @@ func (e *Executor) Shutdown(ctx context.Context, log logr.Logger, spec executor.
 
 // WakeUp starts RDS instances/clusters.
 func (e *Executor) WakeUp(ctx context.Context, log logr.Logger, spec executor.Spec, restore executor.RestoreData) error {
-	log.Info("RDS executor starting wakeup",
-		"target", spec.TargetName,
-		"targetType", spec.TargetType,
-	)
+	log = log.WithName("rds").WithValues("target", spec.TargetName, "targetType", spec.TargetType)
+	log.Info("executor starting wakeup")
+
+	if len(restore.Data) == 0 {
+		log.Info("no restore data available, wakeup operation is no-op")
+		return nil
+	}
 
 	// Parse parameters
 	params, err := e.parseParams(spec.Parameters)
@@ -288,7 +288,7 @@ func (e *Executor) WakeUp(ctx context.Context, log logr.Logger, spec executor.Sp
 		return fmt.Errorf("parse parameters: %w", err)
 	}
 
-	log.Info("restore state loaded", "totalResources", len(restore.Data))
+	log.Info("restore state loaded", "resourceCount", len(restore.Data))
 
 	cfg, err := e.loadAWSConfig(ctx, spec)
 	if err != nil {
@@ -371,7 +371,7 @@ func (e *Executor) WakeUp(ctx context.Context, log logr.Logger, spec executor.Sp
 		e.completionWg.Wait()
 	}
 
-	log.Info("RDS wakeup completed successfully")
+	log.Info("wakeup completed", "resourceCount", len(restore.Data))
 	return nil
 }
 

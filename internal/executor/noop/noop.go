@@ -69,10 +69,8 @@ func (e *Executor) Validate(spec executor.Spec) error {
 
 // Shutdown simulates hibernation with configurable delay and failure modes.
 func (e *Executor) Shutdown(ctx context.Context, log logr.Logger, spec executor.Spec) error {
-	log.Info("NoOp executor starting shutdown",
-		"target", spec.TargetName,
-		"targetType", spec.TargetType,
-	)
+	log = log.WithName("noop").WithValues("target", spec.TargetName, "targetType", spec.TargetType)
+	log.Info("executor starting shutdown")
 
 	params, err := e.parseParams(spec.Parameters)
 	if err != nil {
@@ -119,11 +117,6 @@ func (e *Executor) Shutdown(ctx context.Context, log logr.Logger, spec executor.
 		TargetName:    spec.TargetName,
 	}
 
-	log.Info("NoOp shutdown completed successfully",
-		"target", spec.TargetName,
-		"generatedID", state.GeneratedID,
-	)
-
 	// Incremental save: persist this instance's restore data immediately
 	if spec.SaveRestoreData != nil {
 		if err := spec.SaveRestoreData(spec.TargetName, state, true); err != nil {
@@ -132,16 +125,19 @@ func (e *Executor) Shutdown(ctx context.Context, log logr.Logger, spec executor.
 		}
 	}
 
+	log.Info("shutdown completed")
 	return nil
 }
 
 // WakeUp simulates restoration using saved restore data.
 func (e *Executor) WakeUp(ctx context.Context, log logr.Logger, spec executor.Spec, restore executor.RestoreData) error {
-	log.Info("NoOp executor starting wakeup",
-		"target", spec.TargetName,
-		"targetType", spec.TargetType,
-		"restoreDataCount", len(restore.Data),
-	)
+	log = log.WithName("noop").WithValues("target", spec.TargetName, "targetType", spec.TargetType)
+	log.Info("executor starting wakeup")
+
+	if len(restore.Data) == 0 {
+		log.Info("no restore data available, wakeup operation is no-op")
+		return nil
+	}
 
 	// Iterate over all operations in restore data (should be single operation for noop)
 	for id, stateBytes := range restore.Data {
@@ -183,13 +179,9 @@ func (e *Executor) WakeUp(ctx context.Context, log logr.Logger, spec executor.Sp
 		case <-time.After(delay):
 			log.Info("restoration work simulation completed")
 		}
-
-		log.Info("NoOp wakeup completed for operation",
-			"target", spec.TargetName,
-			"generatedID", state.GeneratedID,
-		)
 	}
 
+	log.Info("wakeup completed")
 	return nil
 }
 

@@ -132,14 +132,11 @@ func (e *Executor) Validate(spec executor.Spec) error {
 
 // Shutdown performs EKS Managed Node Group hibernation by scaling to zero.
 func (e *Executor) Shutdown(ctx context.Context, log logr.Logger, spec executor.Spec) error {
-	log.Info("EKS executor starting shutdown",
-		"target", spec.TargetName,
-		"targetType", spec.TargetType,
-	)
+	log = log.WithName("eks").WithValues("target", spec.TargetName, "targetType", spec.TargetType)
+	log.Info("executor starting shutdown")
 
 	params, err := e.parseParams(spec.Parameters)
 	if err != nil {
-		log.Error(err, "failed to parse parameters")
 		return fmt.Errorf("parse parameters: %w", err)
 	}
 
@@ -207,7 +204,7 @@ func (e *Executor) Shutdown(ctx context.Context, log logr.Logger, spec executor.
 		e.wg.Wait()
 	}
 
-	log.Info("EKS shutdown completed successfully",
+	log.Info("shutdown completed",
 		"clusterName", clusterName,
 		"nodeGroupCount", len(targetNodeGroups),
 	)
@@ -217,10 +214,13 @@ func (e *Executor) Shutdown(ctx context.Context, log logr.Logger, spec executor.
 
 // WakeUp restores EKS Managed Node Groups to their original scaling configuration.
 func (e *Executor) WakeUp(ctx context.Context, log logr.Logger, spec executor.Spec, restore executor.RestoreData) error {
-	log.Info("EKS executor starting wakeup",
-		"target", spec.TargetName,
-		"targetType", spec.TargetType,
-	)
+	log = log.WithName("eks").WithValues("target", spec.TargetName, "targetType", spec.TargetType)
+	log.Info("executor starting wakeup")
+
+	if len(restore.Data) == 0 {
+		log.Info("no restore data available, wakeup operation is no-op")
+		return nil
+	}
 
 	// Parse parameters
 	params, err := e.parseParams(spec.Parameters)
@@ -286,7 +286,7 @@ func (e *Executor) WakeUp(ctx context.Context, log logr.Logger, spec executor.Sp
 		e.wg.Wait()
 	}
 
-	log.Info("EKS wakeup completed successfully",
+	log.Info("wakeup completed",
 		"clusterName", clusterName,
 		"nodeGroupCount", len(restore.Data),
 	)
