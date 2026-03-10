@@ -535,14 +535,32 @@ func (a *restoreDataAccumulator) add(key string, value any, isLive bool) error {
 
 // flush saves all accumulated data to ConfigMap in separate batches by quality.
 // This preserves per-key quality information during merge while batching API calls.
+//
+// If no data was accumulated (executor performed a no-op shutdown), an empty-state
+// restore point is written so that a subsequent wakeup can proceed without error.
+// An empty restore point is valid: the executor had nothing to capture, and wakeup
+// will receive an empty State map which it should handle as a no-op.
 func (a *restoreDataAccumulator) flush(ctx context.Context, rm *restore.Manager, namespace, plan, target, executorType string) error {
 	a.mu.Lock()
 	defer a.mu.Unlock()
 
+	log := a.log.WithValues("plan", fmt.Sprintf("%s/%s", namespace, plan), "target", target)
+
 	totalKeys := len(a.liveKeys) + len(a.nonLiveKeys)
 	if totalKeys == 0 {
-		a.log.V(1).Info("no restore data to flush")
-		return nil
+		// Executor performed a no-op shutdown — nothing was captured. Write an
+		// empty restore point so wakeup does not fail with "no restore data found".
+		log.Info("executor captured no restore data; writing empty restore point")
+		emptyData := &restore.Data{
+			Target:     target,
+			Executor:   executorType,
+			Version:    1,
+			CreatedAt:  metav1.Now(),
+			IsLive:     true,
+			CapturedAt: time.Now().Format(time.RFC3339),
+			State:      nil,
+		}
+		return rm.SaveOrPreserve(ctx, namespace, plan, target, emptyData)
 	}
 
 	// Flush high-quality (isLive=true) keys first
@@ -561,11 +579,8 @@ func (a *restoreDataAccumulator) flush(ctx context.Context, rm *restore.Manager,
 			return fmt.Errorf("flush live keys to ConfigMap: %w", err)
 		}
 
-		a.log.Info("restore data (live) flushed to ConfigMap",
-			"liveKeys", len(a.liveKeys),
-			"plan", plan,
-			"target", target,
-		)
+		log.Info("restore data (live) flushed to ConfigMap",
+			"liveKeys", len(a.liveKeys))
 	}
 
 	// Flush low-quality (isLive=false) keys
@@ -584,11 +599,8 @@ func (a *restoreDataAccumulator) flush(ctx context.Context, rm *restore.Manager,
 			return fmt.Errorf("flush non-live keys to ConfigMap: %w", err)
 		}
 
-		a.log.Info("restore data (non-live) flushed to ConfigMap",
-			"nonLiveKeys", len(a.nonLiveKeys),
-			"plan", plan,
-			"target", target,
-		)
+		log.Info("restore data (non-live) flushed to ConfigMap",
+			"nonLiveKeys", len(a.nonLiveKeys))
 	}
 
 	return nil
@@ -620,6 +632,8 @@ func (r *runner) createSaveRestoreDataCallback(ctx context.Context) (executor.Sa
 
 // loadRestoreData retrieves restore data from ConfigMap.
 func (r *runner) loadRestoreData(ctx context.Context) (*executor.RestoreData, error) {
+	log := r.log.WithValues("plan", fmt.Sprintf("%s/%s", r.cfg.Namespace, r.cfg.Plan), "target", r.cfg.Target)
+
 	restoreMgr := restore.NewManager(r.k8sClient)
 
 	data, err := restoreMgr.Load(ctx, r.cfg.Namespace, r.cfg.Plan, r.cfg.Target)
@@ -639,6 +653,10 @@ func (r *runner) loadRestoreData(ctx context.Context) (*executor.RestoreData, er
 			return nil, fmt.Errorf("marshal state value for key %s: %w", key, err)
 		}
 		transormedData[key] = valueBytes
+	}
+
+	if len(transormedData) == 0 {
+		log.Info("restore point exists but contains no state (no-op shutdown); wakeup will proceed with empty restore data")
 	}
 
 	return &executor.RestoreData{
