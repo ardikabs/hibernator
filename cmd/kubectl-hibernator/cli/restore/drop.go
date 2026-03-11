@@ -16,6 +16,7 @@ import (
 	"k8s.io/apimachinery/pkg/types"
 
 	"github.com/ardikabs/hibernator/cmd/kubectl-hibernator/common"
+	"github.com/ardikabs/hibernator/cmd/kubectl-hibernator/output"
 	"github.com/ardikabs/hibernator/internal/restore"
 )
 
@@ -40,9 +41,9 @@ Examples:
   kubectl hibernator restore drop my-plan --target eks-cluster --resource-id node-xyz
   kubectl hibernator restore drop my-plan --target rds --resource-id db-prod-01`,
 		Args: cobra.ExactArgs(1),
-		RunE: func(cmd *cobra.Command, args []string) error {
-			return runDrop(cmd.Context(), restoreOpts, args[0])
-		},
+		RunE: output.WrapRunE(func(ctx context.Context, args []string) error {
+			return runDrop(ctx, restoreOpts, args[0])
+		}),
 	}
 
 	cmd.Flags().StringVarP(&restoreOpts.target, "target", "t", "", "Target name (required)")
@@ -55,6 +56,8 @@ Examples:
 }
 
 func runDrop(ctx context.Context, opts *restorePointOptions, planName string) error {
+	out := output.FromContext(ctx)
+
 	c, err := common.NewK8sClient(opts.root)
 	if err != nil {
 		return err
@@ -97,7 +100,7 @@ func runDrop(ctx context.Context, opts *restorePointOptions, planName string) er
 			return fmt.Errorf("marshal restore data: %w", err)
 		}
 		cm.Data[key] = string(dataBytes)
-		fmt.Printf("Dropped resource %q from target %q (%d resources remaining)\n", opts.resourceID, opts.target, len(data.State))
+		out.Info("Dropped resource %q from target %q (%d resources remaining)", opts.resourceID, opts.target, len(data.State))
 		break
 	}
 
@@ -110,6 +113,6 @@ func runDrop(ctx context.Context, opts *restorePointOptions, planName string) er
 		return fmt.Errorf("failed to update restore point: %w", err)
 	}
 
-	fmt.Printf("Successfully dropped resource from restore point\n")
+	out.Success("Successfully dropped resource from restore point")
 	return nil
 }

@@ -15,6 +15,7 @@ import (
 
 	hibernatorv1alpha1 "github.com/ardikabs/hibernator/api/v1alpha1"
 	"github.com/ardikabs/hibernator/cmd/kubectl-hibernator/common"
+	"github.com/ardikabs/hibernator/cmd/kubectl-hibernator/output"
 	"github.com/ardikabs/hibernator/internal/wellknown"
 )
 
@@ -39,15 +40,17 @@ Examples:
   kubectl hibernator resume my-plan
   kubectl hibernator resume my-plan -n production`,
 		Args: cobra.ExactArgs(1),
-		RunE: func(cmd *cobra.Command, args []string) error {
-			return runResume(cmd.Context(), resOpts, args[0])
-		},
+		RunE: output.WrapRunE(func(ctx context.Context, args []string) error {
+			return runResume(ctx, resOpts, args[0])
+		}),
 	}
 
 	return cmd
 }
 
 func runResume(ctx context.Context, opts *resumeOptions, planName string) error {
+	out := output.FromContext(ctx)
+
 	c, err := common.NewK8sClient(opts.root)
 	if err != nil {
 		return err
@@ -70,7 +73,7 @@ func runResume(ctx context.Context, opts *resumeOptions, planName string) error 
 	}
 
 	if !isSuspended && !hasSuspendAnnotations {
-		fmt.Printf("HibernatePlan %q is not suspended\n", planName)
+		out.Info("HibernatePlan %q is not suspended", planName)
 		return nil
 	}
 
@@ -86,7 +89,7 @@ func runResume(ctx context.Context, opts *resumeOptions, planName string) error 
 		return fmt.Errorf("failed to patch HibernatePlan %q: %w", planName, err)
 	}
 
-	fmt.Printf("HibernatePlan %q resumed\n", planName)
+	out.Success("HibernatePlan %q resumed", planName)
 
 	return nil
 }

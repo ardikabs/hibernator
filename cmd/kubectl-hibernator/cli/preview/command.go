@@ -18,6 +18,7 @@ import (
 
 	hibernatorv1alpha1 "github.com/ardikabs/hibernator/api/v1alpha1"
 	"github.com/ardikabs/hibernator/cmd/kubectl-hibernator/common"
+	"github.com/ardikabs/hibernator/cmd/kubectl-hibernator/output"
 	"github.com/ardikabs/hibernator/cmd/kubectl-hibernator/printers"
 	"github.com/ardikabs/hibernator/internal/scheduler"
 )
@@ -43,9 +44,9 @@ Works with both cluster resources and local YAML files:
   kubectl hibernator preview my-plan
   kubectl hibernator preview --file plan.yaml`,
 		Args: cobra.MaximumNArgs(1),
-		RunE: func(cmd *cobra.Command, args []string) error {
-			return runPreview(cmd.Context(), previewOpts, args)
-		},
+		RunE: output.WrapRunE(func(ctx context.Context, args []string) error {
+			return runPreview(ctx, previewOpts, args)
+		}),
 	}
 
 	cmd.Flags().StringVarP(&previewOpts.file, "file", "f", "", "Path to a local HibernatePlan YAML file")
@@ -142,5 +143,3 @@ func loadPlanFromFile(path string, plan *hibernatorv1alpha1.HibernatePlan) error
 
 	return nil
 }
-
-

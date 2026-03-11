@@ -15,6 +15,7 @@ import (
 
 	hibernatorv1alpha1 "github.com/ardikabs/hibernator/api/v1alpha1"
 	"github.com/ardikabs/hibernator/cmd/kubectl-hibernator/common"
+	"github.com/ardikabs/hibernator/cmd/kubectl-hibernator/output"
 	"github.com/ardikabs/hibernator/cmd/kubectl-hibernator/printers"
 )
 
@@ -41,9 +42,9 @@ Examples:
   kubectl hibernator describe my-plan -n production
   kubectl hibernator describe my-plan --json`,
 		Args: cobra.ExactArgs(1),
-		RunE: func(cmd *cobra.Command, args []string) error {
-			return runDescribe(cmd.Context(), describeOpts, args[0])
-		},
+		RunE: output.WrapRunE(func(ctx context.Context, args []string) error {
+			return runDescribe(ctx, describeOpts, args[0])
+		}),
 	}
 
 	return cmd

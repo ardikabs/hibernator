@@ -6,10 +6,11 @@ Licensed under the Apache License, Version 2.0.
 package version
 
 import (
-	"fmt"
+	"context"
 
 	"github.com/spf13/cobra"
 
+	"github.com/ardikabs/hibernator/cmd/kubectl-hibernator/output"
 	"github.com/ardikabs/hibernator/internal/version"
 )
 
@@ -19,10 +20,11 @@ func NewCommand() *cobra.Command {
 		Use:   "version",
 		Short: "Print the version of kubectl-hibernator",
 		Long:  "Print the version of kubectl-hibernator",
-		RunE: func(cmd *cobra.Command, args []string) error {
-			fmt.Println("kubectl-hibernator", version.GetVersion())
+		RunE: output.WrapRunE(func(ctx context.Context, args []string) error {
+			out := output.FromContext(ctx)
+			out.Info("kubectl-hibernator: %s", version.GetVersion())
 			return nil
-		},
+		}),
 	}
 
 	return cmd

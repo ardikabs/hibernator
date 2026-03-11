@@ -6,6 +6,8 @@ Licensed under the Apache License, Version 2.0.
 package cli
 
 import (
+	"os"
+
 	"github.com/spf13/cobra"
 	"k8s.io/apimachinery/pkg/runtime"
 	clientgoscheme "k8s.io/client-go/kubernetes/scheme"
@@ -14,13 +16,16 @@ import (
 	"github.com/ardikabs/hibernator/cmd/kubectl-hibernator/cli/describe"
 	"github.com/ardikabs/hibernator/cmd/kubectl-hibernator/cli/list"
 	"github.com/ardikabs/hibernator/cmd/kubectl-hibernator/cli/logs"
+	"github.com/ardikabs/hibernator/cmd/kubectl-hibernator/cli/override"
+	"github.com/ardikabs/hibernator/cmd/kubectl-hibernator/cli/preview"
+	"github.com/ardikabs/hibernator/cmd/kubectl-hibernator/cli/restart"
 	"github.com/ardikabs/hibernator/cmd/kubectl-hibernator/cli/restore"
 	"github.com/ardikabs/hibernator/cmd/kubectl-hibernator/cli/resume"
 	"github.com/ardikabs/hibernator/cmd/kubectl-hibernator/cli/retry"
-	"github.com/ardikabs/hibernator/cmd/kubectl-hibernator/cli/preview"
 	"github.com/ardikabs/hibernator/cmd/kubectl-hibernator/cli/suspend"
 	"github.com/ardikabs/hibernator/cmd/kubectl-hibernator/cli/version"
 	"github.com/ardikabs/hibernator/cmd/kubectl-hibernator/common"
+	"github.com/ardikabs/hibernator/cmd/kubectl-hibernator/output"
 )
 
 var scheme = runtime.NewScheme()
@@ -37,21 +42,31 @@ func NewRootCommand() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "kubectl-hibernator",
 		Short: "Manage Hibernator plans from the command line",
-		Long: "kubectl-hibernator is a CLI plugin for managing HibernatePlan resources.\n\n" +
-			"It provides commands to inspect schedules, view plan status, suspend/resume\n" +
-			"hibernation, trigger retries, and tail controller logs.\n\n" +
-			"Install by copying the binary to your PATH:\n" +
-			"  cp bin/kubectl-hibernator /usr/local/bin/kubectl-hibernator\n\n" +
-			"Then use as:\n" +
-			"  kubectl hibernator list\n" +
-			"  kubectl hibernator describe my-plan\n" +
-			"  kubectl hibernator preview my-plan\n" +
-			"  kubectl hibernator suspend my-plan --hours 4 --reason \"deployment\"\n" +
-			"  kubectl hibernator resume my-plan\n" +
-			"  kubectl hibernator retry my-plan\n" +
-			"  kubectl hibernator logs my-plan",
+		Long: `kubectl-hibernator is a CLI plugin for managing HibernatePlan resources.
+
+It provides commands to inspect schedules, view plan status, suspend/resume
+hibernation, trigger retries, and tail controller logs.
+
+Install by copying the binary to your PATH:
+  cp bin/kubectl-hibernator /usr/local/bin/kubectl-hibernator
+
+Then use as:
+  kubectl hibernator list
+  kubectl hibernator describe my-plan
+  kubectl hibernator preview my-plan
+  kubectl hibernator suspend my-plan --hours 4 --reason "deployment"
+  kubectl hibernator resume my-plan
+  kubectl hibernator retry my-plan
+  kubectl hibernator override my-plan --to hibernate
+  kubectl hibernator restart my-plan
+  kubectl hibernator logs my-plan`,
+		PersistentPreRunE: func(cmd *cobra.Command, args []string) error {
+			formatter := output.NewFormatter(os.Stdout, os.Stderr)
+			cmd.SetContext(output.WithFormatter(cmd.Context(), formatter))
+			return nil
+		},
 		SilenceUsage:  true,
-		SilenceErrors: false,
+		SilenceErrors: true,
 	}
 
 	// Global flags
@@ -67,8 +82,10 @@ func NewRootCommand() *cobra.Command {
 	cmd.AddCommand(suspend.NewCommand(opts))
 	cmd.AddCommand(resume.NewCommand(opts))
 	cmd.AddCommand(retry.NewCommand(opts))
-	cmd.AddCommand(logs.NewCommand(opts))
+	cmd.AddCommand(override.NewCommand(opts))
+	cmd.AddCommand(restart.NewCommand(opts))
 	cmd.AddCommand(restore.NewCommand(opts))
+	cmd.AddCommand(logs.NewCommand(opts))
 
 	return cmd
 }

@@ -15,6 +15,7 @@ import (
 
 	hibernatorv1alpha1 "github.com/ardikabs/hibernator/api/v1alpha1"
 	"github.com/ardikabs/hibernator/cmd/kubectl-hibernator/common"
+	"github.com/ardikabs/hibernator/cmd/kubectl-hibernator/output"
 	"github.com/ardikabs/hibernator/cmd/kubectl-hibernator/printers"
 	"github.com/ardikabs/hibernator/internal/scheduler"
 )
@@ -41,9 +42,9 @@ Examples:
   kubectl hibernator list --all-namespaces
   kubectl hibernator list --json
   kubectl hibernator ls`,
-		RunE: func(cmd *cobra.Command, args []string) error {
-			return runList(cmd.Context(), listOpts)
-		},
+		RunE: output.WrapRunE(func(ctx context.Context, args []string) error {
+			return runList(ctx, listOpts)
+		}),
 	}
 
 	cmd.Flags().BoolVarP(&listOpts.allNamespaces, "all-namespaces", "A", false, "List plans from all namespaces")
