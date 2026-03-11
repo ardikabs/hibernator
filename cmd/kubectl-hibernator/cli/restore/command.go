@@ -31,14 +31,14 @@ Examples:
   # Initialize empty restore point for target
   kubectl hibernator restore init my-plan --target eks-cluster --executor eks
 
-  # Show restore point summary
-  kubectl hibernator restore show my-plan
-
-  # List all resources
+  # Show restore point summary (default)
   kubectl hibernator restore list my-plan
 
+  # List all resources (detailed view)
+  kubectl hibernator restore list my-plan -o wide
+
   # List all resources for a specific target
-  kubectl hibernator restore list my-plan --target eks-cluster
+  kubectl hibernator restore list my-plan --target eks-cluster -o wide
 
   # Inspect of a specific resource in the restore point
   kubectl hibernator restore inspect my-plan --target eks-cluster --resource-id xyz
@@ -51,8 +51,7 @@ Examples:
 	}
 
 	cmd.AddCommand(newInitCommand(opts))
-	cmd.AddCommand(newShowCommand(opts))
-	cmd.AddCommand(newListResourcesCommand(opts))
+	cmd.AddCommand(newListCommand(opts))
 	cmd.AddCommand(newInspectCommand(opts))
 	cmd.AddCommand(newPatchCommand(opts))
 	cmd.AddCommand(newDropCommand(opts))

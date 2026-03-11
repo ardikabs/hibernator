@@ -16,6 +16,7 @@ import (
 
 	hibernatorv1alpha1 "github.com/ardikabs/hibernator/api/v1alpha1"
 	"github.com/ardikabs/hibernator/cmd/kubectl-hibernator/common"
+	"github.com/ardikabs/hibernator/cmd/kubectl-hibernator/output"
 	"github.com/ardikabs/hibernator/internal/wellknown"
 )
 
@@ -43,9 +44,9 @@ Examples:
   kubectl hibernator suspend my-plan --until "2026-01-15T06:00:00Z" --reason "maintenance window"
   kubectl hibernator suspend my-plan --seconds 24 --reason "incident response"`,
 		Args: cobra.ExactArgs(1),
-		RunE: func(cmd *cobra.Command, args []string) error {
-			return runSuspend(cmd.Context(), susOpts, args[0])
-		},
+		RunE: output.WrapRunE(func(ctx context.Context, args []string) error {
+			return runSuspend(ctx, susOpts, args[0])
+		}),
 	}
 
 	cmd.Flags().Float64Var(&susOpts.seconds, "seconds", 0, "Duration in seconds to suspend (e.g., 3600, 1800)")
@@ -56,6 +57,8 @@ Examples:
 }
 
 func runSuspend(ctx context.Context, opts *suspendOptions, planName string) error {
+	out := output.FromContext(ctx)
+
 	// Validate: must have either --seconds or --until
 	if opts.seconds <= 0 && opts.until == "" {
 		return fmt.Errorf("either --seconds or --until must be specified")
@@ -109,10 +112,10 @@ func runSuspend(ctx context.Context, opts *suspendOptions, planName string) erro
 		return fmt.Errorf("failed to patch HibernatePlan %q: %w", planName, err)
 	}
 
-	fmt.Printf("HibernatePlan %q suspended\n", planName)
-	fmt.Printf("Suspended Until: %s\n", deadline.Format(time.RFC3339))
+	out.Info("HibernatePlan %q suspended", planName)
+	out.Info("Suspended Until: %s", deadline.Format(time.RFC3339))
 	if opts.reason != "" {
-		fmt.Printf("Reason: %s\n", opts.reason)
+		out.Info("Reason: %s", opts.reason)
 	}
 
 	return nil

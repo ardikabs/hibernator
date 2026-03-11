@@ -18,6 +18,7 @@ import (
 	"k8s.io/apimachinery/pkg/types"
 
 	"github.com/ardikabs/hibernator/cmd/kubectl-hibernator/common"
+	"github.com/ardikabs/hibernator/cmd/kubectl-hibernator/output"
 	"github.com/ardikabs/hibernator/internal/restore"
 )
 
@@ -76,9 +77,9 @@ kubectl hibernator restore patch my-plan -t eks -r node-123 \
 --set desiredCapacity=10 \
 --dry-run`,
 		Args: cobra.ExactArgs(1),
-		RunE: func(cmd *cobra.Command, args []string) error {
-			return runPatch(cmd.Context(), patchOpts, args[0])
-		},
+		RunE: output.WrapRunE(func(ctx context.Context, args []string) error {
+			return runPatch(ctx, patchOpts, args[0])
+		}),
 	}
 
 	cmd.Flags().StringVarP(&patchOpts.target, "target", "t", "", "Target name (required)")
@@ -96,6 +97,8 @@ kubectl hibernator restore patch my-plan -t eks -r node-123 \
 }
 
 func runPatch(ctx context.Context, opts *patchOptions, planName string) error {
+	out := output.FromContext(ctx)
+
 	// Validate mutual exclusivity
 	hasFieldOps := len(opts.sets) > 0 || len(opts.removes) > 0
 	hasPatchOps := opts.patchJSON != "" || opts.patchFile != ""
@@ -151,23 +154,23 @@ func runPatch(ctx context.Context, opts *patchOptions, planName string) error {
 
 	if !resourceExists {
 		// Warn user that resource doesn't exist and ask for confirmation
-		fmt.Printf("\n⚠️  WARNING: Resource %q not found in target %q\n\n", opts.resourceID, opts.target)
-		fmt.Println("This command will CREATE a new resource entry in the restore point.")
-		fmt.Println("This is useful for adding resources that were missed, but incorrect")
-		fmt.Println("resource IDs can cause executor failures during restoration.")
-		fmt.Println()
-		fmt.Println("Affected:")
-		fmt.Printf("  Plan:      %s\n", planName)
-		fmt.Printf("  Target:    %s\n", opts.target)
-		fmt.Printf("  Executor:  %s\n", targetData.Executor)
-		fmt.Printf("  Resource:  %s (NEW)\n\n", opts.resourceID)
+		out.Warning("Resource %q not found in target %q", opts.resourceID, opts.target)
+		out.Info("This command will CREATE a new resource entry in the restore point.")
+		out.Info("This is useful for adding resources that were missed, but incorrect")
+		out.Info("resource IDs can cause executor failures during restoration.")
+		out.Info("")
+		out.Info("Affected:")
+		out.Info("  Plan:      %s", planName)
+		out.Info("  Target:    %s", opts.target)
+		out.Info("  Executor:  %s", targetData.Executor)
+		out.Info("  Resource:  %s (NEW)", opts.resourceID)
 
 		if !opts.root.JsonOutput {
-			fmt.Print("Proceed with creating this resource? (y/N): ")
+			out.Info("Proceed with creating this resource? (y/N): ")
 			var response string
 			lo.Must1(fmt.Scanln(&response))
 			if strings.ToLower(response) != "y" {
-				fmt.Println("Cancelled - no changes made")
+				out.Info("Cancelled - no changes made")
 				return nil
 			}
 		} else {
@@ -235,22 +238,22 @@ func runPatch(ctx context.Context, opts *patchOptions, planName string) error {
 	}
 
 	// Show diff if dry-run or always show summary
-	if err := showPatchDiff(currentState, modifiedState); err != nil {
+	if err := showPatchDiff(ctx, currentState, modifiedState); err != nil {
 		return err
 	}
 
 	if opts.dryRun {
-		fmt.Println("\n[DRY RUN] No changes applied")
+		out.Hint("[DRY RUN] No changes applied")
 		return nil
 	}
 
 	// Confirm before applying (unless forced)
 	if !opts.root.JsonOutput {
-		fmt.Print("\nApply changes? (y/N): ")
+		out.Info("Apply changes? (y/N): ")
 		var response string
 		lo.Must1(fmt.Scanln(&response))
 		if strings.ToLower(response) != "y" {
-			fmt.Println("Cancelled")
+			out.Info("Cancelled")
 			return nil
 		}
 	}
@@ -269,7 +272,7 @@ func runPatch(ctx context.Context, opts *patchOptions, planName string) error {
 		return fmt.Errorf("failed to update restore point: %w", err)
 	}
 
-	fmt.Printf("✓ Successfully patched resource %q in target %q\n", opts.resourceID, opts.target)
+	out.Success("Successfully patched resource %q in target %q", opts.resourceID, opts.target)
 	return nil
 }
 
@@ -389,7 +392,9 @@ func deepCopyValue(v any) any {
 }
 
 // showPatchDiff displays a diff between current and modified state
-func showPatchDiff(current, modified map[string]any) error {
+func showPatchDiff(ctx context.Context, current, modified map[string]any) error {
+	out := output.FromContext(ctx)
+
 	// Convert to JSON for diff display
 	currentJSON, err := json.MarshalIndent(current, "", "  ")
 	if err != nil {
@@ -402,17 +407,17 @@ func showPatchDiff(current, modified map[string]any) error {
 	}
 
 	if string(currentJSON) == string(modifiedJSON) {
-		fmt.Println("No changes detected")
+		out.Info("No changes detected")
 		return nil
 	}
 
-	fmt.Println("Changes to be applied:")
-	fmt.Println()
-	fmt.Println("Before:")
-	fmt.Println(string(currentJSON))
-	fmt.Println()
-	fmt.Println("After:")
-	fmt.Println(string(modifiedJSON))
+	out.Info("Changes to be applied:")
+	out.Info("")
+	out.Info("Before:")
+	out.Info(string(currentJSON))
+	out.Info("")
+	out.Info("After:")
+	out.Info(string(modifiedJSON))
 
 	return nil
 }

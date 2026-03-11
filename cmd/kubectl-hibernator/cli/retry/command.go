@@ -15,12 +15,12 @@ import (
 
 	hibernatorv1alpha1 "github.com/ardikabs/hibernator/api/v1alpha1"
 	"github.com/ardikabs/hibernator/cmd/kubectl-hibernator/common"
+	"github.com/ardikabs/hibernator/cmd/kubectl-hibernator/output"
 	"github.com/ardikabs/hibernator/internal/wellknown"
 )
 
 type retryOptions struct {
-	root  *common.RootOptions
-	force bool
+	root *common.RootOptions
 }
 
 // NewCommand creates the "retry" command.
@@ -33,19 +33,22 @@ func NewCommand(opts *common.RootOptions) *cobra.Command {
 		Long: `Trigger a manual retry by adding the retry-now annotation to a HibernatePlan.
 The controller will detect this annotation and initiate a retry of the failed operation.
 
-By default, this only works when the plan is in Error phase.
-Use --force to annotate regardless of phase.
+This command only applies to plans in Error phase. To re-run the last executor
+operation on an Active or Hibernated plan, use the 'restart' subcommand instead.
 
 Examples:
-  kubectl hibernator retry my-plan
-  kubectl hibernator retry my-plan --force`,
+  kubectl hibernator retry my-plan`,
 		Args: cobra.ExactArgs(1),
-		RunE: func(cmd *cobra.Command, args []string) error {
-			return runRetry(cmd.Context(), retryOpts, args[0])
-		},
+		RunE: output.WrapRunE(func(ctx context.Context, args []string) error {
+			return runRetry(ctx, retryOpts, args[0])
+		}),
 	}
 
-	cmd.Flags().BoolVar(&retryOpts.force, "force", false, "Add retry annotation regardless of plan phase")
+	// --force is deprecated: retry is now strictly limited to Error phase plans.
+	// Use 'restart' to re-run the last operation on Active or Hibernated plans.
+	var deprecatedForce bool
+	cmd.Flags().BoolVar(&deprecatedForce, "force", false, "[DEPRECATED] has no effect; retry is now restricted to Error phase plans")
+	_ = cmd.Flags().MarkDeprecated("force", "retry is now restricted to plans in Error phase. Use 'restart' to re-trigger an operation on Active or Hibernated plans")
 
 	return cmd
 }
@@ -64,9 +67,9 @@ func runRetry(ctx context.Context, opts *retryOptions, planName string) error {
 		return fmt.Errorf("failed to get HibernatePlan %q in namespace %q: %w", planName, ns, err)
 	}
 
-	// Check phase unless --force
-	if !opts.force && plan.Status.Phase != hibernatorv1alpha1.PhaseError {
-		return fmt.Errorf("HibernatePlan %q is in %q phase (not Error); use --force to retry anyway", planName, plan.Status.Phase)
+	// retry is strictly for Error phase plans
+	if plan.Status.Phase != hibernatorv1alpha1.PhaseError {
+		return retryPhaseError(planName, plan.Status.Phase)
 	}
 
 	// Patch annotation
@@ -81,10 +84,30 @@ func runRetry(ctx context.Context, opts *retryOptions, planName string) error {
 		return fmt.Errorf("failed to patch HibernatePlan %q: %w", planName, err)
 	}
 
-	fmt.Printf("Retry triggered for HibernatePlan %q\n", planName)
+	out := output.FromContext(ctx)
+	out.Success("Retry triggered for HibernatePlan %q", planName)
 	if plan.Status.RetryCount > 0 {
-		fmt.Printf("Previous retries: %d\n", plan.Status.RetryCount)
+		out.Info("Previous retries: %d", plan.Status.RetryCount)
 	}
 
 	return nil
+}
+
+// retryPhaseError returns an informative error when retry is attempted on a plan that is not in Error phase.
+// It guides the user toward the correct subcommand based on the plan's current phase.
+func retryPhaseError(planName string, phase hibernatorv1alpha1.PlanPhase) error {
+	const hint = `
+Hint: 'retry' is reserved for plans stuck in Error phase — it clears the error and
+re-attempts the failed operation using the controller's recovery mechanism.
+
+If the plan is Active or Hibernated and you want to re-run the last executor operation
+(e.g., re-apply a partial hibernation or wakeup), use:
+
+  kubectl hibernator restart %s
+
+'restart' is a one-shot, voluntary re-trigger that honours the plan's current state
+without interfering with the schedule or phase transitions.`
+
+	return fmt.Errorf("HibernatePlan %q is in %q phase, not Error — cannot retry\n%s",
+		planName, phase, fmt.Sprintf(hint, planName))
 }

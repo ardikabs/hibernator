@@ -19,6 +19,7 @@ import (
 
 	hibernatorv1alpha1 "github.com/ardikabs/hibernator/api/v1alpha1"
 	"github.com/ardikabs/hibernator/cmd/kubectl-hibernator/common"
+	"github.com/ardikabs/hibernator/cmd/kubectl-hibernator/output"
 	"github.com/ardikabs/hibernator/internal/restore"
 )
 
@@ -52,9 +53,9 @@ Examples:
   kubectl hibernator restore init my-plan --target db-prod --executor rds --force
   kubectl hibernator restore init my-plan -t karpenter-target -x karpenter`,
 		Args: cobra.ExactArgs(1),
-		RunE: func(cmd *cobra.Command, args []string) error {
-			return runInit(cmd.Context(), initOpts, args[0])
-		},
+		RunE: output.WrapRunE(func(ctx context.Context, args []string) error {
+			return runInit(ctx, initOpts, args[0])
+		}),
 	}
 
 	cmd.Flags().StringVarP(&initOpts.target, "target", "t", "", "Target name (required)")
@@ -68,6 +69,8 @@ Examples:
 }
 
 func runInit(ctx context.Context, opts *initOptions, planName string) error {
+	out := output.FromContext(ctx)
+
 	c, err := common.NewK8sClient(opts.root)
 	if err != nil {
 		return err
@@ -134,6 +137,6 @@ func runInit(ctx context.Context, opts *initOptions, planName string) error {
 		return fmt.Errorf("failed to update restore ConfigMap: %w", err)
 	}
 
-	fmt.Printf("✓ Initialized empty restore point for target %q (executor: %s)\n", opts.target, opts.executor)
+	out.Success("Initialized empty restore point for target %q (executor: %s)", opts.target, opts.executor)
 	return nil
 }

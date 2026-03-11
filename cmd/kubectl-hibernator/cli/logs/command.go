@@ -27,6 +27,7 @@ import (
 
 	hibernatorv1alpha1 "github.com/ardikabs/hibernator/api/v1alpha1"
 	"github.com/ardikabs/hibernator/cmd/kubectl-hibernator/common"
+	"github.com/ardikabs/hibernator/cmd/kubectl-hibernator/output"
 	"github.com/ardikabs/hibernator/internal/wellknown"
 )
 
@@ -58,9 +59,9 @@ Examples:
   kubectl hibernator logs my-plan --follow
   kubectl hibernator logs my-plan --json`,
 		Args: cobra.ExactArgs(1),
-		RunE: func(cmd *cobra.Command, args []string) error {
-			return runLogs(cmd.Context(), logsOpts, args[0])
-		},
+		RunE: output.WrapRunE(func(ctx context.Context, args []string) error {
+			return runLogs(ctx, logsOpts, args[0])
+		}),
 	}
 
 	cmd.Flags().StringVar(&logsOpts.target, "target", "", "Filter logs by target name")
@@ -152,6 +153,8 @@ type logLine struct {
 
 // tailLogsFromPods fetches and aggregates logs from all controller pods, sorts by timestamp, and displays.
 func tailLogsFromPods(ctx context.Context, clientset *kubernetes.Clientset, pods []*corev1.Pod, opts *logsOptions, filter *logFilter) error {
+	out := output.FromContext(ctx)
+
 	logChan := make(chan *logLine, 1000)
 	errChan := make(chan error, len(pods))
 	var wg sync.WaitGroup
@@ -182,7 +185,7 @@ func tailLogsFromPods(ctx context.Context, clientset *kubernetes.Clientset, pods
 	// Check for errors
 	close(errChan)
 	for err := range errChan {
-		fmt.Fprintf(os.Stderr, "Warning: %v\n", err)
+		out.Error("%v", err)
 	}
 
 	// Sort by timestamp
@@ -200,9 +203,9 @@ func tailLogsFromPods(ctx context.Context, clientset *kubernetes.Clientset, pods
 		if !seen[log.hash] {
 			seen[log.hash] = true
 			if opts.root.JsonOutput {
-				fmt.Println(log.raw)
+				out.Info(log.raw)
 			} else {
-				fmt.Println(log.line)
+				out.Info(log.line)
 			}
 		}
 	}
@@ -212,16 +215,18 @@ func tailLogsFromPods(ctx context.Context, clientset *kubernetes.Clientset, pods
 
 // followLogsFromPods streams logs from all controller pods concurrently, merging by timestamp.
 func followLogsFromPods(ctx context.Context, clientset *kubernetes.Clientset, pods []*corev1.Pod, opts *logsOptions, filter *logFilter) error {
+	out := output.FromContext(ctx)
+
 	logChan := make(chan *logLine, 1000)
 	errChan := make(chan error, len(pods))
 	var wg sync.WaitGroup
 
 	// Show which pods we're querying
-	fmt.Fprintf(os.Stderr, "Following logs from %d controller pod(s):\n", len(pods))
+	out.Info("Following logs from %d controller pod(s):", len(pods))
 	for _, pod := range pods {
-		fmt.Fprintf(os.Stderr, "  - %s/%s\n", pod.Namespace, pod.Name)
+		out.Info("  - %s/%s", pod.Namespace, pod.Name)
 	}
-	fmt.Fprintf(os.Stderr, "\n")
+	out.Info("")
 
 	// Stream logs from each pod concurrently
 	for _, pod := range pods {
@@ -252,9 +257,9 @@ func followLogsFromPods(ctx context.Context, clientset *kubernetes.Clientset, po
 		if !seen[log.hash] {
 			seen[log.hash] = true
 			if opts.root.JsonOutput {
-				fmt.Println(log.raw)
+				out.Info(log.raw)
 			} else {
-				fmt.Println(log.line)
+				out.Info(log.line)
 			}
 		}
 		seenMutex.Unlock()
@@ -263,7 +268,7 @@ func followLogsFromPods(ctx context.Context, clientset *kubernetes.Clientset, po
 	// Report any errors
 	close(errChan)
 	for err := range errChan {
-		fmt.Fprintf(os.Stderr, "Error: %v\n", err)
+		out.Error("%v", err)
 	}
 
 	return nil
@@ -324,7 +329,7 @@ func parseLogs(stream io.ReadCloser, filter *logFilter, logChan chan<- *logLine)
 			}
 
 			// Calculate content hash for deduplication
-		hash := fmt.Sprintf("%x", md5.Sum([]byte(line)))
+			hash := fmt.Sprintf("%x", md5.Sum([]byte(line)))
 
 			logChan <- &logLine{
 				raw:       line,

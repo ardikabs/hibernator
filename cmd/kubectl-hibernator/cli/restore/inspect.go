@@ -17,6 +17,7 @@ import (
 	"k8s.io/apimachinery/pkg/types"
 
 	"github.com/ardikabs/hibernator/cmd/kubectl-hibernator/common"
+	"github.com/ardikabs/hibernator/cmd/kubectl-hibernator/output"
 	"github.com/ardikabs/hibernator/cmd/kubectl-hibernator/printers"
 	"github.com/ardikabs/hibernator/internal/restore"
 )
@@ -43,9 +44,9 @@ Examples:
   kubectl hibernator restore inspect my-plan --target rds --resource-id db-prod-01
   kubectl hibernator restore inspect my-plan -t eks-cluster -r node-123 --json`,
 		Args: cobra.ExactArgs(1),
-		RunE: func(cmd *cobra.Command, args []string) error {
-			return runInspect(cmd.Context(), restoreOpts, args[0])
-		},
+		RunE: output.WrapRunE(func(ctx context.Context, args []string) error {
+			return runInspect(ctx, restoreOpts, args[0])
+		}),
 	}
 
 	cmd.Flags().StringVarP(&restoreOpts.target, "target", "t", "", "Target name (required)")
