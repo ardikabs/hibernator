@@ -167,63 +167,6 @@ func newState(key types.NamespacedName, planCtx *message.PlanContext, cfg *Confi
 	}
 }
 
-// selectHandler returns the phase-appropriate Handler for the given state.
-// Dispatch follows a strict priority order:
-//
-//  1. Deletion in progress (DeletionTimestamp set) — returns a lifecycleState
-//     configured for finalizer cleanup, regardless of the current phase.
-//
-//  2. Suspension requested (Spec.Suspend=true) but not yet reflected in status —
-//     returns an inline handler that calls TransitionToSuspended, which drains
-//     any in-flight executions before writing PhaseSuspended.
-//
-//  3. Phase-based dispatch — maps Status.Phase to its dedicated handler:
-//     - ""               → lifecycleState (initialisation / first-time setup)
-//     - PhaseActive      → idleState (schedule evaluation, waiting for off-hours)
-//     - PhaseHibernated  → idleState (schedule evaluation, waiting for on-hours)
-//     - PhaseHibernating → hibernatingState (job orchestration for shutdown)
-//     - PhaseWakingUp    → wakingUpState (job orchestration for wakeup)
-//     - PhaseSuspended   → suspendedState (suspended until resume)
-//     - PhaseError       → recoveryState (retry / manual recovery)
-//     - unknown phase    → nil (caller should treat as a no-op)
-func selectHandler(s *state) Handler {
-	plan := s.plan()
-
-	// Deletion in progress — run finalizer cleanup regardless of phase.
-	if !plan.DeletionTimestamp.IsZero() {
-		return &lifecycleState{state: s, delete: true}
-	}
-
-	// Suspension requested but not yet in PhaseSuspended — transition first.
-	if plan.Spec.Suspend && plan.Status.Phase != hibernatorv1alpha1.PhaseSuspended {
-		return HandlerFunc(func(ctx context.Context, onDeadline bool) (StateResult, error) {
-			result, err := s.TransitionToSuspended(ctx, onDeadline)
-			if err != nil {
-				s.Log.Error(err, "failed to transition to Suspended")
-				return StateResult{}, err
-			}
-			return result, nil
-		})
-	}
-
-	switch plan.Status.Phase {
-	case "":
-		return &lifecycleState{state: s}
-	case hibernatorv1alpha1.PhaseActive, hibernatorv1alpha1.PhaseHibernated:
-		return &idleState{state: s}
-	case hibernatorv1alpha1.PhaseHibernating:
-		return &hibernatingState{state: s}
-	case hibernatorv1alpha1.PhaseWakingUp:
-		return &wakingUpState{state: s}
-	case hibernatorv1alpha1.PhaseSuspended:
-		return &suspendedState{state: s}
-	case hibernatorv1alpha1.PhaseError:
-		return &recoveryState{state: s}
-	default:
-		return nil
-	}
-}
-
 // state holds all context and infrastructure a handler needs for a single
 // handle() invocation. It is constructed fresh on each call via newState() and
 // is not cached between calls.
