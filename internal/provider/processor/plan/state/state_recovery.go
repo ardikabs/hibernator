@@ -84,7 +84,7 @@ func (state *recoveryState) handleManualRetry(ctx context.Context, log logr.Logg
 
 	orig := plan.DeepCopy()
 	delete(plan.Annotations, wellknown.AnnotationRetryNow)
-	if err := state.patchPreservingStatus(ctx, plan, client.MergeFrom(orig)); err != nil {
+	if err := state.patchAndPreserveStatus(ctx, plan, client.MergeFrom(orig)); err != nil {
 		log.Error(err, "failed to clear manual retry annotation")
 		return true, StateResult{RequeueAfter: wellknown.RequeueIntervalOnRecoveryError}, nil
 	}
@@ -211,7 +211,7 @@ func (state *recoveryState) clearRetryAtAnnotation(ctx context.Context, log logr
 	}
 	orig := plan.DeepCopy()
 	delete(plan.Annotations, wellknown.AnnotationRetryAt)
-	if err := state.patchPreservingStatus(ctx, plan, client.MergeFrom(orig)); err != nil && !apierrors.IsNotFound(err) {
+	if err := state.patchAndPreserveStatus(ctx, plan, client.MergeFrom(orig)); err != nil && !apierrors.IsNotFound(err) {
 		log.Error(err, "failed to clear retry-at annotation (non-fatal)")
 		return
 	}

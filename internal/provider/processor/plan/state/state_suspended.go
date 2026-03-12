@@ -63,7 +63,7 @@ func (state *suspendedState) Handle(ctx context.Context) (StateResult, error) {
 			orig := plan.DeepCopy()
 			plan.Spec.Suspend = false
 			delete(plan.Annotations, wellknown.AnnotationSuspendUntil)
-			if err := state.patchPreservingStatus(ctx, plan, client.MergeFrom(orig)); err != nil {
+			if err := state.patchAndPreserveStatus(ctx, plan, client.MergeFrom(orig)); err != nil {
 				log.Error(err, "failed to auto-resume from suspension deadline")
 				return StateResult{}, err
 			}
@@ -94,7 +94,7 @@ func (state *suspendedState) OnDeadline(ctx context.Context) (StateResult, error
 	orig := plan.DeepCopy()
 	plan.Spec.Suspend = false
 	delete(plan.Annotations, wellknown.AnnotationSuspendUntil)
-	if err := state.patchPreservingStatus(ctx, plan, client.MergeFrom(orig)); err != nil {
+	if err := state.patchAndPreserveStatus(ctx, plan, client.MergeFrom(orig)); err != nil {
 		if !apierrors.IsNotFound(err) {
 			log.Error(err, "deadline: failed to patch Spec.Suspend=false")
 		}
@@ -322,7 +322,7 @@ func (state *suspendedState) cleanupSuspensionAnnotations(ctx context.Context, l
 	orig := plan.DeepCopy()
 	delete(plan.Annotations, wellknown.AnnotationSuspendedAtPhase)
 	delete(plan.Annotations, wellknown.AnnotationSuspendReason)
-	if err := state.patchPreservingStatus(ctx, plan, client.MergeFrom(orig)); err != nil {
+	if err := state.patchAndPreserveStatus(ctx, plan, client.MergeFrom(orig)); err != nil {
 		log.Error(err, "failed to clean up suspension annotations (non-fatal)")
 	}
 }

@@ -108,7 +108,7 @@ func (state *wakingUpState) postWakeupCleanup(ctx context.Context, log logr.Logg
 	if _, ok := plan.Annotations[wellknown.AnnotationSuspendedAtPhase]; ok {
 		orig := plan.DeepCopy()
 		delete(plan.Annotations, wellknown.AnnotationSuspendedAtPhase)
-		if err := state.patchPreservingStatus(ctx, plan, client.MergeFrom(orig)); err != nil {
+		if err := state.patchAndPreserveStatus(ctx, plan, client.MergeFrom(orig)); err != nil {
 			log.Error(err, "failed to remove suspended-at-phase annotation (non-fatal)")
 		}
 	}

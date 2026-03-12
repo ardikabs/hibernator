@@ -300,7 +300,7 @@ func TestState_PatchPreservingStatus_PreservesStatus(t *testing.T) {
 	}
 	plan.Annotations["test-key"] = "test-value"
 
-	err := st.patchPreservingStatus(context.Background(), plan, client.MergeFrom(orig))
+	err := st.patchAndPreserveStatus(context.Background(), plan, client.MergeFrom(orig))
 	require.NoError(t, err)
 
 	// Status must be preserved in-memory even after the patch (server might have older status).

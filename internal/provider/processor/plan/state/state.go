@@ -212,22 +212,22 @@ func (s *state) OnDeadline(ctx context.Context) (StateResult, error) { return St
 func (s *state) OnError(ctx context.Context, err error) StateResult {
 	var pe *PlanError
 	if errors.As(err, &pe) {
-		s.Log.Error(err, "plan-level error, transitioning to PhaseError", "plan", s.Key)
+		s.Log.Info("plan-level error, transitioning to PhaseError", "plan", s.Key, "err", err)
 		s.setError(ctx, err)
 		return StateResult{Requeue: true}
 	}
 
-	s.Log.Error(err, "transient error during handler", "plan", s.Key)
+	s.Log.Info("transient error during handler", "plan", s.Key, "err", err)
 	return StateResult{RequeueAfter: wellknown.RequeueIntervalOnTransientError}
 }
 
-// patchPreservingStatus patches the plan object (typically to update annotations or
+// patchAndPreserveStatus patches the plan object (typically to update annotations or
 // spec fields) while preserving the worker's optimistic in-memory status.
 // controller-runtime's Patch deserialises the API server response into the live object,
 // which overwrites Status with the server's (potentially stale) version. This helper
 // snapshots Status before the patch and restores it afterwards, so that status mutations
 // queued via PlanStatuses.Send are never silently reverted.
-func (s *state) patchPreservingStatus(ctx context.Context, plan *hibernatorv1alpha1.HibernatePlan, patch client.Patch) error {
+func (s *state) patchAndPreserveStatus(ctx context.Context, plan *hibernatorv1alpha1.HibernatePlan, patch client.Patch) error {
 	savedStatus := plan.Status.DeepCopy()
 	if err := s.Patch(ctx, plan, patch); err != nil {
 		return err
@@ -254,7 +254,7 @@ func (b *state) nextStage(nextStageIndex int) {
 }
 
 // setError transitions the plan to PhaseError.
-func (b *state) setError(ctx context.Context, phaseErr error) {
+func (b *state) setError(_ context.Context, phaseErr error) {
 	errMsg := "unknown error"
 	if phaseErr != nil {
 		errMsg = phaseErr.Error()
@@ -307,7 +307,7 @@ func (s *state) TransitionToSuspended(ctx context.Context, onDeadline bool) (Sta
 	}
 
 	plan.Annotations[wellknown.AnnotationSuspendedAtPhase] = string(plan.Status.Phase)
-	if err := s.patchPreservingStatus(ctx, plan, client.MergeFrom(orig)); err != nil {
+	if err := s.patchAndPreserveStatus(ctx, plan, client.MergeFrom(orig)); err != nil {
 		return StateResult{}, fmt.Errorf("failed to record suspended-at-phase annotation: %w", err)
 	}
 
