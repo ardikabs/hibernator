@@ -137,7 +137,7 @@ func (s *overrideActionState) consumeRestart(ctx context.Context, plan *hibernat
 	}
 	orig := plan.DeepCopy()
 	delete(plan.Annotations, wellknown.AnnotationRestart)
-	if err := s.patchPreservingStatus(ctx, plan, client.MergeFrom(orig)); err != nil {
+	if err := s.patchAndPreserveStatus(ctx, plan, client.MergeFrom(orig)); err != nil {
 		return false, fmt.Errorf("failed to consume %s annotation: %w", wellknown.AnnotationRestart, err)
 	}
 	return true, nil

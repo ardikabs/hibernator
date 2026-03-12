@@ -168,13 +168,6 @@ func (s *Worker) handle(ctx context.Context, planCtx *message.PlanContext, onDea
 
 // handle dispatches the plan to the appropriate state handler based on its current phase.
 func (s *Worker) handleWithDepth(ctx context.Context, planCtx *message.PlanContext, onDeadline bool, depth int) {
-	if depth >= maxHandleDepth {
-		s.log.Error(nil, "handle() recursion depth exceeded; possible phase loop",
-			"plan", s.key,
-			"phase", planCtx.Plan.Status.Phase)
-		return
-	}
-
 	if planCtx == nil || planCtx.Plan == nil {
 		return
 	}
@@ -182,6 +175,13 @@ func (s *Worker) handleWithDepth(ctx context.Context, planCtx *message.PlanConte
 	plan := planCtx.Plan
 	planName := plan.Name
 	phaseBefore := string(plan.Status.Phase)
+
+	if depth >= maxHandleDepth {
+		s.log.Error(nil, "handle() recursion depth exceeded; possible phase loop",
+			"plan", s.key,
+			"phase", phaseBefore)
+		return
+	}
 
 	start := time.Now()
 	handler := state.New(s.key, planCtx, s.buildConfig())
