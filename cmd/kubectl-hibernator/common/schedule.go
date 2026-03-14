@@ -79,15 +79,16 @@ func ConvertAPIException(exc hibernatorv1alpha1.ScheduleException) *scheduler.Ex
 // ComputeUpcomingEvents computes the next N hibernate/wakeup events by simulating
 // successive evaluator steps. Each step advances the clock by NextRequeueTime so
 // that state-transition boundaries respect schedule buffers and active exceptions.
-// The In field of every returned ScheduleEvent reflects the NextRequeueTime duration
-// from the previous step's perspective, matching the controller's requeue cadence.
+// The In field of every returned ScheduleEvent reflects the duration from when the
+// computation started (user's perspective) to when the event will occur.
 func ComputeUpcomingEvents(baseWindows []scheduler.OffHourWindow, timezone string, exception *scheduler.Exception, count int) ([]ScheduleEvent, error) {
 	if len(baseWindows) == 0 {
 		return nil, fmt.Errorf("no base windows defined")
 	}
 
 	var events []ScheduleEvent
-	cursor := time.Now()
+	startTime := time.Now()
+	cursor := startTime
 
 	for len(events) < count {
 		eval := scheduler.NewScheduleEvaluator(fixedClock{t: cursor})
@@ -96,8 +97,10 @@ func ComputeUpcomingEvents(baseWindows []scheduler.OffHourWindow, timezone strin
 			return nil, fmt.Errorf("evaluate schedule: %w", err)
 		}
 
-		var nextEventTime time.Time
-		var operation string
+		var (
+			nextEventTime time.Time
+			operation     string
+		)
 
 		if result.ShouldHibernate {
 			nextEventTime = result.NextWakeUpTime
@@ -115,7 +118,7 @@ func ComputeUpcomingEvents(baseWindows []scheduler.OffHourWindow, timezone strin
 		events = append(events, ScheduleEvent{
 			Time:      nextEventTime,
 			Operation: operation,
-			In:        in,
+			In:        nextEventTime.Sub(startTime),
 		})
 
 		// Advance cursor to the point the controller would next reconcile.
