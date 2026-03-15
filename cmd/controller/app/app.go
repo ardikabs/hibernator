@@ -26,11 +26,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/webhook"
 
 	hibernatorv1alpha1 "github.com/ardikabs/hibernator/api/v1alpha1"
-	"github.com/ardikabs/hibernator/internal/controller/hibernateplan"
-	"github.com/ardikabs/hibernator/internal/controller/scheduleexception"
 	"github.com/ardikabs/hibernator/internal/provider"
-	"github.com/ardikabs/hibernator/internal/restore"
-	"github.com/ardikabs/hibernator/internal/scheduler"
 	"github.com/ardikabs/hibernator/internal/streaming"
 	"github.com/ardikabs/hibernator/internal/validationwebhook"
 	"github.com/ardikabs/hibernator/internal/version"
@@ -77,8 +73,6 @@ func ParseFlags() Options {
 	flag.BoolVar(&opts.EnableLeaderElection, "leader-elect", envutil.GetBool("LEADER_ELECTION_ENABLED", true),
 		"Enable leader election for controller manager. "+
 			"Enabling this will ensure there is only one active controller manager.")
-	flag.BoolVar(&opts.LegacyReconciler, "legacy-reconciler", envutil.GetBool("LEGACY_RECONCILER", true),
-		"Use legacy monolithic reconciler. Set to false to enable the async phase-driven reconciler.")
 	flag.StringVar(&opts.RunnerImage, "runner-image", envutil.GetString("RUNNER_IMAGE", "ghcr.io/ardikabs/hibernator-runner:latest"),
 		"The runner container image to use for execution jobs.")
 	flag.StringVar(&opts.ControlPlaneEndpoint, "control-plane-endpoint", envutil.GetString("CONTROL_PLANE_ENDPOINT", ""),
@@ -148,51 +142,16 @@ func Run(opts Options) error {
 
 	clk := clock.RealClock{}
 
-	if opts.LegacyReconciler {
-		setupLog.Info("using legacy monolithic reconciler")
-
-		// Set up HibernatePlan controller (legacy)
-		if err = (&hibernateplan.Reconciler{
-			Client:               mgr.GetClient(),
-			APIReader:            mgr.GetAPIReader(),
-			Clock:                clk,
-			Log:                  ctrl.Log.WithName("controllers").WithName("HibernatePlan"),
-			Scheme:               mgr.GetScheme(),
-			Planner:              scheduler.NewPlanner(),
-			ScheduleEvaluator:    scheduler.NewScheduleEvaluator(clk, scheduler.WithScheduleBuffer(opts.ScheduleBufferDuration)),
-			RestoreManager:       restore.NewManager(mgr.GetClient()),
-			ControlPlaneEndpoint: opts.ControlPlaneEndpoint,
-			RunnerImage:          opts.RunnerImage,
-			RunnerServiceAccount: opts.RunnerServiceAccount,
-		}).SetupWithManager(mgr, opts.Workers); err != nil {
-			setupLog.Error(err, "unable to create controller", "controller", "HibernatePlan")
-			return err
-		}
-
-		// Set up ScheduleException controller (legacy)
-		if err = (&scheduleexception.Reconciler{
-			Client:    mgr.GetClient(),
-			APIReader: mgr.GetAPIReader(),
-			Clock:     clk,
-			Log:       ctrl.Log.WithName("controllers").WithName("ScheduleException"),
-			Scheme:    mgr.GetScheme(),
-		}).SetupWithManager(mgr, opts.Workers); err != nil {
-			setupLog.Error(err, "unable to create controller", "controller", "ScheduleException")
-			return err
-		}
-	} else {
-		setupLog.Info("using async phase-driven reconciler")
-
-		if err := provider.Setup(mgr, clk, provider.ProviderOptions{
-			Logger:                 ctrl.Log.WithName("provider"),
-			Workers:                opts.Workers,
-			ScheduleBufferDuration: opts.ScheduleBufferDuration,
-			ControlPlaneEndpoint:   opts.ControlPlaneEndpoint,
-			RunnerImage:            opts.RunnerImage,
-			RunnerServiceAccount:   opts.RunnerServiceAccount,
-		}); err != nil {
-			return err
-		}
+	setupLog.Info("setting up providers")
+	if err := provider.Setup(mgr, clk, provider.ProviderOptions{
+		Logger:                 ctrl.Log.WithName("provider"),
+		Workers:                opts.Workers,
+		ScheduleBufferDuration: opts.ScheduleBufferDuration,
+		ControlPlaneEndpoint:   opts.ControlPlaneEndpoint,
+		RunnerImage:            opts.RunnerImage,
+		RunnerServiceAccount:   opts.RunnerServiceAccount,
+	}); err != nil {
+		return err
 	}
 
 	// Set up validation webhooks
