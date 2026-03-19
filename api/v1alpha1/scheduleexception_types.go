@@ -23,7 +23,7 @@ const (
 )
 
 // ExceptionState represents the lifecycle state of an exception.
-// +kubebuilder:validation:Enum=Pending;Active;Expired
+// +kubebuilder:validation:Enum=Pending;Active;Expired;Detached
 type ExceptionState string
 
 const (
@@ -33,6 +33,11 @@ const (
 	ExceptionStateActive ExceptionState = "Active"
 	// ExceptionStateExpired indicates the exception has passed its validUntil time.
 	ExceptionStateExpired ExceptionState = "Expired"
+	// ExceptionStateDetached indicates the referenced plan no longer exists.
+	// The exception is still a valid resource but is not bound to any plan.
+	// If a plan with the same name is re-created, the exception may transition
+	// back to a time-based state (Pending, Active, or Expired).
+	ExceptionStateDetached ExceptionState = "Detached"
 )
 
 // PlanReference references a HibernatePlan.
@@ -89,7 +94,7 @@ type ScheduleExceptionSpec struct {
 // ScheduleExceptionStatus defines the observed state of ScheduleException.
 type ScheduleExceptionStatus struct {
 	// State is the current lifecycle state of the exception.
-	// +kubebuilder:validation:Enum=Pending;Active;Expired
+	// +kubebuilder:validation:Enum=Pending;Active;Expired;Detached
 	State ExceptionState `json:"state,omitempty"`
 
 	// AppliedAt is when the exception was first applied.
@@ -99,6 +104,10 @@ type ScheduleExceptionStatus struct {
 	// ExpiredAt is when the exception transitioned to Expired state.
 	// +kubebuilder:validation:Optional
 	ExpiredAt *metav1.Time `json:"expiredAt,omitempty"`
+
+	// DetachedAt is when the exception transitioned to Detached state (plan was deleted).
+	// +kubebuilder:validation:Optional
+	DetachedAt *metav1.Time `json:"detachedAt,omitempty"`
 
 	// Message provides diagnostic information about the exception state.
 	// +kubebuilder:validation:Optional

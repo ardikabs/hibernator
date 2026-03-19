@@ -6,22 +6,27 @@ Licensed under the Apache License, Version 2.0.
 package provider
 
 import (
+	"context"
 	"fmt"
 
+	"github.com/go-logr/logr"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/utils/clock"
 	ctrl "sigs.k8s.io/controller-runtime"
+	"sigs.k8s.io/controller-runtime/pkg/client"
+	"sigs.k8s.io/controller-runtime/pkg/event"
 	"sigs.k8s.io/controller-runtime/pkg/manager"
-	"sigs.k8s.io/controller-runtime/pkg/reconcile"
 
+	hibernatorv1alpha1 "github.com/ardikabs/hibernator/api/v1alpha1"
 	"github.com/ardikabs/hibernator/internal/message"
 	planprocessor "github.com/ardikabs/hibernator/internal/provider/processor/plan"
+	requeueprocessor "github.com/ardikabs/hibernator/internal/provider/processor/requeue"
 	scheduleexceptionprocessor "github.com/ardikabs/hibernator/internal/provider/processor/scheduleexception"
 	statusprocessor "github.com/ardikabs/hibernator/internal/provider/processor/status"
 	"github.com/ardikabs/hibernator/internal/restore"
 	"github.com/ardikabs/hibernator/internal/scheduler"
-	"github.com/go-logr/logr"
-
-	hibernatorv1alpha1 "github.com/ardikabs/hibernator/api/v1alpha1"
+	"github.com/ardikabs/hibernator/internal/wellknown"
 )
 
 // ProviderOptions contains the configuration needed to wire the full async reconciler pipeline.
@@ -57,12 +62,24 @@ type ProviderOptions struct {
 //	         → [Coordinator → Workers] → status updates → [Status Writer] → K8s
 func Setup(mgr ctrl.Manager, clk clock.Clock, opts ProviderOptions) error {
 	log := opts.Logger.WithName("setup")
+
+	// Register field indexer for ScheduleException.spec.planRef.name.
+	// This enables efficient lookups of exceptions by plan name without relying on labels.
+	if err := registerFieldIndexes(mgr); err != nil {
+		return fmt.Errorf("unable to register field indexes: %w", err)
+	}
+
 	restoreMgr := restore.NewManager(mgr.GetClient())
 	planner := scheduler.NewPlanner()
 	schedEvaluator := scheduler.NewScheduleEvaluator(clk, scheduler.WithScheduleBuffer(opts.ScheduleBufferDuration))
 
 	// Shared message bus between providers and processors.
 	resources := new(message.ControllerResources)
+
+	// PlanEnqueuer channel — processors write GenericEvents here to trigger
+	// a fresh PlanReconciler.Reconcile() without relying on RequeueAfter.
+	enqueueCh := make(chan event.GenericEvent, 128)
+	enqueuer := &channelEnqueuer{ch: enqueueCh}
 
 	planStatusProcessor := statusprocessor.NewUpdateProcessor[*hibernatorv1alpha1.HibernatePlan](
 		opts.Logger.WithName("processor").WithName("plan-status"),
@@ -80,48 +97,24 @@ func Setup(mgr ctrl.Manager, clk clock.Clock, opts ProviderOptions) error {
 	}
 
 	// --- Providers (K8s reconciler → watchable map) ---
-
-	providers := []struct {
-		name       string
-		reconciler interface {
-			reconcile.Reconciler
-			SetupWithManager(ctrl.Manager, int) error
-		}
-	}{
-		{
-			name: "hibernateplan",
-			reconciler: &PlanReconciler{
-				Client:            mgr.GetClient(),
-				APIReader:         mgr.GetAPIReader(),
-				Clock:             clk,
-				Log:               opts.Logger.WithName("hibernateplan"),
-				Scheme:            mgr.GetScheme(),
-				Planner:           planner,
-				ScheduleEvaluator: schedEvaluator,
-				RestoreManager:    restoreMgr,
-				Resources:         resources,
-			},
-		},
-		{
-			name: "scheduleexception",
-			reconciler: &ExceptionReconciler{
-				Client:    mgr.GetClient(),
-				APIReader: mgr.GetAPIReader(),
-				Clock:     clk,
-				Log:       opts.Logger.WithName("scheduleexception"),
-				Scheme:    mgr.GetScheme(),
-				Resources: resources,
-			},
-		},
+	provider := &PlanReconciler{
+		Client:            mgr.GetClient(),
+		APIReader:         mgr.GetAPIReader(),
+		Clock:             clk,
+		Log:               opts.Logger.WithName("hibernateplan"),
+		Scheme:            mgr.GetScheme(),
+		Planner:           planner,
+		ScheduleEvaluator: schedEvaluator,
+		RestoreManager:    restoreMgr,
+		Resources:         resources,
+		EnqueueCh:         enqueueCh,
 	}
 
-	for _, p := range providers {
-		if err := p.reconciler.SetupWithManager(mgr, opts.Workers); err != nil {
-			return fmt.Errorf("unable to create %s provider: %w", p.name, err)
-		}
-
-		log.Info("registered provider", "provider", p.name)
+	if err := provider.SetupWithManager(mgr, opts.Workers); err != nil {
+		return fmt.Errorf("unable to create hibernateplan provider: %w", err)
 	}
+
+	log.Info("registered provider", "provider", "hibernateplan")
 
 	// --- Processors (watchable map → status updates) ---
 	// Registered as Runnables via mgr.Add() — started when the manager starts.
@@ -148,10 +141,18 @@ func Setup(mgr ctrl.Manager, clk clock.Clock, opts ProviderOptions) error {
 			},
 		},
 		{
+			name: "plan.requeue",
+			runnable: &requeueprocessor.PlanRequeueProcessor{
+				Clock:     clk,
+				Log:       opts.Logger.WithName("processor").WithName("requeue"),
+				Resources: resources,
+				Enqueuer:  enqueuer,
+			},
+		},
+		{
 			name: "scheduleexception.processor",
 			runnable: &scheduleexceptionprocessor.LifecycleProcessor{
 				Client:    mgr.GetClient(),
-				APIReader: mgr.GetAPIReader(),
 				Clock:     clk,
 				Log:       opts.Logger.WithName("processor").WithName("exception"),
 				Resources: resources,
@@ -176,4 +177,37 @@ func Setup(mgr ctrl.Manager, clk clock.Clock, opts ProviderOptions) error {
 	}
 
 	return nil
+}
+
+// registerFieldIndexes sets up field indexes required by the reconciler pipeline.
+func registerFieldIndexes(mgr ctrl.Manager) error {
+	return mgr.GetFieldIndexer().IndexField(
+		context.Background(),
+		&hibernatorv1alpha1.ScheduleException{},
+		wellknown.FieldIndexExceptionPlanRef,
+		func(obj client.Object) []string {
+			exc, ok := obj.(*hibernatorv1alpha1.ScheduleException)
+			if !ok {
+				return nil
+			}
+			return []string{exc.Spec.PlanRef.Name}
+		},
+	)
+}
+
+// channelEnqueuer implements message.PlanEnqueuer by sending GenericEvents to a channel
+// that is registered as a WatchesRawSource on the PlanReconciler.
+type channelEnqueuer struct {
+	ch chan<- event.GenericEvent
+}
+
+func (e *channelEnqueuer) Enqueue(key types.NamespacedName) {
+	e.ch <- event.GenericEvent{
+		Object: &hibernatorv1alpha1.HibernatePlan{
+			ObjectMeta: metav1.ObjectMeta{
+				Name:      key.Name,
+				Namespace: key.Namespace,
+			},
+		},
+	}
 }

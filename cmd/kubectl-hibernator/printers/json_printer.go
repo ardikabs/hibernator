@@ -178,8 +178,8 @@ func (p *JSONPrinter) buildStatusJSON(plan hibernatorv1alpha1.HibernatePlan) Pla
 		status.Executions = append(status.Executions, e)
 	}
 
-	for _, exc := range plan.Status.ActiveExceptions {
-		status.ActiveExceptions = append(status.ActiveExceptions, ExceptionReferenceJSON{
+	for _, exc := range plan.Status.ExceptionReferences {
+		status.ExceptionReferences = append(status.ExceptionReferences, ExceptionReferenceJSON{
 			Name:       exc.Name,
 			ValidUntil: exc.ValidUntil.Format(time.RFC3339),
 		})

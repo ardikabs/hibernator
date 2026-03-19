@@ -209,9 +209,9 @@ func (p *ConsolePrinter) printStatus(out *StatusOutput, w io.Writer) error {
 		}
 	}
 
-	if len(plan.Status.ActiveExceptions) > 0 {
-		tw.line("\n  Active Exceptions:")
-		for _, exc := range plan.Status.ActiveExceptions {
+	if len(plan.Status.ExceptionReferences) > 0 {
+		tw.line("\n Exceptions:")
+		for _, exc := range plan.Status.ExceptionReferences {
 			tw.line("    - %s (type: %s, until: %s, state: %s)",
 				exc.Name,
 				exc.Type,

@@ -7,6 +7,7 @@ package scheduleexception
 
 import (
 	"context"
+	"fmt"
 	"testing"
 	"time"
 
@@ -45,6 +46,13 @@ func newTestProcessor(t *testing.T, objs ...client.Object) (*LifecycleProcessor,
 			&hibernatorv1alpha1.ScheduleException{},
 			&hibernatorv1alpha1.HibernatePlan{},
 		).
+		WithIndex(&hibernatorv1alpha1.ScheduleException{}, wellknown.FieldIndexExceptionPlanRef, func(obj client.Object) []string {
+			exc, ok := obj.(*hibernatorv1alpha1.ScheduleException)
+			if !ok {
+				return nil
+			}
+			return []string{exc.Spec.PlanRef.Name}
+		}).
 		WithObjects(objs...).
 		Build()
 
@@ -56,10 +64,8 @@ func newTestProcessor(t *testing.T, objs ...client.Object) (*LifecycleProcessor,
 	}
 	p := &LifecycleProcessor{
 		Client:    c,
-		APIReader: c,
 		Clock:     clocktesting.NewFakeClock(time.Now()),
 		Log:       logr.Discard(),
-		Scheme:    scheme,
 		Resources: &message.ControllerResources{},
 		Statuses:  statuses,
 	}
@@ -246,7 +252,7 @@ func TestHandleUpdate_NilException_IsNoop(t *testing.T) {
 	p, _ := newTestProcessor(t)
 	errChan := make(chan error, 1)
 	// Must not panic.
-	p.handleUpdate(context.Background(), logr.Discard(),
+	p.handleExceptionUpdate(context.Background(), logr.Discard(),
 		types.NamespacedName{Name: "x", Namespace: "default"}, nil, errChan)
 }
 
@@ -260,7 +266,7 @@ func TestHandleUpdate_AddsFinalizer(t *testing.T) {
 	p.Clock = clocktesting.NewFakeClock(now)
 
 	errChan := make(chan error, 1)
-	p.handleUpdate(context.Background(), logr.Discard(),
+	p.handleExceptionUpdate(context.Background(), logr.Discard(),
 		types.NamespacedName{Name: "ex-fin", Namespace: "default"}, ex, errChan)
 
 	select {
@@ -285,20 +291,30 @@ func TestHandleUpdate_AddsFinalizer(t *testing.T) {
 
 func TestHandleUpdate_DeletionTimestamp_RemovesFromResources(t *testing.T) {
 	ex := baseScheduleException("ex-del", "plan-a")
+	// Add a finalizer so the fake client accepts the object with DeletionTimestamp.
+	ex.Finalizers = []string{wellknown.ExceptionFinalizerName}
 	nowTime := metav1.Now()
 	ex.DeletionTimestamp = &nowTime
 
-	p, _ := newTestProcessor(t)
+	p, _ := newTestProcessor(t, ex)
 	key := types.NamespacedName{Name: "ex-del", Namespace: "default"}
 
-	// Pre-populate the watchable map so we can verify it gets deleted.
-	p.Resources.ExceptionResources.Store(key, ex)
-
 	errChan := make(chan error, 1)
-	p.handleUpdate(context.Background(), logr.Discard(), key, ex, errChan)
+	p.handleExceptionUpdate(context.Background(), logr.Discard(), key, ex, errChan)
 
-	_, exists := p.Resources.ExceptionResources.Load(key)
-	assert.False(t, exists, "exception should have been removed from watchable map on deletion")
+	// handleExceptionUpdate with DeletionTimestamp delegates to handleExceptionDelete,
+	// which re-fetches from APIReader and handles cleanup (finalizer removal).
+	select {
+	case err := <-errChan:
+		t.Fatalf("unexpected error during deletion handling: %v", err)
+	default:
+	}
+
+	// After finalizer removal, the fake client auto-deletes the object
+	// because DeletionTimestamp is set and no finalizers remain.
+	updated := &hibernatorv1alpha1.ScheduleException{}
+	err := p.Get(context.Background(), key, updated)
+	assert.True(t, client.IgnoreNotFound(err) == nil, "exception should be deleted after finalizer removal")
 }
 
 // ---------------------------------------------------------------------------
@@ -315,4 +331,427 @@ func TestRemoveFromPlanStatus_QueuesStatusUpdate(t *testing.T) {
 	planUpdater := statuses.PlanStatuses.(*captureUpdater[*hibernatorv1alpha1.HibernatePlan])
 	assert.Equal(t, 1, planUpdater.Len(),
 		"should have queued one plan status update")
+}
+
+// ---------------------------------------------------------------------------
+// hasOwnerReferenceToPlan
+// ---------------------------------------------------------------------------
+
+func TestHasOwnerReferenceToPlan_NoOwnerRefs(t *testing.T) {
+	ex := baseScheduleException("ex1", "my-plan")
+	key := types.NamespacedName{Name: "my-plan", Namespace: "default"}
+	assert.False(t, hasOwnerReferenceToPlan(ex, key))
+}
+
+func TestHasOwnerReferenceToPlan_MatchingRef(t *testing.T) {
+	ex := baseScheduleException("ex1", "my-plan")
+	ex.OwnerReferences = []metav1.OwnerReference{
+		{
+			APIVersion: hibernatorv1alpha1.GroupVersion.String(),
+			Kind:       "HibernatePlan",
+			Name:       "my-plan",
+		},
+	}
+	key := types.NamespacedName{Name: "my-plan", Namespace: "default"}
+	assert.True(t, hasOwnerReferenceToPlan(ex, key))
+}
+
+func TestHasOwnerReferenceToPlan_DifferentPlanName(t *testing.T) {
+	ex := baseScheduleException("ex1", "my-plan")
+	ex.OwnerReferences = []metav1.OwnerReference{
+		{
+			APIVersion: hibernatorv1alpha1.GroupVersion.String(),
+			Kind:       "HibernatePlan",
+			Name:       "other-plan",
+		},
+	}
+	key := types.NamespacedName{Name: "my-plan", Namespace: "default"}
+	assert.False(t, hasOwnerReferenceToPlan(ex, key))
+}
+
+func TestHasOwnerReferenceToPlan_DifferentKind(t *testing.T) {
+	ex := baseScheduleException("ex1", "my-plan")
+	ex.OwnerReferences = []metav1.OwnerReference{
+		{
+			APIVersion: hibernatorv1alpha1.GroupVersion.String(),
+			Kind:       "CloudProvider",
+			Name:       "my-plan",
+		},
+	}
+	key := types.NamespacedName{Name: "my-plan", Namespace: "default"}
+	assert.False(t, hasOwnerReferenceToPlan(ex, key))
+}
+
+// ---------------------------------------------------------------------------
+// transitionToDetached
+// ---------------------------------------------------------------------------
+
+func TestTransitionToDetached_QueuesUpdate(t *testing.T) {
+	ex := baseScheduleException("ex1", "my-plan")
+	ex.Status.State = hibernatorv1alpha1.ExceptionStateActive
+
+	p, statuses := newTestProcessor(t, ex)
+	key := types.NamespacedName{Name: "ex1", Namespace: "default"}
+
+	p.transitionToDetached(context.Background(), logr.Discard(), key, ex, "my-plan")
+
+	excUpdater := statuses.ExceptionStatuses.(*captureUpdater[*hibernatorv1alpha1.ScheduleException])
+	require.Equal(t, 1, excUpdater.Len(), "should have queued one exception status update")
+
+	upd := <-excUpdater.C()
+	assert.Equal(t, hibernatorv1alpha1.ExceptionStateDetached, upd.Resource.Status.State)
+	assert.Contains(t, upd.Resource.Status.Message, "my-plan")
+	assert.Contains(t, upd.Resource.Status.Message, "no longer exists")
+	assert.NotNil(t, upd.Resource.Status.DetachedAt, "DetachedAt should be set when transitioning to Detached")
+	assert.False(t, upd.Resource.Status.DetachedAt.IsZero(), "DetachedAt should not be zero")
+}
+
+func TestTransitionToDetached_AlreadyDetached_IsNoop(t *testing.T) {
+	ex := baseScheduleException("ex1", "my-plan")
+	ex.Status.State = hibernatorv1alpha1.ExceptionStateDetached
+
+	p, statuses := newTestProcessor(t, ex)
+	key := types.NamespacedName{Name: "ex1", Namespace: "default"}
+
+	p.transitionToDetached(context.Background(), logr.Discard(), key, ex, "my-plan")
+
+	excUpdater := statuses.ExceptionStatuses.(*captureUpdater[*hibernatorv1alpha1.ScheduleException])
+	assert.Equal(t, 0, excUpdater.Len(), "should not queue update for already-detached exception")
+}
+
+// ---------------------------------------------------------------------------
+// handlePlanDelete — Detached vs OwnerReference
+// ---------------------------------------------------------------------------
+
+func TestHandlePlanDelete_NoOwnerRef_TransitionsToDetached(t *testing.T) {
+	ex1 := baseScheduleException("ex1", "my-plan")
+	ex1.Status.State = hibernatorv1alpha1.ExceptionStateActive
+	ex2 := baseScheduleException("ex2", "my-plan")
+	ex2.Status.State = hibernatorv1alpha1.ExceptionStatePending
+
+	p, statuses := newTestProcessor(t, ex1, ex2)
+	planKey := types.NamespacedName{Name: "my-plan", Namespace: "default"}
+	errChan := make(chan error, 4)
+
+	p.handlePlanDelete(context.Background(), logr.Discard(), planKey, errChan)
+
+	select {
+	case err := <-errChan:
+		t.Fatalf("unexpected error: %v", err)
+	default:
+	}
+
+	excUpdater := statuses.ExceptionStatuses.(*captureUpdater[*hibernatorv1alpha1.ScheduleException])
+	assert.Equal(t, 2, excUpdater.Len(), "both exceptions should be transitioned to Detached")
+
+	for range 2 {
+		upd := <-excUpdater.C()
+		assert.Equal(t, hibernatorv1alpha1.ExceptionStateDetached, upd.Resource.Status.State)
+	}
+}
+
+func TestHandlePlanDelete_WithOwnerRef_SkipsException(t *testing.T) {
+	ex := baseScheduleException("ex-owned", "my-plan")
+	ex.Status.State = hibernatorv1alpha1.ExceptionStateActive
+	ex.OwnerReferences = []metav1.OwnerReference{
+		{
+			APIVersion: hibernatorv1alpha1.GroupVersion.String(),
+			Kind:       "HibernatePlan",
+			Name:       "my-plan",
+		},
+	}
+
+	p, statuses := newTestProcessor(t, ex)
+	planKey := types.NamespacedName{Name: "my-plan", Namespace: "default"}
+	errChan := make(chan error, 4)
+
+	p.handlePlanDelete(context.Background(), logr.Discard(), planKey, errChan)
+
+	select {
+	case err := <-errChan:
+		t.Fatalf("unexpected error: %v", err)
+	default:
+	}
+
+	excUpdater := statuses.ExceptionStatuses.(*captureUpdater[*hibernatorv1alpha1.ScheduleException])
+	assert.Equal(t, 0, excUpdater.Len(), "owned exception should be skipped (K8s GC handles it)")
+}
+
+func TestHandlePlanDelete_MixedOwnership(t *testing.T) {
+	// ex-owned has OwnerReference — should be skipped.
+	exOwned := baseScheduleException("ex-owned", "my-plan")
+	exOwned.Status.State = hibernatorv1alpha1.ExceptionStateActive
+	exOwned.OwnerReferences = []metav1.OwnerReference{
+		{
+			APIVersion: hibernatorv1alpha1.GroupVersion.String(),
+			Kind:       "HibernatePlan",
+			Name:       "my-plan",
+		},
+	}
+
+	// ex-standalone has no OwnerReference — should become Detached.
+	exStandalone := baseScheduleException("ex-standalone", "my-plan")
+	exStandalone.Status.State = hibernatorv1alpha1.ExceptionStateActive
+
+	p, statuses := newTestProcessor(t, exOwned, exStandalone)
+	planKey := types.NamespacedName{Name: "my-plan", Namespace: "default"}
+	errChan := make(chan error, 4)
+
+	p.handlePlanDelete(context.Background(), logr.Discard(), planKey, errChan)
+
+	select {
+	case err := <-errChan:
+		t.Fatalf("unexpected error: %v", err)
+	default:
+	}
+
+	excUpdater := statuses.ExceptionStatuses.(*captureUpdater[*hibernatorv1alpha1.ScheduleException])
+	assert.Equal(t, 1, excUpdater.Len(), "only standalone exception should be transitioned")
+
+	upd := <-excUpdater.C()
+	assert.Equal(t, "ex-standalone", upd.NamespacedName.Name)
+	assert.Equal(t, hibernatorv1alpha1.ExceptionStateDetached, upd.Resource.Status.State)
+}
+
+// ---------------------------------------------------------------------------
+// updateExceptionReferences
+// ---------------------------------------------------------------------------
+
+func TestUpdateExceptionReferences_BuildsSortedRefs(t *testing.T) {
+	now := time.Date(2026, 1, 10, 12, 0, 0, 0, time.UTC)
+	plan := &hibernatorv1alpha1.HibernatePlan{
+		ObjectMeta: metav1.ObjectMeta{Name: "plan-a", Namespace: "default"},
+	}
+
+	// Active exception (validFrom in the past, validUntil in the future)
+	activeExc := hibernatorv1alpha1.ScheduleException{
+		ObjectMeta: metav1.ObjectMeta{Name: "exc-active", Namespace: "default"},
+		Spec: hibernatorv1alpha1.ScheduleExceptionSpec{
+			Type:       "suspend",
+			ValidFrom:  metav1.Time{Time: now.Add(-1 * time.Hour)},
+			ValidUntil: metav1.Time{Time: now.Add(2 * time.Hour)},
+		},
+		Status: hibernatorv1alpha1.ScheduleExceptionStatus{
+			State:     hibernatorv1alpha1.ExceptionStateActive,
+			AppliedAt: &metav1.Time{Time: now.Add(-1 * time.Hour)},
+		},
+	}
+
+	// Pending exception (validFrom in the future)
+	pendingExc := hibernatorv1alpha1.ScheduleException{
+		ObjectMeta: metav1.ObjectMeta{Name: "exc-pending", Namespace: "default"},
+		Spec: hibernatorv1alpha1.ScheduleExceptionSpec{
+			Type:       "extend",
+			ValidFrom:  metav1.Time{Time: now.Add(5 * time.Hour)},
+			ValidUntil: metav1.Time{Time: now.Add(10 * time.Hour)},
+		},
+		Status: hibernatorv1alpha1.ScheduleExceptionStatus{
+			State: hibernatorv1alpha1.ExceptionStatePending,
+		},
+	}
+
+	// Expired exception (validUntil in the past)
+	expiredExc := hibernatorv1alpha1.ScheduleException{
+		ObjectMeta: metav1.ObjectMeta{Name: "exc-expired", Namespace: "default"},
+		Spec: hibernatorv1alpha1.ScheduleExceptionSpec{
+			Type:       "suspend",
+			ValidFrom:  metav1.Time{Time: now.Add(-5 * time.Hour)},
+			ValidUntil: metav1.Time{Time: now.Add(-1 * time.Hour)},
+		},
+		Status: hibernatorv1alpha1.ScheduleExceptionStatus{
+			State: hibernatorv1alpha1.ExceptionStateExpired,
+		},
+	}
+
+	planCtx := &message.PlanContext{
+		Plan:       plan,
+		Exceptions: []hibernatorv1alpha1.ScheduleException{expiredExc, pendingExc, activeExc},
+	}
+	key := types.NamespacedName{Name: plan.Name, Namespace: plan.Namespace}
+	p, statuses := newTestProcessor(t)
+	p.updateExceptionReferences(logr.Discard(), key, plan, planCtx.Exceptions)
+
+	planUpdater := statuses.PlanStatuses.(*captureUpdater[*hibernatorv1alpha1.HibernatePlan])
+	require.Equal(t, 1, planUpdater.Len(), "should queue exactly one plan status update")
+
+	upd := <-planUpdater.C()
+	refs := upd.Resource.Status.ExceptionReferences
+	require.Len(t, refs, 3)
+
+	// Order: Active > Pending > Expired
+	assert.Equal(t, "exc-active", refs[0].Name)
+	assert.Equal(t, "exc-pending", refs[1].Name)
+	assert.Equal(t, "exc-expired", refs[2].Name)
+}
+
+func TestUpdateExceptionReferences_SkipsDeletingExceptions(t *testing.T) {
+	now := time.Date(2026, 1, 10, 12, 0, 0, 0, time.UTC)
+	nowMeta := metav1.Now()
+	plan := &hibernatorv1alpha1.HibernatePlan{
+		ObjectMeta: metav1.ObjectMeta{Name: "plan-a", Namespace: "default"},
+	}
+
+	deletingExc := hibernatorv1alpha1.ScheduleException{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:              "exc-deleting",
+			Namespace:         "default",
+			DeletionTimestamp: &nowMeta,
+			Finalizers:        []string{wellknown.ExceptionFinalizerName},
+		},
+		Spec: hibernatorv1alpha1.ScheduleExceptionSpec{
+			Type:       "suspend",
+			ValidFrom:  metav1.Time{Time: now.Add(-1 * time.Hour)},
+			ValidUntil: metav1.Time{Time: now.Add(2 * time.Hour)},
+		},
+		Status: hibernatorv1alpha1.ScheduleExceptionStatus{
+			State: hibernatorv1alpha1.ExceptionStateActive,
+		},
+	}
+
+	activeExc := hibernatorv1alpha1.ScheduleException{
+		ObjectMeta: metav1.ObjectMeta{Name: "exc-active", Namespace: "default"},
+		Spec: hibernatorv1alpha1.ScheduleExceptionSpec{
+			Type:       "extend",
+			ValidFrom:  metav1.Time{Time: now.Add(-1 * time.Hour)},
+			ValidUntil: metav1.Time{Time: now.Add(2 * time.Hour)},
+		},
+		Status: hibernatorv1alpha1.ScheduleExceptionStatus{
+			State: hibernatorv1alpha1.ExceptionStateActive,
+		},
+	}
+
+	planCtx := &message.PlanContext{
+		Plan:       plan,
+		Exceptions: []hibernatorv1alpha1.ScheduleException{deletingExc, activeExc},
+	}
+	key := types.NamespacedName{Name: plan.Name, Namespace: plan.Namespace}
+	p, statuses := newTestProcessor(t)
+	p.updateExceptionReferences(logr.Discard(), key, planCtx.Plan, planCtx.Exceptions)
+
+	planUpdater := statuses.PlanStatuses.(*captureUpdater[*hibernatorv1alpha1.HibernatePlan])
+	require.Equal(t, 1, planUpdater.Len())
+
+	upd := <-planUpdater.C()
+	refs := upd.Resource.Status.ExceptionReferences
+	require.Len(t, refs, 1, "deleting exception should be excluded")
+	assert.Equal(t, "exc-active", refs[0].Name)
+}
+
+func TestUpdateExceptionReferences_NoChange_SkipsUpdate(t *testing.T) {
+	now := time.Date(2026, 1, 10, 12, 0, 0, 0, time.UTC)
+	appliedAt := &metav1.Time{Time: now.Add(-1 * time.Hour)}
+
+	existingRefs := []hibernatorv1alpha1.ExceptionReference{
+		{
+			Name:       "exc-active",
+			Type:       "suspend",
+			ValidFrom:  metav1.Time{Time: now.Add(-1 * time.Hour)},
+			ValidUntil: metav1.Time{Time: now.Add(2 * time.Hour)},
+			State:      hibernatorv1alpha1.ExceptionStateActive,
+			AppliedAt:  appliedAt,
+		},
+	}
+
+	plan := &hibernatorv1alpha1.HibernatePlan{
+		ObjectMeta: metav1.ObjectMeta{Name: "plan-a", Namespace: "default"},
+		Status:     hibernatorv1alpha1.HibernatePlanStatus{ExceptionReferences: existingRefs},
+	}
+
+	exc := hibernatorv1alpha1.ScheduleException{
+		ObjectMeta: metav1.ObjectMeta{Name: "exc-active", Namespace: "default"},
+		Spec: hibernatorv1alpha1.ScheduleExceptionSpec{
+			Type:       "suspend",
+			ValidFrom:  metav1.Time{Time: now.Add(-1 * time.Hour)},
+			ValidUntil: metav1.Time{Time: now.Add(2 * time.Hour)},
+		},
+		Status: hibernatorv1alpha1.ScheduleExceptionStatus{
+			State:     hibernatorv1alpha1.ExceptionStateActive,
+			AppliedAt: appliedAt,
+		},
+	}
+
+	planCtx := &message.PlanContext{
+		Plan:       plan,
+		Exceptions: []hibernatorv1alpha1.ScheduleException{exc},
+	}
+	key := types.NamespacedName{Name: plan.Name, Namespace: plan.Namespace}
+
+	p, statuses := newTestProcessor(t)
+	p.updateExceptionReferences(logr.Discard(), key, planCtx.Plan, planCtx.Exceptions)
+
+	planUpdater := statuses.PlanStatuses.(*captureUpdater[*hibernatorv1alpha1.HibernatePlan])
+	assert.Equal(t, 0, planUpdater.Len(), "should not queue update when references unchanged")
+}
+
+func TestUpdateExceptionReferences_CapsAt10(t *testing.T) {
+	now := time.Date(2026, 1, 10, 12, 0, 0, 0, time.UTC)
+	plan := &hibernatorv1alpha1.HibernatePlan{
+		ObjectMeta: metav1.ObjectMeta{Name: "plan-a", Namespace: "default"},
+	}
+
+	exceptions := make([]hibernatorv1alpha1.ScheduleException, 15)
+	for i := range exceptions {
+		exceptions[i] = hibernatorv1alpha1.ScheduleException{
+			ObjectMeta: metav1.ObjectMeta{
+				Name:      fmt.Sprintf("exc-%02d", i),
+				Namespace: "default",
+			},
+			Spec: hibernatorv1alpha1.ScheduleExceptionSpec{
+				Type:       "suspend",
+				ValidFrom:  metav1.Time{Time: now.Add(time.Duration(-i) * time.Hour)},
+				ValidUntil: metav1.Time{Time: now.Add(time.Duration(15-i) * time.Hour)},
+			},
+			Status: hibernatorv1alpha1.ScheduleExceptionStatus{
+				State: hibernatorv1alpha1.ExceptionStateActive,
+			},
+		}
+	}
+
+	planCtx := &message.PlanContext{
+		Plan:       plan,
+		Exceptions: exceptions,
+	}
+	key := types.NamespacedName{Name: plan.Name, Namespace: plan.Namespace}
+
+	p, statuses := newTestProcessor(t)
+	p.updateExceptionReferences(logr.Discard(), key, planCtx.Plan, planCtx.Exceptions)
+
+	planUpdater := statuses.PlanStatuses.(*captureUpdater[*hibernatorv1alpha1.HibernatePlan])
+	require.Equal(t, 1, planUpdater.Len())
+
+	upd := <-planUpdater.C()
+	assert.Len(t, upd.Resource.Status.ExceptionReferences, 10, "should cap at 10 references")
+}
+
+func TestUpdateExceptionReferences_NoExceptions_ClearsRefs(t *testing.T) {
+	now := time.Date(2026, 1, 10, 12, 0, 0, 0, time.UTC)
+	plan := &hibernatorv1alpha1.HibernatePlan{
+		ObjectMeta: metav1.ObjectMeta{Name: "plan-a", Namespace: "default"},
+		Status: hibernatorv1alpha1.HibernatePlanStatus{
+			ExceptionReferences: []hibernatorv1alpha1.ExceptionReference{
+				{
+					Name:       "old-exc",
+					Type:       "suspend",
+					ValidFrom:  metav1.Time{Time: now.Add(-5 * time.Hour)},
+					ValidUntil: metav1.Time{Time: now.Add(-1 * time.Hour)},
+					State:      hibernatorv1alpha1.ExceptionStateExpired,
+				},
+			},
+		},
+	}
+
+	planCtx := &message.PlanContext{
+		Plan:       plan,
+		Exceptions: nil,
+	}
+	key := types.NamespacedName{Name: plan.Name, Namespace: plan.Namespace}
+
+	p, statuses := newTestProcessor(t)
+	p.updateExceptionReferences(logr.Discard(), key, planCtx.Plan, planCtx.Exceptions)
+
+	planUpdater := statuses.PlanStatuses.(*captureUpdater[*hibernatorv1alpha1.HibernatePlan])
+	require.Equal(t, 1, planUpdater.Len(), "should queue update to clear stale references")
+
+	upd := <-planUpdater.C()
+	assert.Empty(t, upd.Resource.Status.ExceptionReferences)
 }

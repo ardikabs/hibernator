@@ -31,12 +31,12 @@ func (state *idleState) Handle(ctx context.Context) (StateResult, error) {
 			"plan", state.Key.String(),
 			"phase", plan.Status.Phase)
 
-	if planCtx.ScheduleResult == nil {
+	if planCtx.Schedule == nil {
 		log.V(1).Info("no schedule result available, skipping")
 		return StateResult{}, nil
 	}
 
-	shouldHibernate := planCtx.ScheduleResult.ShouldHibernate
+	shouldHibernate := planCtx.Schedule.ShouldHibernate
 
 	switch plan.Status.Phase {
 	case hibernatorv1alpha1.PhaseActive:

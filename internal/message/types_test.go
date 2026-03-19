@@ -34,9 +34,12 @@ func TestPlanContext_DeepCopy_Full_IsDeep(t *testing.T) {
 	orig := &PlanContext{
 		Plan:           plan,
 		HasRestoreData: true,
-		ScheduleResult: &ScheduleEvaluation{ShouldHibernate: true, RequeueAfter: 5 * time.Minute},
-		Exceptions: []hibernatorv1alpha1.ScheduleException{
-			{ObjectMeta: metav1.ObjectMeta{Name: "ex1"}},
+		Schedule: &ScheduleEvaluation{
+			Exceptions: []hibernatorv1alpha1.ScheduleException{
+				{ObjectMeta: metav1.ObjectMeta{Name: "ex1"}},
+			},
+			ShouldHibernate: true,
+			RequeueAfter:    5 * time.Minute,
 		},
 	}
 
@@ -45,12 +48,12 @@ func TestPlanContext_DeepCopy_Full_IsDeep(t *testing.T) {
 	require.NotNil(t, copy)
 	assert.NotSame(t, orig, copy)
 	assert.NotSame(t, orig.Plan, copy.Plan)
-	assert.NotSame(t, orig.ScheduleResult, copy.ScheduleResult)
+	assert.NotSame(t, orig.Schedule, copy.Schedule)
 	assert.Equal(t, orig.HasRestoreData, copy.HasRestoreData)
-	assert.Equal(t, orig.ScheduleResult.ShouldHibernate, copy.ScheduleResult.ShouldHibernate)
-	assert.Equal(t, orig.ScheduleResult.RequeueAfter, copy.ScheduleResult.RequeueAfter)
-	assert.Len(t, copy.Exceptions, 1)
-	assert.Equal(t, "ex1", copy.Exceptions[0].Name)
+	assert.Equal(t, orig.Schedule.ShouldHibernate, copy.Schedule.ShouldHibernate)
+	assert.Equal(t, orig.Schedule.RequeueAfter, copy.Schedule.RequeueAfter)
+	assert.Len(t, copy.Schedule.Exceptions, 1)
+	assert.Equal(t, "ex1", copy.Schedule.Exceptions[0].Name)
 }
 
 func TestPlanContext_DeepCopy_NilFields_OK(t *testing.T) {
@@ -58,7 +61,7 @@ func TestPlanContext_DeepCopy_NilFields_OK(t *testing.T) {
 	copy := orig.DeepCopy()
 	require.NotNil(t, copy)
 	assert.Nil(t, copy.Plan)
-	assert.Nil(t, copy.ScheduleResult)
+	assert.Nil(t, copy.Schedule)
 }
 
 // ---------------------------------------------------------------------------
@@ -109,30 +112,33 @@ func TestPlanContext_Equal_SamePlan_IsTrue(t *testing.T) {
 	assert.True(t, a.Equal(b))
 }
 
-func TestPlanContext_Equal_DifferentScheduleResult_IsFalse(t *testing.T) {
-	a := &PlanContext{ScheduleResult: &ScheduleEvaluation{ShouldHibernate: true}}
-	b := &PlanContext{ScheduleResult: &ScheduleEvaluation{ShouldHibernate: false}}
+func TestPlanContext_Equal_DifferentSchedule_IsFalse(t *testing.T) {
+	a := &PlanContext{Schedule: &ScheduleEvaluation{ShouldHibernate: true}}
+	b := &PlanContext{Schedule: &ScheduleEvaluation{ShouldHibernate: false}}
 	assert.False(t, a.Equal(b))
 }
 
 func TestPlanContext_Equal_RequeueAfterIgnored_IsTrue(t *testing.T) {
 	// RequeueAfter is intentionally excluded from equality — changes to it must not
 	// cause spurious re-delivery.
-	a := &PlanContext{ScheduleResult: &ScheduleEvaluation{ShouldHibernate: true, RequeueAfter: 1 * time.Minute}}
-	b := &PlanContext{ScheduleResult: &ScheduleEvaluation{ShouldHibernate: true, RequeueAfter: 5 * time.Minute}}
+	a := &PlanContext{Schedule: &ScheduleEvaluation{ShouldHibernate: true, RequeueAfter: 1 * time.Minute}}
+	b := &PlanContext{Schedule: &ScheduleEvaluation{ShouldHibernate: true, RequeueAfter: 5 * time.Minute}}
 	assert.True(t, a.Equal(b))
 }
 
-func TestPlanContext_Equal_NilVsNonNilScheduleResult_IsFalse(t *testing.T) {
-	a := &PlanContext{ScheduleResult: &ScheduleEvaluation{ShouldHibernate: true}}
-	b := &PlanContext{ScheduleResult: nil}
+func TestPlanContext_Equal_NilVsNonNilSchedule_IsFalse(t *testing.T) {
+	a := &PlanContext{Schedule: &ScheduleEvaluation{ShouldHibernate: true}}
+	b := &PlanContext{Schedule: nil}
 	assert.False(t, a.Equal(b))
 }
 
 func TestPlanContext_Equal_DifferentExceptionCount_IsFalse(t *testing.T) {
-	a := &PlanContext{Exceptions: []hibernatorv1alpha1.ScheduleException{
-		{ObjectMeta: metav1.ObjectMeta{Name: "ex1"}},
+	a := &PlanContext{Schedule: &ScheduleEvaluation{
+		Exceptions: []hibernatorv1alpha1.ScheduleException{
+			{ObjectMeta: metav1.ObjectMeta{Name: "ex1"}},
+		},
 	}}
+
 	b := &PlanContext{}
 	assert.False(t, a.Equal(b))
 }

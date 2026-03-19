@@ -250,21 +250,34 @@ spec:
           status:
             description: HibernatePlanStatus defines the observed state of HibernatePlan.
             properties:
-              activeExceptions:
+              currentCycleID:
+                description: CurrentCycleID is the current hibernation cycle identifier.
+                type: string
+              currentOperation:
                 description: |-
-                  ActiveExceptions is the history of schedule exceptions for this plan.
-                  Maximum 10 entries, with expired exceptions pruned first.
+                  CurrentOperation tracks the current operation type (shutdown or wakeup).
+                  Used to determine which phase to transition to when stages complete.
+                type: string
+              currentStageIndex:
+                description: |-
+                  CurrentStageIndex tracks which stage is currently executing (0-based).
+                  Reset to 0 when starting new hibernation/wakeup cycle.
+                type: integer
+              errorMessage:
+                description: ErrorMessage provides details about the error that caused
+                  PhaseError.
+                type: string
+              exceptionReferences:
+                description: |-
+                  ExceptionReferences is the history of schedule exceptions for this plan.
+                  Maximum 10 entries, ordered by: active state first (most relevant), then by ValidFrom descending (most recent first).
+                  Oldest entries are pruned when limit is exceeded.
                 items:
                   description: ExceptionReference tracks an exception in the plan's
                     history.
                   properties:
                     appliedAt:
                       description: AppliedAt is when the exception was first applied.
-                      format: date-time
-                      type: string
-                    expiredAt:
-                      description: ExpiredAt is when the exception transitioned to
-                        Expired.
                       format: date-time
                       type: string
                     name:
@@ -276,6 +289,7 @@ spec:
                       - Pending
                       - Active
                       - Expired
+                      - Detached
                       type: string
                     type:
                       description: Type of the exception (extend, suspend, replace).
@@ -300,23 +314,6 @@ spec:
                   - validUntil
                   type: object
                 type: array
-              currentCycleID:
-                description: CurrentCycleID is the current hibernation cycle identifier.
-                type: string
-              currentOperation:
-                description: |-
-                  CurrentOperation tracks the current operation type (shutdown or wakeup).
-                  Used to determine which phase to transition to when stages complete.
-                type: string
-              currentStageIndex:
-                description: |-
-                  CurrentStageIndex tracks which stage is currently executing (0-based).
-                  Reset to 0 when starting new hibernation/wakeup cycle.
-                type: integer
-              errorMessage:
-                description: ErrorMessage provides details about the error that caused
-                  PhaseError.
-                type: string
               executionHistory:
                 description: |-
                   ExecutionHistory records historical execution cycles (max 5).

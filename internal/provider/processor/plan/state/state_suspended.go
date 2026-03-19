@@ -228,11 +228,11 @@ func (state *suspendedState) resumeFromExecution(ctx context.Context, log logr.L
 	}
 
 	planCtx := state.PlanCtx
-	if planCtx.ScheduleResult == nil {
+	if planCtx.Schedule == nil {
 		return StateResult{}, false, nil
 	}
 
-	shouldHibernate := planCtx.ScheduleResult.ShouldHibernate
+	shouldHibernate := planCtx.Schedule.ShouldHibernate
 
 	var targetPhase hibernatorv1alpha1.PlanPhase
 
@@ -287,10 +287,10 @@ func (state *suspendedState) shouldForceWakeUpOnResume() bool {
 	if !planCtx.HasRestoreData {
 		return false
 	}
-	if planCtx.ScheduleResult == nil {
+	if planCtx.Schedule == nil {
 		return false
 	}
-	return !planCtx.ScheduleResult.ShouldHibernate
+	return !planCtx.Schedule.ShouldHibernate
 }
 
 func (state *suspendedState) forceWakeUpOnResume(ctx context.Context, log logr.Logger) (StateResult, error) {

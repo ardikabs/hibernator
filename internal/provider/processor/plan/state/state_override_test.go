@@ -27,7 +27,7 @@ func newOverrideActionState(
 ) *state {
 	c := newHandlerFakeClient(plan)
 	st := newHandlerState(plan, c)
-	st.PlanCtx.ScheduleResult = sr
+	st.PlanCtx.Schedule = sr
 	st.PlanCtx.HasRestoreData = hasRestoreData
 	return st
 }
@@ -129,8 +129,8 @@ func TestNew_OverrideActionAnnotation_SuspendRequested_SuspendTakesPriority(t *t
 
 	h := New(st.Key, st.PlanCtx, buildTestConfig(c))
 	require.NotNil(t, h)
-	_, ok := h.(HandlerFunc)
-	assert.True(t, ok, "expected HandlerFunc(TransitionToSuspended): Suspend priority > override-action")
+	_, ok := h.(*preSuspensionState)
+	assert.True(t, ok, "expected *preSuspensionState: Suspend priority > override-action")
 }
 
 // Phase=Suspended + Spec.Suspend=false → suspendedState (Suspended ∉ {Active,Hibernated}).

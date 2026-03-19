@@ -260,7 +260,7 @@ func isStatusEqual(objA, objB any) bool {
 		if b, ok := objB.(*hibernatorv1alpha1.HibernatePlan); ok {
 			opts := append(defaultOpts,
 				cmpopts.IgnoreFields(hibernatorv1alpha1.ExecutionStatus{}, "StartedAt", "FinishedAt"),
-				cmpopts.IgnoreFields(hibernatorv1alpha1.ExceptionReference{}, "AppliedAt", "ExpiredAt"),
+				cmpopts.IgnoreFields(hibernatorv1alpha1.ExceptionReference{}, "AppliedAt"),
 			)
 			return cmp.Equal(a.Status, b.Status, opts)
 		}

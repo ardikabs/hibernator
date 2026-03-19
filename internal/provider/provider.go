@@ -29,6 +29,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/handler"
 	"sigs.k8s.io/controller-runtime/pkg/predicate"
 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
+	"sigs.k8s.io/controller-runtime/pkg/source"
 
 	hibernatorv1alpha1 "github.com/ardikabs/hibernator/api/v1alpha1"
 	"github.com/ardikabs/hibernator/internal/message"
@@ -45,6 +46,9 @@ import (
 // phase-transition decisions (schedule evaluation, HasRestoreData, active exceptions).
 // Supervisor states own OPERATIONAL reads/writes — Job lifecycle, Pod inspection,
 // and restore ConfigMap data that are part of executing the current phase.
+//
+// The reconciler is a pure data collector — it never requeues. Time-based
+// re-enqueuing is handled by the PlanRequeueProcessor via the EnqueueCh channel.
 type PlanReconciler struct {
 	client.Client
 	APIReader client.Reader
@@ -56,6 +60,10 @@ type PlanReconciler struct {
 	ScheduleEvaluator *scheduler.ScheduleEvaluator
 	RestoreManager    *restore.Manager
 	Planner           *scheduler.Planner
+
+	// EnqueueCh receives GenericEvents from internal processors (e.g., PlanRequeueProcessor)
+	// to trigger a fresh reconcile without relying on RequeueAfter.
+	EnqueueCh <-chan event.GenericEvent
 
 	deliveryNonce atomic.Int64
 }
@@ -77,7 +85,7 @@ func (r *PlanReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.
 	log := r.Log.WithValues("plan", key)
 
 	// Fetch the HibernatePlan
-	plan := &hibernatorv1alpha1.HibernatePlan{}
+	plan := new(hibernatorv1alpha1.HibernatePlan)
 	if err := r.Get(ctx, key, plan); err != nil {
 		if apierrors.IsNotFound(err) {
 			// Plan deleted -> remove from watchable map (triggers delete event in processors)
@@ -92,25 +100,13 @@ func (r *PlanReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.
 		log = log.WithValues("cycleID", plan.Status.CurrentCycleID, "operation", plan.Status.CurrentOperation)
 	}
 
-	// Fetch active ScheduleExceptions for this plan
-	var exceptionList hibernatorv1alpha1.ScheduleExceptionList
-	if err := r.List(ctx, &exceptionList,
-		client.InNamespace(plan.Namespace),
-		client.MatchingLabels{wellknown.LabelPlan: plan.Name},
-	); err != nil {
-		log.Error(err, "failed to list schedule exceptions")
-		// Continue without exceptions -- don't fail the whole reconcile
+	// Fetch ALL exceptions for this plan (all states) using field index.
+	allExceptions, err := r.fetchAllExceptions(ctx, plan)
+	if err != nil {
+		log.Error(err, "failed to fetch all exceptions")
 	}
 
-	// Filter to Active exceptions only — Pending and Expired exceptions carry no
-	// actionable information for schedule evaluation or Worker phase decisions.
-	// Excluding them prevents spurious watchable re-delivery when the exception
-	// controller writes status updates (e.g. ExpiredAt) to non-active exceptions.
-	activeExceptions := lo.Filter(exceptionList.Items, func(exc hibernatorv1alpha1.ScheduleException, idx int) bool {
-		return exc.Status.State == hibernatorv1alpha1.ExceptionStateActive
-	})
-
-	schedResult, err := r.evaluateSchedule(log, plan, activeExceptions)
+	schedule, err := r.evaluateSchedule(ctx, plan, allExceptions, log)
 	if err != nil {
 		log.Error(err, "failed to evaluate schedule")
 		return ctrl.Result{RequeueAfter: wellknown.RequeueIntervalOnScheduleError}, nil
@@ -125,10 +121,12 @@ func (r *PlanReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.
 	}
 
 	// Bundle into PlanContext and store in watchable map.
+	// The reconciler is a pure data collector — it does not requeue.
+	// Time-based re-enqueuing is handled by the PlanRequeueProcessor.
 	planCtx := &message.PlanContext{
 		Plan:           plan,
-		Exceptions:     activeExceptions,
-		ScheduleResult: schedResult,
+		Schedule:       schedule,
+		Exceptions:     allExceptions,
 		HasRestoreData: hasRestoreData,
 		DeliveryNonce:  r.deliveryNonce.Add(1),
 	}
@@ -137,18 +135,44 @@ func (r *PlanReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.
 
 	log.V(1).Info("stored plan context",
 		"phase", plan.Status.Phase,
-		"activeExceptionsCount", len(activeExceptions),
 		"hasRestoreData", hasRestoreData,
-		"nextEvent", schedResult.RequeueAfter.String(),
+		"totalExceptions", len(allExceptions),
 	)
 
-	return ctrl.Result{RequeueAfter: schedResult.RequeueAfter}, nil
+	return ctrl.Result{}, nil
+}
+
+// fetchAllExceptions retrieves ALL ScheduleExceptions for a given plan (any state)
+// using the field index on spec.planRef.name.
+func (r *PlanReconciler) fetchAllExceptions(ctx context.Context, plan *hibernatorv1alpha1.HibernatePlan) ([]hibernatorv1alpha1.ScheduleException, error) {
+	var exceptionList hibernatorv1alpha1.ScheduleExceptionList
+	if err := r.List(ctx, &exceptionList,
+		client.InNamespace(plan.Namespace),
+		client.MatchingFields{wellknown.FieldIndexExceptionPlanRef: plan.Name},
+	); err != nil {
+		return nil, err
+	}
+
+	return exceptionList.Items, nil
 }
 
 // evaluateSchedule checks if we should be in hibernation based on schedule and active exceptions.
-func (r *PlanReconciler) evaluateSchedule(log logr.Logger, plan *hibernatorv1alpha1.HibernatePlan, exceptions []hibernatorv1alpha1.ScheduleException) (*message.ScheduleEvaluation, error) {
+// It derives the active exceptions from the provided full list to avoid a second List call.
+func (r *PlanReconciler) evaluateSchedule(_ context.Context, plan *hibernatorv1alpha1.HibernatePlan, allExceptions []hibernatorv1alpha1.ScheduleException, log logr.Logger) (*message.ScheduleEvaluation, error) {
 	if r.ScheduleEvaluator == nil {
 		return nil, fmt.Errorf("no schedule evaluator configured")
+	}
+
+	// Derive active exceptions from the full list.
+	activeExceptions := r.filterActiveExceptions(allExceptions)
+
+	// Select the newest active exception
+	exception, err := r.selectActiveException(log, plan, activeExceptions)
+	if err != nil {
+		log.Error(err, "failed to get active exception, evaluating base schedule only")
+
+		// Fall through to evaluate base schedule
+		exception = nil
 	}
 
 	// Convert OffHourWindows to scheduler format
@@ -161,15 +185,6 @@ func (r *PlanReconciler) evaluateSchedule(log logr.Logger, plan *hibernatorv1alp
 		}
 	}
 
-	// Query for active exception
-	exception, err := r.selectActiveException(log, plan, exceptions)
-	if err != nil {
-		log.Error(err, "failed to get active exception, evaluating base schedule only")
-
-		// Fall through to evaluate base schedule
-		exception = nil
-	}
-
 	// Evaluate schedule with exception (if any)
 	result, err := r.ScheduleEvaluator.Evaluate(baseWindows, plan.Spec.Schedule.Timezone, exception)
 	if err != nil {
@@ -178,52 +193,55 @@ func (r *PlanReconciler) evaluateSchedule(log logr.Logger, plan *hibernatorv1alp
 
 	requeueAfter := r.ScheduleEvaluator.NextRequeueTime(result)
 	log.Info("schedule evaluation result",
-		"nextHibernateTime", result.NextHibernateTime,
-		"nextWakeUpTime", result.NextWakeUpTime,
 		"shouldHibernate", result.ShouldHibernate,
+		"totalActiveExceptions", len(activeExceptions),
+		"nextHibernateTime", result.NextHibernateTime.Format(time.RFC3339),
+		"nextWakeUpTime", result.NextWakeUpTime.Format(time.RFC3339),
 		"nextRequeue", requeueAfter.String(),
 	)
 
 	return &message.ScheduleEvaluation{
+		Exceptions:      activeExceptions,
 		ShouldHibernate: result.ShouldHibernate,
 		RequeueAfter:    requeueAfter,
 	}, nil
 }
 
-// selectActiveException selects the newest active ScheduleException from a list.
-func (r *PlanReconciler) selectActiveException(log logr.Logger, plan *hibernatorv1alpha1.HibernatePlan, exceptions []hibernatorv1alpha1.ScheduleException) (*scheduler.Exception, error) {
+// filterActiveExceptions filters and sorts active exceptions from a full list.
+// Returns active exceptions sorted by CreationTimestamp descending (newest first).
+func (r *PlanReconciler) filterActiveExceptions(allExceptions []hibernatorv1alpha1.ScheduleException) []hibernatorv1alpha1.ScheduleException {
 	now := r.Clock.Now()
 
-	var activeExceptions []hibernatorv1alpha1.ScheduleException
-	for _, exc := range exceptions {
-		if exc.Status.State != hibernatorv1alpha1.ExceptionStateActive {
-			continue
-		}
-		if now.Before(exc.Spec.ValidFrom.Time) || now.After(exc.Spec.ValidUntil.Time) {
-			continue
-		}
-		activeExceptions = append(activeExceptions, exc)
-	}
+	activeExceptions := lo.Filter(allExceptions, func(exc hibernatorv1alpha1.ScheduleException, _ int) bool {
+		return now.After(exc.Spec.ValidFrom.Time) && now.Before(exc.Spec.ValidUntil.Time)
+	})
 
-	if len(activeExceptions) == 0 {
+	// Sort by CreationTimestamp descending (newest first)
+	// Assuming that newest exception is the most relevant when multiple exceptions are active,
+	// as it likely reflects the latest intent of the user.
+	sort.Slice(activeExceptions, func(i, j int) bool {
+		return activeExceptions[j].CreationTimestamp.Before(&activeExceptions[i].CreationTimestamp)
+	})
+
+	return activeExceptions
+}
+
+// selectActiveException selects the newest active ScheduleException from a list.
+// TODO(ardikabs): on handling multiple active exceptions
+// - P1: validationwebhook on determining multiple exceptions within the same window, or prioritization logic based on exception type or other criteria.
+func (r *PlanReconciler) selectActiveException(log logr.Logger, plan *hibernatorv1alpha1.HibernatePlan, activeExceptions []hibernatorv1alpha1.ScheduleException) (*scheduler.Exception, error) {
+	// With multiple active exceptions, pick the newest one
+	exc, ok := lo.First(activeExceptions)
+	if !ok {
+		log.V(1).Info("no active exceptions found")
 		return nil, nil
 	}
 
-	// If multiple active exceptions, pick the newest one
-	if len(activeExceptions) > 1 {
-		log.Info("multiple active exceptions found, picking newest",
-			"count", len(activeExceptions),
-			"plan", plan.Name)
+	log.Info("active exception found, evaluating against schedule",
+		"count", len(activeExceptions),
+		"exception", exc.Name,
+		"plan", plan.Name)
 
-		// Sort by CreationTimestamp descending (newest first)
-		// Assuming that newest exception is the most relevant when multiple exceptions are active,
-		// as it likely reflects the latest intent of the user.
-		sort.Slice(activeExceptions, func(i, j int) bool {
-			return activeExceptions[j].CreationTimestamp.Before(&activeExceptions[i].CreationTimestamp)
-		})
-	}
-
-	exc := activeExceptions[0]
 	windows := make([]scheduler.OffHourWindow, len(exc.Spec.Windows))
 	for i, w := range exc.Spec.Windows {
 		windows[i] = scheduler.OffHourWindow{
@@ -316,13 +334,28 @@ func (r *PlanReconciler) SetupWithManager(mgr ctrl.Manager, workers int) error {
 	}
 
 	return ctrl.NewControllerManagedBy(mgr).
-		For(&hibernatorv1alpha1.HibernatePlan{}).
+		// React to Spec changes (generation bump) and annotation changes (retry-now,
+		// suspend-until, override-action, restart, etc.). Status writes are excluded —
+		// they neither bump Generation nor change Annotations, preventing the
+		// status-write → reconcile → re-store loop.
+		For(&hibernatorv1alpha1.HibernatePlan{}, builder.WithPredicates(
+			predicate.Or(
+				predicate.GenerationChangedPredicate{},
+				predicate.AnnotationChangedPredicate{},
+			),
+		)).
 		Owns(&batchv1.Job{}, builder.WithPredicates(jobTerminalPredicate)).
 		Owns(&corev1.ConfigMap{}, builder.WithPredicates(configMapDataChangedPredicate)).
 		Watches(
 			&hibernatorv1alpha1.ScheduleException{},
 			handler.EnqueueRequestsFromMapFunc(r.findPlansForException),
+			// Only Spec changes matter — no state handler reads exc.Status.State;
+			// schedule evaluation uses ValidFrom/ValidUntil directly. Suppressing
+			// exception status writes eliminates the ExceptionLifecycleProcessor
+			// status-write → reconcile loop.
+			builder.WithPredicates(predicate.GenerationChangedPredicate{}),
 		).
+		WatchesRawSource(source.Channel(r.EnqueueCh, &handler.EnqueueRequestForObject{})).
 		WithOptions(controller.Options{
 			MaxConcurrentReconciles: workers,
 		}).

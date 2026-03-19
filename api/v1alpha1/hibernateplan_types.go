@@ -392,10 +392,11 @@ type HibernatePlanStatus struct {
 	// +optional
 	ErrorMessage string `json:"errorMessage,omitempty"`
 
-	// ActiveExceptions is the history of schedule exceptions for this plan.
-	// Maximum 10 entries, with expired exceptions pruned first.
+	// ExceptionReferences is the history of schedule exceptions for this plan.
+	// Maximum 10 entries, ordered by: active state first (most relevant), then by ValidFrom descending (most recent first).
+	// Oldest entries are pruned when limit is exceeded.
 	// +optional
-	ActiveExceptions []ExceptionReference `json:"activeExceptions,omitempty"`
+	ExceptionReferences []ExceptionReference `json:"exceptionReferences,omitempty"`
 
 	// CurrentStageIndex tracks which stage is currently executing (0-based).
 	// Reset to 0 when starting new hibernation/wakeup cycle.
@@ -434,10 +435,6 @@ type ExceptionReference struct {
 	// AppliedAt is when the exception was first applied.
 	// +optional
 	AppliedAt *metav1.Time `json:"appliedAt,omitempty"`
-
-	// ExpiredAt is when the exception transitioned to Expired.
-	// +optional
-	ExpiredAt *metav1.Time `json:"expiredAt,omitempty"`
 }
 
 // +kubebuilder:object:root=true
@@ -485,13 +482,6 @@ func ExceptionReferencesEqual(a, b []ExceptionReference) bool {
 			return false
 		}
 		if a[i].AppliedAt != nil && !a[i].AppliedAt.Equal(b[i].AppliedAt) {
-			return false
-		}
-		// Compare ExpiredAt
-		if (a[i].ExpiredAt == nil) != (b[i].ExpiredAt == nil) {
-			return false
-		}
-		if a[i].ExpiredAt != nil && !a[i].ExpiredAt.Equal(b[i].ExpiredAt) {
 			return false
 		}
 	}

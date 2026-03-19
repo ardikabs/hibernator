@@ -73,7 +73,7 @@ type ScheduleJSON struct {
 	OffHours   []OffHourWindowJSON      `json:"offHours"`
 	State      ScheduleStateJSON        `json:"currentState"`
 	Events     []common.ScheduleEvent   `json:"upcomingEvents"`
-	Exceptions []ExceptionReferenceJSON `json:"activeExceptions,omitempty"`
+	Exceptions []ExceptionReferenceJSON `json:"exceptionReferences,omitempty"`
 }
 
 type ScheduleStateJSON struct {
@@ -130,17 +130,17 @@ type PlanTargetJSON struct {
 }
 
 type PlanStatusJSON struct {
-	Phase            string                   `json:"phase"`
-	Suspended        bool                     `json:"suspended"`
-	SuspendUntil     string                   `json:"suspendUntil,omitempty"`
-	SuspendReason    string                   `json:"suspendReason,omitempty"`
-	CurrentCycleID   string                   `json:"currentCycleId,omitempty"`
-	CurrentOperation string                   `json:"currentOperation,omitempty"`
-	ErrorMessage     string                   `json:"errorMessage,omitempty"`
-	RetryCount       int32                    `json:"retryCount,omitempty"`
-	LastRetryTime    string                   `json:"lastRetryTime,omitempty"`
-	Executions       []ExecutionStatusJSON    `json:"executions,omitempty"`
-	ActiveExceptions []ExceptionReferenceJSON `json:"activeExceptions,omitempty"`
+	Phase               string                   `json:"phase"`
+	Suspended           bool                     `json:"suspended"`
+	SuspendUntil        string                   `json:"suspendUntil,omitempty"`
+	SuspendReason       string                   `json:"suspendReason,omitempty"`
+	CurrentCycleID      string                   `json:"currentCycleId,omitempty"`
+	CurrentOperation    string                   `json:"currentOperation,omitempty"`
+	ErrorMessage        string                   `json:"errorMessage,omitempty"`
+	RetryCount          int32                    `json:"retryCount,omitempty"`
+	LastRetryTime       string                   `json:"lastRetryTime,omitempty"`
+	Executions          []ExecutionStatusJSON    `json:"executions,omitempty"`
+	ExceptionReferences []ExceptionReferenceJSON `json:"exceptionReferences,omitempty"`
 }
 
 type ExecutionStatusJSON struct {

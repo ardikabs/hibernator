@@ -51,6 +51,13 @@ func newPlanReconciler(clk *clocktesting.FakeClock, objs ...client.Object) (*Pla
 		WithScheme(scheme).
 		WithObjects(objs...).
 		WithStatusSubresource(&hibernatorv1alpha1.HibernatePlan{}).
+		WithIndex(&hibernatorv1alpha1.ScheduleException{}, wellknown.FieldIndexExceptionPlanRef, func(obj client.Object) []string {
+			exc, ok := obj.(*hibernatorv1alpha1.ScheduleException)
+			if !ok {
+				return nil
+			}
+			return []string{exc.Spec.PlanRef.Name}
+		}).
 		Build()
 
 	resources := new(message.ControllerResources)
@@ -148,7 +155,8 @@ func TestPlanReconciler_Reconcile_WithException_PopulatesExceptions(t *testing.T
 
 	stored, ok := resources.PlanResources.Load(key)
 	require.True(t, ok)
-	assert.Len(t, stored.Exceptions, 1, "one exception should be attached to PlanContext")
+	assert.NotNil(t, stored.Schedule, "Schedule should be populated in PlanContext")
+	assert.Len(t, stored.Schedule.Exceptions, 1, "one exception should be attached to PlanContext's schedule")
 }
 
 // ---------------------------------------------------------------------------
@@ -198,23 +206,24 @@ func TestSelectActiveException_PendingException_IsIgnored(t *testing.T) {
 	r, _ := newPlanReconciler(clk)
 	plan := simplePlan("p", "default")
 
+	// Exception whose ValidFrom is still in the future — genuinely pending by time.
+	// filterActiveExceptions uses time-based logic only (no Status.State check),
+	// so this exception is correctly excluded before reaching selectActiveException.
 	exceptions := []hibernatorv1alpha1.ScheduleException{
 		{
 			ObjectMeta: metav1.ObjectMeta{Name: "exc-1", Namespace: "default"},
 			Spec: hibernatorv1alpha1.ScheduleExceptionSpec{
-				ValidFrom:  metav1.NewTime(now.Add(-1 * time.Hour)),
-				ValidUntil: metav1.NewTime(now.Add(1 * time.Hour)),
+				ValidFrom:  metav1.NewTime(now.Add(1 * time.Hour)), // future
+				ValidUntil: metav1.NewTime(now.Add(2 * time.Hour)),
 				Type:       hibernatorv1alpha1.ExceptionSuspend,
-			},
-			Status: hibernatorv1alpha1.ScheduleExceptionStatus{
-				State: hibernatorv1alpha1.ExceptionStatePending, // not active
 			},
 		},
 	}
 
-	exc, err := r.selectActiveException(logr.Discard(), plan, exceptions)
+	active := r.filterActiveExceptions(exceptions)
+	exc, err := r.selectActiveException(logr.Discard(), plan, active)
 	require.NoError(t, err)
-	assert.Nil(t, exc, "pending exception should be ignored")
+	assert.Nil(t, exc, "future-ValidFrom exception should be excluded from schedule evaluation")
 }
 
 func TestSelectActiveException_ExpiredTimeWindow_IsIgnored(t *testing.T) {
@@ -231,15 +240,13 @@ func TestSelectActiveException_ExpiredTimeWindow_IsIgnored(t *testing.T) {
 				ValidUntil: metav1.NewTime(now.Add(-1 * time.Hour)), // already expired
 				Type:       hibernatorv1alpha1.ExceptionSuspend,
 			},
-			Status: hibernatorv1alpha1.ScheduleExceptionStatus{
-				State: hibernatorv1alpha1.ExceptionStateActive,
-			},
 		},
 	}
 
-	exc, err := r.selectActiveException(logr.Discard(), plan, exceptions)
+	active := r.filterActiveExceptions(exceptions)
+	exc, err := r.selectActiveException(logr.Discard(), plan, active)
 	require.NoError(t, err)
-	assert.Nil(t, exc, "exception past ValidUntil should be ignored")
+	assert.Nil(t, exc, "exception past ValidUntil should be excluded from schedule evaluation")
 }
 
 func TestSelectActiveException_MultipleActive_PicksNewest(t *testing.T) {
@@ -277,7 +284,8 @@ func TestSelectActiveException_MultipleActive_PicksNewest(t *testing.T) {
 		Status: hibernatorv1alpha1.ScheduleExceptionStatus{State: hibernatorv1alpha1.ExceptionStateActive},
 	}
 
-	exc, err := r.selectActiveException(logr.Discard(), plan, []hibernatorv1alpha1.ScheduleException{older, newer})
+	active := r.filterActiveExceptions([]hibernatorv1alpha1.ScheduleException{older, newer})
+	exc, err := r.selectActiveException(logr.Discard(), plan, active)
 	require.NoError(t, err)
 	require.NotNil(t, exc)
 	// The newer exception has ExceptionExtend type; verify correct exception was picked.

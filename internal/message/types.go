@@ -20,9 +20,6 @@ import (
 type ControllerResources struct {
 	// PlanResources holds enriched PlanContext for each HibernatePlan.
 	PlanResources watchable.Map[types.NamespacedName, *PlanContext]
-
-	// ExceptionResources holds raw ScheduleException resources.
-	ExceptionResources watchable.Map[types.NamespacedName, *hibernatorv1alpha1.ScheduleException]
 }
 
 // PlanContext contains all data needed by processors to make decisions for a single HibernatePlan.
@@ -31,12 +28,16 @@ type PlanContext struct {
 	// Plan is the HibernatePlan resource fetched from K8s.
 	Plan *hibernatorv1alpha1.HibernatePlan
 
-	// Exceptions is the list of ScheduleExceptions associated with this plan.
-	Exceptions []hibernatorv1alpha1.ScheduleException
-
-	// ScheduleResult contains the pre-computed schedule evaluation.
+	// Schedule contains the pre-computed schedule evaluation.
 	// Nil if schedule evaluation failed or is not applicable.
-	ScheduleResult *ScheduleEvaluation
+	Schedule *ScheduleEvaluation
+
+	// Exceptions is the full list of ScheduleExceptions associated with this plan
+	// (all states: Pending, Active, Expired). Used by the ExceptionLifecycleProcessor
+	// for state transitions and by the PlanRequeueProcessor for time-boundary calculations.
+	// This is distinct from Schedule.Exceptions which only contains active exceptions
+	// for schedule evaluation.
+	Exceptions []hibernatorv1alpha1.ScheduleException
 
 	// HasRestoreData indicates whether restore data exists for this plan.
 	HasRestoreData bool
@@ -60,16 +61,22 @@ func (pc *PlanContext) DeepCopy() *PlanContext {
 	if pc.Plan != nil {
 		result.Plan = pc.Plan.DeepCopy()
 	}
-	if pc.Exceptions != nil {
+	if len(pc.Exceptions) > 0 {
 		result.Exceptions = make([]hibernatorv1alpha1.ScheduleException, len(pc.Exceptions))
 		for i, exc := range pc.Exceptions {
 			result.Exceptions[i] = *exc.DeepCopy()
 		}
 	}
-	if pc.ScheduleResult != nil {
-		result.ScheduleResult = &ScheduleEvaluation{
-			ShouldHibernate: pc.ScheduleResult.ShouldHibernate,
-			RequeueAfter:    pc.ScheduleResult.RequeueAfter,
+	if pc.Schedule != nil {
+		schedExceptions := make([]hibernatorv1alpha1.ScheduleException, len(pc.Schedule.Exceptions))
+		for i, exc := range pc.Schedule.Exceptions {
+			schedExceptions[i] = *exc.DeepCopy()
+		}
+
+		result.Schedule = &ScheduleEvaluation{
+			ShouldHibernate: pc.Schedule.ShouldHibernate,
+			RequeueAfter:    pc.Schedule.RequeueAfter,
+			Exceptions:      schedExceptions,
 		}
 	}
 	return result
@@ -105,13 +112,25 @@ func (pc *PlanContext) Equal(other *PlanContext) bool {
 			return false
 		}
 	}
-	if (pc.ScheduleResult == nil) != (other.ScheduleResult == nil) {
+
+	if (pc.Schedule == nil) != (other.Schedule == nil) {
 		return false
 	}
-	if pc.ScheduleResult != nil {
-		if pc.ScheduleResult.ShouldHibernate != other.ScheduleResult.ShouldHibernate {
+	if pc.Schedule != nil {
+		if len(pc.Schedule.Exceptions) != len(other.Schedule.Exceptions) {
 			return false
 		}
+
+		for i := range pc.Schedule.Exceptions {
+			if !exceptionsEqual(&pc.Schedule.Exceptions[i], &other.Schedule.Exceptions[i]) {
+				return false
+			}
+		}
+
+		if pc.Schedule.ShouldHibernate != other.Schedule.ShouldHibernate {
+			return false
+		}
+
 		// RequeueAfter is intentionally excluded — it is a time-varying scheduling hint
 		// computed from time.Until(), which changes on every reconcile cycle even when
 		// nothing meaningful has changed. Including it would cause spurious watchable
@@ -151,6 +170,9 @@ func exceptionsEqual(a, b *hibernatorv1alpha1.ScheduleException) bool {
 
 // ScheduleEvaluation contains the result of schedule evaluation by the provider.
 type ScheduleEvaluation struct {
+	// Exceptions is the list of active ScheduleExceptions associated with this plan.
+	Exceptions []hibernatorv1alpha1.ScheduleException
+
 	// ShouldHibernate indicates if the plan should currently be hibernating.
 	ShouldHibernate bool
 

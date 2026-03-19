@@ -117,6 +117,7 @@ var _ = Describe("Lifecycle E2E", func() {
 		testutil.SimulateJobSuccess(ctx, k8sClient, hibernationJob, fakeClock.Now())
 
 		By("Verifying plan transitions to Hibernated and saves restore data")
+		testutil.EventuallyPhase(ctx, k8sClient, plan, hibernatorv1alpha1.PhaseHibernated)
 		testutil.EventuallyRestoreDataSaved(ctx, k8sClient, plan, 0)
 
 		// Verify ConfigMap exists and can be retrieved via manager

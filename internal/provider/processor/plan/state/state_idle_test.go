@@ -24,7 +24,7 @@ func newIdleState(
 ) *state {
 	c := newHandlerFakeClient(plan)
 	st := newHandlerState(plan, c)
-	st.PlanCtx.ScheduleResult = sr
+	st.PlanCtx.Schedule = sr
 	st.PlanCtx.HasRestoreData = hasRestoreData
 	return st
 }

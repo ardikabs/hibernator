@@ -281,7 +281,8 @@ func (v *ScheduleExceptionValidator) validateNoOverlappingExceptions(ctx context
 			continue
 		}
 
-		if existing.Status.State == hibernatorv1alpha1.ExceptionStateExpired {
+		if existing.Status.State == hibernatorv1alpha1.ExceptionStateExpired ||
+			existing.Status.State == hibernatorv1alpha1.ExceptionStateDetached {
 			continue
 		}
 

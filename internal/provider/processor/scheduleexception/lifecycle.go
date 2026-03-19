@@ -8,12 +8,12 @@ package scheduleexception
 import (
 	"context"
 	"fmt"
+	"sort"
 	"time"
 
 	"github.com/go-logr/logr"
 	"github.com/telepresenceio/watchable"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
-	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/utils/clock"
 	"sigs.k8s.io/controller-runtime/pkg/client"
@@ -28,22 +28,21 @@ import (
 // LifecycleProcessor manages the ScheduleException lifecycle state machine:
 // Pending → Active → Expired.
 //
-// It subscribes to ALL exceptions (no phase filter) and handles:
+// It subscribes to PlanResources (not ExceptionResources) and processes all
+// exceptions carried in PlanContext.Exceptions. This ensures that exception
+// lifecycle transitions are driven by the same delivery pipeline as the plan
+// itself, fixing the time-based state transition bug where HandleSubscription
+// would suppress re-delivery because the exception object itself hadn't changed.
+//
+// Handles:
 //   - Finalizer management
 //   - Plan label management for efficient querying
 //   - State transitions based on ValidFrom/ValidUntil
 //   - Deletion cleanup (removing exception reference from plan status)
 type LifecycleProcessor struct {
 	client.Client
-	// APIReader must be the uncached API reader (mgr.GetAPIReader()) so that Get calls
-	// inside RetryOnConflict always fetch the true server state rather than a potentially
-	// stale informer-cache snapshot. Using the cache here would cause retries to serialize
-	// against the same stale ResourceVersion, exhaust the budget, and leave orphaned
-	// ExceptionReferences in plan.Status.ActiveExceptions with no recovery path.
-	APIReader client.Reader
-	Clock     clock.Clock
-	Log       logr.Logger
-	Scheme    *runtime.Scheme
+	Clock clock.Clock
+	Log   logr.Logger
 
 	Resources *message.ControllerResources
 	Statuses  *statusprocessor.ControllerStatuses
@@ -54,24 +53,24 @@ func (p *LifecycleProcessor) NeedLeaderElection() bool {
 	return true
 }
 
-// Start implements manager.Runnable. It subscribes to all exception updates
-// and processes state transitions.
+// Start implements manager.Runnable. It subscribes to PlanResources and processes
+// exception state transitions from PlanContext.Exceptions.
 func (p *LifecycleProcessor) Start(ctx context.Context) error {
 	log := p.Log.WithName("lifecycle")
 	log.Info("starting exception lifecycle processor")
 
 	message.HandleSubscription(ctx, log, message.Metadata{
 		Runner:  "exception-lifecycle",
-		Message: "exception-resources",
-	}, p.Resources.ExceptionResources.Subscribe(ctx),
-		func(update watchable.Update[types.NamespacedName, *hibernatorv1alpha1.ScheduleException], errChan chan error) {
+		Message: "plan-resources",
+	}, p.Resources.PlanResources.Subscribe(ctx),
+		func(update watchable.Update[types.NamespacedName, *message.PlanContext], errChan chan error) {
 			if update.Delete {
-				log.V(1).Info("received delete event", "exception", update.Key)
-				p.handleDelete(ctx, log, update.Key, update.Value, errChan)
+				log.V(1).Info("received plan delete event", "plan", update.Key)
+				p.handlePlanDelete(ctx, log, update.Key, errChan)
 				return
 			}
 
-			p.handleUpdate(ctx, log, update.Key, update.Value, errChan)
+			p.handlePlanUpdate(ctx, log, update.Key, update.Value, errChan)
 		},
 	)
 
@@ -79,8 +78,123 @@ func (p *LifecycleProcessor) Start(ctx context.Context) error {
 	return nil
 }
 
-// handleUpdate drives the ScheduleException state machine.
-func (p *LifecycleProcessor) handleUpdate(ctx context.Context, log logr.Logger, key types.NamespacedName, exception *hibernatorv1alpha1.ScheduleException, errChan chan error) {
+// handlePlanUpdate processes all exceptions in the PlanContext.
+func (p *LifecycleProcessor) handlePlanUpdate(ctx context.Context, log logr.Logger, planKey types.NamespacedName, planCtx *message.PlanContext, errChan chan error) {
+	if planCtx == nil {
+		return
+	}
+
+	for i := range planCtx.Exceptions {
+		exc := &planCtx.Exceptions[i]
+		excKey := types.NamespacedName{Name: exc.Name, Namespace: exc.Namespace}
+
+		if !exc.DeletionTimestamp.IsZero() {
+			p.handleExceptionDelete(ctx, log, excKey, errChan)
+			continue
+		}
+
+		p.handleExceptionUpdate(ctx, log, excKey, exc, errChan)
+	}
+
+	// Sync exception references into plan status
+	p.updateExceptionReferences(log, planKey, planCtx.Plan, planCtx.Exceptions)
+}
+
+// updateExceptionReferences builds a sorted ExceptionReference list from the
+// PlanContext's exceptions and queues a plan status update. This keeps the plan's
+// ExceptionReferences in sync without requiring a separate observer or extra API calls,
+// since all exceptions are already available in the PlanContext.
+func (p *LifecycleProcessor) updateExceptionReferences(log logr.Logger, key types.NamespacedName, plan *hibernatorv1alpha1.HibernatePlan, exceptions []hibernatorv1alpha1.ScheduleException) {
+	// Build ExceptionReferences from all exceptions (regardless of state)
+	exceptionRefs := make([]hibernatorv1alpha1.ExceptionReference, 0, len(exceptions))
+	for i := range exceptions {
+		exc := &exceptions[i]
+		// Skip exceptions being deleted — they are handled by removeFromPlanStatus
+		if !exc.DeletionTimestamp.IsZero() {
+			continue
+		}
+		exceptionRefs = append(exceptionRefs, hibernatorv1alpha1.ExceptionReference{
+			Name:       exc.Name,
+			Type:       exc.Spec.Type,
+			ValidFrom:  exc.Spec.ValidFrom,
+			ValidUntil: exc.Spec.ValidUntil,
+			State:      exc.Status.State,
+			AppliedAt:  exc.Status.AppliedAt,
+		})
+	}
+
+	// Sort: Active > Pending > Expired, then by ValidFrom descending (most recent first)
+	stateOrder := map[hibernatorv1alpha1.ExceptionState]int{
+		hibernatorv1alpha1.ExceptionStateActive:  0,
+		hibernatorv1alpha1.ExceptionStatePending: 1,
+		hibernatorv1alpha1.ExceptionStateExpired: 2,
+	}
+
+	sort.Slice(exceptionRefs, func(i, j int) bool {
+		stateA := stateOrder[exceptionRefs[i].State]
+		stateB := stateOrder[exceptionRefs[j].State]
+		if stateA != stateB {
+			return stateA < stateB
+		}
+		return exceptionRefs[i].ValidFrom.Time.After(exceptionRefs[j].ValidFrom.Time)
+	})
+
+	// Cap at 10 most recent
+	if len(exceptionRefs) > 10 {
+		exceptionRefs = exceptionRefs[:10]
+	}
+
+	// Skip update if nothing changed
+	if hibernatorv1alpha1.ExceptionReferencesEqual(plan.Status.ExceptionReferences, exceptionRefs) {
+		log.V(1).Info("exception references unchanged, skipping plan status update")
+		return
+	}
+
+	p.Statuses.PlanStatuses.Send(statusprocessor.Update[*hibernatorv1alpha1.HibernatePlan]{
+		NamespacedName: key,
+		Resource:       plan,
+		Mutator: statusprocessor.MutatorFunc[*hibernatorv1alpha1.HibernatePlan](func(p *hibernatorv1alpha1.HibernatePlan) {
+			p.Status.ExceptionReferences = exceptionRefs
+		}),
+	})
+
+	log.V(1).Info("queued exception references update for plan", "plan", key, "count", len(exceptionRefs))
+}
+
+// handlePlanDelete handles all exceptions associated with a deleted plan.
+// Exceptions with an OwnerReference to the plan are skipped — Kubernetes garbage
+// collection will cascade-delete them. All other exceptions are transitioned to
+// the Detached state to signal that their referenced plan no longer exists.
+func (p *LifecycleProcessor) handlePlanDelete(ctx context.Context, log logr.Logger, planKey types.NamespacedName, errChan chan error) {
+	// Use the cached client (not APIReader) because field indexes only work with the cache.
+	var exceptionList hibernatorv1alpha1.ScheduleExceptionList
+	if err := p.List(ctx, &exceptionList,
+		client.InNamespace(planKey.Namespace),
+		client.MatchingFields{wellknown.FieldIndexExceptionPlanRef: planKey.Name},
+	); err != nil {
+		errChan <- fmt.Errorf("plan %s: failed to list exceptions for cleanup: %w", planKey, err)
+		return
+	}
+
+	for i := range exceptionList.Items {
+		exc := &exceptionList.Items[i]
+		excKey := types.NamespacedName{Name: exc.Name, Namespace: exc.Namespace}
+
+		// If the exception has an OwnerReference to the plan, Kubernetes GC
+		// will cascade-delete it — nothing to do here.
+		if hasOwnerReferenceToPlan(exc, planKey) {
+			log.V(1).Info("exception has owner reference to plan, skipping (GC will handle)",
+				"exception", excKey)
+			continue
+		}
+
+		// Transition to Detached state — the plan is gone but the exception lives on.
+		p.transitionToDetached(ctx, log, excKey, exc, planKey.Name)
+	}
+}
+
+// handleExceptionUpdate drives the ScheduleException state machine for a single exception.
+func (p *LifecycleProcessor) handleExceptionUpdate(ctx context.Context, log logr.Logger, key types.NamespacedName, exception *hibernatorv1alpha1.ScheduleException, errChan chan error) {
 	if exception == nil {
 		return
 	}
@@ -100,7 +214,7 @@ func (p *LifecycleProcessor) handleUpdate(ctx context.Context, log logr.Logger, 
 	// Handle deletion (DeletionTimestamp set)
 	if !exception.DeletionTimestamp.IsZero() {
 		log.V(1).Info("exception has deletion timestamp, handling deletion")
-		p.Resources.ExceptionResources.Delete(key)
+		p.handleExceptionDelete(ctx, log, key, errChan)
 		return
 	}
 
@@ -154,17 +268,15 @@ func (p *LifecycleProcessor) computeDesiredState(now time.Time, exception *hiber
 }
 
 // transitionState moves the exception to a new state.
-func (p *LifecycleProcessor) transitionState(ctx context.Context, log logr.Logger, key types.NamespacedName, exception *hibernatorv1alpha1.ScheduleException, desiredState hibernatorv1alpha1.ExceptionState, now time.Time) {
+func (p *LifecycleProcessor) transitionState(_ context.Context, log logr.Logger, key types.NamespacedName, exception *hibernatorv1alpha1.ScheduleException, desiredState hibernatorv1alpha1.ExceptionState, now time.Time) {
 	oldState := exception.Status.State
 	if oldState == "" {
 		oldState = "<unset>"
 	}
 
-	nn := types.NamespacedName{Name: exception.Name, Namespace: exception.Namespace}
-
 	// Queue status update via status processor
 	p.Statuses.ExceptionStatuses.Send(statusprocessor.Update[*hibernatorv1alpha1.ScheduleException]{
-		NamespacedName: nn,
+		NamespacedName: key,
 		Resource:       exception,
 		Mutator: statusprocessor.MutatorFunc[*hibernatorv1alpha1.ScheduleException](func(e *hibernatorv1alpha1.ScheduleException) {
 			e.Status.State = desiredState
@@ -173,15 +285,19 @@ func (p *LifecycleProcessor) transitionState(ctx context.Context, log logr.Logge
 			case hibernatorv1alpha1.ExceptionStatePending:
 				e.Status.AppliedAt = nil
 				e.Status.ExpiredAt = nil
+				e.Status.DetachedAt = nil
 				e.Status.Message = "Exception pending"
 			case hibernatorv1alpha1.ExceptionStateActive:
 				nowTime := now
 				e.Status.AppliedAt = &metav1.Time{Time: nowTime}
 				e.Status.ExpiredAt = nil
+				e.Status.DetachedAt = nil
 				e.Status.Message = "Exception activated"
 			case hibernatorv1alpha1.ExceptionStateExpired:
 				nowTime := now
 				e.Status.ExpiredAt = &metav1.Time{Time: nowTime}
+				e.Status.AppliedAt = nil
+				e.Status.DetachedAt = nil
 				e.Status.Message = "Exception expired"
 			}
 		}),
@@ -191,7 +307,7 @@ func (p *LifecycleProcessor) transitionState(ctx context.Context, log logr.Logge
 }
 
 // updateMessage updates the exception's status message with time-based information.
-func (p *LifecycleProcessor) updateMessage(ctx context.Context, log logr.Logger, key types.NamespacedName, exception *hibernatorv1alpha1.ScheduleException, now time.Time) {
+func (p *LifecycleProcessor) updateMessage(_ context.Context, log logr.Logger, key types.NamespacedName, exception *hibernatorv1alpha1.ScheduleException, now time.Time) {
 	var newMessage string
 
 	switch exception.Status.State {
@@ -201,6 +317,8 @@ func (p *LifecycleProcessor) updateMessage(ctx context.Context, log logr.Logger,
 		newMessage = formatActiveMessage(now, exception)
 	case hibernatorv1alpha1.ExceptionStateExpired:
 		newMessage = "Exception expired"
+	case hibernatorv1alpha1.ExceptionStateDetached:
+		newMessage = fmt.Sprintf("Referenced plan %q no longer exists; exception is detached", exception.Spec.PlanRef.Name)
 	default:
 		newMessage = fmt.Sprintf("Exception state: %s", exception.Status.State)
 	}
@@ -215,9 +333,8 @@ func (p *LifecycleProcessor) updateMessage(ctx context.Context, log logr.Logger,
 		"oldMessage", exception.Status.Message,
 		"newMessage", newMessage)
 
-	nn := types.NamespacedName{Name: exception.Name, Namespace: exception.Namespace}
 	p.Statuses.ExceptionStatuses.Send(statusprocessor.Update[*hibernatorv1alpha1.ScheduleException]{
-		NamespacedName: nn,
+		NamespacedName: key,
 		Resource:       exception,
 		Mutator: statusprocessor.MutatorFunc[*hibernatorv1alpha1.ScheduleException](func(e *hibernatorv1alpha1.ScheduleException) {
 			e.Status.Message = newMessage
@@ -285,13 +402,13 @@ func (p *LifecycleProcessor) ensurePlanLabel(ctx context.Context, log logr.Logge
 	return nil
 }
 
-// handleDelete handles an exception that has DeletionTimestamp set.
-// The watchable delete event carries a stale snapshot, so we re-fetch the exception
-// from the API server to get the current ResourceVersion before patching the finalizer.
-func (p *LifecycleProcessor) handleDelete(ctx context.Context, log logr.Logger, key types.NamespacedName, _ *hibernatorv1alpha1.ScheduleException, errChan chan error) {
+// handleExceptionDelete handles an exception that has DeletionTimestamp set.
+// It re-fetches the exception from the API server to get the current ResourceVersion
+// before patching the finalizer.
+func (p *LifecycleProcessor) handleExceptionDelete(ctx context.Context, log logr.Logger, key types.NamespacedName, errChan chan error) {
 	// Re-fetch fresh copy from the API server to avoid 409 Conflict on stale ResourceVersion.
-	exception := &hibernatorv1alpha1.ScheduleException{}
-	if err := p.APIReader.Get(ctx, key, exception); err != nil {
+	exception := new(hibernatorv1alpha1.ScheduleException)
+	if err := p.Get(ctx, key, exception); err != nil {
 		if client.IgnoreNotFound(err) == nil {
 			log.V(1).Info("exception already gone, nothing to clean up")
 			return
@@ -304,8 +421,7 @@ func (p *LifecycleProcessor) handleDelete(ctx context.Context, log logr.Logger, 
 		"exception", exception.Name,
 		"namespace", exception.Namespace,
 	)
-	log.V(1).Info("handling exception deletion",
-		"hasFinalizer", controllerutil.ContainsFinalizer(exception, wellknown.ExceptionFinalizerName))
+	log.V(1).Info("handling exception deletion")
 
 	// Remove exception from plan status
 	if err := p.removeFromPlanStatus(ctx, log, exception); err != nil {
@@ -342,15 +458,80 @@ func (p *LifecycleProcessor) removeFromPlanStatus(_ context.Context, log logr.Lo
 		Resource:       new(hibernatorv1alpha1.HibernatePlan),
 		Mutator: statusprocessor.MutatorFunc[*hibernatorv1alpha1.HibernatePlan](func(p *hibernatorv1alpha1.HibernatePlan) {
 			var updated []hibernatorv1alpha1.ExceptionReference
-			for _, ref := range p.Status.ActiveExceptions {
+			for _, ref := range p.Status.ExceptionReferences {
 				if ref.Name != exceptionName {
 					updated = append(updated, ref)
 				}
 			}
-			p.Status.ActiveExceptions = updated
+			p.Status.ExceptionReferences = updated
 		}),
 	})
 
 	log.V(1).Info("queued removal of exception from plan status", "plan", planKey.Name)
 	return nil
+}
+
+// transitionToDetached queues a status update that moves the exception to the Detached state
+// and removes the finalizer. This is used when the referenced plan is deleted but the exception
+// has no OwnerReference, meaning it should not be cascade-deleted.
+//
+// Removing the finalizer allows:
+// - Users to delete the orphaned exception if desired
+// - The exception to be re-linked if a plan with the same name is recreated
+func (p *LifecycleProcessor) transitionToDetached(ctx context.Context, log logr.Logger, key types.NamespacedName, exception *hibernatorv1alpha1.ScheduleException, planName string) {
+	if exception.Status.State == hibernatorv1alpha1.ExceptionStateDetached {
+		log.V(1).Info("exception already detached, skipping", "exception", key)
+		return
+	}
+
+	oldState := exception.Status.State
+	if oldState == "" {
+		oldState = "<unset>"
+	}
+
+	msg := fmt.Sprintf("Referenced plan %q no longer exists; exception is detached", planName)
+	now := p.Clock.Now()
+
+	// Queue status update
+	p.Statuses.ExceptionStatuses.Send(statusprocessor.Update[*hibernatorv1alpha1.ScheduleException]{
+		NamespacedName: key,
+		Resource:       exception,
+		Mutator: statusprocessor.MutatorFunc[*hibernatorv1alpha1.ScheduleException](func(e *hibernatorv1alpha1.ScheduleException) {
+			e.Status.State = hibernatorv1alpha1.ExceptionStateDetached
+			e.Status.DetachedAt = &metav1.Time{Time: now}
+			e.Status.Message = msg
+		}),
+	})
+
+	// Remove finalizer so the exception can be deleted by the user or relinked with a recreated plan
+	if controllerutil.ContainsFinalizer(exception, wellknown.ExceptionFinalizerName) {
+		orig := exception.DeepCopy()
+		controllerutil.RemoveFinalizer(exception, wellknown.ExceptionFinalizerName)
+		if err := p.Patch(ctx, exception, client.MergeFrom(orig)); err != nil {
+			log.Error(err, "failed to remove finalizer when transitioning to Detached",
+				"exception", key,
+				"plan", planName)
+			return
+		}
+		log.V(1).Info("removed finalizer from detached exception", "exception", key)
+	}
+
+	log.Info("queued exception transition to Detached",
+		"exception", key,
+		"from", string(oldState),
+		"plan", planName)
+}
+
+// hasOwnerReferenceToPlan checks whether the exception has an OwnerReference pointing
+// to the given HibernatePlan. If it does, Kubernetes garbage collection will
+// cascade-delete the exception when the plan is removed.
+func hasOwnerReferenceToPlan(exc *hibernatorv1alpha1.ScheduleException, planKey types.NamespacedName) bool {
+	for _, ref := range exc.OwnerReferences {
+		if ref.Kind == "HibernatePlan" &&
+			ref.Name == planKey.Name &&
+			ref.APIVersion == hibernatorv1alpha1.GroupVersion.String() {
+			return true
+		}
+	}
+	return false
 }

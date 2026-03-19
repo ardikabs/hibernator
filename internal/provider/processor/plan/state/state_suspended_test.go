@@ -68,7 +68,7 @@ func TestSuspendedState_ShouldForceWakeUp_AllConditionsMet_ReturnsTrue(t *testin
 	c := newHandlerFakeClient(plan)
 	st := newHandlerState(plan, c)
 	st.PlanCtx.HasRestoreData = true
-	st.PlanCtx.ScheduleResult = &message.ScheduleEvaluation{ShouldHibernate: false}
+	st.PlanCtx.Schedule = &message.ScheduleEvaluation{ShouldHibernate: false}
 
 	h := &suspendedState{state: st}
 	assert.True(t, h.shouldForceWakeUpOnResume())
@@ -264,7 +264,7 @@ func TestResumeFromExecution_Hibernating_SameWindow_ResumesToHibernating(t *test
 
 	c := newHandlerFakeClient(plan)
 	st := newHandlerState(plan, c)
-	st.PlanCtx.ScheduleResult = &message.ScheduleEvaluation{ShouldHibernate: true}
+	st.PlanCtx.Schedule = &message.ScheduleEvaluation{ShouldHibernate: true}
 
 	h := &suspendedState{state: st}
 	_, handled, err := h.resumeFromExecution(context.Background(), logr.Discard())
@@ -300,7 +300,7 @@ func TestResumeFromExecution_Hibernating_DifferentWindow_ResumesToActive(t *test
 
 	c := newHandlerFakeClient(plan)
 	st := newHandlerState(plan, c)
-	st.PlanCtx.ScheduleResult = &message.ScheduleEvaluation{ShouldHibernate: false}
+	st.PlanCtx.Schedule = &message.ScheduleEvaluation{ShouldHibernate: false}
 
 	h := &suspendedState{state: st}
 	_, handled, err := h.resumeFromExecution(context.Background(), logr.Discard())
@@ -335,7 +335,7 @@ func TestResumeFromExecution_WakingUp_SameWindow_ResumesToWakingUp(t *testing.T)
 
 	c := newHandlerFakeClient(plan)
 	st := newHandlerState(plan, c)
-	st.PlanCtx.ScheduleResult = &message.ScheduleEvaluation{ShouldHibernate: false}
+	st.PlanCtx.Schedule = &message.ScheduleEvaluation{ShouldHibernate: false}
 
 	h := &suspendedState{state: st}
 	_, handled, err := h.resumeFromExecution(context.Background(), logr.Discard())
@@ -369,7 +369,7 @@ func TestResumeFromExecution_WakingUp_DifferentWindow_ResumesToHibernated(t *tes
 
 	c := newHandlerFakeClient(plan)
 	st := newHandlerState(plan, c)
-	st.PlanCtx.ScheduleResult = &message.ScheduleEvaluation{ShouldHibernate: true}
+	st.PlanCtx.Schedule = &message.ScheduleEvaluation{ShouldHibernate: true}
 
 	h := &suspendedState{state: st}
 	_, handled, err := h.resumeFromExecution(context.Background(), logr.Discard())
