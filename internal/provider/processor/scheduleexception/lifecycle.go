@@ -136,7 +136,7 @@ func (p *LifecycleProcessor) updateExceptionReferences(log logr.Logger, key type
 		if stateA != stateB {
 			return stateA < stateB
 		}
-		return exceptionRefs[i].ValidFrom.Time.After(exceptionRefs[j].ValidFrom.Time)
+		return exceptionRefs[i].ValidFrom.After(exceptionRefs[j].ValidFrom.Time)
 	})
 
 	// Cap at 10 most recent

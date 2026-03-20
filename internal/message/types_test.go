@@ -39,7 +39,7 @@ func TestPlanContext_DeepCopy_Full_IsDeep(t *testing.T) {
 				{ObjectMeta: metav1.ObjectMeta{Name: "ex1"}},
 			},
 			ShouldHibernate: true,
-			RequeueAfter:    5 * time.Minute,
+			NextEvent:       time.Date(2026, 1, 1, 20, 0, 0, 0, time.UTC),
 		},
 	}
 
@@ -51,7 +51,7 @@ func TestPlanContext_DeepCopy_Full_IsDeep(t *testing.T) {
 	assert.NotSame(t, orig.Schedule, copy.Schedule)
 	assert.Equal(t, orig.HasRestoreData, copy.HasRestoreData)
 	assert.Equal(t, orig.Schedule.ShouldHibernate, copy.Schedule.ShouldHibernate)
-	assert.Equal(t, orig.Schedule.RequeueAfter, copy.Schedule.RequeueAfter)
+	assert.Equal(t, orig.Schedule.NextEvent, copy.Schedule.NextEvent)
 	assert.Len(t, copy.Schedule.Exceptions, 1)
 	assert.Equal(t, "ex1", copy.Schedule.Exceptions[0].Name)
 }
@@ -118,11 +118,19 @@ func TestPlanContext_Equal_DifferentSchedule_IsFalse(t *testing.T) {
 	assert.False(t, a.Equal(b))
 }
 
-func TestPlanContext_Equal_RequeueAfterIgnored_IsTrue(t *testing.T) {
-	// RequeueAfter is intentionally excluded from equality — changes to it must not
-	// cause spurious re-delivery.
-	a := &PlanContext{Schedule: &ScheduleEvaluation{ShouldHibernate: true, RequeueAfter: 1 * time.Minute}}
-	b := &PlanContext{Schedule: &ScheduleEvaluation{ShouldHibernate: true, RequeueAfter: 5 * time.Minute}}
+func TestPlanContext_Equal_DifferentNextEvent_IsFalse(t *testing.T) {
+	// NextEvent is an absolute timestamp included in equality — different values
+	// must cause re-delivery so the requeue processor re-arms its timer.
+	a := &PlanContext{Schedule: &ScheduleEvaluation{ShouldHibernate: true, NextEvent: time.Date(2026, 1, 1, 20, 0, 0, 0, time.UTC)}}
+	b := &PlanContext{Schedule: &ScheduleEvaluation{ShouldHibernate: true, NextEvent: time.Date(2026, 1, 2, 6, 0, 0, 0, time.UTC)}}
+	assert.False(t, a.Equal(b))
+}
+
+func TestPlanContext_Equal_SameNextEvent_IsTrue(t *testing.T) {
+	// Same NextEvent values should not cause spurious re-delivery.
+	event := time.Date(2026, 1, 1, 20, 0, 0, 0, time.UTC)
+	a := &PlanContext{Schedule: &ScheduleEvaluation{ShouldHibernate: true, NextEvent: event}}
+	b := &PlanContext{Schedule: &ScheduleEvaluation{ShouldHibernate: true, NextEvent: event}}
 	assert.True(t, a.Equal(b))
 }
 

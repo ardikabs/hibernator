@@ -15,6 +15,7 @@ import (
 	"github.com/ardikabs/hibernator/internal/restore"
 	"github.com/ardikabs/hibernator/internal/scheduler"
 	corev1 "k8s.io/api/core/v1"
+	"k8s.io/utils/ptr"
 )
 
 // JSONPrinter handles JSON output for various resources with context-relevant information.
@@ -67,7 +68,7 @@ func (p *JSONPrinter) planToJSON(plan hibernatorv1alpha1.HibernatePlan) PlanJSON
 		},
 		Behavior: PlanBehaviorJSON{
 			Mode:    string(plan.Spec.Behavior.Mode),
-			Retries: plan.Spec.Behavior.Retries,
+			Retries: ptr.Deref(plan.Spec.Behavior.Retries, 3),
 		},
 		Execution: PlanExecutionJSON{
 			StrategyType:   string(plan.Spec.Execution.Strategy.Type),

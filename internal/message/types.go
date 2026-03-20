@@ -42,10 +42,19 @@ type PlanContext struct {
 	// HasRestoreData indicates whether restore data exists for this plan.
 	HasRestoreData bool
 
-	// DeliveryNonce is a monotonically increasing counter set by the provider on every
-	// reconcile. It guarantees that watchable.Map.Store() always detects a change and
-	// re-delivers the context to subscribers, even when no other field has changed.
-	// Workers never read this field; it exists solely as a change-detection signal.
+	// DeliveryNonce is a monotonically increasing counter that increments whenever
+	// a dependent resource (external to the plan state itself) changes in a way that
+	// affects plan execution. Examples include Job terminal state transitions (success/failure),
+	// ConfigMap data updates, or ScheduleException lifecycle changes.
+	//
+	// This ensures that watchable.Map.Store() detects such external state changes and
+	// re-delivers the PlanContext to subscribers, even when no HibernatePlan field
+	// has changed. This mechanism treats dependent-resource state changes as plan-related
+	// changes for the purpose of processor notifications, preventing watchable suppression
+	// when only external dependencies have changed.
+	//
+	// Workers and state handlers never read this field; it exists solely as a signal
+	// to watchable that a re-delivery should occur.
 	DeliveryNonce int64
 }
 
@@ -75,7 +84,7 @@ func (pc *PlanContext) DeepCopy() *PlanContext {
 
 		result.Schedule = &ScheduleEvaluation{
 			ShouldHibernate: pc.Schedule.ShouldHibernate,
-			RequeueAfter:    pc.Schedule.RequeueAfter,
+			NextEvent:       pc.Schedule.NextEvent,
 			Exceptions:      schedExceptions,
 		}
 	}
@@ -88,25 +97,32 @@ func (pc *PlanContext) Equal(other *PlanContext) bool {
 	if pc == other {
 		return true
 	}
+
 	if pc == nil || other == nil {
 		return false
 	}
+
 	// Compare fields using basic equality and deep comparison where needed
 	if pc.HasRestoreData != other.HasRestoreData {
 		return false
 	}
+
 	if pc.DeliveryNonce != other.DeliveryNonce {
 		return false
 	}
+
 	if (pc.Plan == nil) != (other.Plan == nil) {
 		return false
 	}
+
 	if pc.Plan != nil && !planEqual(pc.Plan, other.Plan) {
 		return false
 	}
+
 	if len(pc.Exceptions) != len(other.Exceptions) {
 		return false
 	}
+
 	for i := range pc.Exceptions {
 		if !exceptionsEqual(&pc.Exceptions[i], &other.Exceptions[i]) {
 			return false
@@ -116,6 +132,7 @@ func (pc *PlanContext) Equal(other *PlanContext) bool {
 	if (pc.Schedule == nil) != (other.Schedule == nil) {
 		return false
 	}
+
 	if pc.Schedule != nil {
 		if len(pc.Schedule.Exceptions) != len(other.Schedule.Exceptions) {
 			return false
@@ -131,10 +148,11 @@ func (pc *PlanContext) Equal(other *PlanContext) bool {
 			return false
 		}
 
-		// RequeueAfter is intentionally excluded — it is a time-varying scheduling hint
-		// computed from time.Until(), which changes on every reconcile cycle even when
-		// nothing meaningful has changed. Including it would cause spurious watchable
-		// re-delivery on every provider reconcile.
+		// NextEvent is an absolute timestamp that only changes when the underlying
+		// schedule or exception windows change. Safe to include in equality.
+		if !pc.Schedule.NextEvent.Equal(other.Schedule.NextEvent) {
+			return false
+		}
 	}
 	return true
 }
@@ -176,6 +194,10 @@ type ScheduleEvaluation struct {
 	// ShouldHibernate indicates if the plan should currently be hibernating.
 	ShouldHibernate bool
 
-	// RequeueAfter is the suggested requeue duration based on schedule evaluation.
-	RequeueAfter time.Duration
+	// NextEvent is the absolute timestamp of the next schedule-driven event
+	// (hibernate or wake-up transition), including schedule buffer and safety buffer.
+	// Unlike a relative duration, this value is stable across reconcile cycles —
+	// it only changes when the underlying schedule or exception windows change.
+	// Consumers compute time-until-event locally: time.Until(NextEvent).
+	NextEvent time.Time
 }

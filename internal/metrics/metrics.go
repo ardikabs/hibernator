@@ -154,4 +154,18 @@ var (
 		},
 		[]string{"type", "key", "event"},
 	)
+
+	// EnqueueDropTotal counts GenericEvents dropped by channelEnqueuer when the
+	// requeue channel buffer is full. A non-zero value signals backpressure on
+	// the controller-runtime work queue. Affected plans are reconciled on the
+	// next natural trigger (schedule tick, annotation change, etc.), but the
+	// time-based requeue was silently skipped.
+	// Labels: plan (namespace/name).
+	EnqueueDropTotal = factory.NewCounterVec(
+		prometheus.CounterOpts{
+			Name: "hibernator_enqueue_drop_total",
+			Help: "Total number of plan requeue events dropped because the enqueue channel was full",
+		},
+		[]string{"plan"},
+	)
 )

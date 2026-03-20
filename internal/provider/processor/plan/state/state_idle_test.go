@@ -8,7 +8,6 @@ package state
 import (
 	"context"
 	"testing"
-	"time"
 
 	"github.com/stretchr/testify/assert"
 
@@ -48,7 +47,7 @@ func TestIdleState_Handle_NoScheduleResult_NoTransition(t *testing.T) {
 func TestIdleState_Handle_ActiveShouldHibernate_TransitionsToHibernating(t *testing.T) {
 	plan := basePlanForState("p", hibernatorv1alpha1.PhaseActive)
 	plan.Spec.Execution.Strategy.Type = hibernatorv1alpha1.StrategySequential
-	sr := &message.ScheduleEvaluation{ShouldHibernate: true, RequeueAfter: 5 * time.Minute}
+	sr := &message.ScheduleEvaluation{ShouldHibernate: true}
 	st := newIdleState(plan, sr, false)
 	h := &idleState{state: st}
 
@@ -66,7 +65,7 @@ func TestIdleState_Handle_ActiveShouldHibernate_TransitionsToHibernating(t *test
 
 func TestIdleState_Handle_ActiveShouldNotHibernate_NoTransition(t *testing.T) {
 	plan := basePlanForState("p", hibernatorv1alpha1.PhaseActive)
-	sr := &message.ScheduleEvaluation{ShouldHibernate: false, RequeueAfter: 5 * time.Minute}
+	sr := &message.ScheduleEvaluation{ShouldHibernate: false}
 	st := newIdleState(plan, sr, false)
 	h := &idleState{state: st}
 
@@ -78,7 +77,7 @@ func TestIdleState_Handle_ActiveShouldNotHibernate_NoTransition(t *testing.T) {
 
 func TestIdleState_Handle_HibernatedNoRestoreData_NoWakeUp(t *testing.T) {
 	plan := basePlanForState("p", hibernatorv1alpha1.PhaseHibernated)
-	sr := &message.ScheduleEvaluation{ShouldHibernate: false, RequeueAfter: 5 * time.Minute}
+	sr := &message.ScheduleEvaluation{ShouldHibernate: false}
 	st := newIdleState(plan, sr, false /* no restore data */)
 	h := &idleState{state: st}
 
@@ -91,7 +90,7 @@ func TestIdleState_Handle_HibernatedNoRestoreData_NoWakeUp(t *testing.T) {
 
 func TestIdleState_Handle_HibernatedShouldStayHibernated(t *testing.T) {
 	plan := basePlanForState("p", hibernatorv1alpha1.PhaseHibernated)
-	sr := &message.ScheduleEvaluation{ShouldHibernate: true, RequeueAfter: 5 * time.Minute}
+	sr := &message.ScheduleEvaluation{ShouldHibernate: true}
 	st := newIdleState(plan, sr, true)
 	h := &idleState{state: st}
 

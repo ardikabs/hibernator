@@ -127,7 +127,7 @@ var _ = Describe("Error Recovery E2E", func() {
 			}).
 			WithBehavior(hibernatorv1alpha1.Behavior{
 				Mode:    hibernatorv1alpha1.BehaviorStrict,
-				Retries: 1,
+				Retries: ptr.To(int32(1)),
 			}).
 			WithTarget(hibernatorv1alpha1.Target{
 				Name: "database",
@@ -260,7 +260,7 @@ var _ = Describe("Error Recovery E2E", func() {
 			}).
 			WithBehavior(hibernatorv1alpha1.Behavior{
 				Mode:    hibernatorv1alpha1.BehaviorBestEffort,
-				Retries: 1,
+				Retries: ptr.To(int32(1)),
 			}).
 			WithTarget(
 				hibernatorv1alpha1.Target{
@@ -330,7 +330,7 @@ var _ = Describe("Error Recovery E2E", func() {
 			}).
 			WithBehavior(hibernatorv1alpha1.Behavior{
 				Mode:    hibernatorv1alpha1.BehaviorStrict,
-				Retries: 1,
+				Retries: ptr.To(int32(1)),
 			}).
 			WithTarget(hibernatorv1alpha1.Target{
 				Name: "database",

@@ -10,8 +10,6 @@ import (
 	"fmt"
 
 	"github.com/go-logr/logr"
-	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
-	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/utils/clock"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
@@ -79,7 +77,10 @@ func Setup(mgr ctrl.Manager, clk clock.Clock, opts ProviderOptions) error {
 	// PlanEnqueuer channel — processors write GenericEvents here to trigger
 	// a fresh PlanReconciler.Reconcile() without relying on RequeueAfter.
 	enqueueCh := make(chan event.GenericEvent, 128)
-	enqueuer := &channelEnqueuer{ch: enqueueCh}
+	enqueuer := &channelEnqueuer{
+		logger: opts.Logger.WithName("plan-enqueuer"),
+		ch:     enqueueCh,
+	}
 
 	planStatusProcessor := statusprocessor.NewUpdateProcessor[*hibernatorv1alpha1.HibernatePlan](
 		opts.Logger.WithName("processor").WithName("plan-status"),
@@ -193,21 +194,4 @@ func registerFieldIndexes(mgr ctrl.Manager) error {
 			return []string{exc.Spec.PlanRef.Name}
 		},
 	)
-}
-
-// channelEnqueuer implements message.PlanEnqueuer by sending GenericEvents to a channel
-// that is registered as a WatchesRawSource on the PlanReconciler.
-type channelEnqueuer struct {
-	ch chan<- event.GenericEvent
-}
-
-func (e *channelEnqueuer) Enqueue(key types.NamespacedName) {
-	e.ch <- event.GenericEvent{
-		Object: &hibernatorv1alpha1.HibernatePlan{
-			ObjectMeta: metav1.ObjectMeta{
-				Name:      key.Name,
-				Namespace: key.Namespace,
-			},
-		},
-	}
 }

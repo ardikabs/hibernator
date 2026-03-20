@@ -8,6 +8,7 @@ package state
 import (
 	"context"
 	"fmt"
+	"slices"
 	"sort"
 	"strings"
 
@@ -83,17 +84,16 @@ func (s *state) execute(
 			"completedCount", stageStatus.CompletedCount,
 			"failedCount", stageStatus.FailedCount)
 
-		if stageStatus.FailedCount > 0 && plan.Spec.Behavior.Mode == hibernatorv1alpha1.BehaviorStrict {
+		if stageStatus.FailedCount > 0 &&
+			plan.Spec.Behavior.Mode == hibernatorv1alpha1.BehaviorStrict {
 			var failedTargets []string
 			for _, exec := range plan.Status.Executions {
 				if exec.State != hibernatorv1alpha1.StateFailed {
 					continue
 				}
-				for _, t := range targetStage.Targets {
-					if exec.Target == t {
-						failedTargets = append(failedTargets, exec.Target)
-						break
-					}
+
+				if slices.Contains(targetStage.Targets, exec.Target) {
+					failedTargets = append(failedTargets, exec.Target)
 				}
 			}
 			return StateResult{}, AsPlanError(fmt.Errorf("one or more targets failed: %s", strings.Join(failedTargets, ", ")))

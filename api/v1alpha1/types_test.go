@@ -12,6 +12,7 @@ import (
 
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/util/yaml"
+	"k8s.io/utils/ptr"
 )
 
 func TestExecutionStrategyType_Constants(t *testing.T) {
@@ -241,7 +242,7 @@ func TestBehavior_Marshal(t *testing.T) {
 	behavior := Behavior{
 		Mode:     BehaviorBestEffort,
 		FailFast: false,
-		Retries:  5,
+		Retries:  ptr.To(int32(5)),
 	}
 
 	data, err := json.Marshal(behavior)
@@ -260,8 +261,9 @@ func TestBehavior_Marshal(t *testing.T) {
 	if result.FailFast != behavior.FailFast {
 		t.Errorf("FailFast: got %v, want %v", result.FailFast, behavior.FailFast)
 	}
-	if result.Retries != behavior.Retries {
-		t.Errorf("Retries: got %d, want %d", result.Retries, behavior.Retries)
+
+	if !ptr.Equal(result.Retries, behavior.Retries) {
+		t.Errorf("Retries: got %d, want %d", ptr.Deref(result.Retries, 0), ptr.Deref(behavior.Retries, 0))
 	}
 }
 
@@ -483,7 +485,7 @@ func TestHibernatePlanSpec_Complete(t *testing.T) {
 		Behavior: Behavior{
 			Mode:     BehaviorStrict,
 			FailFast: true,
-			Retries:  3,
+			Retries:  ptr.To(int32(3)),
 		},
 		Targets: []Target{
 			{

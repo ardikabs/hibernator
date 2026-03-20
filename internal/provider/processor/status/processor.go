@@ -266,9 +266,7 @@ func isStatusEqual(objA, objB any) bool {
 		}
 	case *hibernatorv1alpha1.ScheduleException:
 		if b, ok := objB.(*hibernatorv1alpha1.ScheduleException); ok {
-			return cmp.Equal(a.Status, b.Status,
-				cmpopts.IgnoreFields(hibernatorv1alpha1.ScheduleExceptionStatus{}, "AppliedAt", "ExpiredAt"),
-			)
+			return cmp.Equal(a.Status, b.Status, defaultOpts)
 		}
 	}
 

@@ -128,10 +128,7 @@ func ClassifyError(err error) ErrorClassification {
 func DetermineRecoveryStrategy(plan *hibernatorv1alpha1.HibernatePlan, clk clock.Clock, err error) ErrorRecoveryStrategy {
 	classification := ClassifyError(err)
 
-	maxRetries := wellknown.DefaultRecoveryMaxRetryAttempts
-	if plan.Spec.Behavior.Retries > 0 {
-		maxRetries = plan.Spec.Behavior.Retries
-	}
+	maxRetries := ptr.Deref(plan.Spec.Behavior.Retries, wellknown.DefaultRecoveryMaxRetryAttempts)
 
 	if plan.Status.RetryCount >= maxRetries {
 		return ErrorRecoveryStrategy{

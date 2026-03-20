@@ -86,6 +86,13 @@ func WithScheduleBuffer(duration string) ScheduleEvaluatorOption {
 	}
 }
 
+// GetScheduleBuffer returns the configured schedule buffer duration.
+// This is used by external callers (e.g., provider) that need to apply
+// the same buffer when computing absolute event timestamps.
+func (e *ScheduleEvaluator) GetScheduleBuffer() time.Duration {
+	return e.scheduleBuffer
+}
+
 // EvaluationResult contains the result of schedule evaluation.
 type EvaluationResult struct {
 	// ShouldHibernate indicates if the system should be in hibernation state.

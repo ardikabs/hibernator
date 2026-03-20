@@ -415,6 +415,77 @@ var _ = Describe("ScheduleException E2E", func() {
 		testutil.ConsistentllyAtPhase(ctx, k8sClient, plan, hibernatorv1alpha1.PhaseActive, 5*time.Second)
 	})
 
+	It("LeadTime: should prevent hibernation during the lead-time buffer before the suspension window opens", func() {
+		// Schedule: 20:00-06:00 (off-hours every night).
+		// ExceptionSuspend: covers 20:00-06:00 with a 1-hour lead time.
+		// The lead-time buffer means that from 19:00 onward the exception starts
+		// "protecting" the plan — even though the base schedule says hibernate at 20:00,
+		// the system must NOT start hibernation between 19:00 and 20:00 because we are
+		// inside the lead-time window immediately preceding the suspension period.
+		//
+		// Timeline:
+		//   08:00 → plan starts Active (on-hours, exception is Active with lead time)
+		//   19:01 → inside lead-time buffer (1 h before 20:00 suspension) — must stay Active
+		//   21:00 → inside suspension window — must stay Active (suspend exception wins)
+		baseTime := time.Date(2026, 5, 11, 8, 0, 0, 0, time.UTC) // Monday 08:00
+		fakeClock.SetTime(baseTime)
+
+		By("Creating HibernatePlan with 20:00-06:00 hibernation window")
+		plan, _ = testutil.NewHibernatePlanBuilder("exc-leadtime-test", testNamespace).
+			WithSchedule("20:00", "06:00", "MON", "TUE", "WED", "THU", "FRI", "SAT", "SUN").
+			WithExecutionStrategy(hibernatorv1alpha1.ExecutionStrategy{
+				Type: hibernatorv1alpha1.StrategySequential,
+			}).
+			WithTarget(hibernatorv1alpha1.Target{
+				Name: "database",
+				Type: "rds",
+				ConnectorRef: hibernatorv1alpha1.ConnectorRef{
+					Kind: "CloudProvider",
+					Name: "exception-aws",
+				},
+			}).
+			Build()
+
+		Expect(k8sClient.Create(ctx, plan)).To(Succeed())
+		testutil.EventuallyPhase(ctx, k8sClient, plan, hibernatorv1alpha1.PhaseActive)
+
+		By("Creating ExceptionSuspend covering 20:00-06:00 with a 1-hour lead time")
+		// ValidFrom is already in the past so the exception is active immediately.
+		// LeadTime=1h means the suspension buffer starts at 19:00, 1 h before the
+		// first window opens at 20:00.
+		exception = testutil.NewScheduleExceptionBuilder("exc-leadtime", testNamespace, plan.Name).
+			WithType(hibernatorv1alpha1.ExceptionSuspend).
+			WithValidity(baseTime.Add(-1*time.Hour), baseTime.Add(48*time.Hour)).
+			WithLeadTime("1h").
+			WithWindows(hibernatorv1alpha1.OffHourWindow{
+				Start:      "20:00",
+				End:        "06:00",
+				DaysOfWeek: []string{"MON", "TUE", "WED", "THU", "FRI", "SAT", "SUN"},
+			}).
+			Build()
+
+		Expect(k8sClient.Create(ctx, exception)).To(Succeed())
+		testutil.EventuallyExceptionState(ctx, k8sClient, exception, hibernatorv1alpha1.ExceptionStateActive)
+
+		By("Advancing clock to Monday 19:01 — inside the 1-hour lead-time buffer before the 20:00 window")
+		// Base schedule says: not in hibernation window yet (20:00 hasn't fired).
+		// But the lead-time buffer (19:00-20:00) must prevent any new hibernation from starting.
+		fakeClock.SetTime(time.Date(2026, 5, 11, 19, 1, 0, 0, time.UTC))
+		testutil.TriggerReconcile(ctx, k8sClient, plan)
+
+		By("Verifying plan remains Active at 19:01 (lead-time buffer prevents hibernation start)")
+		testutil.ConsistentllyAtPhase(ctx, k8sClient, plan, hibernatorv1alpha1.PhaseActive, 4*time.Second)
+
+		By("Advancing clock into the suspension window proper (Monday 21:00)")
+		// Now both the base schedule (ShouldHibernate=true) AND the suspension window
+		// are active. The Suspend exception must still win — plan stays Active.
+		fakeClock.SetTime(time.Date(2026, 5, 11, 21, 1, 0, 0, time.UTC))
+		testutil.TriggerReconcile(ctx, k8sClient, plan)
+
+		By("Verifying plan remains Active at 21:00 (suspend exception prevents hibernation)")
+		testutil.ConsistentllyAtPhase(ctx, k8sClient, plan, hibernatorv1alpha1.PhaseActive, 4*time.Second)
+	})
+
 	It("ScheduleExceptionLifecycle_Complete: should transition through Pending → Active → Expired → Detached states", func() {
 		// This test validates the full exception state machine lifecycle without checking
 		// execution side effects (plan phase transitions are covered by GoldenPath E2E tests).

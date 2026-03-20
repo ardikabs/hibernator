@@ -8,7 +8,6 @@ package state
 import (
 	"context"
 	"testing"
-	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -241,7 +240,7 @@ func TestOverrideActionState_Hibernate_FromActive_DuringActiveWindow_Transitions
 		wellknown.AnnotationOverrideAction:      "true",
 		wellknown.AnnotationOverridePhaseTarget: wellknown.OverridePhaseTargetHibernate,
 	}
-	sr := &message.ScheduleEvaluation{ShouldHibernate: false, RequeueAfter: 5 * time.Minute}
+	sr := &message.ScheduleEvaluation{ShouldHibernate: false}
 	st := newOverrideActionState(plan, sr, false)
 	h := &overrideActionState{idleState: &idleState{state: st}}
 
@@ -261,7 +260,7 @@ func TestOverrideActionState_Hibernate_FromActive_ScheduleAgreesHibernate_Transi
 		wellknown.AnnotationOverrideAction:      "true",
 		wellknown.AnnotationOverridePhaseTarget: wellknown.OverridePhaseTargetHibernate,
 	}
-	sr := &message.ScheduleEvaluation{ShouldHibernate: true, RequeueAfter: 5 * time.Minute}
+	sr := &message.ScheduleEvaluation{ShouldHibernate: true}
 	st := newOverrideActionState(plan, sr, false)
 	h := &overrideActionState{idleState: &idleState{state: st}}
 
@@ -280,7 +279,7 @@ func TestOverrideActionState_Hibernate_FromHibernated_SuppressesScheduleWakeup(t
 		wellknown.AnnotationOverrideAction:      "true",
 		wellknown.AnnotationOverridePhaseTarget: wellknown.OverridePhaseTargetHibernate,
 	}
-	sr := &message.ScheduleEvaluation{ShouldHibernate: false, RequeueAfter: 5 * time.Minute}
+	sr := &message.ScheduleEvaluation{ShouldHibernate: false}
 	st := newOverrideActionState(plan, sr, true)
 	h := &overrideActionState{idleState: &idleState{state: st}}
 
@@ -300,7 +299,7 @@ func TestOverrideActionState_Hibernate_FromHibernated_DuringHibernatedWindow_Noo
 		wellknown.AnnotationOverrideAction:      "true",
 		wellknown.AnnotationOverridePhaseTarget: wellknown.OverridePhaseTargetHibernate,
 	}
-	sr := &message.ScheduleEvaluation{ShouldHibernate: true, RequeueAfter: 5 * time.Minute}
+	sr := &message.ScheduleEvaluation{ShouldHibernate: true}
 	st := newOverrideActionState(plan, sr, false)
 	h := &overrideActionState{idleState: &idleState{state: st}}
 
@@ -323,7 +322,7 @@ func TestOverrideActionState_Wakeup_FromHibernated_WithRestoreData_TransitionsTo
 		wellknown.AnnotationOverrideAction:      "true",
 		wellknown.AnnotationOverridePhaseTarget: wellknown.OverridePhaseTargetWakeup,
 	}
-	sr := &message.ScheduleEvaluation{ShouldHibernate: true, RequeueAfter: 5 * time.Minute}
+	sr := &message.ScheduleEvaluation{ShouldHibernate: true}
 	st := newOverrideActionState(plan, sr, true)
 	h := &overrideActionState{idleState: &idleState{state: st}}
 
@@ -342,7 +341,7 @@ func TestOverrideActionState_Wakeup_FromHibernated_NoRestoreData_NoopWithWarning
 		wellknown.AnnotationOverrideAction:      "true",
 		wellknown.AnnotationOverridePhaseTarget: wellknown.OverridePhaseTargetWakeup,
 	}
-	sr := &message.ScheduleEvaluation{ShouldHibernate: true, RequeueAfter: 5 * time.Minute}
+	sr := &message.ScheduleEvaluation{ShouldHibernate: true}
 	st := newOverrideActionState(plan, sr, false)
 	h := &overrideActionState{idleState: &idleState{state: st}}
 

@@ -10,7 +10,6 @@ import (
 	"fmt"
 	"maps"
 	"sort"
-	"sync/atomic"
 	"time"
 
 	"github.com/go-logr/logr"
@@ -18,6 +17,7 @@ import (
 	batchv1 "k8s.io/api/batch/v1"
 	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/utils/clock"
@@ -65,7 +65,14 @@ type PlanReconciler struct {
 	// to trigger a fresh reconcile without relying on RequeueAfter.
 	EnqueueCh <-chan event.GenericEvent
 
-	deliveryNonce atomic.Int64
+	// DependencyNonces tracks per-plan monotonic counters incremented whenever a
+	// dependent resource — external to the HibernatePlan state itself — undergoes a
+	// significant state transition that the plan execution must react to (e.g., a Job
+	// reaching a terminal state). The current counter value is embedded into
+	// PlanContext.DeliveryNonce on each Reconcile call, ensuring watchable.Map.Store()
+	// detects a meaningful change and re-delivers the context to subscribers even when
+	// no HibernatePlan field has changed.
+	DependencyNonces dependencyNonceMap
 }
 
 // +kubebuilder:rbac:groups=hibernator.ardikabs.com,resources=hibernateplans,verbs=get;list;watch;create;update;patch;delete
@@ -88,8 +95,9 @@ func (r *PlanReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.
 	plan := new(hibernatorv1alpha1.HibernatePlan)
 	if err := r.Get(ctx, key, plan); err != nil {
 		if apierrors.IsNotFound(err) {
-			// Plan deleted -> remove from watchable map (triggers delete event in processors)
+			// Plan deleted — remove from watchable map and clean up the dependency nonce.
 			r.Resources.PlanResources.Delete(key)
+			r.DependencyNonces.Delete(key)
 			return ctrl.Result{}, nil
 		}
 		return ctrl.Result{}, err
@@ -128,7 +136,7 @@ func (r *PlanReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.
 		Schedule:       schedule,
 		Exceptions:     allExceptions,
 		HasRestoreData: hasRestoreData,
-		DeliveryNonce:  r.deliveryNonce.Add(1),
+		DeliveryNonce:  r.DependencyNonces.Get(key),
 	}
 
 	r.Resources.PlanResources.Store(key, planCtx)
@@ -137,6 +145,7 @@ func (r *PlanReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.
 		"phase", plan.Status.Phase,
 		"hasRestoreData", hasRestoreData,
 		"totalExceptions", len(allExceptions),
+		"deliveryNonce", planCtx.DeliveryNonce,
 	)
 
 	return ctrl.Result{}, nil
@@ -191,20 +200,53 @@ func (r *PlanReconciler) evaluateSchedule(_ context.Context, plan *hibernatorv1a
 		return nil, err
 	}
 
-	requeueAfter := r.ScheduleEvaluator.NextRequeueTime(result)
+	// Compute the next schedule event as an absolute timestamp.
+	// This is the moment the system should transition (hibernate or wake-up),
+	// including the schedule buffer and a safety buffer to ensure the controller
+	// observes the transition after the cron boundary has passed.
+	nextEvent := r.computeNextEvent(result)
+
 	log.Info("schedule evaluation result",
 		"shouldHibernate", result.ShouldHibernate,
 		"totalActiveExceptions", len(activeExceptions),
 		"nextHibernateTime", result.NextHibernateTime.Format(time.RFC3339),
 		"nextWakeUpTime", result.NextWakeUpTime.Format(time.RFC3339),
-		"nextRequeue", requeueAfter.String(),
+		"nextEvent", nextEvent.Format(time.RFC3339),
 	)
 
 	return &message.ScheduleEvaluation{
 		Exceptions:      activeExceptions,
 		ShouldHibernate: result.ShouldHibernate,
-		RequeueAfter:    requeueAfter,
+		NextEvent:       nextEvent,
 	}, nil
+}
+
+// computeNextEvent derives the next schedule-driven event as an absolute timestamp
+// from the evaluation result. It mirrors the selection logic of
+// ScheduleEvaluator.NextRequeueTime but returns a stable time.Time instead of a
+// drifting duration. The schedule buffer and safety buffer are added so that the
+// requeue processor fires slightly after the cron boundary, giving the system time
+// to observe the transition.
+func (r *PlanReconciler) computeNextEvent(result *scheduler.EvaluationResult) time.Time {
+	const safetyBuffer = 10 * time.Second
+
+	if result.InGracePeriod {
+		// Grace period end is already an absolute time; add only safety buffer.
+		return result.GracePeriodEnd.Add(safetyBuffer)
+	}
+
+	var nextEvent time.Time
+	if result.ShouldHibernate {
+		// Currently hibernated → next event is wake-up.
+		nextEvent = result.NextWakeUpTime
+	} else {
+		// Currently active → next event is hibernate.
+		nextEvent = result.NextHibernateTime
+	}
+
+	// Add schedule buffer (configurable, typically 1m) + safety buffer so the
+	// requeue fires after the cron boundary has passed.
+	return nextEvent.Add(r.ScheduleEvaluator.GetScheduleBuffer() + safetyBuffer)
 }
 
 // filterActiveExceptions filters and sorts active exceptions from a full list.
@@ -286,6 +328,52 @@ func (r *PlanReconciler) findPlansForException(ctx context.Context, obj client.O
 	}
 }
 
+// onJobTerminalUpdate is the predicate UpdateFunc for owned Jobs. It detects the
+// first 0→1+ transition of Job.Status.Succeeded or Job.Status.Failed, signalling
+// that the Job has reached a terminal state. On detection, it increments
+// DependencyNonces for the owning plan so that the subsequent Reconcile embeds a
+// changed DeliveryNonce into the PlanContext — preventing watchable.Map from
+// suppressing re-delivery to subscribers when no HibernatePlan field has changed.
+// This enables processors to react to job completion near real-time, bypassing the
+// standard polling interval.
+//
+// Returns true on the terminal transition to allow the event to proceed to Reconcile,
+// so the controller immediately stores an updated PlanContext with the incremented
+// DeliveryNonce.
+func (r *PlanReconciler) onJobTerminalUpdate(e event.UpdateEvent) bool {
+	oldJob, ok1 := e.ObjectOld.(*batchv1.Job)
+	newJob, ok2 := e.ObjectNew.(*batchv1.Job)
+	if !ok1 || !ok2 {
+		return false
+	}
+	// Detect the first 0→1+ transition of Succeeded or Failed.
+	wasTerminal := oldJob.Status.Succeeded > 0 || oldJob.Status.Failed > 0
+	isTerminal := newJob.Status.Succeeded > 0 || newJob.Status.Failed > 0
+	condition := !wasTerminal && isTerminal
+	if condition {
+		owner := metav1.GetControllerOf(newJob)
+		if owner == nil {
+			return condition
+		}
+
+		nn := types.NamespacedName{
+			Name:      owner.Name,
+			Namespace: newJob.Namespace,
+		}
+
+		r.DependencyNonces.Inc(nn)
+
+		r.Log.V(1).Info("job transitioned to terminal state, enqueuing plan",
+			"plan", nn,
+			"job", client.ObjectKeyFromObject(newJob),
+			"succeeded", newJob.Status.Succeeded,
+			"failed", newJob.Status.Failed,
+		)
+	}
+
+	return condition
+}
+
 // SetupWithManager sets up the provider reconciler with the Manager.
 func (r *PlanReconciler) SetupWithManager(mgr ctrl.Manager, workers int) error {
 	// configMapDataChangedPredicate fires only when a ConfigMap's Data or BinaryData
@@ -317,17 +405,7 @@ func (r *PlanReconciler) SetupWithManager(mgr ctrl.Manager, workers int) error {
 	// invisible.  Succeeded and Failed only ever increase, so the 0→1+ transition
 	// fires exactly once per Job regardless of coalescing.
 	jobTerminalPredicate := predicate.Funcs{
-		UpdateFunc: func(e event.UpdateEvent) bool {
-			oldJob, ok1 := e.ObjectOld.(*batchv1.Job)
-			newJob, ok2 := e.ObjectNew.(*batchv1.Job)
-			if !ok1 || !ok2 {
-				return false
-			}
-			// Fire on the 0→1+ transition of Succeeded or Failed.
-			wasTerminal := oldJob.Status.Succeeded > 0 || oldJob.Status.Failed > 0
-			isTerminal := newJob.Status.Succeeded > 0 || newJob.Status.Failed > 0
-			return !wasTerminal && isTerminal
-		},
+		UpdateFunc:  r.onJobTerminalUpdate,
 		CreateFunc:  func(_ event.CreateEvent) bool { return false },
 		DeleteFunc:  func(_ event.DeleteEvent) bool { return false },
 		GenericFunc: func(_ event.GenericEvent) bool { return false },

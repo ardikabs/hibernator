@@ -13,6 +13,7 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/utils/clock"
 	testingclock "k8s.io/utils/clock/testing"
+	"k8s.io/utils/ptr"
 
 	hibernatorv1alpha1 "github.com/ardikabs/hibernator/api/v1alpha1"
 	"github.com/stretchr/testify/require"
@@ -115,7 +116,7 @@ func TestCalculateBackoff(t *testing.T) {
 func TestDetermineRecoveryStrategy_FirstRetry(t *testing.T) {
 	plan := &hibernatorv1alpha1.HibernatePlan{
 		Spec: hibernatorv1alpha1.HibernatePlanSpec{
-			Behavior: hibernatorv1alpha1.Behavior{Retries: 3},
+			Behavior: hibernatorv1alpha1.Behavior{Retries: ptr.To(int32(3))},
 		},
 		Status: hibernatorv1alpha1.HibernatePlanStatus{
 			RetryCount: 0,
@@ -135,7 +136,7 @@ func TestDetermineRecoveryStrategy_FirstRetry(t *testing.T) {
 func TestDetermineRecoveryStrategy_MaxRetries(t *testing.T) {
 	plan := &hibernatorv1alpha1.HibernatePlan{
 		Spec: hibernatorv1alpha1.HibernatePlanSpec{
-			Behavior: hibernatorv1alpha1.Behavior{Retries: 3},
+			Behavior: hibernatorv1alpha1.Behavior{Retries: ptr.To(int32(3))},
 		},
 		Status: hibernatorv1alpha1.HibernatePlanStatus{
 			RetryCount: 3,
@@ -152,7 +153,7 @@ func TestDetermineRecoveryStrategy_MaxRetries(t *testing.T) {
 func TestDetermineRecoveryStrategy_PermanentError(t *testing.T) {
 	plan := &hibernatorv1alpha1.HibernatePlan{
 		Spec: hibernatorv1alpha1.HibernatePlanSpec{
-			Behavior: hibernatorv1alpha1.Behavior{Retries: 5},
+			Behavior: hibernatorv1alpha1.Behavior{Retries: ptr.To(int32(5))},
 		},
 		Status: hibernatorv1alpha1.HibernatePlanStatus{
 			RetryCount: 0,
@@ -172,7 +173,7 @@ func TestDetermineRecoveryStrategy_PermanentError(t *testing.T) {
 func TestDetermineRecoveryStrategy_WithinBackoff(t *testing.T) {
 	plan := &hibernatorv1alpha1.HibernatePlan{
 		Spec: hibernatorv1alpha1.HibernatePlanSpec{
-			Behavior: hibernatorv1alpha1.Behavior{Retries: 5},
+			Behavior: hibernatorv1alpha1.Behavior{Retries: ptr.To(int32(5))},
 		},
 		Status: hibernatorv1alpha1.HibernatePlanStatus{
 			RetryCount:    1,

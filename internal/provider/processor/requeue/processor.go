@@ -23,10 +23,19 @@ import (
 	"github.com/ardikabs/hibernator/internal/message"
 )
 
+// timerEntry pairs a clock.Timer with the CancelFunc for the goroutine that
+// waits on it. Cancelling the context terminates the goroutine even if the
+// timer has not yet fired, preventing goroutine leaks when a plan update
+// replaces an in-flight timer before it expires.
+type timerEntry struct {
+	timer  clock.Timer
+	cancel context.CancelFunc
+}
+
 // PlanRequeueProcessor subscribes to PlanResources and manages time-based
 // re-enqueuing for both schedule boundaries and exception lifecycle boundaries.
 //
-// It uses clock.Timer per plan — one timer per plan key, always set to the
+// It uses a timerEntry per plan — one timer per plan key, always set to the
 // nearest upcoming boundary. The handler runs serially inside HandleSubscription,
 // so the timer map requires no locking.
 type PlanRequeueProcessor struct {
@@ -44,12 +53,13 @@ func (p *PlanRequeueProcessor) Start(ctx context.Context) error {
 	log := p.Log.WithName("requeue")
 	log.Info("starting plan requeue processor")
 
-	timers := make(map[types.NamespacedName]clock.Timer)
+	timers := make(map[types.NamespacedName]*timerEntry)
 
-	// On shutdown, stop all armed timers to prevent late fires.
+	// On shutdown, cancel all goroutines and stop their timers.
 	defer func() {
-		for key, t := range timers {
-			_ = t.Stop()
+		for key, e := range timers {
+			e.cancel()
+			_ = e.timer.Stop()
 			delete(timers, key)
 		}
 	}()
@@ -60,10 +70,14 @@ func (p *PlanRequeueProcessor) Start(ctx context.Context) error {
 	}, p.Resources.PlanResources.Subscribe(ctx),
 		func(update watchable.Update[types.NamespacedName, *message.PlanContext], _ chan error) {
 			key := update.Key
+			log := p.Log.WithValues("plan", key)
 
-			// Always cancel the previous timer for this plan first.
-			if t, ok := timers[key]; ok {
-				_ = t.Stop()
+			// Cancel the previous goroutine and stop its timer before replacing.
+			// Calling e.cancel() signals the goroutine via timerCtx.Done(), ensuring
+			// it exits even if the timer has not fired yet.
+			if e, ok := timers[key]; ok {
+				e.cancel()
+				_ = e.timer.Stop()
 				delete(timers, key)
 			}
 
@@ -74,33 +88,37 @@ func (p *PlanRequeueProcessor) Start(ctx context.Context) error {
 			now := p.Clock.Now()
 			boundary, ok := computeBoundary(now, update.Value)
 			if !ok {
-				log.V(1).Info("no time boundary for plan", "plan", key)
+				log.V(1).Info("no time boundary for plan")
 				return
 			}
 
 			d := boundary.Sub(now)
 			if d <= 0 {
 				// Boundary already passed — enqueue immediately.
-				log.V(1).Info("boundary already passed, enqueuing immediately", "plan", key)
+				log.V(1).Info("boundary already passed, enqueuing immediately")
 				p.Enqueuer.Enqueue(key)
 				return
 			}
 
-			log.V(1).Info("arming requeue timer",
-				"plan", key,
+			log.V(1).Info("starting internal requeue timer",
 				"boundary", boundary.Format(time.RFC3339),
 				"duration", d.String(),
 			)
 
 			// Use Clock.NewTimer so fake clocks in tests control when the timer fires.
 			t := p.Clock.NewTimer(d)
-			timers[key] = t
+			timerCtx, cancel := context.WithCancel(ctx)
+			timers[key] = &timerEntry{timer: t, cancel: cancel}
 			go func() {
+				// defer cancel ensures context resources are freed when the goroutine
+				// exits, regardless of which select branch triggered.
+				defer cancel()
 				select {
-				case <-ctx.Done():
+				case <-timerCtx.Done():
+					// Cancelled by a subsequent plan update or controller shutdown.
 					_ = t.Stop()
 				case <-t.C():
-					log.V(1).Info("requeue timer fired", "plan", key)
+					log.V(1).Info("requeue timer fired, enqueuing plan")
 					p.Enqueuer.Enqueue(key)
 				}
 			}()
@@ -113,7 +131,8 @@ func (p *PlanRequeueProcessor) Start(ctx context.Context) error {
 
 // computeBoundary returns the earliest time at which this plan should be re-enqueued.
 // It considers:
-//   - Schedule.RequeueAfter: the next schedule evaluation boundary
+//   - Schedule.NextEvent: the absolute timestamp of the next schedule transition
+//     (already includes schedule buffer and safety buffer)
 //   - Exception ValidFrom/ValidUntil: any future boundary timestamp across all exceptions
 //
 // Exception boundaries are evaluated purely from Spec timestamps, independent of
@@ -128,9 +147,9 @@ func computeBoundary(now time.Time, planCtx *message.PlanContext) (time.Time, bo
 
 	var earliest time.Time
 
-	// Schedule boundary
-	if planCtx.Schedule != nil && planCtx.Schedule.RequeueAfter > 0 {
-		earliest = now.Add(planCtx.Schedule.RequeueAfter)
+	// Schedule boundary: NextEvent is an absolute timestamp; use it directly.
+	if planCtx.Schedule != nil && !planCtx.Schedule.NextEvent.IsZero() {
+		earliest = planCtx.Schedule.NextEvent
 	}
 
 	// Exception lifecycle boundaries: include every future ValidFrom or ValidUntil.
