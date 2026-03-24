@@ -172,7 +172,7 @@ func (state *recoveryState) handleRetry(ctx context.Context, log logr.Logger, la
 func (state *recoveryState) determineRetryOperation(log logr.Logger, plan *hibernatorv1alpha1.HibernatePlan) hibernatorv1alpha1.PlanOperation {
 	operation := hibernatorv1alpha1.PlanOperation(plan.Status.CurrentOperation)
 	if operation == "" {
-		if state.PlanCtx.ScheduleResult != nil && state.PlanCtx.ScheduleResult.ShouldHibernate {
+		if state.PlanCtx.Schedule != nil && state.PlanCtx.Schedule.ShouldHibernate {
 			operation = hibernatorv1alpha1.OperationHibernate
 		} else {
 			operation = hibernatorv1alpha1.OperationWakeUp
@@ -181,7 +181,7 @@ func (state *recoveryState) determineRetryOperation(log logr.Logger, plan *hiber
 		return operation
 	}
 
-	scheduledShouldHibernate := state.PlanCtx.ScheduleResult != nil && state.PlanCtx.ScheduleResult.ShouldHibernate
+	scheduledShouldHibernate := state.PlanCtx.Schedule != nil && state.PlanCtx.Schedule.ShouldHibernate
 	operationShouldHibernate := operation == hibernatorv1alpha1.OperationHibernate
 	if operationShouldHibernate != scheduledShouldHibernate {
 		// The failed operation no longer aligns with the current schedule window.

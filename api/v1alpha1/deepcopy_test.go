@@ -10,6 +10,7 @@ import (
 	"time"
 
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/utils/ptr"
 )
 
 // DeepCopy tests for HibernatePlan types
@@ -467,7 +468,7 @@ func TestBehavior_DeepCopy(t *testing.T) {
 	original := Behavior{
 		Mode:     BehaviorBestEffort,
 		FailFast: false,
-		Retries:  5,
+		Retries:  ptr.To(int32(5)),
 	}
 
 	copy := original.DeepCopy()

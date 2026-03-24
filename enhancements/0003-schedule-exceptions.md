@@ -127,8 +127,8 @@ spec:
 status:
   phase: "Active"
 
-  # NEW: Exception history (max 10 entries, expired pruned first)
-  activeExceptions:
+  # NEW: Exception history (max 10 entries, active first, then desc by ValidFrom)
+  exceptionReferences:
     - name: "on-site-event-override"
       type: "extend"
       validFrom: "2026-01-29T00:00:00Z"
@@ -257,7 +257,7 @@ ScheduleException and HibernatePlan are linked via:
      - **Note**: Ongoing hibernation at lead time window start continues normally
    - **Replace**: Use ONLY exception windows, ignore base schedule
 6. Evaluate effective schedule against current time
-7. Update `status.activeExceptions[]` history (max 10, prune expired first)
+7. Update `status.exceptionReferences[]` history (max 10, active first, then desc by ValidFrom)
 
 ### Temporal Overlap Prevention
 
@@ -307,7 +307,7 @@ ScheduleException and HibernatePlan are linked via:
    - Update `message` field with diagnostic info (e.g. "activates in 2 days")
 
 3. **On Delete** (finalizer):
-   - Update HibernatePlan status to remove exception from `activeExceptions[]`
+   - Update HibernatePlan status to remove exception from `exceptionReferences[]`
    - Clean up label references
    - Allow deletion to proceed
 

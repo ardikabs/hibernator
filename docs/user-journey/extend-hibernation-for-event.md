@@ -154,7 +154,7 @@ status:
 Check HibernatePlan status (history tracking):
 
 ```bash
-kubectl get hibernateplan event-support -n hibernator-system -o jsonpath='{.status.activeExceptions}' | jq
+kubectl get hibernateplan event-support -n hibernator-system -o jsonpath='{.status.exceptionReferences}' | jq
 ```
 
 Expected plan status:
@@ -224,7 +224,7 @@ status:
 HibernatePlan status updates (moves to history):
 
 ```bash
-kubectl get hibernateplan event-support -n hibernator-system -o jsonpath='{.status.activeExceptions}' | jq
+kubectl get hibernateplan event-support -n hibernator-system -o jsonpath='{.status.exceptionReferences}' | jq
 ```
 
 ```json
@@ -268,8 +268,8 @@ On Feb 28, 23:59:59:
 # Feb 29 00:00:00 → Schedule reverts to base
 
 # After expiration:
-kubectl describe hibernateplan event-support | grep "activeExceptions"
-# Should show: (no active exceptions) or exception moved to expiredExceptions
+kubectl describe hibernateplan event-support | grep "exceptionReferences"
+# Should show: (no exceptions) or history of applied exceptions
 
 # Next hibernation window (Mar 1 20:00):
 # - Uses BASE schedule only (no more extended windows)

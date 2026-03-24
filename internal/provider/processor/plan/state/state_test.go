@@ -196,7 +196,7 @@ func TestNew_DeletionTimestamp_ReturnsLifecycleStateDeleteMode(t *testing.T) {
 	assert.True(t, ls.delete, "expected delete=true for lifecycle state with DeletionTimestamp")
 }
 
-func TestNew_SuspendRequested_NotYetSuspended_ReturnsHandlerFunc(t *testing.T) {
+func TestNew_SuspendRequested_NotYetSuspended_ReturnsPreSuspensionState(t *testing.T) {
 	plan := basePlanForState("p", hibernatorv1alpha1.PhaseActive)
 	plan.Spec.Suspend = true
 	c := newHandlerFakeClient(plan)
@@ -204,8 +204,8 @@ func TestNew_SuspendRequested_NotYetSuspended_ReturnsHandlerFunc(t *testing.T) {
 
 	h := New(st.Key, st.PlanCtx, buildTestConfig(c))
 	require.NotNil(t, h)
-	_, ok := h.(HandlerFunc)
-	assert.True(t, ok, "expected HandlerFunc when Suspend=true and phase != PhaseSuspended")
+	_, ok := h.(*preSuspensionState)
+	assert.True(t, ok, "expected *preSuspensionState when Suspend=true and phase != PhaseSuspended")
 }
 
 func TestNew_SuspendRequested_AlreadySuspended_ReturnsSuspendedState(t *testing.T) {
@@ -224,7 +224,7 @@ func TestNew_SuspendRequested_AlreadySuspended_ReturnsSuspendedState(t *testing.
 // HandlerFunc
 // ---------------------------------------------------------------------------
 
-func TestHandlerFunc_Handle_ExecutesTransitionToSuspended(t *testing.T) {
+func TestPreSuspensionState_Handle_PatchesSuspendedAtPhaseAnnotation(t *testing.T) {
 	plan := basePlanForState("p", hibernatorv1alpha1.PhaseActive)
 	plan.Spec.Suspend = true
 	c := newHandlerFakeClient(plan)
@@ -232,13 +232,13 @@ func TestHandlerFunc_Handle_ExecutesTransitionToSuspended(t *testing.T) {
 
 	h := New(st.Key, st.PlanCtx, buildTestConfig(c))
 	require.NotNil(t, h)
-	_, ok := h.(HandlerFunc)
+	_, ok := h.(*preSuspensionState)
 	require.True(t, ok)
 
 	// Calling Handle should patch the suspended-at-phase annotation.
 	_, err := h.Handle(context.Background())
 	require.NoError(t, err)
-	assert.Equal(t, string(hibernatorv1alpha1.PhaseActive), plan.Annotations["hibernator.ardikabs.com/suspended-at-phase"])
+	assert.Equal(t, string(hibernatorv1alpha1.PhaseActive), plan.Annotations[wellknown.AnnotationSuspendedAtPhase])
 }
 
 // ---------------------------------------------------------------------------
@@ -305,24 +305,6 @@ func TestState_PatchPreservingStatus_PreservesStatus(t *testing.T) {
 
 	// Status must be preserved in-memory even after the patch (server might have older status).
 	assert.Equal(t, "should-be-preserved", plan.Status.ErrorMessage)
-}
-
-// ---------------------------------------------------------------------------
-// State.TransitionToSuspended()
-// ---------------------------------------------------------------------------
-
-func TestState_TransitionToSuspended_PatchesAnnotationAndQueuesStatus(t *testing.T) {
-	plan := basePlanForState("p", hibernatorv1alpha1.PhaseActive)
-	c := newHandlerFakeClient(plan)
-	st := newHandlerState(plan, c)
-
-	_, err := st.TransitionToSuspended(context.Background(), false)
-	require.NoError(t, err)
-
-	assert.Equal(t, string(hibernatorv1alpha1.PhaseActive),
-		plan.Annotations[wellknown.AnnotationSuspendedAtPhase])
-	assert.Equal(t, hibernatorv1alpha1.PhaseSuspended, plan.Status.Phase)
-	assert.GreaterOrEqual(t, planStatuses(st).Len(), 1)
 }
 
 // ---------------------------------------------------------------------------

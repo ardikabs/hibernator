@@ -25,6 +25,7 @@ import (
 	. "github.com/onsi/gomega"
 	"k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/utils/ptr"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
 	hibernatorv1alpha1 "github.com/ardikabs/hibernator/api/v1alpha1"
@@ -462,7 +463,7 @@ var _ = Describe("Plan Suspension E2E", func() {
 			}).
 			WithBehavior(hibernatorv1alpha1.Behavior{
 				Mode:    hibernatorv1alpha1.BehaviorStrict,
-				Retries: 1,
+				Retries: ptr.To(int32(1)),
 			}).
 			WithTarget(hibernatorv1alpha1.Target{
 				Name: "database",
@@ -543,7 +544,7 @@ var _ = Describe("Plan Suspension E2E", func() {
 			}).
 			WithBehavior(hibernatorv1alpha1.Behavior{
 				Mode:    hibernatorv1alpha1.BehaviorStrict,
-				Retries: 1,
+				Retries: ptr.To(int32(1)),
 			}).
 			WithTarget(hibernatorv1alpha1.Target{
 				Name: "database",

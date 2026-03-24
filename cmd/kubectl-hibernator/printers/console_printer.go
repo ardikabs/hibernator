@@ -15,7 +15,9 @@ import (
 	hibernatorv1alpha1 "github.com/ardikabs/hibernator/api/v1alpha1"
 	"github.com/ardikabs/hibernator/internal/restore"
 	"github.com/ardikabs/hibernator/internal/scheduler"
+	"github.com/ardikabs/hibernator/internal/wellknown"
 	corev1 "k8s.io/api/core/v1"
+	"k8s.io/utils/ptr"
 )
 
 // ConsolePrinter handles table-like output for various resources
@@ -88,7 +90,7 @@ func (p *ConsolePrinter) printPlan(plan hibernatorv1alpha1.HibernatePlan, w io.W
 	// Behavior
 	tw.line("Behavior:")
 	tw.line("  Mode:     %s", plan.Spec.Behavior.Mode)
-	tw.line("  Retries:  %d", plan.Spec.Behavior.Retries)
+	tw.line("  Retries:  %d", ptr.Deref(plan.Spec.Behavior.Retries, wellknown.DefaultRecoveryMaxRetryAttempts))
 	tw.newline()
 
 	// Execution strategy
@@ -169,7 +171,7 @@ func (p *ConsolePrinter) printStatus(out *StatusOutput, w io.Writer) error {
 
 	if plan.Status.Phase == hibernatorv1alpha1.PhaseError {
 		tw.line("  Error:       %s", plan.Status.ErrorMessage)
-		tw.line("  Retry Count: %d/%d", plan.Status.RetryCount, plan.Spec.Behavior.Retries)
+		tw.line("  Retry Count: %d/%d", plan.Status.RetryCount, ptr.Deref(plan.Spec.Behavior.Retries, wellknown.DefaultRecoveryMaxRetryAttempts))
 		if plan.Status.LastRetryTime != nil {
 			tw.line("  Last Retry:  %s (%s ago)", plan.Status.LastRetryTime.Format(time.RFC3339), HumanDuration(time.Since(plan.Status.LastRetryTime.Time)))
 		}
@@ -209,9 +211,9 @@ func (p *ConsolePrinter) printStatus(out *StatusOutput, w io.Writer) error {
 		}
 	}
 
-	if len(plan.Status.ActiveExceptions) > 0 {
-		tw.line("\n  Active Exceptions:")
-		for _, exc := range plan.Status.ActiveExceptions {
+	if len(plan.Status.ExceptionReferences) > 0 {
+		tw.line("\n Exceptions:")
+		for _, exc := range plan.Status.ExceptionReferences {
 			tw.line("    - %s (type: %s, until: %s, state: %s)",
 				exc.Name,
 				exc.Type,

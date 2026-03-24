@@ -127,7 +127,7 @@ var _ = Describe("Error Recovery E2E", func() {
 			}).
 			WithBehavior(hibernatorv1alpha1.Behavior{
 				Mode:    hibernatorv1alpha1.BehaviorStrict,
-				Retries: 1,
+				Retries: ptr.To(int32(1)),
 			}).
 			WithTarget(hibernatorv1alpha1.Target{
 				Name: "database",
@@ -260,7 +260,7 @@ var _ = Describe("Error Recovery E2E", func() {
 			}).
 			WithBehavior(hibernatorv1alpha1.Behavior{
 				Mode:    hibernatorv1alpha1.BehaviorBestEffort,
-				Retries: 1,
+				Retries: ptr.To(int32(1)),
 			}).
 			WithTarget(
 				hibernatorv1alpha1.Target{
@@ -317,6 +317,58 @@ var _ = Describe("Error Recovery E2E", func() {
 		}, testutil.DefaultTimeout, testutil.DefaultInterval).Should(BeTrue())
 	})
 
+	It("ZeroRetries: should immediately enter PhaseError on first job failure when Retries=0", func() {
+		// Retries=0 means no auto-retry is permitted; any job failure must transition
+		// the plan directly to PhaseError without spawning a new Job.
+		baseTime := time.Date(2026, 6, 8, 20, 1, 10, 0, time.UTC) // Monday, off-hours
+		fakeClock.SetTime(baseTime)
+
+		By("Creating HibernatePlan with Retries=0")
+		plan, _ = testutil.NewHibernatePlanBuilder("error-zeroretries-test", testNamespace).
+			WithSchedule("20:00", "06:00", "MON", "TUE", "WED", "THU", "FRI", "SAT", "SUN").
+			WithExecutionStrategy(hibernatorv1alpha1.ExecutionStrategy{
+				Type: hibernatorv1alpha1.StrategySequential,
+			}).
+			WithBehavior(hibernatorv1alpha1.Behavior{
+				Mode:    hibernatorv1alpha1.BehaviorStrict,
+				Retries: ptr.To(int32(0)),
+			}).
+			WithTarget(hibernatorv1alpha1.Target{
+				Name: "database",
+				Type: "rds",
+				ConnectorRef: hibernatorv1alpha1.ConnectorRef{
+					Kind: "CloudProvider",
+					Name: "recovery-aws",
+				},
+			}).
+			Build()
+
+		Expect(k8sClient.Create(ctx, plan)).To(Succeed())
+
+		By("Verifying plan starts Hibernating (off-hours)")
+		testutil.EventuallyPhase(ctx, k8sClient, plan, hibernatorv1alpha1.PhaseHibernating)
+
+		By("Simulating shutdown Job failure")
+		hibernationJob := testutil.EventuallyJobCreated(ctx, k8sClient, testNamespace, plan.Name, hibernatorv1alpha1.OperationHibernate, "database")
+		testutil.SimulateJobFailure(ctx, k8sClient, hibernationJob, fakeClock.Now())
+
+		By("Verifying plan immediately enters PhaseError — no retry job should be created")
+		testutil.EventuallyPhase(ctx, k8sClient, plan, hibernatorv1alpha1.PhaseError)
+		testutil.ConsistentllyAtPhase(ctx, k8sClient, plan, hibernatorv1alpha1.PhaseError, 4*time.Second)
+
+		By("Verifying RetryCount is still 0 (no retry was attempted)")
+		Eventually(func() int32 {
+			_ = k8sClient.Get(ctx, client.ObjectKeyFromObject(plan), plan)
+			return plan.Status.RetryCount
+		}, testutil.DefaultTimeout, testutil.DefaultInterval).Should(Equal(int32(0)))
+
+		By("Verifying ErrorMessage is populated")
+		Eventually(func() string {
+			_ = k8sClient.Get(ctx, client.ObjectKeyFromObject(plan), plan)
+			return plan.Status.ErrorMessage
+		}, testutil.DefaultTimeout, testutil.DefaultInterval).ShouldNot(BeEmpty())
+	})
+
 	It("WakeupError: should enter PhaseError when wakeup Job fails and allow recovery via retry-now", func() {
 		// 1. Setup: Monday 20:01:10 UTC (off-hours) — begin by establishing a Hibernated state.
 		baseTime := time.Date(2026, 6, 1, 20, 1, 10, 0, time.UTC) // Monday, off-hours
@@ -330,7 +382,7 @@ var _ = Describe("Error Recovery E2E", func() {
 			}).
 			WithBehavior(hibernatorv1alpha1.Behavior{
 				Mode:    hibernatorv1alpha1.BehaviorStrict,
-				Retries: 1,
+				Retries: ptr.To(int32(1)),
 			}).
 			WithTarget(hibernatorv1alpha1.Target{
 				Name: "database",

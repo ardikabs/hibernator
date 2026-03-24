@@ -173,7 +173,7 @@ func TestIsStatusEqual_HibernatePlan_DifferentExceptionAppliedAt_ReturnsTrue(t *
 
 	a := &hibernatorv1alpha1.HibernatePlan{
 		Status: hibernatorv1alpha1.HibernatePlanStatus{
-			ActiveExceptions: []hibernatorv1alpha1.ExceptionReference{
+			ExceptionReferences: []hibernatorv1alpha1.ExceptionReference{
 				{
 					Name:       "exc-1",
 					Type:       hibernatorv1alpha1.ExceptionSuspend,
@@ -186,33 +186,7 @@ func TestIsStatusEqual_HibernatePlan_DifferentExceptionAppliedAt_ReturnsTrue(t *
 		},
 	}
 	b := a.DeepCopy()
-	b.Status.ActiveExceptions[0].AppliedAt = &later
-
-	assert.True(t, isStatusEqual(a, b))
-}
-
-func TestIsStatusEqual_HibernatePlan_DifferentExceptionExpiredAt_ReturnsTrue(t *testing.T) {
-	now := metav1.Now()
-	later := metav1.NewTime(now.Add(time.Hour))
-	validFrom := metav1.NewTime(now.Add(-2 * time.Hour))
-	validUntil := metav1.NewTime(now.Add(-time.Hour))
-
-	a := &hibernatorv1alpha1.HibernatePlan{
-		Status: hibernatorv1alpha1.HibernatePlanStatus{
-			ActiveExceptions: []hibernatorv1alpha1.ExceptionReference{
-				{
-					Name:       "exc-1",
-					Type:       hibernatorv1alpha1.ExceptionSuspend,
-					ValidFrom:  validFrom,
-					ValidUntil: validUntil,
-					State:      hibernatorv1alpha1.ExceptionStateExpired,
-					ExpiredAt:  &now,
-				},
-			},
-		},
-	}
-	b := a.DeepCopy()
-	b.Status.ActiveExceptions[0].ExpiredAt = &later
+	b.Status.ExceptionReferences[0].AppliedAt = &later
 
 	assert.True(t, isStatusEqual(a, b))
 }
@@ -220,6 +194,25 @@ func TestIsStatusEqual_HibernatePlan_DifferentExceptionExpiredAt_ReturnsTrue(t *
 // ---------------------------------------------------------------------------
 // isStatusEqual — ScheduleException
 // ---------------------------------------------------------------------------
+
+func TestIsStatusEqual_ScheduleException(t *testing.T) {
+	now := metav1.Now()
+
+	a := &hibernatorv1alpha1.ScheduleException{
+		Status: hibernatorv1alpha1.ScheduleExceptionStatus{
+			State:     hibernatorv1alpha1.ExceptionStateExpired,
+			ExpiredAt: &now,
+		},
+	}
+
+	appliedAt := metav1.NewTime(now.Add(time.Minute))
+	expiredAt := metav1.NewTime(now.Add(time.Hour))
+	b := a.DeepCopy()
+	b.Status.AppliedAt = &appliedAt
+	b.Status.ExpiredAt = &expiredAt
+
+	assert.False(t, isStatusEqual(a, b))
+}
 
 func TestIsStatusEqual_ScheduleException_IdenticalStatus_ReturnsTrue(t *testing.T) {
 	a := &hibernatorv1alpha1.ScheduleException{
@@ -246,38 +239,6 @@ func TestIsStatusEqual_ScheduleException_DifferentState_ReturnsFalse(t *testing.
 	}
 
 	assert.False(t, isStatusEqual(a, b))
-}
-
-func TestIsStatusEqual_ScheduleException_DifferentAppliedAt_ReturnsTrue(t *testing.T) {
-	now := metav1.Now()
-	later := metav1.NewTime(now.Add(time.Hour))
-
-	a := &hibernatorv1alpha1.ScheduleException{
-		Status: hibernatorv1alpha1.ScheduleExceptionStatus{
-			State:     hibernatorv1alpha1.ExceptionStateActive,
-			AppliedAt: &now,
-		},
-	}
-	b := a.DeepCopy()
-	b.Status.AppliedAt = &later
-
-	assert.True(t, isStatusEqual(a, b))
-}
-
-func TestIsStatusEqual_ScheduleException_DifferentExpiredAt_ReturnsTrue(t *testing.T) {
-	now := metav1.Now()
-	later := metav1.NewTime(now.Add(time.Hour))
-
-	a := &hibernatorv1alpha1.ScheduleException{
-		Status: hibernatorv1alpha1.ScheduleExceptionStatus{
-			State:     hibernatorv1alpha1.ExceptionStateExpired,
-			ExpiredAt: &now,
-		},
-	}
-	b := a.DeepCopy()
-	b.Status.ExpiredAt = &later
-
-	assert.True(t, isStatusEqual(a, b))
 }
 
 func TestIsStatusEqual_ScheduleException_DifferentMessage_ReturnsFalse(t *testing.T) {

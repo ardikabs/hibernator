@@ -7,6 +7,10 @@ const (
 	// ExceptionFinalizerName is the finalizer for ScheduleException resources.
 	ExceptionFinalizerName = "hibernator.ardikabs.com/exception-finalizer"
 
+	// FieldIndexExceptionPlanRef is the field index path for ScheduleException.spec.planRef.name.
+	// Used by the field indexer to enable efficient lookups of exceptions by plan name.
+	FieldIndexExceptionPlanRef = ".spec.planRef.name"
+
 	// RunnerImage is the default runner image.
 	RunnerImage = "ghcr.io/ardikabs/hibernator-runner:latest"
 

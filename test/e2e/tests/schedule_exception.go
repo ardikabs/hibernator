@@ -23,10 +23,14 @@ import (
 
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
+	"github.com/samber/lo"
 	"k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"sigs.k8s.io/controller-runtime/pkg/client"
+	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
 
 	hibernatorv1alpha1 "github.com/ardikabs/hibernator/api/v1alpha1"
+	"github.com/ardikabs/hibernator/internal/wellknown"
 	"github.com/ardikabs/hibernator/test/e2e/testutil"
 )
 
@@ -62,9 +66,9 @@ var _ = Describe("ScheduleException E2E", func() {
 
 	AfterEach(func() {
 		By("Cleaning up resources")
+		testutil.EnsureDeleted(ctx, k8sClient, exception)
 		testutil.EnsureDeleted(ctx, k8sClient, plan)
 		testutil.EnsureDeleted(ctx, k8sClient, cloudProvider)
-		testutil.EnsureDeleted(ctx, k8sClient, exception)
 	})
 
 	It("ExceptionSuspend: should prevent hibernation during off-hours carve-out window", func() {
@@ -409,5 +413,407 @@ var _ = Describe("ScheduleException E2E", func() {
 
 		By("Verifying plan remains Active — Suspend takes priority over Extend in the overlapping window")
 		testutil.ConsistentllyAtPhase(ctx, k8sClient, plan, hibernatorv1alpha1.PhaseActive, 5*time.Second)
+	})
+
+	It("LeadTime: should prevent hibernation during the lead-time buffer before the suspension window opens", func() {
+		// Schedule: 20:00-06:00 (off-hours every night).
+		// ExceptionSuspend: covers 20:00-06:00 with a 1-hour lead time.
+		// The lead-time buffer means that from 19:00 onward the exception starts
+		// "protecting" the plan — even though the base schedule says hibernate at 20:00,
+		// the system must NOT start hibernation between 19:00 and 20:00 because we are
+		// inside the lead-time window immediately preceding the suspension period.
+		//
+		// Timeline:
+		//   08:00 → plan starts Active (on-hours, exception is Active with lead time)
+		//   19:01 → inside lead-time buffer (1 h before 20:00 suspension) — must stay Active
+		//   21:00 → inside suspension window — must stay Active (suspend exception wins)
+		baseTime := time.Date(2026, 5, 11, 8, 0, 0, 0, time.UTC) // Monday 08:00
+		fakeClock.SetTime(baseTime)
+
+		By("Creating HibernatePlan with 20:00-06:00 hibernation window")
+		plan, _ = testutil.NewHibernatePlanBuilder("exc-leadtime-test", testNamespace).
+			WithSchedule("20:00", "06:00", "MON", "TUE", "WED", "THU", "FRI", "SAT", "SUN").
+			WithExecutionStrategy(hibernatorv1alpha1.ExecutionStrategy{
+				Type: hibernatorv1alpha1.StrategySequential,
+			}).
+			WithTarget(hibernatorv1alpha1.Target{
+				Name: "database",
+				Type: "rds",
+				ConnectorRef: hibernatorv1alpha1.ConnectorRef{
+					Kind: "CloudProvider",
+					Name: "exception-aws",
+				},
+			}).
+			Build()
+
+		Expect(k8sClient.Create(ctx, plan)).To(Succeed())
+		testutil.EventuallyPhase(ctx, k8sClient, plan, hibernatorv1alpha1.PhaseActive)
+
+		By("Creating ExceptionSuspend covering 20:00-06:00 with a 1-hour lead time")
+		// ValidFrom is already in the past so the exception is active immediately.
+		// LeadTime=1h means the suspension buffer starts at 19:00, 1 h before the
+		// first window opens at 20:00.
+		exception = testutil.NewScheduleExceptionBuilder("exc-leadtime", testNamespace, plan.Name).
+			WithType(hibernatorv1alpha1.ExceptionSuspend).
+			WithValidity(baseTime.Add(-1*time.Hour), baseTime.Add(48*time.Hour)).
+			WithLeadTime("1h").
+			WithWindows(hibernatorv1alpha1.OffHourWindow{
+				Start:      "20:00",
+				End:        "06:00",
+				DaysOfWeek: []string{"MON", "TUE", "WED", "THU", "FRI", "SAT", "SUN"},
+			}).
+			Build()
+
+		Expect(k8sClient.Create(ctx, exception)).To(Succeed())
+		testutil.EventuallyExceptionState(ctx, k8sClient, exception, hibernatorv1alpha1.ExceptionStateActive)
+
+		By("Advancing clock to Monday 19:01 — inside the 1-hour lead-time buffer before the 20:00 window")
+		// Base schedule says: not in hibernation window yet (20:00 hasn't fired).
+		// But the lead-time buffer (19:00-20:00) must prevent any new hibernation from starting.
+		fakeClock.SetTime(time.Date(2026, 5, 11, 19, 1, 0, 0, time.UTC))
+		testutil.TriggerReconcile(ctx, k8sClient, plan)
+
+		By("Verifying plan remains Active at 19:01 (lead-time buffer prevents hibernation start)")
+		testutil.ConsistentllyAtPhase(ctx, k8sClient, plan, hibernatorv1alpha1.PhaseActive, 4*time.Second)
+
+		By("Advancing clock into the suspension window proper (Monday 21:00)")
+		// Now both the base schedule (ShouldHibernate=true) AND the suspension window
+		// are active. The Suspend exception must still win — plan stays Active.
+		fakeClock.SetTime(time.Date(2026, 5, 11, 21, 1, 0, 0, time.UTC))
+		testutil.TriggerReconcile(ctx, k8sClient, plan)
+
+		By("Verifying plan remains Active at 21:00 (suspend exception prevents hibernation)")
+		testutil.ConsistentllyAtPhase(ctx, k8sClient, plan, hibernatorv1alpha1.PhaseActive, 4*time.Second)
+	})
+
+	It("ScheduleExceptionLifecycle_Complete: should transition through Pending → Active → Expired → Detached states", func() {
+		// This test validates the full exception state machine lifecycle without checking
+		// execution side effects (plan phase transitions are covered by GoldenPath E2E tests).
+		// Focuses exclusively on ScheduleException state transitions and timestamp recording:
+		// 1. Exception created with ValidFrom in future → Pending state
+		// 2. Clock advances past ValidFrom → Active state
+		// 3. Clock advances past ValidUntil → Expired state
+		// 4. Plan deletion (exception without ownerref) → Detached state
+		baseTime := time.Date(2026, 5, 5, 8, 0, 0, 0, time.UTC) // Monday 08:00 UTC
+		fakeClock.SetTime(baseTime)
+
+		By("Creating HibernatePlan as reference context")
+		plan, _ = testutil.NewHibernatePlanBuilder("exc-lifecycle-complete", testNamespace).
+			WithSchedule("20:00", "06:00", "MON", "TUE", "WED", "THU", "FRI", "SAT", "SUN").
+			WithExecutionStrategy(hibernatorv1alpha1.ExecutionStrategy{
+				Type: hibernatorv1alpha1.StrategySequential,
+			}).
+			WithTarget(hibernatorv1alpha1.Target{
+				Name: "database",
+				Type: "rds",
+				ConnectorRef: hibernatorv1alpha1.ConnectorRef{
+					Kind: "CloudProvider",
+					Name: "exception-aws",
+				},
+			}).
+			Build()
+
+		Expect(k8sClient.Create(ctx, plan)).To(Succeed())
+		testutil.EventuallyPhase(ctx, k8sClient, plan, hibernatorv1alpha1.PhaseActive)
+
+		By("Creating ScheduleException with ValidFrom 1 hour in future (09:00 UTC)")
+		validFromTime := baseTime.Add(1 * time.Hour)  // 09:00 UTC
+		validUntilTime := baseTime.Add(3 * time.Hour) // 11:00 UTC
+		exception = testutil.NewScheduleExceptionBuilder("exc-lifecycle", testNamespace, plan.Name).
+			WithType(hibernatorv1alpha1.ExceptionExtend).
+			WithValidity(validFromTime, validUntilTime).
+			WithWindows(hibernatorv1alpha1.OffHourWindow{
+				Start:      "09:00",
+				End:        "18:00",
+				DaysOfWeek: []string{"MON", "TUE", "WED", "THU", "FRI", "SAT", "SUN"},
+			}).
+			Build()
+
+		Expect(k8sClient.Create(ctx, exception)).To(Succeed())
+
+		By("Validating exception reaches Pending state (clock before ValidFrom)")
+		testutil.EventuallyExceptionState(ctx, k8sClient, exception, hibernatorv1alpha1.ExceptionStatePending)
+		Expect(k8sClient.Get(ctx, client.ObjectKeyFromObject(exception), exception)).To(Succeed())
+		Expect(exception.Status.State).To(Equal(hibernatorv1alpha1.ExceptionStatePending))
+		Expect(exception.Status.AppliedAt).To(BeNil(), "Pending state should not have AppliedAt")
+
+		By("Verifying exception does not appear in plan.Status.ExceptionReferences (Pending state)")
+		Expect(k8sClient.Get(ctx, client.ObjectKeyFromObject(plan), plan)).To(Succeed())
+		// Should not have any active exception references while in Pending state
+		pendingRefs := lo.Filter(plan.Status.ExceptionReferences, func(ref hibernatorv1alpha1.ExceptionReference, _ int) bool {
+			return ref.Name == exception.Name && ref.State == hibernatorv1alpha1.ExceptionStateActive
+		})
+		Expect(pendingRefs).To(HaveLen(0), "Pending exception should not appear as active in plan references")
+
+		By("Advancing clock to 09:05 (past ValidFrom) and triggering exception reconcile")
+		fakeClock.SetTime(baseTime.Add(65 * time.Minute))
+		testutil.TriggerReconcile(ctx, k8sClient, exception)
+
+		By("Validating exception transitions to Active state with AppliedAt timestamp")
+		testutil.EventuallyExceptionState(ctx, k8sClient, exception, hibernatorv1alpha1.ExceptionStateActive)
+		Expect(k8sClient.Get(ctx, client.ObjectKeyFromObject(exception), exception)).To(Succeed())
+		Expect(exception.Status.State).To(Equal(hibernatorv1alpha1.ExceptionStateActive))
+		Expect(exception.Status.AppliedAt).NotTo(BeNil(), "Active state must set AppliedAt timestamp")
+
+		By("Verifying exception appears in plan.Status.ExceptionReferences with Active state")
+		Eventually(func(g Gomega) {
+			g.Expect(k8sClient.Get(ctx, client.ObjectKeyFromObject(plan), plan)).To(Succeed())
+			activeRefs := lo.Filter(plan.Status.ExceptionReferences, func(ref hibernatorv1alpha1.ExceptionReference, _ int) bool {
+				return ref.Name == exception.Name && ref.State == hibernatorv1alpha1.ExceptionStateActive
+			})
+			g.Expect(activeRefs).To(HaveLen(1), "Expected 1 active exception reference")
+		}).WithTimeout(10 * time.Second).Should(Succeed())
+
+		By("Advancing clock to 11:05 (past ValidUntil) and triggering exception reconcile")
+		fakeClock.SetTime(baseTime.Add(185 * time.Minute))
+		testutil.TriggerReconcile(ctx, k8sClient, exception)
+
+		By("Validating exception transitions to Expired state with ExpiredAt timestamp")
+		testutil.EventuallyExceptionState(ctx, k8sClient, exception, hibernatorv1alpha1.ExceptionStateExpired)
+		Expect(k8sClient.Get(ctx, client.ObjectKeyFromObject(exception), exception)).To(Succeed())
+		Expect(exception.Status.State).To(Equal(hibernatorv1alpha1.ExceptionStateExpired))
+		Expect(exception.Status.ExpiredAt).NotTo(BeNil(), "Expired state must set ExpiredAt timestamp")
+
+		By("Verifying exception no longer appears as active in plan.Status.ExceptionReferences (Expired state)")
+		Expect(k8sClient.Get(ctx, client.ObjectKeyFromObject(plan), plan)).To(Succeed())
+		expiredRefs := lo.Filter(plan.Status.ExceptionReferences, func(ref hibernatorv1alpha1.ExceptionReference, _ int) bool {
+			return ref.Name == exception.Name && ref.State == hibernatorv1alpha1.ExceptionStateActive
+		})
+		Expect(expiredRefs).To(HaveLen(0), "Expired exception should not appear as active in plan references")
+
+		By("Deleting plan (exception has no ownerref, should transition to Detached)")
+		Expect(k8sClient.Delete(ctx, plan)).To(Succeed())
+
+		By("Validating exception transitions to Detached state with DetachedAt timestamp")
+		testutil.EventuallyExceptionState(ctx, k8sClient, exception, hibernatorv1alpha1.ExceptionStateDetached)
+		Expect(k8sClient.Get(ctx, client.ObjectKeyFromObject(exception), exception)).To(Succeed())
+		Expect(exception.Status.State).To(Equal(hibernatorv1alpha1.ExceptionStateDetached))
+		Expect(exception.Status.DetachedAt).NotTo(BeNil(), "Detached state must set DetachedAt timestamp")
+
+		By("Confirming exception persists after plan deletion (not garbage collected)")
+		key := client.ObjectKeyFromObject(exception)
+		exception = &hibernatorv1alpha1.ScheduleException{}
+		Expect(k8sClient.Get(ctx, key, exception)).To(Succeed())
+		Expect(exception.Status.State).To(Equal(hibernatorv1alpha1.ExceptionStateDetached))
+	})
+
+	It("ScheduleExceptionLifecycle_PendingActiveExpiredDetached: detailed state transitions with status validation", func() {
+		// Comprehensive test validating state machine progression with explicit status assertions.
+		// Tests that messages and timestamps are correctly updated at each transition.
+		baseTime := time.Date(2026, 5, 12, 10, 0, 0, 0, time.UTC) // Monday 10:00 UTC
+		fakeClock.SetTime(baseTime)
+
+		By("Creating HibernatePlan")
+		plan, _ = testutil.NewHibernatePlanBuilder("exc-states-detailed", testNamespace).
+			WithSchedule("20:00", "06:00", "MON", "TUE", "WED", "THU", "FRI", "SAT", "SUN").
+			WithExecutionStrategy(hibernatorv1alpha1.ExecutionStrategy{
+				Type: hibernatorv1alpha1.StrategySequential,
+			}).
+			WithTarget(hibernatorv1alpha1.Target{
+				Name: "database",
+				Type: "rds",
+				ConnectorRef: hibernatorv1alpha1.ConnectorRef{
+					Kind: "CloudProvider",
+					Name: "exception-aws",
+				},
+			}).
+			Build()
+
+		Expect(k8sClient.Create(ctx, plan)).To(Succeed())
+		testutil.EventuallyPhase(ctx, k8sClient, plan, hibernatorv1alpha1.PhaseActive)
+
+		By("Creating ScheduleException with future ValidFrom")
+		validFromTime := baseTime.Add(2 * time.Hour)  // 12:00 UTC
+		validUntilTime := baseTime.Add(4 * time.Hour) // 14:00 UTC
+		exception = testutil.NewScheduleExceptionBuilder("exc-states-test", testNamespace, plan.Name).
+			WithType(hibernatorv1alpha1.ExceptionSuspend).
+			WithValidity(validFromTime, validUntilTime).
+			WithWindows(hibernatorv1alpha1.OffHourWindow{
+				Start:      "20:00",
+				End:        "06:00",
+				DaysOfWeek: []string{"MON", "TUE", "WED", "THU", "FRI", "SAT", "SUN"},
+			}).
+			Build()
+
+		Expect(k8sClient.Create(ctx, exception)).To(Succeed())
+
+		// State 1: Pending
+		By("Validating exception is in Pending state (ValidFrom in future)")
+		testutil.EventuallyExceptionState(ctx, k8sClient, exception, hibernatorv1alpha1.ExceptionStatePending)
+
+		By("Reading exception status and checking Pending message")
+		Expect(k8sClient.Get(ctx, client.ObjectKeyFromObject(exception), exception)).To(Succeed())
+		Expect(exception.Status.State).To(Equal(hibernatorv1alpha1.ExceptionStatePending))
+		Expect(exception.Status.Message).NotTo(BeEmpty(), "Pending state should have a status message")
+
+		// Transition to Active
+		By("Advancing clock past ValidFrom (12:05)")
+		fakeClock.SetTime(baseTime.Add(125 * time.Minute))
+		testutil.TriggerReconcile(ctx, k8sClient, exception)
+
+		// State 2: Active
+		By("Validating exception transitions to Active state")
+		testutil.EventuallyExceptionState(ctx, k8sClient, exception, hibernatorv1alpha1.ExceptionStateActive)
+
+		By("Reading exception status and checking Active message")
+		Expect(k8sClient.Get(ctx, client.ObjectKeyFromObject(exception), exception)).To(Succeed())
+		Expect(exception.Status.State).To(Equal(hibernatorv1alpha1.ExceptionStateActive))
+		Expect(exception.Status.Message).NotTo(BeEmpty(), "Active state should have a status message")
+		Expect(exception.Status.AppliedAt).NotTo(BeNil(), "Active state should record AppliedAt timestamp")
+
+		// Transition to Expired
+		By("Advancing clock past ValidUntil (14:05)")
+		fakeClock.SetTime(baseTime.Add(245 * time.Minute))
+		testutil.TriggerReconcile(ctx, k8sClient, exception)
+
+		// State 3: Expired
+		By("Validating exception transitions to Expired state")
+		testutil.EventuallyExceptionState(ctx, k8sClient, exception, hibernatorv1alpha1.ExceptionStateExpired)
+
+		By("Reading exception status and checking Expired message")
+		Expect(k8sClient.Get(ctx, client.ObjectKeyFromObject(exception), exception)).To(Succeed())
+		Expect(exception.Status.State).To(Equal(hibernatorv1alpha1.ExceptionStateExpired))
+		Expect(exception.Status.Message).NotTo(BeEmpty(), "Expired state should have a status message")
+		Expect(exception.Status.ExpiredAt).NotTo(BeNil(), "Expired state should record ExpiredAt timestamp")
+
+		// Transition to Detached (plan deletion)
+		By("Deleting the HibernatePlan (exception has no ownerref, should go to Detached)")
+		Expect(k8sClient.Delete(ctx, plan)).To(Succeed())
+
+		// State 4: Detached
+		By("Validating exception transitions to Detached state")
+		testutil.EventuallyExceptionState(ctx, k8sClient, exception, hibernatorv1alpha1.ExceptionStateDetached)
+
+		By("Reading exception status and checking Detached message")
+		Expect(k8sClient.Get(ctx, client.ObjectKeyFromObject(exception), exception)).To(Succeed())
+		Expect(exception.Status.State).To(Equal(hibernatorv1alpha1.ExceptionStateDetached))
+		Expect(exception.Status.Message).NotTo(BeEmpty(), "Detached state should have a status message")
+		Expect(exception.Status.DetachedAt).NotTo(BeNil(), "Detached state should record DetachedAt timestamp")
+
+		By("Confirming exception still exists after plan deletion")
+		retrieved := &hibernatorv1alpha1.ScheduleException{}
+		Expect(k8sClient.Get(ctx, client.ObjectKeyFromObject(exception), retrieved)).To(Succeed())
+		Expect(retrieved.Status.State).To(Equal(hibernatorv1alpha1.ExceptionStateDetached))
+	})
+
+	It("ScheduleExceptionDetached_WithOwnerRef: cascade deletion when plan deletes exception with ownerref", func() {
+		// When an exception is created WITH an ownerref to a plan, deleting the plan
+		// should cascade-delete the exception (not transition it to Detached).
+		// This validates that plan-managed exceptions are properly GC'd while
+		// user-created exceptions are preserved.
+		baseTime := time.Date(2026, 5, 19, 10, 0, 0, 0, time.UTC) // Monday 10:00 UTC
+		fakeClock.SetTime(baseTime)
+
+		By("Creating HibernatePlan")
+		plan, _ = testutil.NewHibernatePlanBuilder("exc-ownerref-test", testNamespace).
+			WithSchedule("20:00", "06:00", "MON", "TUE", "WED", "THU", "FRI", "SAT", "SUN").
+			WithExecutionStrategy(hibernatorv1alpha1.ExecutionStrategy{
+				Type: hibernatorv1alpha1.StrategySequential,
+			}).
+			WithTarget(hibernatorv1alpha1.Target{
+				Name: "database",
+				Type: "rds",
+				ConnectorRef: hibernatorv1alpha1.ConnectorRef{
+					Kind: "CloudProvider",
+					Name: "exception-aws",
+				},
+			}).
+			Build()
+
+		Expect(k8sClient.Create(ctx, plan)).To(Succeed())
+		testutil.EventuallyPhase(ctx, k8sClient, plan, hibernatorv1alpha1.PhaseActive)
+
+		By("Creating ScheduleException WITH ownerref to plan (managed exception)")
+		exception = testutil.NewScheduleExceptionBuilder("exc-managed", testNamespace, plan.Name).
+			WithType(hibernatorv1alpha1.ExceptionExtend).
+			WithValidity(baseTime.Add(-1*time.Hour), baseTime.Add(2*time.Hour)).
+			WithWindows(hibernatorv1alpha1.OffHourWindow{
+				Start:      "09:00",
+				End:        "18:00",
+				DaysOfWeek: []string{"MON", "TUE", "WED", "THU", "FRI", "SAT", "SUN"},
+			}).
+			Build()
+
+		// Add ownerref pointing to the plan
+		exception.OwnerReferences = []metav1.OwnerReference{
+			{
+				APIVersion: hibernatorv1alpha1.GroupVersion.String(),
+				Kind:       "HibernatePlan",
+				Name:       plan.Name,
+				UID:        plan.UID,
+				Controller: lo.ToPtr(true),
+			},
+		}
+
+		Expect(k8sClient.Create(ctx, exception)).To(Succeed())
+		testutil.EventuallyExceptionState(ctx, k8sClient, exception, hibernatorv1alpha1.ExceptionStateActive)
+
+		By("Deleting the HibernatePlan (exception has ownerref, should be cascade-deleted)")
+		Expect(k8sClient.Delete(ctx, plan)).To(Succeed())
+
+		By("Validating exception is cascade-deleted (not transitioned to Detached)")
+		testutil.EnsureDeleted(ctx, k8sClient, exception)
+
+		By("Confirming exception is gone from API server")
+		retrieved := &hibernatorv1alpha1.ScheduleException{}
+		err := k8sClient.Get(ctx, client.ObjectKeyFromObject(exception), retrieved)
+		Expect(err).To(HaveOccurred())
+		Expect(errors.IsNotFound(err)).To(BeTrue(), "Exception should be gone (cascade deleted)")
+	})
+
+	It("ScheduleExceptionDetached_NoOwnerRef: plan deletion transitions user-created exception to Detached", func() {
+		// When an exception is created WITHOUT ownerref (user-managed), deleting the plan
+		// should transition it to Detached (not delete it).
+		// This validates that orphaned exceptions are preserved with a clear state.
+		baseTime := time.Date(2026, 5, 26, 14, 0, 0, 0, time.UTC) // Monday 14:00 UTC
+		fakeClock.SetTime(baseTime)
+
+		By("Creating HibernatePlan")
+		plan, _ = testutil.NewHibernatePlanBuilder("exc-detached-test", testNamespace).
+			WithSchedule("20:00", "06:00", "MON", "TUE", "WED", "THU", "FRI", "SAT", "SUN").
+			WithExecutionStrategy(hibernatorv1alpha1.ExecutionStrategy{
+				Type: hibernatorv1alpha1.StrategySequential,
+			}).
+			WithTarget(hibernatorv1alpha1.Target{
+				Name: "database",
+				Type: "rds",
+				ConnectorRef: hibernatorv1alpha1.ConnectorRef{
+					Kind: "CloudProvider",
+					Name: "exception-aws",
+				},
+			}).
+			Build()
+
+		Expect(k8sClient.Create(ctx, plan)).To(Succeed())
+		testutil.EventuallyPhase(ctx, k8sClient, plan, hibernatorv1alpha1.PhaseActive)
+
+		By("Creating ScheduleException WITHOUT ownerref (user-created exception)")
+		exception = testutil.NewScheduleExceptionBuilder("exc-unmanaged", testNamespace, plan.Name).
+			WithType(hibernatorv1alpha1.ExceptionReplace).
+			WithValidity(baseTime.Add(-1*time.Hour), baseTime.Add(48*time.Hour)).
+			WithWindows(hibernatorv1alpha1.OffHourWindow{
+				Start:      "06:00",
+				End:        "22:00",
+				DaysOfWeek: []string{"MON", "TUE", "WED", "THU", "FRI", "SAT", "SUN"},
+			}).
+			Build()
+
+		// Explicitly ensure NO ownerref (user-created)
+		exception.OwnerReferences = nil
+
+		Expect(k8sClient.Create(ctx, exception)).To(Succeed())
+		testutil.EventuallyExceptionState(ctx, k8sClient, exception, hibernatorv1alpha1.ExceptionStateActive)
+
+		By("Deleting the HibernatePlan (exception has no ownerref, should transition to Detached)")
+		Expect(k8sClient.Delete(ctx, plan)).To(Succeed())
+
+		By("Validating exception transitions to Detached state (not deleted)")
+		testutil.EventuallyExceptionState(ctx, k8sClient, exception, hibernatorv1alpha1.ExceptionStateDetached)
+
+		By("Confirming exception still exists in Detached state")
+		Expect(k8sClient.Get(ctx, client.ObjectKeyFromObject(exception), exception)).To(Succeed())
+		Expect(exception.Status.State).To(Equal(hibernatorv1alpha1.ExceptionStateDetached))
+		Expect(exception.Status.Message).To(ContainSubstring("plan"), "Detached message should reference the plan")
+		Expect(controllerutil.ContainsFinalizer(exception, wellknown.ExceptionFinalizerName)).To(BeFalse(), "Detached exception should not have finalizer")
 	})
 })

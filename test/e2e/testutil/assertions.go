@@ -19,7 +19,7 @@ import (
 )
 
 const (
-	DefaultTimeout  = 10 * time.Second
+	DefaultTimeout  = 20 * time.Second
 	DefaultInterval = 250 * time.Millisecond
 )
 

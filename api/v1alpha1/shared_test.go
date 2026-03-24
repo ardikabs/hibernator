@@ -216,39 +216,3 @@ func TestExceptionReferencesEqual_AppliedAt_DifferentValues(t *testing.T) {
 		t.Error("different AppliedAt values should not be equal")
 	}
 }
-
-func TestExceptionReferencesEqual_ExpiredAt_OneNil(t *testing.T) {
-	ref1 := newExceptionRef("x")
-	ref2 := newExceptionRef("x")
-	expired := metav1.NewTime(time.Date(2026, 1, 2, 6, 0, 0, 0, time.UTC))
-	ref1.ExpiredAt = &expired
-	if ExceptionReferencesEqual([]ExceptionReference{ref1}, []ExceptionReference{ref2}) {
-		t.Error("one ExpiredAt nil and other non-nil should not be equal")
-	}
-}
-
-func TestExceptionReferencesEqual_ExpiredAt_DifferentValues(t *testing.T) {
-	ref1 := newExceptionRef("x")
-	ref2 := newExceptionRef("x")
-	t1 := metav1.NewTime(time.Date(2026, 1, 2, 6, 0, 0, 0, time.UTC))
-	t2 := metav1.NewTime(time.Date(2026, 1, 2, 7, 0, 0, 0, time.UTC))
-	ref1.ExpiredAt = &t1
-	ref2.ExpiredAt = &t2
-	if ExceptionReferencesEqual([]ExceptionReference{ref1}, []ExceptionReference{ref2}) {
-		t.Error("different ExpiredAt values should not be equal")
-	}
-}
-
-func TestExceptionReferencesEqual_AppliedAndExpired_Equal(t *testing.T) {
-	ref1 := newExceptionRef("x")
-	ref2 := newExceptionRef("x")
-	applied := metav1.NewTime(time.Date(2026, 1, 1, 6, 0, 0, 0, time.UTC))
-	expired := metav1.NewTime(time.Date(2026, 1, 2, 6, 0, 0, 0, time.UTC))
-	ref1.AppliedAt = &applied
-	ref1.ExpiredAt = &expired
-	ref2.AppliedAt = &applied
-	ref2.ExpiredAt = &expired
-	if !ExceptionReferencesEqual([]ExceptionReference{ref1}, []ExceptionReference{ref2}) {
-		t.Error("same AppliedAt and ExpiredAt should be equal")
-	}
-}

@@ -83,7 +83,7 @@ func runPreview(ctx context.Context, opts *previewOptions, args []string) error 
 			return fmt.Errorf("failed to get HibernatePlan %q in namespace %q: %w", args[0], ns, err)
 		}
 
-		exceptions = plan.Status.ActiveExceptions
+		exceptions = plan.Status.ExceptionReferences
 		if exc, err := common.FetchActiveException(ctx, c, plan); err == nil && exc != nil {
 			exception = common.ConvertAPIException(*exc)
 		}

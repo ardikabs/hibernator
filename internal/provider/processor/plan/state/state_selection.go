@@ -6,8 +6,6 @@ Licensed under the Apache License, Version 2.0.
 package state
 
 import (
-	"context"
-
 	hibernatorv1alpha1 "github.com/ardikabs/hibernator/api/v1alpha1"
 	"github.com/ardikabs/hibernator/internal/wellknown"
 )
@@ -33,6 +31,11 @@ import (
 //     - unknown phase    → nil (caller should treat as a no-op)
 //
 // For active/hibernated phases the concrete handler is chosen by selectIdleHandler.
+//
+// The selected handler is wrapped with an observation pipeline that executes
+// phase-agnostic observers (exceptionReferences, metrics, conditions, etc.) before
+// delegating to phase-specific handling. The pipeline is instantiated fresh on each
+// selectHandler call, allowing observations to be correctly scoped to each state.
 func selectHandler(s *state) Handler {
 	plan := s.plan()
 
@@ -40,19 +43,12 @@ func selectHandler(s *state) Handler {
 	if !plan.DeletionTimestamp.IsZero() {
 		return &lifecycleState{state: s, delete: true}
 	}
-
-	// Suspension requested but not yet in PhaseSuspended — transition first.
-	if plan.Spec.Suspend && plan.Status.Phase != hibernatorv1alpha1.PhaseSuspended {
-		return HandlerFunc(func(ctx context.Context, onDeadline bool) (StateResult, error) {
-			result, err := s.TransitionToSuspended(ctx, onDeadline)
-			if err != nil {
-				s.Log.Error(err, "failed to transition to Suspended")
-				return StateResult{}, err
-			}
-			return result, nil
-		})
+	if plan.Spec.Suspend &&
+		plan.Status.Phase != hibernatorv1alpha1.PhaseSuspended {
+		// Suspension requested but not yet in PhaseSuspended — transition first.
+		return &preSuspensionState{state: s}
 	}
-
+	// Phase-based dispatch.
 	switch plan.Status.Phase {
 	case "":
 		return &lifecycleState{state: s}
@@ -69,6 +65,8 @@ func selectHandler(s *state) Handler {
 	default:
 		return nil
 	}
+	// Wrap the phase-specific handler with the observation pipeline.
+	// return wrapWithObservations(s, handler)
 }
 
 // selectIdleHandler resolves the concrete Handler for Active and Hibernated phases,

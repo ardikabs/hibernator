@@ -273,57 +273,6 @@ func (b *state) setError(_ context.Context, phaseErr error) {
 	})
 }
 
-// TransitionToSuspended records the current phase in an annotation and queues
-// a PhaseSuspended status update, then returns.
-//
-// Graceful drain: if the plan is mid-execution (PhaseHibernating or PhaseWakingUp)
-// and has Running targets, the actual transition is deferred — this method reschedules
-// a poll tick and returns nil. PhaseSuspended is only written once all in-flight
-// targets reach a terminal state. This ensures the execution bookmark held in
-// status (CycleID, StageIndex, Executions) is accurate at suspension time, enabling
-// resumeFromExecution to resume or route correctly on resume.
-//
-// Note: there is no drain timeout. If a Job never reaches a terminal state the plan
-// holds at the current execution phase indefinitely. Use the Job TTL or manual Job
-// deletion to unblock. When the deadline fires (onDeadline=true) the drain is
-// bypassed and the suspension is written immediately.
-func (s *state) TransitionToSuspended(ctx context.Context, onDeadline bool) (StateResult, error) {
-	plan := s.plan()
-
-	if !onDeadline && (plan.Status.Phase == hibernatorv1alpha1.PhaseHibernating || plan.Status.Phase == hibernatorv1alpha1.PhaseWakingUp) {
-		drained, result, err := s.awaitExecutionDrain(ctx)
-		if err != nil {
-			return result, err
-		}
-
-		if !drained {
-			return result, nil
-		}
-	}
-
-	orig := plan.DeepCopy()
-	if plan.Annotations == nil {
-		plan.Annotations = make(map[string]string)
-	}
-
-	plan.Annotations[wellknown.AnnotationSuspendedAtPhase] = string(plan.Status.Phase)
-	if err := s.patchAndPreserveStatus(ctx, plan, client.MergeFrom(orig)); err != nil {
-		return StateResult{}, fmt.Errorf("failed to record suspended-at-phase annotation: %w", err)
-	}
-
-	s.Statuses.PlanStatuses.Send(statusprocessor.Update[*hibernatorv1alpha1.HibernatePlan]{
-		NamespacedName: s.Key,
-		Resource:       plan,
-		Mutator: statusprocessor.MutatorFunc[*hibernatorv1alpha1.HibernatePlan](func(p *hibernatorv1alpha1.HibernatePlan) {
-			p.Status.Phase = hibernatorv1alpha1.PhaseSuspended
-			p.Status.ErrorMessage = ""
-			p.Status.LastTransitionTime = ptr.To(metav1.NewTime(s.Clock.Now()))
-		}),
-	})
-
-	return StateResult{Requeue: true}, nil
-}
-
 // awaitExecutionDrain blocks the transition to PhaseSuspended until all in-flight
 // targets reach a terminal state. A target is considered in-flight when LogsRef is
 // set (assigned at Job dispatch time) and FinishedAt is nil.

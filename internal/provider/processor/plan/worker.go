@@ -80,8 +80,8 @@ type Worker struct {
 	slot keyedworker.Slot[*message.PlanContext]
 
 	// Timers — nil means inactive.
-	requeueTimer  *time.Timer
-	deadlineTimer *time.Timer
+	requeueTimer  clock.Timer
+	deadlineTimer clock.Timer
 
 	// consecutiveJobMisses tracks how many consecutive poll cycles each target's
 	// runner Job has been absent while still in StateRunning. Lazily initialised
@@ -102,7 +102,7 @@ type Worker struct {
 func (s *Worker) run(ctx context.Context) {
 	defer s.cleanup()
 
-	workerIdleTimer := time.NewTimer(workerIdleTimeout)
+	workerIdleTimer := s.Clock.NewTimer(workerIdleTimeout)
 	defer workerIdleTimer.Stop()
 
 	for {
@@ -133,7 +133,7 @@ func (s *Worker) run(ctx context.Context) {
 			}
 			workerIdleTimer.Reset(workerIdleTimeout)
 
-		case <-workerIdleTimer.C:
+		case <-workerIdleTimer.C():
 			s.log.V(1).Info("worker idle timeout reached, self-terminating", "plan", s.key)
 			return
 		}
@@ -322,7 +322,7 @@ func (s *Worker) applyTimers(result state.StateResult) {
 		s.setDeadlineTimer(result.TimeoutAfter) // arm-once: no-op if already running
 	case result.DeadlineAfter > 0:
 		s.stopDeadlineTimer()
-		s.deadlineTimer = time.NewTimer(result.DeadlineAfter) // always-override
+		s.deadlineTimer = s.Clock.NewTimer(result.DeadlineAfter) // always-override
 	default:
 		s.stopDeadlineTimer()
 	}
@@ -330,7 +330,7 @@ func (s *Worker) applyTimers(result state.StateResult) {
 
 func (s *Worker) setRequeueTimer(d time.Duration) {
 	s.stopRequeueTimer()
-	s.requeueTimer = time.NewTimer(d)
+	s.requeueTimer = s.Clock.NewTimer(d)
 }
 
 func (s *Worker) stopRequeueTimer() {
@@ -342,7 +342,7 @@ func (s *Worker) stopRequeueTimer() {
 
 func (s *Worker) setDeadlineTimer(d time.Duration) {
 	if s.deadlineTimer == nil {
-		s.deadlineTimer = time.NewTimer(d)
+		s.deadlineTimer = s.Clock.NewTimer(d)
 	}
 }
 
@@ -361,9 +361,9 @@ func (s *Worker) cleanup() {
 
 // timerChan returns the channel of t, or nil if t is nil.
 // A nil channel never selects, so inactive timers effectively disable their case.
-func timerChan(t *time.Timer) <-chan time.Time {
+func timerChan(t clock.Timer) <-chan time.Time {
 	if t == nil {
 		return nil
 	}
-	return t.C
+	return t.C()
 }

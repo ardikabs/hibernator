@@ -156,6 +156,11 @@ spec:
                 description: AppliedAt is when the exception was first applied.
                 format: date-time
                 type: string
+              detachedAt:
+                description: DetachedAt is when the exception transitioned to Detached
+                  state (plan was deleted).
+                format: date-time
+                type: string
               expiredAt:
                 description: ExpiredAt is when the exception transitioned to Expired
                   state.
@@ -171,10 +176,12 @@ spec:
                   - Pending
                   - Active
                   - Expired
+                  - Detached
                 - enum:
                   - Pending
                   - Active
                   - Expired
+                  - Detached
                 description: State is the current lifecycle state of the exception.
                 type: string
             type: object
