@@ -58,11 +58,12 @@ func setupTestClient(objs ...client.Object) client.Client {
 
 func TestScheduleExceptionValidator_ValidateCreate(t *testing.T) {
 	tests := []struct {
-		name      string
-		exception *hibernatorv1alpha1.ScheduleException
-		setup     func() client.Client
-		wantErr   bool
-		errMsg    string
+		name        string
+		exception   *hibernatorv1alpha1.ScheduleException
+		setup       func() client.Client
+		wantErr     bool
+		errMsg      string
+		wantWarning string
 	}{
 		{
 			name:      "valid exception",
@@ -87,7 +88,7 @@ func TestScheduleExceptionValidator_ValidateCreate(t *testing.T) {
 			wantErr: false,
 		},
 		{
-			name: "invalid planRef - nonexistent plan",
+			name: "nonexistent plan - warning only",
 			exception: &hibernatorv1alpha1.ScheduleException{
 				ObjectMeta: metav1.ObjectMeta{
 					Name:      "test-exception",
@@ -107,8 +108,8 @@ func TestScheduleExceptionValidator_ValidateCreate(t *testing.T) {
 			setup: func() client.Client {
 				return setupTestClient()
 			},
-			wantErr: true,
-			errMsg:  "Not found",
+			wantErr:     false,
+			wantWarning: "not found",
 		},
 		{
 			name: "invalid planRef - wrong namespace",
@@ -305,7 +306,7 @@ func TestScheduleExceptionValidator_ValidateCreate(t *testing.T) {
 			errMsg:  "must be one of: MON, TUE, WED, THU, FRI, SAT, SUN",
 		},
 		{
-			name: "overlapping active exception",
+			name: "non-colliding same-type exceptions allowed (different days)",
 			exception: &hibernatorv1alpha1.ScheduleException{
 				ObjectMeta: metav1.ObjectMeta{
 					Name:      "new-exception",
@@ -351,11 +352,10 @@ func TestScheduleExceptionValidator_ValidateCreate(t *testing.T) {
 				}
 				return setupTestClient(plan, existingException)
 			},
-			wantErr: true,
-			errMsg:  "overlaps with existing",
+			wantErr: false,
 		},
 		{
-			name: "overlapping pending exception",
+			name: "colliding same-type pending exception rejected",
 			exception: &hibernatorv1alpha1.ScheduleException{
 				ObjectMeta: metav1.ObjectMeta{Name: "new-exception", Namespace: "default"},
 				Spec: hibernatorv1alpha1.ScheduleExceptionSpec{
@@ -384,7 +384,7 @@ func TestScheduleExceptionValidator_ValidateCreate(t *testing.T) {
 				return setupTestClient(plan, existingException)
 			},
 			wantErr: true,
-			errMsg:  "overlaps with existing",
+			errMsg:  "colliding same-type",
 		},
 	}
 
@@ -392,7 +392,20 @@ func TestScheduleExceptionValidator_ValidateCreate(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			validator := NewScheduleExceptionValidator(logr.Discard(), tt.setup())
 
-			_, err := validator.ValidateCreate(context.Background(), tt.exception)
+			warnings, err := validator.ValidateCreate(context.Background(), tt.exception)
+
+			if tt.wantWarning != "" {
+				found := false
+				for _, w := range warnings {
+					if strings.Contains(w, tt.wantWarning) {
+						found = true
+						break
+					}
+				}
+				if !found {
+					t.Errorf("ValidateCreate() expected warning containing %q, got %v", tt.wantWarning, warnings)
+				}
+			}
 
 			if tt.wantErr {
 				if err == nil {
@@ -419,6 +432,7 @@ func TestScheduleExceptionValidator_ValidateUpdate(t *testing.T) {
 		setup        func() client.Client
 		wantErr      bool
 		errMsg       string
+		wantWarning  string
 	}{
 		{
 			name:         "valid update",
@@ -447,7 +461,7 @@ func TestScheduleExceptionValidator_ValidateUpdate(t *testing.T) {
 			wantErr: false,
 		},
 		{
-			name:         "invalid update - change planRef",
+			name:         "nonexistent plan on update - warning only",
 			oldException: validException(),
 			newException: func() *hibernatorv1alpha1.ScheduleException {
 				exc := validException()
@@ -457,8 +471,8 @@ func TestScheduleExceptionValidator_ValidateUpdate(t *testing.T) {
 			setup: func() client.Client {
 				return setupTestClient()
 			},
-			wantErr: true,
-			errMsg:  "Not found",
+			wantErr:     false,
+			wantWarning: "not found",
 		},
 	}
 
@@ -466,7 +480,20 @@ func TestScheduleExceptionValidator_ValidateUpdate(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			validator := NewScheduleExceptionValidator(logr.Discard(), tt.setup())
 
-			_, err := validator.ValidateUpdate(context.Background(), tt.oldException, tt.newException)
+			warnings, err := validator.ValidateUpdate(context.Background(), tt.oldException, tt.newException)
+
+			if tt.wantWarning != "" {
+				found := false
+				for _, w := range warnings {
+					if strings.Contains(w, tt.wantWarning) {
+						found = true
+						break
+					}
+				}
+				if !found {
+					t.Errorf("ValidateUpdate() expected warning containing %q, got %v", tt.wantWarning, warnings)
+				}
+			}
 
 			if tt.wantErr {
 				if err == nil {
@@ -491,5 +518,280 @@ func TestScheduleExceptionValidator_ValidateDelete(t *testing.T) {
 	_, err := validator.ValidateDelete(context.Background(), exc)
 	if err != nil {
 		t.Errorf("ValidateDelete() unexpected error = %v", err)
+	}
+}
+
+func TestValidateNoOverlappingExceptions_MultiException(t *testing.T) {
+	basePlan := &hibernatorv1alpha1.HibernatePlan{
+		ObjectMeta: metav1.ObjectMeta{Name: "test-plan", Namespace: "default"},
+		Spec: hibernatorv1alpha1.HibernatePlanSpec{
+			Schedule: hibernatorv1alpha1.Schedule{
+				Timezone: "UTC",
+				OffHours: []hibernatorv1alpha1.OffHourWindow{{Start: "20:00", End: "06:00", DaysOfWeek: []string{"MON", "TUE", "WED", "THU", "FRI"}}},
+			},
+		},
+	}
+
+	now := time.Now()
+	validFrom := metav1.Time{Time: now}
+	validUntil := metav1.Time{Time: now.Add(7 * 24 * time.Hour)}
+
+	tests := []struct {
+		name     string
+		incoming *hibernatorv1alpha1.ScheduleException
+		existing *hibernatorv1alpha1.ScheduleException
+		wantErr  bool
+		errMsg   string
+	}{
+		{
+			name: "extend+suspend colliding windows allowed",
+			incoming: &hibernatorv1alpha1.ScheduleException{
+				ObjectMeta: metav1.ObjectMeta{Name: "new-suspend", Namespace: "default"},
+				Spec: hibernatorv1alpha1.ScheduleExceptionSpec{
+					PlanRef:    hibernatorv1alpha1.PlanReference{Name: "test-plan"},
+					ValidFrom:  validFrom,
+					ValidUntil: validUntil,
+					Type:       hibernatorv1alpha1.ExceptionSuspend,
+					Windows:    []hibernatorv1alpha1.OffHourWindow{{Start: "20:00", End: "23:00", DaysOfWeek: []string{"THU"}}},
+				},
+			},
+			existing: &hibernatorv1alpha1.ScheduleException{
+				ObjectMeta: metav1.ObjectMeta{Name: "existing-extend", Namespace: "default", Labels: map[string]string{wellknown.LabelPlan: "test-plan"}},
+				Spec: hibernatorv1alpha1.ScheduleExceptionSpec{
+					PlanRef:    hibernatorv1alpha1.PlanReference{Name: "test-plan"},
+					ValidFrom:  validFrom,
+					ValidUntil: validUntil,
+					Type:       hibernatorv1alpha1.ExceptionExtend,
+					Windows:    []hibernatorv1alpha1.OffHourWindow{{Start: "20:00", End: "23:59", DaysOfWeek: []string{"THU"}}},
+				},
+				Status: hibernatorv1alpha1.ScheduleExceptionStatus{State: hibernatorv1alpha1.ExceptionStateActive},
+			},
+			wantErr: false,
+		},
+		{
+			name: "replace+extend colliding windows allowed",
+			incoming: &hibernatorv1alpha1.ScheduleException{
+				ObjectMeta: metav1.ObjectMeta{Name: "new-extend", Namespace: "default"},
+				Spec: hibernatorv1alpha1.ScheduleExceptionSpec{
+					PlanRef:    hibernatorv1alpha1.PlanReference{Name: "test-plan"},
+					ValidFrom:  validFrom,
+					ValidUntil: validUntil,
+					Type:       hibernatorv1alpha1.ExceptionExtend,
+					Windows:    []hibernatorv1alpha1.OffHourWindow{{Start: "00:00", End: "23:59", DaysOfWeek: []string{"WED"}}},
+				},
+			},
+			existing: &hibernatorv1alpha1.ScheduleException{
+				ObjectMeta: metav1.ObjectMeta{Name: "existing-replace", Namespace: "default", Labels: map[string]string{wellknown.LabelPlan: "test-plan"}},
+				Spec: hibernatorv1alpha1.ScheduleExceptionSpec{
+					PlanRef:    hibernatorv1alpha1.PlanReference{Name: "test-plan"},
+					ValidFrom:  validFrom,
+					ValidUntil: validUntil,
+					Type:       hibernatorv1alpha1.ExceptionReplace,
+					Windows:    []hibernatorv1alpha1.OffHourWindow{{Start: "22:00", End: "04:00", DaysOfWeek: []string{"WED", "THU"}}},
+				},
+				Status: hibernatorv1alpha1.ScheduleExceptionStatus{State: hibernatorv1alpha1.ExceptionStateActive},
+			},
+			wantErr: false,
+		},
+		{
+			name: "replace+replace colliding windows rejected",
+			incoming: &hibernatorv1alpha1.ScheduleException{
+				ObjectMeta: metav1.ObjectMeta{Name: "new-replace", Namespace: "default"},
+				Spec: hibernatorv1alpha1.ScheduleExceptionSpec{
+					PlanRef:    hibernatorv1alpha1.PlanReference{Name: "test-plan"},
+					ValidFrom:  validFrom,
+					ValidUntil: validUntil,
+					Type:       hibernatorv1alpha1.ExceptionReplace,
+					Windows:    []hibernatorv1alpha1.OffHourWindow{{Start: "20:00", End: "06:00", DaysOfWeek: []string{"MON"}}},
+				},
+			},
+			existing: &hibernatorv1alpha1.ScheduleException{
+				ObjectMeta: metav1.ObjectMeta{Name: "existing-replace", Namespace: "default", Labels: map[string]string{wellknown.LabelPlan: "test-plan"}},
+				Spec: hibernatorv1alpha1.ScheduleExceptionSpec{
+					PlanRef:    hibernatorv1alpha1.PlanReference{Name: "test-plan"},
+					ValidFrom:  validFrom,
+					ValidUntil: validUntil,
+					Type:       hibernatorv1alpha1.ExceptionReplace,
+					Windows:    []hibernatorv1alpha1.OffHourWindow{{Start: "22:00", End: "04:00", DaysOfWeek: []string{"MON"}}},
+				},
+				Status: hibernatorv1alpha1.ScheduleExceptionStatus{State: hibernatorv1alpha1.ExceptionStateActive},
+			},
+			wantErr: true,
+			errMsg:  "colliding same-type",
+		},
+		{
+			name: "replace+replace non-colliding windows allowed",
+			incoming: &hibernatorv1alpha1.ScheduleException{
+				ObjectMeta: metav1.ObjectMeta{Name: "new-replace", Namespace: "default"},
+				Spec: hibernatorv1alpha1.ScheduleExceptionSpec{
+					PlanRef:    hibernatorv1alpha1.PlanReference{Name: "test-plan"},
+					ValidFrom:  validFrom,
+					ValidUntil: validUntil,
+					Type:       hibernatorv1alpha1.ExceptionReplace,
+					Windows:    []hibernatorv1alpha1.OffHourWindow{{Start: "20:00", End: "06:00", DaysOfWeek: []string{"MON"}}},
+				},
+			},
+			existing: &hibernatorv1alpha1.ScheduleException{
+				ObjectMeta: metav1.ObjectMeta{Name: "existing-replace", Namespace: "default", Labels: map[string]string{wellknown.LabelPlan: "test-plan"}},
+				Spec: hibernatorv1alpha1.ScheduleExceptionSpec{
+					PlanRef:    hibernatorv1alpha1.PlanReference{Name: "test-plan"},
+					ValidFrom:  validFrom,
+					ValidUntil: validUntil,
+					Type:       hibernatorv1alpha1.ExceptionReplace,
+					Windows:    []hibernatorv1alpha1.OffHourWindow{{Start: "20:00", End: "06:00", DaysOfWeek: []string{"WED"}}},
+				},
+				Status: hibernatorv1alpha1.ScheduleExceptionStatus{State: hibernatorv1alpha1.ExceptionStateActive},
+			},
+			wantErr: false,
+		},
+		{
+			name: "disjoint validity periods always allowed",
+			incoming: &hibernatorv1alpha1.ScheduleException{
+				ObjectMeta: metav1.ObjectMeta{Name: "new-extend", Namespace: "default"},
+				Spec: hibernatorv1alpha1.ScheduleExceptionSpec{
+					PlanRef:    hibernatorv1alpha1.PlanReference{Name: "test-plan"},
+					ValidFrom:  metav1.Time{Time: now.Add(30 * 24 * time.Hour)},
+					ValidUntil: metav1.Time{Time: now.Add(37 * 24 * time.Hour)},
+					Type:       hibernatorv1alpha1.ExceptionExtend,
+					Windows:    []hibernatorv1alpha1.OffHourWindow{{Start: "06:00", End: "11:00", DaysOfWeek: []string{"MON"}}},
+				},
+			},
+			existing: &hibernatorv1alpha1.ScheduleException{
+				ObjectMeta: metav1.ObjectMeta{Name: "existing-extend", Namespace: "default", Labels: map[string]string{wellknown.LabelPlan: "test-plan"}},
+				Spec: hibernatorv1alpha1.ScheduleExceptionSpec{
+					PlanRef:    hibernatorv1alpha1.PlanReference{Name: "test-plan"},
+					ValidFrom:  validFrom,
+					ValidUntil: validUntil,
+					Type:       hibernatorv1alpha1.ExceptionExtend,
+					Windows:    []hibernatorv1alpha1.OffHourWindow{{Start: "06:00", End: "11:00", DaysOfWeek: []string{"MON"}}},
+				},
+				Status: hibernatorv1alpha1.ScheduleExceptionStatus{State: hibernatorv1alpha1.ExceptionStateActive},
+			},
+			wantErr: false,
+		},
+		{
+			name: "extend+extend colliding windows rejected",
+			incoming: &hibernatorv1alpha1.ScheduleException{
+				ObjectMeta: metav1.ObjectMeta{Name: "new-extend", Namespace: "default"},
+				Spec: hibernatorv1alpha1.ScheduleExceptionSpec{
+					PlanRef:    hibernatorv1alpha1.PlanReference{Name: "test-plan"},
+					ValidFrom:  validFrom,
+					ValidUntil: validUntil,
+					Type:       hibernatorv1alpha1.ExceptionExtend,
+					Windows:    []hibernatorv1alpha1.OffHourWindow{{Start: "08:00", End: "14:00", DaysOfWeek: []string{"SAT"}}},
+				},
+			},
+			existing: &hibernatorv1alpha1.ScheduleException{
+				ObjectMeta: metav1.ObjectMeta{Name: "existing-extend", Namespace: "default", Labels: map[string]string{wellknown.LabelPlan: "test-plan"}},
+				Spec: hibernatorv1alpha1.ScheduleExceptionSpec{
+					PlanRef:    hibernatorv1alpha1.PlanReference{Name: "test-plan"},
+					ValidFrom:  validFrom,
+					ValidUntil: validUntil,
+					Type:       hibernatorv1alpha1.ExceptionExtend,
+					Windows:    []hibernatorv1alpha1.OffHourWindow{{Start: "10:00", End: "16:00", DaysOfWeek: []string{"SAT"}}},
+				},
+				Status: hibernatorv1alpha1.ScheduleExceptionStatus{State: hibernatorv1alpha1.ExceptionStateActive},
+			},
+			wantErr: true,
+			errMsg:  "colliding same-type",
+		},
+		{
+			name: "suspend+suspend colliding windows rejected",
+			incoming: &hibernatorv1alpha1.ScheduleException{
+				ObjectMeta: metav1.ObjectMeta{Name: "new-suspend", Namespace: "default"},
+				Spec: hibernatorv1alpha1.ScheduleExceptionSpec{
+					PlanRef:    hibernatorv1alpha1.PlanReference{Name: "test-plan"},
+					ValidFrom:  validFrom,
+					ValidUntil: validUntil,
+					Type:       hibernatorv1alpha1.ExceptionSuspend,
+					Windows:    []hibernatorv1alpha1.OffHourWindow{{Start: "21:00", End: "23:00", DaysOfWeek: []string{"FRI"}}},
+				},
+			},
+			existing: &hibernatorv1alpha1.ScheduleException{
+				ObjectMeta: metav1.ObjectMeta{Name: "existing-suspend", Namespace: "default", Labels: map[string]string{wellknown.LabelPlan: "test-plan"}},
+				Spec: hibernatorv1alpha1.ScheduleExceptionSpec{
+					PlanRef:    hibernatorv1alpha1.PlanReference{Name: "test-plan"},
+					ValidFrom:  validFrom,
+					ValidUntil: validUntil,
+					Type:       hibernatorv1alpha1.ExceptionSuspend,
+					Windows:    []hibernatorv1alpha1.OffHourWindow{{Start: "20:00", End: "22:00", DaysOfWeek: []string{"FRI"}}},
+				},
+				Status: hibernatorv1alpha1.ScheduleExceptionStatus{State: hibernatorv1alpha1.ExceptionStateActive},
+			},
+			wantErr: true,
+			errMsg:  "colliding same-type",
+		},
+		{
+			name: "suspend+replace colliding windows allowed",
+			incoming: &hibernatorv1alpha1.ScheduleException{
+				ObjectMeta: metav1.ObjectMeta{Name: "new-suspend", Namespace: "default"},
+				Spec: hibernatorv1alpha1.ScheduleExceptionSpec{
+					PlanRef:    hibernatorv1alpha1.PlanReference{Name: "test-plan"},
+					ValidFrom:  validFrom,
+					ValidUntil: validUntil,
+					Type:       hibernatorv1alpha1.ExceptionSuspend,
+					Windows:    []hibernatorv1alpha1.OffHourWindow{{Start: "22:00", End: "02:00", DaysOfWeek: []string{"WED"}}},
+				},
+			},
+			existing: &hibernatorv1alpha1.ScheduleException{
+				ObjectMeta: metav1.ObjectMeta{Name: "existing-replace", Namespace: "default", Labels: map[string]string{wellknown.LabelPlan: "test-plan"}},
+				Spec: hibernatorv1alpha1.ScheduleExceptionSpec{
+					PlanRef:    hibernatorv1alpha1.PlanReference{Name: "test-plan"},
+					ValidFrom:  validFrom,
+					ValidUntil: validUntil,
+					Type:       hibernatorv1alpha1.ExceptionReplace,
+					Windows:    []hibernatorv1alpha1.OffHourWindow{{Start: "20:00", End: "06:00", DaysOfWeek: []string{"WED", "THU"}}},
+				},
+				Status: hibernatorv1alpha1.ScheduleExceptionStatus{State: hibernatorv1alpha1.ExceptionStateActive},
+			},
+			wantErr: false,
+		},
+		{
+			name: "expired exception ignored",
+			incoming: &hibernatorv1alpha1.ScheduleException{
+				ObjectMeta: metav1.ObjectMeta{Name: "new-extend", Namespace: "default"},
+				Spec: hibernatorv1alpha1.ScheduleExceptionSpec{
+					PlanRef:    hibernatorv1alpha1.PlanReference{Name: "test-plan"},
+					ValidFrom:  validFrom,
+					ValidUntil: validUntil,
+					Type:       hibernatorv1alpha1.ExceptionExtend,
+					Windows:    []hibernatorv1alpha1.OffHourWindow{{Start: "06:00", End: "11:00", DaysOfWeek: []string{"MON"}}},
+				},
+			},
+			existing: &hibernatorv1alpha1.ScheduleException{
+				ObjectMeta: metav1.ObjectMeta{Name: "expired-extend", Namespace: "default", Labels: map[string]string{wellknown.LabelPlan: "test-plan"}},
+				Spec: hibernatorv1alpha1.ScheduleExceptionSpec{
+					PlanRef:    hibernatorv1alpha1.PlanReference{Name: "test-plan"},
+					ValidFrom:  validFrom,
+					ValidUntil: validUntil,
+					Type:       hibernatorv1alpha1.ExceptionExtend,
+					Windows:    []hibernatorv1alpha1.OffHourWindow{{Start: "06:00", End: "11:00", DaysOfWeek: []string{"MON"}}},
+				},
+				Status: hibernatorv1alpha1.ScheduleExceptionStatus{State: hibernatorv1alpha1.ExceptionStateExpired},
+			},
+			wantErr: false,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			c := setupTestClient(basePlan, tt.existing)
+			validator := NewScheduleExceptionValidator(logr.Discard(), c)
+			_, err := validator.ValidateCreate(context.Background(), tt.incoming)
+
+			if tt.wantErr {
+				if err == nil {
+					t.Errorf("expected error containing %q, got nil", tt.errMsg)
+					return
+				}
+				if tt.errMsg != "" && !strings.Contains(err.Error(), tt.errMsg) {
+					t.Errorf("error = %v, want error containing %q", err, tt.errMsg)
+				}
+			} else {
+				if err != nil {
+					t.Errorf("unexpected error = %v", err)
+				}
+			}
+		})
 	}
 }

@@ -129,7 +129,7 @@ func TestFullDayWakeupWithSuspend(t *testing.T) {
 			fakeClock := clocktesting.NewFakeClock(tt.time)
 			evaluator := NewScheduleEvaluator(fakeClock, WithScheduleBuffer(buffer))
 
-			result, err := evaluator.Evaluate(windows, timezone, suspension)
+			result, err := evaluator.Evaluate(windows, timezone, []*Exception{suspension})
 			if err != nil {
 				t.Fatalf("Evaluate failed: %v", err)
 			}
@@ -230,7 +230,7 @@ func TestSuspendExceptionBackwardWindows(t *testing.T) {
 			fakeClock := clocktesting.NewFakeClock(tt.time)
 			evaluator := NewScheduleEvaluator(fakeClock, WithScheduleBuffer(buffer))
 
-			result, err := evaluator.Evaluate(windowsBase, timezone, suspensionBackward)
+			result, err := evaluator.Evaluate(windowsBase, timezone, []*Exception{suspensionBackward})
 			if err != nil {
 				t.Fatalf("Evaluate failed: %v", err)
 			}
@@ -403,7 +403,7 @@ func TestSuspendNextWakeUpAdjustedForUpcomingSuspension(t *testing.T) {
 			fakeClock := clocktesting.NewFakeClock(tt.now)
 			evaluator := NewScheduleEvaluator(fakeClock)
 
-			result, err := evaluator.Evaluate(baseWindows, timezone, exception)
+			result, err := evaluator.Evaluate(baseWindows, timezone, []*Exception{exception})
 			if err != nil {
 				t.Fatalf("Evaluate() error = %v", err)
 			}
@@ -498,7 +498,7 @@ func TestSuspendExceptionWeekendCarveOut(t *testing.T) {
 			fakeClock := clocktesting.NewFakeClock(tt.now)
 			evaluator := NewScheduleEvaluator(fakeClock, WithScheduleBuffer("1m"))
 
-			result, err := evaluator.Evaluate(baseWindows, timezone, exception)
+			result, err := evaluator.Evaluate(baseWindows, timezone, []*Exception{exception})
 			if err != nil {
 				t.Fatalf("Evaluate() error = %v", err)
 			}

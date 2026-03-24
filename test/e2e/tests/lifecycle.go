@@ -86,7 +86,7 @@ var _ = Describe("Lifecycle E2E", func() {
 			}).
 			WithTarget(hibernatorv1alpha1.Target{
 				Name: "database",
-				Type: "rds",
+				Type: "noop",
 				ConnectorRef: hibernatorv1alpha1.ConnectorRef{
 					Kind: "CloudProvider",
 					Name: "global-aws",
@@ -160,7 +160,7 @@ var _ = Describe("Lifecycle E2E", func() {
 			}).
 			WithTarget(hibernatorv1alpha1.Target{
 				Name: "database",
-				Type: "rds",
+				Type: "noop",
 				ConnectorRef: hibernatorv1alpha1.ConnectorRef{
 					Kind: "CloudProvider",
 					Name: "global-aws",
@@ -193,7 +193,7 @@ var _ = Describe("Lifecycle E2E", func() {
 			}).
 			WithTarget(hibernatorv1alpha1.Target{
 				Name: "database",
-				Type: "rds",
+				Type: "noop",
 				ConnectorRef: hibernatorv1alpha1.ConnectorRef{
 					Kind: "CloudProvider",
 					Name: "global-aws",
@@ -235,7 +235,7 @@ var _ = Describe("Lifecycle E2E", func() {
 			}).
 			WithTarget(hibernatorv1alpha1.Target{
 				Name: "database",
-				Type: "rds",
+				Type: "noop",
 				ConnectorRef: hibernatorv1alpha1.ConnectorRef{
 					Kind: "CloudProvider",
 					Name: "global-aws",
@@ -293,7 +293,7 @@ var _ = Describe("Lifecycle E2E", func() {
 			}).
 			WithTarget(hibernatorv1alpha1.Target{
 				Name: "database",
-				Type: "rds",
+				Type: "noop",
 				ConnectorRef: hibernatorv1alpha1.ConnectorRef{
 					Kind: "CloudProvider",
 					Name: "global-aws",

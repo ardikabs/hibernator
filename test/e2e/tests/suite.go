@@ -24,10 +24,12 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/log/zap"
 	"sigs.k8s.io/controller-runtime/pkg/manager"
 	metricsserver "sigs.k8s.io/controller-runtime/pkg/metrics/server"
+	"sigs.k8s.io/controller-runtime/pkg/webhook"
 
 	hibernatorv1alpha1 "github.com/ardikabs/hibernator/api/v1alpha1"
 	"github.com/ardikabs/hibernator/internal/provider"
 	"github.com/ardikabs/hibernator/internal/restore"
+	"github.com/ardikabs/hibernator/internal/validationwebhook"
 )
 
 var (
@@ -52,6 +54,9 @@ var _ = BeforeSuite(func() {
 	testEnv = &envtest.Environment{
 		CRDDirectoryPaths:     []string{filepath.Join("..", "..", "config", "crd", "bases")},
 		ErrorIfCRDPathMissing: true,
+		WebhookInstallOptions: envtest.WebhookInstallOptions{
+			Paths: []string{filepath.Join("..", "..", "config", "webhook")},
+		},
 	}
 
 	var err error
@@ -77,6 +82,7 @@ var _ = BeforeSuite(func() {
 
 	// Set up manager and controller
 	By("setting up manager and controller")
+	webhookInstallOptions := &testEnv.WebhookInstallOptions
 	mgr, err = ctrl.NewManager(cfg, ctrl.Options{
 		Scheme:         scheme.Scheme,
 		Metrics:        metricsserver.Options{BindAddress: "0"},
@@ -84,7 +90,16 @@ var _ = BeforeSuite(func() {
 		Cache: cache.Options{
 			SyncPeriod: ptr.To(time.Second),
 		},
+		WebhookServer: webhook.NewServer(webhook.Options{
+			Host:    webhookInstallOptions.LocalServingHost,
+			Port:    webhookInstallOptions.LocalServingPort,
+			CertDir: webhookInstallOptions.LocalServingCertDir,
+		}),
 	})
+	Expect(err).NotTo(HaveOccurred())
+
+	By("registering validation webhooks")
+	err = validationwebhook.SetupWithManager(mgr, ctrl.Log.WithName("webhook"))
 	Expect(err).NotTo(HaveOccurred())
 
 	fakeClock = clocktesting.NewFakeClock(time.Now())

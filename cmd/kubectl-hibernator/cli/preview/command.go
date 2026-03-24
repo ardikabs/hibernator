@@ -58,8 +58,8 @@ Works with both cluster resources and local YAML files:
 func runPreview(ctx context.Context, opts *previewOptions, args []string) error {
 	var (
 		plan       hibernatorv1alpha1.HibernatePlan
-		exception  *scheduler.Exception
-		exceptions []hibernatorv1alpha1.ExceptionReference
+		exceptions []*scheduler.Exception
+		exRefs     []hibernatorv1alpha1.ExceptionReference
 	)
 
 	if opts.file != "" {
@@ -83,9 +83,9 @@ func runPreview(ctx context.Context, opts *previewOptions, args []string) error 
 			return fmt.Errorf("failed to get HibernatePlan %q in namespace %q: %w", args[0], ns, err)
 		}
 
-		exceptions = plan.Status.ExceptionReferences
-		if exc, err := common.FetchActiveException(ctx, c, plan); err == nil && exc != nil {
-			exception = common.ConvertAPIException(*exc)
+		exRefs = plan.Status.ExceptionReferences
+		if excs, err := common.FetchActiveExceptions(ctx, c, plan); err == nil && len(excs) > 0 {
+			exceptions = excs
 		}
 	}
 
@@ -93,12 +93,12 @@ func runPreview(ctx context.Context, opts *previewOptions, args []string) error 
 	evaluator := scheduler.NewScheduleEvaluator(clock.RealClock{})
 	windows := common.ConvertAPIWindows(plan.Spec.Schedule.OffHours)
 
-	result, err := evaluator.Evaluate(windows, plan.Spec.Schedule.Timezone, exception)
+	result, err := evaluator.Evaluate(windows, plan.Spec.Schedule.Timezone, exceptions)
 	if err != nil {
 		return fmt.Errorf("failed to evaluate schedule: %w", err)
 	}
 
-	events, err := common.ComputeUpcomingEvents(windows, plan.Spec.Schedule.Timezone, exception, opts.events)
+	events, err := common.ComputeUpcomingEvents(windows, plan.Spec.Schedule.Timezone, exceptions, opts.events)
 	if err != nil {
 		events = []common.ScheduleEvent{}
 	}
@@ -106,7 +106,7 @@ func runPreview(ctx context.Context, opts *previewOptions, args []string) error 
 	output := &printers.ScheduleOutput{
 		Plan:       plan,
 		Result:     result,
-		Exceptions: exceptions,
+		Exceptions: exRefs,
 		Events:     events,
 	}
 

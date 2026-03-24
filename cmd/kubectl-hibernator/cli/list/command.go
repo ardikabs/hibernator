@@ -73,12 +73,12 @@ func runList(ctx context.Context, opts *listOptions) error {
 		items[i].Plan = plan
 
 		if !plan.Spec.Suspend {
-			var exception *scheduler.Exception
-			if exc, err := common.FetchActiveException(ctx, c, plan); err == nil && exc != nil {
-				exception = common.ConvertAPIException(*exc)
+			var exceptions []*scheduler.Exception
+			if excs, err := common.FetchActiveExceptions(ctx, c, plan); err == nil && len(excs) > 0 {
+				exceptions = excs
 			}
 
-			if event, err := common.ComputeNextEvent(plan.Spec.Schedule, exception); err == nil {
+			if event, err := common.ComputeNextEvent(plan.Spec.Schedule, exceptions); err == nil {
 				items[i].NextEvent = event
 			}
 		}

@@ -175,13 +175,17 @@ func (r *PlanReconciler) evaluateSchedule(_ context.Context, plan *hibernatorv1a
 	// Derive active exceptions from the full list.
 	activeExceptions := r.filterActiveExceptions(allExceptions)
 
-	// Select the newest active exception
-	exception, err := r.selectActiveException(log, plan, activeExceptions)
-	if err != nil {
-		log.Error(err, "failed to get active exception, evaluating base schedule only")
+	// Convert each active exception to the scheduler type.
+	// Same-type merging is handled internally by Evaluate.
+	exceptions := lo.Map(activeExceptions, func(exc hibernatorv1alpha1.ScheduleException, _ int) *scheduler.Exception {
+		return convertException(exc)
+	})
 
-		// Fall through to evaluate base schedule
-		exception = nil
+	if len(exceptions) > 0 {
+		log.Info("active exceptions for evaluation",
+			"count", len(exceptions),
+			"names", lo.Map(activeExceptions, func(exc hibernatorv1alpha1.ScheduleException, _ int) string { return exc.Name }),
+		)
 	}
 
 	// Convert OffHourWindows to scheduler format
@@ -194,8 +198,8 @@ func (r *PlanReconciler) evaluateSchedule(_ context.Context, plan *hibernatorv1a
 		}
 	}
 
-	// Evaluate schedule with exception (if any)
-	result, err := r.ScheduleEvaluator.Evaluate(baseWindows, plan.Spec.Schedule.Timezone, exception)
+	// Evaluate schedule with exceptions (if any)
+	result, err := r.ScheduleEvaluator.Evaluate(baseWindows, plan.Spec.Schedule.Timezone, exceptions)
 	if err != nil {
 		return nil, err
 	}
@@ -268,22 +272,9 @@ func (r *PlanReconciler) filterActiveExceptions(allExceptions []hibernatorv1alph
 	return activeExceptions
 }
 
-// selectActiveException selects the newest active ScheduleException from a list.
-// TODO(ardikabs): on handling multiple active exceptions
-// - P1: validationwebhook on determining multiple exceptions within the same window, or prioritization logic based on exception type or other criteria.
-func (r *PlanReconciler) selectActiveException(log logr.Logger, plan *hibernatorv1alpha1.HibernatePlan, activeExceptions []hibernatorv1alpha1.ScheduleException) (*scheduler.Exception, error) {
-	// With multiple active exceptions, pick the newest one
-	exc, ok := lo.First(activeExceptions)
-	if !ok {
-		log.V(1).Info("no active exceptions found")
-		return nil, nil
-	}
-
-	log.Info("active exception found, evaluating against schedule",
-		"count", len(activeExceptions),
-		"exception", exc.Name,
-		"plan", plan.Name)
-
+// convertException converts a single ScheduleException API resource into a
+// scheduler.Exception.
+func convertException(exc hibernatorv1alpha1.ScheduleException) *scheduler.Exception {
 	windows := make([]scheduler.OffHourWindow, len(exc.Spec.Windows))
 	for i, w := range exc.Spec.Windows {
 		windows[i] = scheduler.OffHourWindow{
@@ -296,11 +287,9 @@ func (r *PlanReconciler) selectActiveException(log logr.Logger, plan *hibernator
 	var leadTime time.Duration
 	if exc.Spec.LeadTime != "" {
 		d, err := time.ParseDuration(exc.Spec.LeadTime)
-		if err != nil {
-			return nil, fmt.Errorf("invalid lead time format (%s) in exception %s: %w", exc.Spec.LeadTime, exc.Name, err)
+		if err == nil {
+			leadTime = d
 		}
-
-		leadTime = d
 	}
 
 	return &scheduler.Exception{
@@ -309,7 +298,7 @@ func (r *PlanReconciler) selectActiveException(log logr.Logger, plan *hibernator
 		ValidUntil: exc.Spec.ValidUntil.Time,
 		LeadTime:   leadTime,
 		Windows:    windows,
-	}, nil
+	}
 }
 
 // findPlansForException returns reconcile requests for HibernatePlans when a ScheduleException changes.
