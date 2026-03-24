@@ -133,6 +133,26 @@ func TestDetermineRecoveryStrategy_FirstRetry(t *testing.T) {
 	}
 }
 
+func TestDetermineRecoveryStrategy_ZeroRetries(t *testing.T) {
+	plan := &hibernatorv1alpha1.HibernatePlan{
+		Spec: hibernatorv1alpha1.HibernatePlanSpec{
+			Behavior: hibernatorv1alpha1.Behavior{Retries: ptr.To(int32(0))},
+		},
+		Status: hibernatorv1alpha1.HibernatePlanStatus{
+			RetryCount: 0,
+		},
+	}
+
+	strategy := DetermineRecoveryStrategy(plan, fakeClock, errors.New("connection timeout"))
+
+	if strategy.ShouldRetry {
+		t.Error("ShouldRetry should be false when Retries=0 (no retries allowed)")
+	}
+	if strategy.Classification != ErrorTransient {
+		t.Errorf("Classification = %q, want Transient", strategy.Classification)
+	}
+}
+
 func TestDetermineRecoveryStrategy_MaxRetries(t *testing.T) {
 	plan := &hibernatorv1alpha1.HibernatePlan{
 		Spec: hibernatorv1alpha1.HibernatePlanSpec{
