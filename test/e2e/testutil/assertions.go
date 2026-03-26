@@ -4,6 +4,7 @@ package testutil
 
 import (
 	"context"
+	"reflect"
 	"sort"
 	"time"
 
@@ -15,7 +16,9 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
 	hibernatorv1alpha1 "github.com/ardikabs/hibernator/api/v1alpha1"
+	"github.com/ardikabs/hibernator/internal/restore"
 	"github.com/ardikabs/hibernator/internal/wellknown"
+	"github.com/ardikabs/hibernator/pkg/k8sutil"
 )
 
 const (
@@ -146,7 +149,11 @@ func SimulateJobSuccess(ctx context.Context, k8sClient client.Client, job *batch
 
 // EnsureDeleted deletes the object and waits until it's gone.
 func EnsureDeleted(ctx context.Context, k8sClient client.Client, obj client.Object) {
-	if obj == nil || (obj.GetNamespace() == "" && obj.GetName() == "") {
+	if obj == nil || (reflect.ValueOf(obj).Kind() == reflect.Ptr && reflect.ValueOf(obj).IsNil()) {
+		return
+	}
+
+	if obj.GetNamespace() == "" && obj.GetName() == "" {
 		return
 	}
 
@@ -216,6 +223,48 @@ func EventuallyExceptionState(ctx context.Context, k8sClient client.Client, exc 
 		_ = k8sClient.Get(ctx, client.ObjectKeyFromObject(exc), exc)
 		return exc.Status.State
 	}, DefaultTimeout, DefaultInterval).Should(Equal(state))
+}
+
+// SimulateHibernation drives a plan from Hibernating → Hibernated by simulating successful
+// completion of the hibernation Job for each target.
+// It waits for the plan to enter Hibernating, creates and succeeds each job in order,
+// then waits for the terminal Hibernated phase.
+// Use this wherever a test needs to cross the execution boundary without caring about the
+// job internals — the "golden-path execution" helper.
+func SimulateHibernation(ctx context.Context, k8sClient client.Client, plan *hibernatorv1alpha1.HibernatePlan, restoreManager *restore.Manager, now time.Time, targets ...string) {
+	TriggerReconcile(ctx, k8sClient, plan)
+	EventuallyPhase(ctx, k8sClient, plan, hibernatorv1alpha1.PhaseHibernating)
+	for _, target := range targets {
+		job := EventuallyJobCreated(ctx, k8sClient, plan.Namespace, plan.Name, hibernatorv1alpha1.OperationHibernate, target)
+		SimulateJobSuccess(ctx, k8sClient, job, now)
+	}
+	EventuallyPhase(ctx, k8sClient, plan, hibernatorv1alpha1.PhaseHibernated)
+	EventuallyRestoreDataSaved(ctx, k8sClient, plan, 0)
+
+	cmKey, _ := k8sutil.ObjectKeyFromString(plan.Status.Executions[0].RestoreConfigMapRef)
+	var restoreCM corev1.ConfigMap
+	Expect(k8sClient.Get(ctx, cmKey, &restoreCM)).To(Succeed())
+
+	// Manually inject some restore data to simulate real-world usage if needed
+	Expect(restoreManager.Save(ctx, plan.Namespace, plan.Name, plan.Spec.Targets[0].Name, &restore.Data{
+		Target: plan.Spec.Targets[0].Name,
+	})).To(Succeed())
+}
+
+// SimulateWakeup drives a plan from WakingUp → Active by simulating successful completion of
+// the wakeup Job for each target.
+// It waits for the plan to enter WakingUp, creates and succeeds each job in order,
+// then waits for the terminal Active phase.
+// Use this wherever a test needs to cross the execution boundary without caring about the
+// job internals — the "golden-path execution" helper.
+func SimulateWakeup(ctx context.Context, k8sClient client.Client, plan *hibernatorv1alpha1.HibernatePlan, now time.Time, targets ...string) {
+	TriggerReconcile(ctx, k8sClient, plan)
+	EventuallyPhase(ctx, k8sClient, plan, hibernatorv1alpha1.PhaseWakingUp)
+	for _, target := range targets {
+		job := EventuallyJobCreated(ctx, k8sClient, plan.Namespace, plan.Name, hibernatorv1alpha1.OperationWakeUp, target)
+		SimulateJobSuccess(ctx, k8sClient, job, now)
+	}
+	EventuallyPhase(ctx, k8sClient, plan, hibernatorv1alpha1.PhaseActive)
 }
 
 // EventuallyTargetState waits until the specific target in the plan reaches the expected state.

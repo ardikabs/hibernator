@@ -84,7 +84,7 @@ var _ = Describe("ScheduleException E2E", func() {
 			}).
 			WithTarget(hibernatorv1alpha1.Target{
 				Name: "database",
-				Type: "rds",
+				Type: "noop",
 				ConnectorRef: hibernatorv1alpha1.ConnectorRef{
 					Kind: "CloudProvider",
 					Name: "exception-aws",
@@ -135,7 +135,7 @@ var _ = Describe("ScheduleException E2E", func() {
 			}).
 			WithTarget(hibernatorv1alpha1.Target{
 				Name: "database",
-				Type: "rds",
+				Type: "noop",
 				ConnectorRef: hibernatorv1alpha1.ConnectorRef{
 					Kind: "CloudProvider",
 					Name: "exception-aws",
@@ -187,7 +187,7 @@ var _ = Describe("ScheduleException E2E", func() {
 			}).
 			WithTarget(hibernatorv1alpha1.Target{
 				Name: "database",
-				Type: "rds",
+				Type: "noop",
 				ConnectorRef: hibernatorv1alpha1.ConnectorRef{
 					Kind: "CloudProvider",
 					Name: "exception-aws",
@@ -238,7 +238,7 @@ var _ = Describe("ScheduleException E2E", func() {
 			}).
 			WithTarget(hibernatorv1alpha1.Target{
 				Name: "database",
-				Type: "rds",
+				Type: "noop",
 				ConnectorRef: hibernatorv1alpha1.ConnectorRef{
 					Kind: "CloudProvider",
 					Name: "exception-aws",
@@ -300,7 +300,7 @@ var _ = Describe("ScheduleException E2E", func() {
 			}).
 			WithTarget(hibernatorv1alpha1.Target{
 				Name: "database",
-				Type: "rds",
+				Type: "noop",
 				ConnectorRef: hibernatorv1alpha1.ConnectorRef{
 					Kind: "CloudProvider",
 					Name: "exception-aws",
@@ -368,7 +368,7 @@ var _ = Describe("ScheduleException E2E", func() {
 			}).
 			WithTarget(hibernatorv1alpha1.Target{
 				Name: "database",
-				Type: "rds",
+				Type: "noop",
 				ConnectorRef: hibernatorv1alpha1.ConnectorRef{
 					Kind: "CloudProvider",
 					Name: "exception-aws",
@@ -438,7 +438,7 @@ var _ = Describe("ScheduleException E2E", func() {
 			}).
 			WithTarget(hibernatorv1alpha1.Target{
 				Name: "database",
-				Type: "rds",
+				Type: "noop",
 				ConnectorRef: hibernatorv1alpha1.ConnectorRef{
 					Kind: "CloudProvider",
 					Name: "exception-aws",
@@ -505,7 +505,7 @@ var _ = Describe("ScheduleException E2E", func() {
 			}).
 			WithTarget(hibernatorv1alpha1.Target{
 				Name: "database",
-				Type: "rds",
+				Type: "noop",
 				ConnectorRef: hibernatorv1alpha1.ConnectorRef{
 					Kind: "CloudProvider",
 					Name: "exception-aws",
@@ -611,7 +611,7 @@ var _ = Describe("ScheduleException E2E", func() {
 			}).
 			WithTarget(hibernatorv1alpha1.Target{
 				Name: "database",
-				Type: "rds",
+				Type: "noop",
 				ConnectorRef: hibernatorv1alpha1.ConnectorRef{
 					Kind: "CloudProvider",
 					Name: "exception-aws",
@@ -712,7 +712,7 @@ var _ = Describe("ScheduleException E2E", func() {
 			}).
 			WithTarget(hibernatorv1alpha1.Target{
 				Name: "database",
-				Type: "rds",
+				Type: "noop",
 				ConnectorRef: hibernatorv1alpha1.ConnectorRef{
 					Kind: "CloudProvider",
 					Name: "exception-aws",
@@ -776,7 +776,7 @@ var _ = Describe("ScheduleException E2E", func() {
 			}).
 			WithTarget(hibernatorv1alpha1.Target{
 				Name: "database",
-				Type: "rds",
+				Type: "noop",
 				ConnectorRef: hibernatorv1alpha1.ConnectorRef{
 					Kind: "CloudProvider",
 					Name: "exception-aws",
@@ -815,5 +815,465 @@ var _ = Describe("ScheduleException E2E", func() {
 		Expect(exception.Status.State).To(Equal(hibernatorv1alpha1.ExceptionStateDetached))
 		Expect(exception.Status.Message).To(ContainSubstring("plan"), "Detached message should reference the plan")
 		Expect(controllerutil.ContainsFinalizer(exception, wellknown.ExceptionFinalizerName)).To(BeFalse(), "Detached exception should not have finalizer")
+	})
+
+	// ─────────────────────────────────────────────────────────────────────────────
+	// Composable Multi-Exception Tests
+	// ─────────────────────────────────────────────────────────────────────────────
+
+	It("MultiException_ExtendPlusSuspend_PartialWindowOverlap: suspend carves out its window from an extend-extended schedule", func() {
+		// RFC-0003 Phase 5: Two simultaneously active exceptions of different types.
+		//   - ExceptionExtend:  adds hibernation during 09:00-18:00 every day
+		//   - ExceptionSuspend: blocks hibernation during 11:00-14:00 every day
+		//
+		// Composition (replace → extend → suspend):
+		//   effective = base ∪ extend.windows = 09:00-18:00 ∪ 20:00-06:00
+		//   final     = effective ∖ suspend.windows = … ∖ 11:00-14:00
+		//
+		// Expected behaviour:
+		//   10:00 → inside extend window, outside suspend → plan Hibernates
+		//   12:00 → inside extend window AND inside suspend → plan stays Active (suspend wins)
+		var exceptionSuspend *hibernatorv1alpha1.ScheduleException
+
+		baseTime := time.Date(2026, 6, 1, 8, 0, 0, 0, time.UTC) // Monday 08:00
+		fakeClock.SetTime(baseTime)
+
+		By("Creating HibernatePlan with 20:00-06:00 base hibernation window")
+		plan, _ = testutil.NewHibernatePlanBuilder("multi-ext-sus-partial", testNamespace).
+			WithSchedule("20:00", "06:00", "MON", "TUE", "WED", "THU", "FRI", "SAT", "SUN").
+			WithExecutionStrategy(hibernatorv1alpha1.ExecutionStrategy{
+				Type: hibernatorv1alpha1.StrategySequential,
+			}).
+			WithTarget(hibernatorv1alpha1.Target{
+				Name: "database",
+				Type: "noop",
+				ConnectorRef: hibernatorv1alpha1.ConnectorRef{
+					Kind: "CloudProvider",
+					Name: "exception-aws",
+				},
+			}).
+			Build()
+
+		Expect(k8sClient.Create(ctx, plan)).To(Succeed())
+		testutil.EventuallyPhase(ctx, k8sClient, plan, hibernatorv1alpha1.PhaseActive)
+
+		By("Creating ExceptionExtend adding 09:00-18:00 daytime hibernation")
+		exception = testutil.NewScheduleExceptionBuilder("multi-ext-partial-extend", testNamespace, plan.Name).
+			WithType(hibernatorv1alpha1.ExceptionExtend).
+			WithValidity(baseTime.Add(-1*time.Hour), baseTime.Add(48*time.Hour)).
+			WithWindows(hibernatorv1alpha1.OffHourWindow{
+				Start:      "09:00",
+				End:        "18:00",
+				DaysOfWeek: []string{"MON", "TUE", "WED", "THU", "FRI", "SAT", "SUN"},
+			}).
+			Build()
+		Expect(k8sClient.Create(ctx, exception)).To(Succeed())
+		testutil.EventuallyExceptionState(ctx, k8sClient, exception, hibernatorv1alpha1.ExceptionStateActive)
+
+		By("Creating ExceptionSuspend blocking hibernation during 11:00-14:00 (carve-out from extend window)")
+		// Allowed by Phase 5 webhook: extend+suspend is a permitted cross-type pair.
+		exceptionSuspend = testutil.NewScheduleExceptionBuilder("multi-ext-partial-suspend", testNamespace, plan.Name).
+			WithType(hibernatorv1alpha1.ExceptionSuspend).
+			WithValidity(baseTime.Add(-1*time.Hour), baseTime.Add(48*time.Hour)).
+			WithWindows(hibernatorv1alpha1.OffHourWindow{
+				Start:      "11:00",
+				End:        "14:00",
+				DaysOfWeek: []string{"MON", "TUE", "WED", "THU", "FRI", "SAT", "SUN"},
+			}).
+			Build()
+		Expect(k8sClient.Create(ctx, exceptionSuspend)).To(Succeed())
+		testutil.EventuallyExceptionState(ctx, k8sClient, exceptionSuspend, hibernatorv1alpha1.ExceptionStateActive)
+
+		By("Advancing clock to Monday 10:00 — inside extend window, outside suspend window")
+		fakeClock.SetTime(time.Date(2026, 6, 1, 10, 1, 0, 0, time.UTC))
+
+		By("Simulating full hibernation execution cycle (Hibernating → Hibernated): extend window applies, no suspend interference")
+		testutil.SimulateHibernation(ctx, k8sClient, plan, restoreManager, fakeClock.Now(), "database")
+
+		By("Advancing clock to Monday 08:30 — outside all hibernation windows — to trigger wakeup")
+		fakeClock.SetTime(time.Date(2026, 6, 1, 8, 30, 0, 0, time.UTC))
+
+		By("Simulating full wakeup execution cycle (WakingUp → Active)")
+		testutil.SimulateWakeup(ctx, k8sClient, plan, fakeClock.Now(), "database")
+
+		By("Advancing clock to Monday 12:00 — inside BOTH extend and suspend windows")
+		fakeClock.SetTime(time.Date(2026, 6, 1, 12, 1, 0, 0, time.UTC))
+		testutil.TriggerReconcile(ctx, k8sClient, plan)
+
+		By("Verifying plan remains Active — suspend carve-out overrides extend hibernation at 12:00")
+		testutil.ConsistentllyAtPhase(ctx, k8sClient, plan, hibernatorv1alpha1.PhaseActive, 5*time.Second)
+
+		By("Cleaning up second exception (first is cleaned up in AfterEach)")
+		testutil.EnsureDeleted(ctx, k8sClient, exceptionSuspend)
+	})
+
+	It("MultiException_TwoExtend_NonCollidingWindows_MergedByEvaluator: two extend exceptions merge their windows", func() {
+		// RFC-0003 Phase 5: Two simultaneously active Extend exceptions with non-colliding windows.
+		// The webhook allows this (window collision check passes), and the evaluator merges their
+		// windows via mergeByType before evaluation.
+		//
+		// Exceptions:
+		//   - extend-morning: 09:00-12:00 Mon-Fri
+		//   - extend-evening: 14:00-17:00 Mon-Fri
+		//
+		// Expected behaviour:
+		//   10:00 → inside extend-morning → Hibernating
+		//   <off-hours reset>
+		//   15:00 → inside extend-evening → Hibernating
+		//   13:00 → in gap between both extend windows → Active
+		var exceptionExtend2 *hibernatorv1alpha1.ScheduleException
+
+		baseTime := time.Date(2026, 6, 8, 8, 0, 0, 0, time.UTC) // Monday 08:00
+		fakeClock.SetTime(baseTime)
+
+		By("Creating HibernatePlan with 20:00-06:00 base hibernation window (evenings only)")
+		plan, _ = testutil.NewHibernatePlanBuilder("multi-two-extend-merge", testNamespace).
+			WithSchedule("20:00", "06:00", "MON", "TUE", "WED", "THU", "FRI", "SAT", "SUN").
+			WithExecutionStrategy(hibernatorv1alpha1.ExecutionStrategy{
+				Type: hibernatorv1alpha1.StrategySequential,
+			}).
+			WithTarget(hibernatorv1alpha1.Target{
+				Name: "database",
+				Type: "noop",
+				ConnectorRef: hibernatorv1alpha1.ConnectorRef{
+					Kind: "CloudProvider",
+					Name: "exception-aws",
+				},
+			}).
+			Build()
+
+		Expect(k8sClient.Create(ctx, plan)).To(Succeed())
+		testutil.EventuallyPhase(ctx, k8sClient, plan, hibernatorv1alpha1.PhaseActive)
+
+		By("Creating ExceptionExtend-morning: adds 09:00-12:00 hibernation window")
+		exception = testutil.NewScheduleExceptionBuilder("multi-extend-morning", testNamespace, plan.Name).
+			WithType(hibernatorv1alpha1.ExceptionExtend).
+			WithValidity(baseTime.Add(-1*time.Hour), baseTime.Add(48*time.Hour)).
+			WithWindows(hibernatorv1alpha1.OffHourWindow{
+				Start:      "09:00",
+				End:        "12:00",
+				DaysOfWeek: []string{"MON", "TUE", "WED", "THU", "FRI"},
+			}).
+			Build()
+		Expect(k8sClient.Create(ctx, exception)).To(Succeed())
+		testutil.EventuallyExceptionState(ctx, k8sClient, exception, hibernatorv1alpha1.ExceptionStateActive)
+
+		By("Creating ExceptionExtend-evening: adds 14:00-17:00 hibernation window (non-colliding with morning)")
+		// Webhook should ACCEPT this because the two extend windows don't collide
+		// (09:00-12:00 and 14:00-17:00 are disjoint).
+		exceptionExtend2 = testutil.NewScheduleExceptionBuilder("multi-extend-evening", testNamespace, plan.Name).
+			WithType(hibernatorv1alpha1.ExceptionExtend).
+			WithValidity(baseTime.Add(-1*time.Hour), baseTime.Add(48*time.Hour)).
+			WithWindows(hibernatorv1alpha1.OffHourWindow{
+				Start:      "14:00",
+				End:        "17:00",
+				DaysOfWeek: []string{"MON", "TUE", "WED", "THU", "FRI"},
+			}).
+			Build()
+		Expect(k8sClient.Create(ctx, exceptionExtend2)).To(Succeed(), "Webhook must accept two extend exceptions with non-colliding windows")
+		testutil.EventuallyExceptionState(ctx, k8sClient, exceptionExtend2, hibernatorv1alpha1.ExceptionStateActive)
+
+		By("Advancing clock to Monday 10:00 — inside extend-morning window: should trigger hibernation")
+		fakeClock.SetTime(time.Date(2026, 6, 8, 10, 1, 0, 0, time.UTC))
+		testutil.SimulateHibernation(ctx, k8sClient, plan, restoreManager, fakeClock.Now(), "database")
+
+		By("Moving clock to 13:00 — gap between both extend windows, should be on-hours")
+		fakeClock.SetTime(time.Date(2026, 6, 8, 13, 1, 0, 0, time.UTC))
+		testutil.SimulateWakeup(ctx, k8sClient, plan, fakeClock.Now(), "database")
+
+		By("Advancing clock to Monday 15:00 — inside extend-evening window: should trigger hibernation")
+		fakeClock.SetTime(time.Date(2026, 6, 8, 15, 1, 0, 0, time.UTC))
+		testutil.SimulateHibernation(ctx, k8sClient, plan, restoreManager, fakeClock.Now(), "database")
+
+		By("Moving clock to 18:00 — gap between both extend windows, should be on-hours")
+		fakeClock.SetTime(time.Date(2026, 6, 8, 18, 1, 0, 0, time.UTC))
+		testutil.SimulateWakeup(ctx, k8sClient, plan, fakeClock.Now(), "database")
+
+		By("Confirming gap stays Active for a sustained period (no false triggers)")
+		testutil.ConsistentllyAtPhase(ctx, k8sClient, plan, hibernatorv1alpha1.PhaseActive, 4*time.Second)
+
+		By("Cleaning up second extend exception (first is cleaned up in AfterEach)")
+		testutil.EnsureDeleted(ctx, k8sClient, exceptionExtend2)
+	})
+
+	It("MultiException_WebhookRejects_SameType_CollidingWindows: same-type colliding exceptions are rejected", func() {
+		// RFC-0003 Phase 5 validation: Same-type exceptions whose windows collide within the same
+		// validity period must be rejected by the webhook.
+		// Two Extend exceptions both covering Mon 10:00-15:00 → second creation rejected.
+		baseTime := time.Date(2026, 6, 15, 8, 0, 0, 0, time.UTC) // Monday 08:00
+		fakeClock.SetTime(baseTime)
+
+		By("Creating HibernatePlan")
+		plan, _ = testutil.NewHibernatePlanBuilder("multi-webhook-reject", testNamespace).
+			WithSchedule("20:00", "06:00", "MON", "TUE", "WED", "THU", "FRI", "SAT", "SUN").
+			WithExecutionStrategy(hibernatorv1alpha1.ExecutionStrategy{
+				Type: hibernatorv1alpha1.StrategySequential,
+			}).
+			WithTarget(hibernatorv1alpha1.Target{
+				Name: "database",
+				Type: "noop",
+				ConnectorRef: hibernatorv1alpha1.ConnectorRef{
+					Kind: "CloudProvider",
+					Name: "exception-aws",
+				},
+			}).
+			Build()
+
+		Expect(k8sClient.Create(ctx, plan)).To(Succeed())
+		testutil.EventuallyPhase(ctx, k8sClient, plan, hibernatorv1alpha1.PhaseActive)
+
+		By("Creating first ExceptionExtend: 10:00-15:00 Mon-Fri")
+		exception = testutil.NewScheduleExceptionBuilder("multi-reject-extend-1", testNamespace, plan.Name).
+			WithType(hibernatorv1alpha1.ExceptionExtend).
+			WithValidity(baseTime.Add(-1*time.Hour), baseTime.Add(48*time.Hour)).
+			WithWindows(hibernatorv1alpha1.OffHourWindow{
+				Start:      "10:00",
+				End:        "15:00",
+				DaysOfWeek: []string{"MON", "TUE", "WED", "THU", "FRI"},
+			}).
+			Build()
+		Expect(k8sClient.Create(ctx, exception)).To(Succeed())
+		testutil.EventuallyExceptionState(ctx, k8sClient, exception, hibernatorv1alpha1.ExceptionStateActive)
+
+		By("Attempting to create a second ExceptionExtend whose window collides with the first (12:00-18:00)")
+		// 10:00-15:00 and 12:00-18:00 overlap → same type + colliding windows → webhook must reject.
+		conflicting := testutil.NewScheduleExceptionBuilder("multi-reject-extend-2", testNamespace, plan.Name).
+			WithType(hibernatorv1alpha1.ExceptionExtend).
+			WithValidity(baseTime.Add(-1*time.Hour), baseTime.Add(48*time.Hour)).
+			WithWindows(hibernatorv1alpha1.OffHourWindow{
+				Start:      "12:00",
+				End:        "18:00",
+				DaysOfWeek: []string{"MON", "TUE", "WED", "THU", "FRI"},
+			}).
+			Build()
+
+		err := k8sClient.Create(ctx, conflicting)
+		Expect(err).To(HaveOccurred(), "Webhook must reject same-type Extend exceptions with colliding windows")
+		Expect(errors.IsInvalid(err) || errors.IsForbidden(err)).To(BeTrue(),
+			"Expected 422 Invalid or 403 Forbidden, got: %v", err)
+	})
+
+	It("MultiException_WebhookAccepts_SameType_NonCollidingWindows: same-type non-colliding exceptions are accepted", func() {
+		// RFC-0003 Phase 5 validation: Same-type exceptions whose windows do NOT collide within the same
+		// validity period must be accepted by the webhook.
+		// Two Extend exceptions with disjoint windows (09:00-12:00 and 14:00-17:00) → second accepted.
+		var exceptionExtend2 *hibernatorv1alpha1.ScheduleException
+
+		baseTime := time.Date(2026, 6, 22, 8, 0, 0, 0, time.UTC) // Monday 08:00
+		fakeClock.SetTime(baseTime)
+
+		By("Creating HibernatePlan")
+		plan, _ = testutil.NewHibernatePlanBuilder("multi-webhook-accept", testNamespace).
+			WithSchedule("20:00", "06:00", "MON", "TUE", "WED", "THU", "FRI", "SAT", "SUN").
+			WithExecutionStrategy(hibernatorv1alpha1.ExecutionStrategy{
+				Type: hibernatorv1alpha1.StrategySequential,
+			}).
+			WithTarget(hibernatorv1alpha1.Target{
+				Name: "database",
+				Type: "noop",
+				ConnectorRef: hibernatorv1alpha1.ConnectorRef{
+					Kind: "CloudProvider",
+					Name: "exception-aws",
+				},
+			}).
+			Build()
+
+		Expect(k8sClient.Create(ctx, plan)).To(Succeed())
+		testutil.EventuallyPhase(ctx, k8sClient, plan, hibernatorv1alpha1.PhaseActive)
+
+		By("Creating first ExceptionExtend: 09:00-12:00 Mon-Fri")
+		exception = testutil.NewScheduleExceptionBuilder("multi-accept-extend-1", testNamespace, plan.Name).
+			WithType(hibernatorv1alpha1.ExceptionExtend).
+			WithValidity(baseTime.Add(-1*time.Hour), baseTime.Add(48*time.Hour)).
+			WithWindows(hibernatorv1alpha1.OffHourWindow{
+				Start:      "09:00",
+				End:        "12:00",
+				DaysOfWeek: []string{"MON", "TUE", "WED", "THU", "FRI"},
+			}).
+			Build()
+		Expect(k8sClient.Create(ctx, exception)).To(Succeed())
+		testutil.EventuallyExceptionState(ctx, k8sClient, exception, hibernatorv1alpha1.ExceptionStateActive)
+
+		By("Creating second ExceptionExtend: 14:00-17:00 Mon-Fri (non-colliding windows)")
+		// 09:00-12:00 and 14:00-17:00 are disjoint → same type but no collision → webhook MUST accept.
+		exceptionExtend2 = testutil.NewScheduleExceptionBuilder("multi-accept-extend-2", testNamespace, plan.Name).
+			WithType(hibernatorv1alpha1.ExceptionExtend).
+			WithValidity(baseTime.Add(-1*time.Hour), baseTime.Add(48*time.Hour)).
+			WithWindows(hibernatorv1alpha1.OffHourWindow{
+				Start:      "14:00",
+				End:        "17:00",
+				DaysOfWeek: []string{"MON", "TUE", "WED", "THU", "FRI"},
+			}).
+			Build()
+
+		Expect(k8sClient.Create(ctx, exceptionExtend2)).To(Succeed(),
+			"Webhook must accept two Extend exceptions with non-colliding windows (Phase 5 relaxed constraint)")
+
+		By("Verifying both exceptions reach Active state")
+		testutil.EventuallyExceptionState(ctx, k8sClient, exception, hibernatorv1alpha1.ExceptionStateActive)
+		testutil.EventuallyExceptionState(ctx, k8sClient, exceptionExtend2, hibernatorv1alpha1.ExceptionStateActive)
+
+		By("Cleaning up second extend exception (first is cleaned up in AfterEach)")
+		testutil.EnsureDeleted(ctx, k8sClient, exceptionExtend2)
+	})
+
+	It("MultiException_ExtendPlusReplace_ComposedSchedule: replace overrides base and extend adds further windows", func() {
+		// RFC-0003 Phase 5: two simultaneously active exceptions — Replace + Extend.
+		// Composition order: replace → extend → suspend
+		//
+		//   ExceptionReplace: replaces base with 10:00-14:00 Mon-Fri only
+		//   ExceptionExtend:  adds 18:00-20:00 Mon-Fri on top of the replaced schedule
+		//
+		// Expected behaviour at various clock positions:
+		//   12:00 → inside replace window        → Hibernating (from replace)
+		//   19:00 → inside extend window, outside replace → Hibernating (from extend)
+		//   15:00 → outside both windows          → Active (original base 20:00-06:00 is overridden)
+		var exceptionReplace *hibernatorv1alpha1.ScheduleException
+
+		baseTime := time.Date(2026, 7, 6, 9, 0, 0, 0, time.UTC) // Monday 09:00
+		fakeClock.SetTime(baseTime)
+
+		By("Creating HibernatePlan with 20:00-06:00 base hibernation window")
+		plan, _ = testutil.NewHibernatePlanBuilder("multi-ext-replace", testNamespace).
+			WithSchedule("20:00", "06:00", "MON", "TUE", "WED", "THU", "FRI", "SAT", "SUN").
+			WithExecutionStrategy(hibernatorv1alpha1.ExecutionStrategy{
+				Type: hibernatorv1alpha1.StrategySequential,
+			}).
+			WithTarget(hibernatorv1alpha1.Target{
+				Name: "database",
+				Type: "noop",
+				ConnectorRef: hibernatorv1alpha1.ConnectorRef{
+					Kind: "CloudProvider",
+					Name: "exception-aws",
+				},
+			}).
+			Build()
+
+		Expect(k8sClient.Create(ctx, plan)).To(Succeed())
+		testutil.EventuallyPhase(ctx, k8sClient, plan, hibernatorv1alpha1.PhaseActive)
+
+		By("Creating ExceptionReplace: replaces base with 10:00-14:00 Mon-Fri")
+		// Replace exception completely overrides the base 20:00-06:00 schedule.
+		exceptionReplace = testutil.NewScheduleExceptionBuilder("multi-ext-replace-rep", testNamespace, plan.Name).
+			WithType(hibernatorv1alpha1.ExceptionReplace).
+			WithValidity(baseTime.Add(-1*time.Hour), baseTime.Add(48*time.Hour)).
+			WithWindows(hibernatorv1alpha1.OffHourWindow{
+				Start:      "10:00",
+				End:        "14:00",
+				DaysOfWeek: []string{"MON", "TUE", "WED", "THU", "FRI"},
+			}).
+			Build()
+		Expect(k8sClient.Create(ctx, exceptionReplace)).To(Succeed())
+		testutil.EventuallyExceptionState(ctx, k8sClient, exceptionReplace, hibernatorv1alpha1.ExceptionStateActive)
+
+		By("Creating ExceptionExtend: adds 18:00-20:00 window on top of replacement schedule")
+		// Allowed by Phase 5 webhook: replace+extend is a permitted cross-type pair.
+		exception = testutil.NewScheduleExceptionBuilder("multi-ext-replace-ext", testNamespace, plan.Name).
+			WithType(hibernatorv1alpha1.ExceptionExtend).
+			WithValidity(baseTime.Add(-1*time.Hour), baseTime.Add(48*time.Hour)).
+			WithWindows(hibernatorv1alpha1.OffHourWindow{
+				Start:      "18:00",
+				End:        "20:00",
+				DaysOfWeek: []string{"MON", "TUE", "WED", "THU", "FRI"},
+			}).
+			Build()
+		Expect(k8sClient.Create(ctx, exception)).To(Succeed())
+		testutil.EventuallyExceptionState(ctx, k8sClient, exception, hibernatorv1alpha1.ExceptionStateActive)
+
+		By("Advancing clock to Monday 12:00 — inside replace window, should hibernate")
+		fakeClock.SetTime(time.Date(2026, 7, 6, 12, 1, 0, 0, time.UTC))
+		testutil.SimulateHibernation(ctx, k8sClient, plan, restoreManager, fakeClock.Now(), "database")
+
+		By("Advancing clock to 15:00 — outside both replace and extend windows, should wake up")
+		// With replace active, base 20:00-06:00 is ignored entirely; 15:00 is outside replace(10:00-14:00)
+		// and outside extend(18:00-20:00) → Active.
+		fakeClock.SetTime(time.Date(2026, 7, 6, 15, 1, 0, 0, time.UTC))
+		testutil.SimulateWakeup(ctx, k8sClient, plan, fakeClock.Now(), "database")
+
+		By("Verifying plan stays Active at 15:00 — original base window is replaced, only replace+extend matter now")
+		testutil.ConsistentllyAtPhase(ctx, k8sClient, plan, hibernatorv1alpha1.PhaseActive, 5*time.Second)
+
+		By("Advancing clock to 19:00 — inside extend window (18:00-20:00), should hibernate")
+		fakeClock.SetTime(time.Date(2026, 7, 6, 19, 1, 0, 0, time.UTC))
+		testutil.TriggerReconcile(ctx, k8sClient, plan)
+
+		By("Verifying plan transitions to Hibernating — extend window fires on top of replaced schedule")
+		testutil.EventuallyPhase(ctx, k8sClient, plan, hibernatorv1alpha1.PhaseHibernating)
+
+		By("Cleaning up replace exception (extend exception is cleaned up in AfterEach)")
+		testutil.EnsureDeleted(ctx, k8sClient, exceptionReplace)
+	})
+
+	It("MultiException_SuspendPlusReplace_SuspendCarvesOutFromReplacedSchedule: suspend carves out window from replace-overridden schedule", func() {
+		// RFC-0003 Phase 5: two simultaneously active exceptions — Replace + Suspend.
+		// Composition order: replace → extend → suspend
+		//
+		//   ExceptionReplace: replaces base with 20:00-06:00 Mon-Fri (same as base for clarity)
+		//   ExceptionSuspend: blocks hibernation during 22:00-02:00 Mon-Fri
+		//
+		// Expected behaviour:
+		//   21:00 → inside replace window, outside suspend → Hibernating (from replace)
+		//   23:00 → inside replace window, inside suspend  → Active (suspend carves out)
+		var exceptionReplace *hibernatorv1alpha1.ScheduleException
+
+		baseTime := time.Date(2026, 7, 13, 8, 0, 0, 0, time.UTC) // Monday 08:00
+		fakeClock.SetTime(baseTime)
+
+		By("Creating HibernatePlan with 20:00-06:00 base hibernation window")
+		plan, _ = testutil.NewHibernatePlanBuilder("multi-suspend-replace", testNamespace).
+			WithSchedule("20:00", "06:00", "MON", "TUE", "WED", "THU", "FRI", "SAT", "SUN").
+			WithExecutionStrategy(hibernatorv1alpha1.ExecutionStrategy{
+				Type: hibernatorv1alpha1.StrategySequential,
+			}).
+			WithTarget(hibernatorv1alpha1.Target{
+				Name: "database",
+				Type: "noop",
+				ConnectorRef: hibernatorv1alpha1.ConnectorRef{
+					Kind: "CloudProvider",
+					Name: "exception-aws",
+				},
+			}).
+			Build()
+
+		Expect(k8sClient.Create(ctx, plan)).To(Succeed())
+		testutil.EventuallyPhase(ctx, k8sClient, plan, hibernatorv1alpha1.PhaseActive)
+
+		By("Creating ExceptionReplace: replaces base with 20:00-04:00 Mon-Fri window")
+		exceptionReplace = testutil.NewScheduleExceptionBuilder("multi-sus-replace-rep", testNamespace, plan.Name).
+			WithType(hibernatorv1alpha1.ExceptionReplace).
+			WithValidity(baseTime.Add(-1*time.Hour), baseTime.Add(48*time.Hour)).
+			WithWindows(hibernatorv1alpha1.OffHourWindow{
+				Start:      "18:00",
+				End:        "04:00",
+				DaysOfWeek: []string{"MON", "TUE", "WED", "THU", "FRI"},
+			}).
+			Build()
+		Expect(k8sClient.Create(ctx, exceptionReplace)).To(Succeed())
+		testutil.EventuallyExceptionState(ctx, k8sClient, exceptionReplace, hibernatorv1alpha1.ExceptionStateActive)
+
+		By("Creating ExceptionSuspend: carves out 22:00-02:00 from the replace window")
+		// Allowed by Phase 5 webhook: replace+suspend is a permitted cross-type pair.
+		exception = testutil.NewScheduleExceptionBuilder("multi-sus-replace-sus", testNamespace, plan.Name).
+			WithType(hibernatorv1alpha1.ExceptionSuspend).
+			WithValidity(baseTime.Add(-1*time.Hour), baseTime.Add(48*time.Hour)).
+			WithWindows(hibernatorv1alpha1.OffHourWindow{
+				Start:      "22:00",
+				End:        "02:00",
+				DaysOfWeek: []string{"MON", "TUE", "WED", "THU", "FRI"},
+			}).
+			Build()
+		Expect(k8sClient.Create(ctx, exception)).To(Succeed())
+		testutil.EventuallyExceptionState(ctx, k8sClient, exception, hibernatorv1alpha1.ExceptionStateActive)
+
+		By("Advancing clock to Monday 19:00 — inside replace window, outside suspend → Hibernating")
+		fakeClock.SetTime(time.Date(2026, 7, 13, 19, 1, 0, 0, time.UTC))
+		testutil.SimulateHibernation(ctx, k8sClient, plan, restoreManager, fakeClock.Now(), "database")
+
+		By("Advancing clock to Monday 23:00 — inside BOTH replace and suspend windows → Active (wakeup)")
+		fakeClock.SetTime(time.Date(2026, 7, 13, 23, 1, 0, 0, time.UTC))
+		testutil.SimulateWakeup(ctx, k8sClient, plan, fakeClock.Now(), "database")
+
+		By("Cleaning up replace exception (suspend exception is cleaned up in AfterEach)")
+		testutil.EnsureDeleted(ctx, k8sClient, exceptionReplace)
 	})
 })

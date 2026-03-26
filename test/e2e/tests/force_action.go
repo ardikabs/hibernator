@@ -89,7 +89,7 @@ var _ = Describe("Override-Action E2E", func() {
 			}).
 			WithTarget(hibernatorv1alpha1.Target{
 				Name:         "database",
-				Type:         "rds",
+				Type:         "noop",
 				ConnectorRef: hibernatorv1alpha1.ConnectorRef{Kind: "CloudProvider", Name: "override-action-aws"},
 			}).
 			Build()
@@ -147,7 +147,7 @@ var _ = Describe("Override-Action E2E", func() {
 			}).
 			WithTarget(hibernatorv1alpha1.Target{
 				Name:         "app",
-				Type:         "rds",
+				Type:         "noop",
 				ConnectorRef: hibernatorv1alpha1.ConnectorRef{Kind: "CloudProvider", Name: "override-action-aws"},
 			}).
 			Build()
@@ -212,7 +212,7 @@ var _ = Describe("Override-Action E2E", func() {
 			}).
 			WithTarget(hibernatorv1alpha1.Target{
 				Name:         "cache",
-				Type:         "rds",
+				Type:         "noop",
 				ConnectorRef: hibernatorv1alpha1.ConnectorRef{Kind: "CloudProvider", Name: "override-action-aws"},
 			}).
 			Build()
@@ -278,7 +278,7 @@ var _ = Describe("Override-Action E2E", func() {
 			WithAnnotation(wellknown.AnnotationOverridePhaseTarget, wellknown.OverridePhaseTargetHibernate).
 			WithTarget(hibernatorv1alpha1.Target{
 				Name:         "database",
-				Type:         "rds",
+				Type:         "noop",
 				ConnectorRef: hibernatorv1alpha1.ConnectorRef{Kind: "CloudProvider", Name: "override-action-aws"},
 			}).
 			Build()
@@ -331,7 +331,7 @@ var _ = Describe("Override-Action E2E", func() {
 			}).
 			WithTarget(hibernatorv1alpha1.Target{
 				Name:         "service",
-				Type:         "rds",
+				Type:         "noop",
 				ConnectorRef: hibernatorv1alpha1.ConnectorRef{Kind: "CloudProvider", Name: "override-action-aws"},
 			}).
 			Build()
@@ -392,7 +392,7 @@ var _ = Describe("Override-Action E2E", func() {
 			}).
 			WithTarget(hibernatorv1alpha1.Target{
 				Name:         "worker",
-				Type:         "rds",
+				Type:         "noop",
 				ConnectorRef: hibernatorv1alpha1.ConnectorRef{Kind: "CloudProvider", Name: "override-action-aws"},
 			}).
 			Build()

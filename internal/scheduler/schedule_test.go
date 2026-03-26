@@ -9,6 +9,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 	clocktesting "k8s.io/utils/clock/testing"
 )
 
@@ -212,190 +214,128 @@ func TestScheduleEvaluator_NextRequeueTime(t *testing.T) {
 	}
 }
 
-func TestConvertOffHoursToCron(t *testing.T) {
+func TestParseWindowToCron(t *testing.T) {
 	tests := []struct {
 		name              string
-		windows           []OffHourWindow
+		start             string
+		end               string
+		days              []string
 		wantHibernateCron string
 		wantWakeUpCron    string
 		wantErr           bool
 	}{
 		{
-			name: "valid single window weekdays",
-			windows: []OffHourWindow{
-				{
-					Start:      "20:00",
-					End:        "06:00",
-					DaysOfWeek: []string{"MON", "TUE", "WED", "THU", "FRI"},
-				},
-			},
+			name:              "valid single window weekdays",
+			start:             "20:00",
+			end:               "06:00",
+			days:              []string{"MON", "TUE", "WED", "THU", "FRI"},
 			wantHibernateCron: "0 20 * * 1,2,3,4,5",
 			wantWakeUpCron:    "0 6 * * 1,2,3,4,5",
 			wantErr:           false,
 		},
 		{
-			name: "valid single window with all days",
-			windows: []OffHourWindow{
-				{
-					Start:      "22:30",
-					End:        "08:15",
-					DaysOfWeek: []string{"SUN", "MON", "TUE", "WED", "THU", "FRI", "SAT"},
-				},
-			},
+			name:              "valid single window with all days",
+			start:             "22:30",
+			end:               "08:15",
+			days:              []string{"SUN", "MON", "TUE", "WED", "THU", "FRI", "SAT"},
 			wantHibernateCron: "30 22 * * 0,1,2,3,4,5,6",
 			wantWakeUpCron:    "15 8 * * 0,1,2,3,4,5,6",
 			wantErr:           false,
 		},
 		{
-			name: "valid single window weekend only",
-			windows: []OffHourWindow{
-				{
-					Start:      "23:00",
-					End:        "07:00",
-					DaysOfWeek: []string{"SAT", "SUN"},
-				},
-			},
+			name:              "valid single window weekend only",
+			start:             "23:00",
+			end:               "07:00",
+			days:              []string{"SAT", "SUN"},
 			wantHibernateCron: "0 23 * * 6,0",
 			wantWakeUpCron:    "0 7 * * 6,0",
 			wantErr:           false,
 		},
 		{
-			name: "overnight window end before start",
-			windows: []OffHourWindow{
-				{
-					Start:      "20:00",
-					End:        "06:00",
-					DaysOfWeek: []string{"MON"},
-				},
-			},
+			name:              "overnight window end before start",
+			start:             "20:00",
+			end:               "06:00",
+			days:              []string{"MON"},
 			wantHibernateCron: "0 20 * * 1",
 			wantWakeUpCron:    "0 6 * * 1",
 			wantErr:           false,
 		},
 		{
-			name: "case insensitive days",
-			windows: []OffHourWindow{
-				{
-					Start:      "18:00",
-					End:        "09:00",
-					DaysOfWeek: []string{"mon", "Wed", "FRI"},
-				},
-			},
+			name:              "case insensitive days",
+			start:             "18:00",
+			end:               "09:00",
+			days:              []string{"mon", "Wed", "FRI"},
 			wantHibernateCron: "0 18 * * 1,3,5",
 			wantWakeUpCron:    "0 9 * * 1,3,5",
 			wantErr:           false,
 		},
 		{
 			name:    "empty windows",
-			windows: []OffHourWindow{},
 			wantErr: true,
 		},
 		{
-			name: "invalid start time format",
-			windows: []OffHourWindow{
-				{
-					Start:      "25:00",
-					End:        "06:00",
-					DaysOfWeek: []string{"MON"},
-				},
-			},
+			name:    "invalid start time format",
+			start:   "25:00",
+			end:     "06:00",
+			days:    []string{"MON"},
 			wantErr: true,
 		},
 		{
-			name: "invalid start time hour",
-			windows: []OffHourWindow{
-				{
-					Start:      "24:00",
-					End:        "06:00",
-					DaysOfWeek: []string{"MON"},
-				},
-			},
+			name:    "invalid start time hour",
+			start:   "24:00",
+			end:     "06:00",
+			days:    []string{"MON"},
 			wantErr: true,
 		},
 		{
-			name: "invalid start time minute",
-			windows: []OffHourWindow{
-				{
-					Start:      "20:60",
-					End:        "06:00",
-					DaysOfWeek: []string{"MON"},
-				},
-			},
+			name:    "invalid start time minute",
+			start:   "20:60",
+			end:     "06:00",
+			days:    []string{"MON"},
 			wantErr: true,
 		},
 		{
-			name: "invalid end time format missing leading zero",
-			windows: []OffHourWindow{
-				{
-					Start:      "20:00",
-					End:        "6",
-					DaysOfWeek: []string{"MON"},
-				},
-			},
+			name:    "invalid end time format missing leading zero",
+			start:   "20:00",
+			end:     "6",
+			days:    []string{"MON"},
 			wantErr: true,
 		},
 		{
-			name: "invalid day name",
-			windows: []OffHourWindow{
-				{
-					Start:      "20:00",
-					End:        "06:00",
-					DaysOfWeek: []string{"MONDAY"},
-				},
-			},
+			name:    "invalid day name",
+			start:   "20:00",
+			end:     "06:00",
+			days:    []string{"MONDAY"},
 			wantErr: true,
 		},
 		{
-			name: "invalid day name mixed",
-			windows: []OffHourWindow{
-				{
-					Start:      "20:00",
-					End:        "06:00",
-					DaysOfWeek: []string{"MON", "INVALID", "WED"},
-				},
-			},
+			name:    "invalid day name mixed",
+			start:   "20:00",
+			end:     "06:00",
+			days:    []string{"MON", "INVALID", "WED"},
 			wantErr: true,
 		},
 		{
-			name: "malformed time no colon",
-			windows: []OffHourWindow{
-				{
-					Start:      "2000",
-					End:        "06:00",
-					DaysOfWeek: []string{"MON"},
-				},
-			},
+			name:    "malformed time no colon",
+			start:   "2000",
+			end:     "06:00",
+			days:    []string{"MON"},
 			wantErr: true,
 		},
 		{
-			name: "negative hour",
-			windows: []OffHourWindow{
-				{
-					Start:      "-1:00",
-					End:        "06:00",
-					DaysOfWeek: []string{"MON"},
-				},
-			},
-			wantErr: true,
-		},
-		{
-			name: "negative hour",
-			windows: []OffHourWindow{
-				{
-					Start:      "-1:00",
-					End:        "06:00",
-					DaysOfWeek: []string{"MON"},
-				},
-			},
+			name:    "negative hour",
+			start:   "-1:00",
+			end:     "06:00",
+			days:    []string{"MON"},
 			wantErr: true,
 		},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			hibernateCron, wakeUpCron, err := ConvertOffHoursToCron(tt.windows)
+			hibernateCron, wakeUpCron, err := ParseWindowToCron(tt.start, tt.end, tt.days...)
 			if (err != nil) != tt.wantErr {
-				t.Errorf("ConvertOffHoursToCron() error = %v, wantErr %v", err, tt.wantErr)
+				t.Errorf("ParseWindowToCron() error = %v, wantErr %v", err, tt.wantErr)
 				return
 			}
 
@@ -404,11 +344,11 @@ func TestConvertOffHoursToCron(t *testing.T) {
 			}
 
 			if hibernateCron != tt.wantHibernateCron {
-				t.Errorf("ConvertOffHoursToCron() hibernateCron = %v, want %v", hibernateCron, tt.wantHibernateCron)
+				t.Errorf("ParseWindowToCron() hibernateCron = %v, want %v", hibernateCron, tt.wantHibernateCron)
 			}
 
 			if wakeUpCron != tt.wantWakeUpCron {
-				t.Errorf("ConvertOffHoursToCron() wakeUpCron = %v, want %v", wakeUpCron, tt.wantWakeUpCron)
+				t.Errorf("ParseWindowToCron() wakeUpCron = %v, want %v", wakeUpCron, tt.wantWakeUpCron)
 			}
 		})
 	}
@@ -650,7 +590,7 @@ func TestScheduleEvaluator_Evaluate(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			evaluator := NewScheduleEvaluator(clocktesting.NewFakeClock(tt.now), WithScheduleBuffer("1m"))
-			result, err := evaluator.Evaluate(tt.baseWindows, tt.timezone, tt.exception)
+			result, err := evaluator.Evaluate(tt.baseWindows, tt.timezone, []*Exception{tt.exception})
 
 			if (err != nil) != tt.wantErr {
 				t.Errorf("Evaluate() error = %v, wantErr %v", err, tt.wantErr)
@@ -1095,117 +1035,85 @@ func TestScheduleEvaluator_EdgeCases(t *testing.T) {
 	}
 }
 
-func TestConvertOffHoursToCron_EdgeCases(t *testing.T) {
+func TestParseWindowToCron_EdgeCases(t *testing.T) {
 	tests := []struct {
 		name          string
-		windows       []OffHourWindow
+		start         string
+		end           string
+		days          []string
 		wantHibernate string
 		wantWakeUp    string
 		wantErr       bool
 	}{
 		{
-			name:    "empty windows",
-			windows: []OffHourWindow{},
+			name:    "empty days",
+			start:   "20:00",
+			end:     "06:00",
+			days:    []string{},
 			wantErr: true,
 		},
 		{
-			name: "invalid time format - missing colon",
-			windows: []OffHourWindow{
-				{
-					Start:      "2000",
-					End:        "06:00",
-					DaysOfWeek: []string{"MON"},
-				},
-			},
+			name:    "invalid time format - missing colon",
+			start:   "2000",
+			end:     "06:00",
+			days:    []string{"MON"},
 			wantErr: true,
 		},
 		{
-			name: "invalid time format - three parts",
-			windows: []OffHourWindow{
-				{
-					Start:      "20:00:00",
-					End:        "06:00",
-					DaysOfWeek: []string{"MON"},
-				},
-			},
+			name:    "invalid time format - three parts",
+			start:   "20:00:00",
+			end:     "06:00",
+			days:    []string{"MON"},
 			wantErr: true,
 		},
 		{
-			name: "invalid hour",
-			windows: []OffHourWindow{
-				{
-					Start:      "25:00",
-					End:        "06:00",
-					DaysOfWeek: []string{"MON"},
-				},
-			},
+			name:    "invalid hour",
+			start:   "25:00",
+			end:     "06:00",
+			days:    []string{"MON"},
 			wantErr: true,
 		},
 		{
-			name: "invalid minute",
-			windows: []OffHourWindow{
-				{
-					Start:      "20:60",
-					End:        "06:00",
-					DaysOfWeek: []string{"MON"},
-				},
-			},
+			name:    "invalid minute",
+			start:   "20:60",
+			end:     "06:00",
+			days:    []string{"MON"},
 			wantErr: true,
 		},
 		{
-			name: "invalid day name",
-			windows: []OffHourWindow{
-				{
-					Start:      "20:00",
-					End:        "06:00",
-					DaysOfWeek: []string{"MONDAY"},
-				},
-			},
+			name:    "invalid day name",
+			start:   "20:00",
+			end:     "06:00",
+			days:    []string{"MONDAY"},
 			wantErr: true,
 		},
 		{
-			name: "empty days of week",
-			windows: []OffHourWindow{
-				{
-					Start:      "20:00",
-					End:        "06:00",
-					DaysOfWeek: []string{},
-				},
-			},
+			name:    "empty days of week",
+			start:   "20:00",
+			end:     "06:00",
+			days:    []string{},
 			wantErr: true,
 		},
 		{
-			name: "midnight to midnight - same start and end (invalid per webhook validation)",
-			windows: []OffHourWindow{
-				{
-					Start:      "00:00",
-					End:        "00:00",
-					DaysOfWeek: []string{"MON"},
-				},
-			},
+			name:    "midnight to midnight - same start and end (invalid per webhook validation)",
+			start:   "00:00",
+			end:     "00:00",
+			days:    []string{"MON"},
 			wantErr: true,
 		},
 		{
-			name: "all days of week",
-			windows: []OffHourWindow{
-				{
-					Start:      "20:00",
-					End:        "06:00",
-					DaysOfWeek: []string{"MON", "TUE", "WED", "THU", "FRI", "SAT", "SUN"},
-				},
-			},
+			name:          "all days of week",
+			start:         "20:00",
+			end:           "06:00",
+			days:          []string{"MON", "TUE", "WED", "THU", "FRI", "SAT", "SUN"},
 			wantHibernate: "0 20 * * 1,2,3,4,5,6,0",
 			wantWakeUp:    "0 6 * * 1,2,3,4,5,6,0",
 		},
 		{
-			name: "case insensitive day names",
-			windows: []OffHourWindow{
-				{
-					Start:      "20:00",
-					End:        "06:00",
-					DaysOfWeek: []string{"mon", "TUE", "Wed"},
-				},
-			},
+			name:          "case insensitive day names",
+			start:         "20:00",
+			end:           "06:00",
+			days:          []string{"mon", "TUE", "Wed"},
 			wantHibernate: "0 20 * * 1,2,3",
 			wantWakeUp:    "0 6 * * 1,2,3",
 		},
@@ -1213,7 +1121,7 @@ func TestConvertOffHoursToCron_EdgeCases(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			hibernate, wakeup, err := ConvertOffHoursToCron(tt.windows)
+			hibernate, wakeup, err := ParseWindowToCron(tt.start, tt.end, tt.days...)
 			if (err != nil) != tt.wantErr {
 				t.Errorf("expected error=%v, got error=%v", tt.wantErr, err)
 			}
@@ -1305,4 +1213,421 @@ func mustParseTimeInLocation(value, timezone string) time.Time {
 		panic(err)
 	}
 	return t
+}
+
+func TestEvaluate_MultiException(t *testing.T) {
+	// Base schedule: weekday overnight hibernation 20:00–06:00 UTC.
+	baseWindows := []OffHourWindow{
+		{Start: "20:00", End: "06:00", DaysOfWeek: []string{"MON", "TUE", "WED", "THU", "FRI"}},
+	}
+
+	alwaysValid := func() (time.Time, time.Time) {
+		return time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC),
+			time.Date(2026, 12, 31, 23, 59, 59, 0, time.UTC)
+	}
+
+	tests := []struct {
+		name          string
+		baseWindows   []OffHourWindow
+		timezone      string
+		exceptions    []*Exception
+		now           time.Time
+		wantHibernate bool
+		wantState     string
+	}{
+		{
+			name:          "nil exceptions - base schedule only",
+			baseWindows:   baseWindows,
+			timezone:      "UTC",
+			exceptions:    nil,
+			now:           time.Date(2026, 1, 28, 14, 0, 0, 0, time.UTC), // Wed 14:00
+			wantHibernate: false,
+			wantState:     "active",
+		},
+		{
+			name:        "extend+suspend non-colliding - extend on Wed, suspend on Thu night",
+			baseWindows: baseWindows,
+			timezone:    "UTC",
+			exceptions: func() []*Exception {
+				vf, vu := alwaysValid()
+				return []*Exception{
+					{
+						Type: ExceptionExtend, ValidFrom: vf, ValidUntil: vu,
+						Windows: []OffHourWindow{
+							{Start: "00:00", End: "23:59", DaysOfWeek: []string{"WED"}},
+						},
+					},
+					{
+						Type: ExceptionSuspend, ValidFrom: vf, ValidUntil: vu,
+						Windows: []OffHourWindow{
+							{Start: "23:00", End: "03:00", DaysOfWeek: []string{"THU"}},
+						},
+					},
+				}
+			}(),
+			// Wed 14:00 — base says active, but extend says hibernate (full day Wed)
+			now:           time.Date(2026, 1, 28, 14, 0, 0, 0, time.UTC),
+			wantHibernate: true,
+			wantState:     "hibernated",
+		},
+		{
+			// Regression: extend on Wed, suspend on Thu with a large LeadTime that
+			// would reach back into Wednesday if evaluateSuspend were called blindly.
+			// The fix (isSuspendContextActive) must route through evaluateExtend on
+			// Wednesday so the lead-time window for Thursday does NOT prevents
+			// extend-driven hibernation on Wednesday.
+			name:        "extend+suspend non-colliding - large suspend leadtime must not bleed into extend day",
+			baseWindows: baseWindows,
+			timezone:    "UTC",
+			exceptions: func() []*Exception {
+				vf, vu := alwaysValid()
+				return []*Exception{
+					{
+						Type: ExceptionExtend, ValidFrom: vf, ValidUntil: vu,
+						Windows: []OffHourWindow{
+							{Start: "08:00", End: "18:00", DaysOfWeek: []string{"WED"}},
+						},
+					},
+					{
+						Type:      ExceptionSuspend,
+						ValidFrom: vf, ValidUntil: vu,
+						LeadTime: 20 * time.Hour, // 20 h lead time reaches back to Wed 13:00 for Thu 09:00
+						Windows: []OffHourWindow{
+							{Start: "09:00", End: "17:00", DaysOfWeek: []string{"THU"}},
+						},
+					},
+				}
+			}(),
+			// Wed 15:00 — extend window 08:00-18:00 is active; suspend's 20 h lead
+			// time would start at Wed 13:00, but it must NOT suppress Wed hibernation.
+			now:           time.Date(2026, 1, 28, 15, 0, 0, 0, time.UTC),
+			wantHibernate: true,
+			wantState:     "hibernated",
+		},
+		{
+			name:        "extend+suspend - suspend carves out from extended base",
+			baseWindows: baseWindows,
+			timezone:    "UTC",
+			exceptions: func() []*Exception {
+				vf, vu := alwaysValid()
+				return []*Exception{
+					{
+						Type: ExceptionExtend, ValidFrom: vf, ValidUntil: vu,
+						Windows: []OffHourWindow{
+							{Start: "00:00", End: "23:59", DaysOfWeek: []string{"WED"}},
+						},
+					},
+					{
+						Type: ExceptionSuspend, ValidFrom: vf, ValidUntil: vu,
+						Windows: []OffHourWindow{
+							{Start: "12:00", End: "14:00", DaysOfWeek: []string{"WED"}},
+						},
+					},
+				}
+			}(),
+			// Wed 13:00 — extend says hibernate all day, but suspend carves out 12:00-14:00
+			now:           time.Date(2026, 1, 28, 13, 0, 0, 0, time.UTC),
+			wantHibernate: false,
+			wantState:     "active",
+		},
+		{
+			name:        "replace - replaces base entirely",
+			baseWindows: baseWindows,
+			timezone:    "UTC",
+			exceptions: func() []*Exception {
+				vf, vu := alwaysValid()
+				return []*Exception{
+					{
+						Type: ExceptionReplace, ValidFrom: vf, ValidUntil: vu,
+						Windows: []OffHourWindow{
+							// Replace with 10:00-14:00 only
+							{Start: "10:00", End: "14:00", DaysOfWeek: []string{"WED"}},
+						},
+					},
+				}
+			}(),
+			// Wed 12:00 — in the replaced window
+			now:           time.Date(2026, 1, 28, 12, 0, 0, 0, time.UTC),
+			wantHibernate: true,
+			wantState:     "hibernated",
+		},
+		{
+			name:        "replace - base schedule ignored",
+			baseWindows: baseWindows,
+			timezone:    "UTC",
+			exceptions: func() []*Exception {
+				vf, vu := alwaysValid()
+				return []*Exception{
+					{
+						Type: ExceptionReplace, ValidFrom: vf, ValidUntil: vu,
+						Windows: []OffHourWindow{
+							{Start: "10:00", End: "14:00", DaysOfWeek: []string{"WED"}},
+						},
+					},
+				}
+			}(),
+			// Wed 22:00 — normally base would hibernate, but replaced with 10:00-14:00 only
+			now:           time.Date(2026, 1, 28, 22, 0, 0, 0, time.UTC),
+			wantHibernate: false,
+			wantState:     "active",
+		},
+		{
+			name:        "replace+extend - extend adds on top of replaced base",
+			baseWindows: baseWindows,
+			timezone:    "UTC",
+			exceptions: func() []*Exception {
+				vf, vu := alwaysValid()
+				return []*Exception{
+					{
+						Type: ExceptionReplace, ValidFrom: vf, ValidUntil: vu,
+						Windows: []OffHourWindow{
+							{Start: "10:00", End: "14:00", DaysOfWeek: []string{"WED"}},
+						},
+					},
+					{
+						Type: ExceptionExtend, ValidFrom: vf, ValidUntil: vu,
+						Windows: []OffHourWindow{
+							{Start: "18:00", End: "20:00", DaysOfWeek: []string{"WED"}},
+						},
+					},
+				}
+			}(),
+			// Wed 19:00 — replaced base is 10:00-14:00, extend adds 18:00-20:00
+			now:           time.Date(2026, 1, 28, 19, 0, 0, 0, time.UTC),
+			wantHibernate: true,
+			wantState:     "hibernated",
+		},
+		{
+			name:        "replace+suspend - suspend carves out from replaced base",
+			baseWindows: baseWindows,
+			timezone:    "UTC",
+			exceptions: func() []*Exception {
+				vf, vu := alwaysValid()
+				return []*Exception{
+					{
+						Type: ExceptionReplace, ValidFrom: vf, ValidUntil: vu,
+						Windows: []OffHourWindow{
+							{Start: "20:00", End: "06:00", DaysOfWeek: []string{"MON", "TUE", "WED", "THU", "FRI", "SAT", "SUN"}},
+						},
+					},
+					{
+						Type: ExceptionSuspend, ValidFrom: vf, ValidUntil: vu,
+						Windows: []OffHourWindow{
+							{Start: "22:00", End: "02:00", DaysOfWeek: []string{"WED"}},
+						},
+					},
+				}
+			}(),
+			// Wed 23:00 — replaced base says hibernate, but suspend carves out 22:00-02:00
+			now:           time.Date(2026, 1, 28, 23, 0, 0, 0, time.UTC),
+			wantHibernate: false,
+			wantState:     "active",
+		},
+		{
+			name:        "replace+extend+suspend triple composition",
+			baseWindows: baseWindows,
+			timezone:    "UTC",
+			exceptions: func() []*Exception {
+				vf, vu := alwaysValid()
+				return []*Exception{
+					{
+						Type: ExceptionReplace, ValidFrom: vf, ValidUntil: vu,
+						Windows: []OffHourWindow{
+							{Start: "22:00", End: "04:00", DaysOfWeek: []string{"WED"}},
+						},
+					},
+					{
+						Type: ExceptionExtend, ValidFrom: vf, ValidUntil: vu,
+						Windows: []OffHourWindow{
+							{Start: "10:00", End: "12:00", DaysOfWeek: []string{"WED"}},
+						},
+					},
+					{
+						Type: ExceptionSuspend, ValidFrom: vf, ValidUntil: vu,
+						Windows: []OffHourWindow{
+							{Start: "11:00", End: "11:30", DaysOfWeek: []string{"WED"}},
+						},
+					},
+				}
+			}(),
+			// Wed 11:15 — extendedBase = replace(22:00-04:00) + extend(10:00-12:00)
+			// suspend carves out 11:00-11:30 → should NOT hibernate
+			now:           time.Date(2026, 1, 28, 11, 15, 0, 0, time.UTC),
+			wantHibernate: false,
+			wantState:     "active",
+		},
+		{
+			name:        "expired exceptions ignored, base schedule used",
+			baseWindows: baseWindows,
+			timezone:    "UTC",
+			exceptions: []*Exception{
+				{
+					Type:       ExceptionSuspend,
+					ValidFrom:  time.Date(2025, 1, 1, 0, 0, 0, 0, time.UTC),
+					ValidUntil: time.Date(2025, 12, 31, 23, 59, 59, 0, time.UTC),
+					Windows: []OffHourWindow{
+						{Start: "20:00", End: "06:00", DaysOfWeek: []string{"MON", "TUE", "WED", "THU", "FRI"}},
+					},
+				},
+			},
+			// Wed 22:00 — exception expired, base should hibernate
+			now:           time.Date(2026, 1, 28, 22, 0, 0, 0, time.UTC),
+			wantHibernate: true,
+			wantState:     "hibernated",
+		},
+		// ── Multi-window evaluation (merged same-type exceptions) ───────────
+		{
+			name:        "two merged extend windows - inside first window",
+			baseWindows: baseWindows,
+			timezone:    "UTC",
+			exceptions: func() []*Exception {
+				vf, vu := alwaysValid()
+				return []*Exception{
+					{
+						Type: ExceptionExtend, ValidFrom: vf, ValidUntil: vu,
+						Windows: []OffHourWindow{
+							{Start: "09:00", End: "12:00", DaysOfWeek: []string{"MON", "TUE", "WED", "THU", "FRI"}},
+						},
+					},
+					{
+						Type: ExceptionExtend, ValidFrom: vf, ValidUntil: vu,
+						Windows: []OffHourWindow{
+							{Start: "14:00", End: "17:00", DaysOfWeek: []string{"MON", "TUE", "WED", "THU", "FRI"}},
+						},
+					},
+				}
+			}(),
+			// Wed 10:00 — inside extend-morning (09:00-12:00)
+			now:           time.Date(2026, 1, 28, 10, 0, 0, 0, time.UTC),
+			wantHibernate: true,
+			wantState:     "hibernated",
+		},
+		{
+			name:        "two merged extend windows - inside second window",
+			baseWindows: baseWindows,
+			timezone:    "UTC",
+			exceptions: func() []*Exception {
+				vf, vu := alwaysValid()
+				return []*Exception{
+					{
+						Type: ExceptionExtend, ValidFrom: vf, ValidUntil: vu,
+						Windows: []OffHourWindow{
+							{Start: "09:00", End: "12:00", DaysOfWeek: []string{"MON", "TUE", "WED", "THU", "FRI"}},
+						},
+					},
+					{
+						Type: ExceptionExtend, ValidFrom: vf, ValidUntil: vu,
+						Windows: []OffHourWindow{
+							{Start: "14:00", End: "17:00", DaysOfWeek: []string{"MON", "TUE", "WED", "THU", "FRI"}},
+						},
+					},
+				}
+			}(),
+			// Wed 15:00 — inside extend-evening (14:00-17:00), was silently dropped before fix
+			now:           time.Date(2026, 1, 28, 15, 0, 0, 0, time.UTC),
+			wantHibernate: true,
+			wantState:     "hibernated",
+		},
+		{
+			name:        "two merged extend windows - in gap between both",
+			baseWindows: baseWindows,
+			timezone:    "UTC",
+			exceptions: func() []*Exception {
+				vf, vu := alwaysValid()
+				return []*Exception{
+					{
+						Type: ExceptionExtend, ValidFrom: vf, ValidUntil: vu,
+						Windows: []OffHourWindow{
+							{Start: "09:00", End: "12:00", DaysOfWeek: []string{"MON", "TUE", "WED", "THU", "FRI"}},
+						},
+					},
+					{
+						Type: ExceptionExtend, ValidFrom: vf, ValidUntil: vu,
+						Windows: []OffHourWindow{
+							{Start: "14:00", End: "17:00", DaysOfWeek: []string{"MON", "TUE", "WED", "THU", "FRI"}},
+						},
+					},
+				}
+			}(),
+			// Wed 13:00 — between extend-morning and extend-evening, base also says active
+			now:           time.Date(2026, 1, 28, 13, 0, 0, 0, time.UTC),
+			wantHibernate: false,
+			wantState:     "active",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			evaluator := NewScheduleEvaluator(clocktesting.NewFakeClock(tt.now), WithScheduleBuffer("1m"))
+			result, err := evaluator.Evaluate(tt.baseWindows, tt.timezone, tt.exceptions)
+			if err != nil {
+				t.Fatalf("Evaluate() error = %v", err)
+			}
+
+			if result.ShouldHibernate != tt.wantHibernate {
+				t.Errorf("ShouldHibernate = %v, want %v (state=%s)", result.ShouldHibernate, tt.wantHibernate, result.CurrentState)
+			}
+
+			if result.CurrentState != tt.wantState {
+				t.Errorf("CurrentState = %v, want %v", result.CurrentState, tt.wantState)
+			}
+		})
+	}
+}
+
+func TestMergeByType(t *testing.T) {
+	vf := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
+	vu := time.Date(2026, 12, 31, 23, 59, 59, 0, time.UTC)
+
+	exceptions := []*Exception{
+		{Type: ExceptionExtend, ValidFrom: vf, ValidUntil: vu},
+		{Type: ExceptionSuspend, ValidFrom: vf, ValidUntil: vu},
+	}
+
+	if got := mergeByType(exceptions, ExceptionExtend); got == nil || got.Type != ExceptionExtend {
+		t.Errorf("mergeByType(extend) = %v, want extend exception", got)
+	}
+	if got := mergeByType(exceptions, ExceptionSuspend); got == nil || got.Type != ExceptionSuspend {
+		t.Errorf("mergeByType(suspend) = %v, want suspend exception", got)
+	}
+	if got := mergeByType(exceptions, ExceptionReplace); got != nil {
+		t.Errorf("mergeByType(replace) = %v, want nil", got)
+	}
+	if got := mergeByType(nil, ExceptionExtend); got != nil {
+		t.Errorf("mergeByType(nil, extend) = %v, want nil", got)
+	}
+}
+
+func TestMergeByType_SameType_MergesWindowsAndExpandsValidity(t *testing.T) {
+	vf1 := time.Date(2026, 3, 1, 0, 0, 0, 0, time.UTC)
+	vu1 := time.Date(2026, 3, 10, 0, 0, 0, 0, time.UTC)
+	vf2 := time.Date(2026, 3, 5, 0, 0, 0, 0, time.UTC)
+	vu2 := time.Date(2026, 3, 15, 0, 0, 0, 0, time.UTC)
+
+	exceptions := []*Exception{
+		{
+			Type:       ExceptionSuspend,
+			ValidFrom:  vf1,
+			ValidUntil: vu1,
+			LeadTime:   3 * time.Minute,
+			Windows:    []OffHourWindow{{Start: "08:00", End: "12:00", DaysOfWeek: []string{"MON"}}},
+		},
+		{
+			Type:       ExceptionSuspend,
+			ValidFrom:  vf2,
+			ValidUntil: vu2,
+			LeadTime:   10 * time.Minute,
+			Windows:    []OffHourWindow{{Start: "14:00", End: "18:00", DaysOfWeek: []string{"WED"}}},
+		},
+	}
+
+	got := mergeByType(exceptions, ExceptionSuspend)
+	require.NotNil(t, got)
+	assert.Equal(t, ExceptionSuspend, got.Type)
+	assert.Equal(t, vf1, got.ValidFrom, "ValidFrom should be the earliest")
+	assert.Equal(t, vu2, got.ValidUntil, "ValidUntil should be the latest")
+	assert.Equal(t, 10*time.Minute, got.LeadTime, "LeadTime should be the max")
+	require.Len(t, got.Windows, 2)
+	assert.Equal(t, "08:00", got.Windows[0].Start)
+	assert.Equal(t, "14:00", got.Windows[1].Start)
 }

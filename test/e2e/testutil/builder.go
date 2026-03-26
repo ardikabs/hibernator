@@ -106,6 +106,14 @@ func (b *HibernatePlanBuilder) WithBehavior(behavior hibernatorv1alpha1.Behavior
 	return b
 }
 
+// WithOffHours replaces the hibernation windows on the plan schedule.
+// Call this after WithSchedule (or after setting a timezone) to override the default single-window
+// with multiple windows, enabling OR-combined multi-window evaluation.
+func (b *HibernatePlanBuilder) WithOffHours(windows ...hibernatorv1alpha1.OffHourWindow) *HibernatePlanBuilder {
+	b.plan.Spec.Schedule.OffHours = windows
+	return b
+}
+
 // WithTimezone overrides the timezone used for schedule evaluation.
 // Must be called after WithSchedule, since WithSchedule resets the timezone to "UTC".
 func (b *HibernatePlanBuilder) WithTimezone(tz string) *HibernatePlanBuilder {

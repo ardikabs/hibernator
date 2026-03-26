@@ -76,7 +76,7 @@ var _ = Describe("Schedule Boundary E2E - 1-Minute Buffer Workaround", func() {
 			}).
 			WithTarget(hibernatorv1alpha1.Target{
 				Name: "database",
-				Type: "rds",
+				Type: "noop",
 				ConnectorRef: hibernatorv1alpha1.ConnectorRef{
 					Kind: "CloudProvider",
 					Name: "global-aws",
@@ -135,7 +135,7 @@ var _ = Describe("Schedule Boundary E2E - 1-Minute Buffer Workaround", func() {
 			WithSchedule("23:59", "00:00", "MON", "TUE", "WED", "THU", "FRI", "SAT", "SUN").
 			WithTarget(hibernatorv1alpha1.Target{
 				Name: "database",
-				Type: "rds",
+				Type: "noop",
 				ConnectorRef: hibernatorv1alpha1.ConnectorRef{
 					Kind: "CloudProvider",
 					Name: "global-aws",

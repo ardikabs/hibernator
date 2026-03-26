@@ -69,9 +69,13 @@ func (v *ScheduleExceptionValidator) validate(ctx context.Context, exception *hi
 		return nil, nil
 	}
 
-	var allErrs field.ErrorList
+	var (
+		allErrs  field.ErrorList
+		warnings admission.Warnings
+	)
 
-	planErrs := v.validatePlanRef(ctx, exception)
+	planWarnings, planErrs := v.validatePlanRef(ctx, exception)
+	warnings = append(warnings, planWarnings...)
 	allErrs = append(allErrs, planErrs...)
 
 	timeErrs := v.validateTimeRange(exception)
@@ -87,24 +91,26 @@ func (v *ScheduleExceptionValidator) validate(ctx context.Context, exception *hi
 	allErrs = append(allErrs, activeErrs...)
 
 	if len(allErrs) > 0 {
-		return nil, apierrors.NewInvalid(
+		return warnings, apierrors.NewInvalid(
 			exception.GroupVersionKind().GroupKind(),
 			exception.Name,
 			allErrs,
 		)
 	}
 
-	return nil, nil
+	return warnings, nil
 }
 
 // validatePlanRef validates the planRef field.
-func (v *ScheduleExceptionValidator) validatePlanRef(ctx context.Context, exception *hibernatorv1alpha1.ScheduleException) field.ErrorList {
+// A missing HibernatePlan is reported as a warning (the exception is still
+// created but won't be picked up until a matching plan exists).
+func (v *ScheduleExceptionValidator) validatePlanRef(ctx context.Context, exception *hibernatorv1alpha1.ScheduleException) (admission.Warnings, field.ErrorList) {
 	var allErrs field.ErrorList
 	planRefPath := field.NewPath("spec", "planRef")
 
 	if exception.Spec.PlanRef.Name == "" {
 		allErrs = append(allErrs, field.Required(planRefPath.Child("name"), "planRef.name must be specified"))
-		return allErrs
+		return nil, allErrs
 	}
 
 	targetNamespace := exception.Spec.PlanRef.Namespace
@@ -118,7 +124,7 @@ func (v *ScheduleExceptionValidator) validatePlanRef(ctx context.Context, except
 			targetNamespace,
 			fmt.Sprintf("planRef must reference a HibernatePlan in the same namespace (%s)", exception.Namespace),
 		))
-		return allErrs
+		return nil, allErrs
 	}
 
 	plan := &hibernatorv1alpha1.HibernatePlan{}
@@ -128,19 +134,19 @@ func (v *ScheduleExceptionValidator) validatePlanRef(ctx context.Context, except
 	}
 	if err := v.client.Get(ctx, planKey, plan); err != nil {
 		if apierrors.IsNotFound(err) {
-			allErrs = append(allErrs, field.NotFound(
-				planRefPath.Child("name"),
-				exception.Spec.PlanRef.Name,
-			))
-		} else {
-			allErrs = append(allErrs, field.InternalError(
-				planRefPath.Child("name"),
-				fmt.Errorf("failed to verify HibernatePlan existence: %w", err),
-			))
+			return admission.Warnings{
+				fmt.Sprintf("HibernatePlan %q not found in namespace %q; this exception will have no effect until the plan is created",
+					exception.Spec.PlanRef.Name, targetNamespace),
+			}, nil
 		}
+
+		allErrs = append(allErrs, field.InternalError(
+			planRefPath.Child("name"),
+			fmt.Errorf("failed to verify HibernatePlan existence: %w", err),
+		))
 	}
 
-	return allErrs
+	return nil, allErrs
 }
 
 // validateTimeRange validates validFrom and validUntil.
@@ -251,7 +257,16 @@ func (v *ScheduleExceptionValidator) validateWindows(exception *hibernatorv1alph
 	return allErrs
 }
 
-// validateNoOverlappingExceptions ensures only one active or pending exception per plan at any given time.
+// validateNoOverlappingExceptions checks that the incoming exception does not
+// conflict with existing Active or Pending exceptions for the same plan.
+//
+// Validation follows a two-tier approach:
+//  1. Window collision — if validity periods overlap, check whether any pair of
+//     schedule windows across the two exceptions collide (shared day + overlapping
+//     time range). Non-colliding exceptions can always coexist.
+//  2. Type pairing — when windows DO collide, only certain cross-type combinations
+//     are allowed (extend+suspend, replace+extend, replace+suspend). Same-type
+//     collisions are always rejected.
 func (v *ScheduleExceptionValidator) validateNoOverlappingExceptions(ctx context.Context, exception *hibernatorv1alpha1.ScheduleException) field.ErrorList {
 	var allErrs field.ErrorList
 
@@ -286,25 +301,50 @@ func (v *ScheduleExceptionValidator) validateNoOverlappingExceptions(ctx context
 			continue
 		}
 
+		// Tier 0: validity period overlap check.
 		s1 := exception.Spec.ValidFrom.Time
 		e1 := exception.Spec.ValidUntil.Time
 		s2 := existing.Spec.ValidFrom.Time
 		e2 := existing.Spec.ValidUntil.Time
 
-		if s1.Before(e2) && s2.Before(e1) {
+		if !s1.Before(e2) || !s2.Before(e1) {
+			continue // Disjoint validity periods — always safe.
+		}
+
+		// Tier 1: window collision check.
+		if !windowsCollide(exception.Spec.Windows, existing.Spec.Windows) {
+			continue // Non-colliding windows — allowed regardless of type.
+		}
+
+		// Tier 2: windows DO collide — check type pairing.
+		if exception.Spec.Type == existing.Spec.Type {
 			allErrs = append(allErrs, field.Forbidden(
 				field.NewPath("spec", "planRef", "name"),
-				fmt.Sprintf("exception time range [%s, %s] overlaps with existing %s exception %s [%s, %s]",
-					s1.Format(time.RFC3339),
-					e1.Format(time.RFC3339),
+				fmt.Sprintf(
+					"colliding same-type %q exceptions cannot coexist; merge windows into a single exception (conflicts with %s exception %q)",
+					exception.Spec.Type,
 					existing.Status.State,
 					existing.Name,
-					s2.Format(time.RFC3339),
-					e2.Format(time.RFC3339),
 				),
 			))
 			break
 		}
+
+		if !isAllowedTypePair(exception.Spec.Type, existing.Spec.Type) {
+			allErrs = append(allErrs, field.Forbidden(
+				field.NewPath("spec", "planRef", "name"),
+				fmt.Sprintf(
+					"unsupported colliding exception type combination %q + %q (conflicts with %s exception %q)",
+					exception.Spec.Type,
+					existing.Spec.Type,
+					existing.Status.State,
+					existing.Name,
+				),
+			))
+			break
+		}
+
+		// Allowed cross-type collision (e.g., extend+suspend) — intentional composition.
 	}
 
 	return allErrs

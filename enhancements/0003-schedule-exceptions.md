@@ -1,16 +1,16 @@
 ---
 rfc: RFC-0003
 title: Temporary Schedule Exceptions via Independent CRD
-status: Implemented (Phase 1-3)
+status: Implemented
 date: 2026-01-29
-updated: 2026-02-02
+updated: 2026-03-25
 ---
 
 # RFC 0003 — Temporary Schedule Exceptions via Independent CRD
 
 **Keywords:** Schedule-Exceptions, Maintenance-Windows, Lead-Time, Time-Bound, Extend, Suspend, Replace, Emergency-Events, Validation, Status-Tracking, Independent-CRD, GitOps
 
-**Status:** Implemented ✅ (Phase 1-3 Complete, Phase 4 Pending)
+**Status:** Implemented ✅ (Phases 1-5 Complete — approval workflows are future work; see [Future Considerations](#future-considerations-exception-approval-workflow))
 
 ## Summary
 
@@ -53,7 +53,7 @@ A team normally hibernates services 20:00-06:00 on weekdays. However, for the ne
 
 ## Non-Goals
 
-- Support multiple simultaneous active exceptions per plan (use single active exception for simplicity)
+- ~~Support multiple simultaneous active exceptions per plan (use single active exception for simplicity)~~ _(Superseded by [Phase 5 Addendum](#phase-5-addendum-composable-multi-exception-types))_
 - Support infinite exceptions (time-bound only, max 90 days)
 - Implement approval workflow in initial version (designed for future extension)
 
@@ -259,17 +259,22 @@ ScheduleException and HibernatePlan are linked via:
 6. Evaluate effective schedule against current time
 7. Update `status.exceptionReferences[]` history (max 10, active first, then desc by ValidFrom)
 
-### Temporal Overlap Prevention
+### Temporal Overlap Prevention (Original)
 
-**Rule**: Only ONE exception (Active or Pending) allowed to cover any specific point in time per HibernatePlan.
+> **Note**: This section describes the original single-exception constraint from Phases 1-3.
+> It has been relaxed in [Phase 5](#phase-5-addendum-composable-multi-exception-types), which allows
+> certain type combinations to coexist. The description below applies to same-type exceptions with
+> colliding windows and to disallowed cross-type pairs.
 
-**Rationale**:
+**Original Rule**: Only ONE exception (Active or Pending) allowed to cover any specific point in time per HibernatePlan.
+
+**Rationale** (still applies to restricted pairs):
 
 - Simplifies merge semantics (no complex ordering or precedence rules)
 - Clear intent (explicit override, not layered modifications)
 - Predictable behavior (users know exactly what schedule is active)
 
-**Enforcement**:
+**Enforcement (Phases 1-3)**:
 
 - Webhook validation rejects new exception creation if its time range `[validFrom, validUntil]` overlaps with ANY existing non-expired exception for the same plan.
 - Overlap detection logic: `start1 < end2 AND start2 < end1`.
@@ -277,6 +282,8 @@ ScheduleException and HibernatePlan are linked via:
   - Wait for current exception to expire (controller transitions to Expired)
   - OR adjust time ranges to be sequential
   - OR manually delete the conflicting exception
+
+**Enforcement (Phase 5+)**: See [Phase 5 Addendum](#phase-5-addendum-composable-multi-exception-types) for the refined multi-tier validation that allows composable type pairs.
 
 ### Validation Rules
 
@@ -332,3 +339,124 @@ Temporary schedule exceptions can significantly impact infrastructure availabili
 ## Migration
 
 ScheduleException is a new CRD. No breaking changes to existing HibernatePlans.
+
+---
+
+## Phase 5 Addendum: Composable Multi-Exception Types
+
+**Date:** 2026-07-14
+**Status:** Implemented ✅
+
+### Overview
+
+Phase 5 lifts the strict "one exception per plan at a time" constraint established in Phases 1-3. Instead of
+blocking all temporal overlaps, the webhook now applies a three-tier validation:
+
+1. **Tier 0 — Validity Period Overlap**: Detect whether two exceptions' `[validFrom, validUntil]` intervals
+   intersect. If they do not overlap, no further checks needed — both can coexist freely.
+2. **Tier 1 — Window Collision**: For overlapping validity periods, check if any individual schedule windows
+   from the two exceptions share a common time slot (same days + overlapping time range).
+   If no windows collide, the pair is still allowed (they will never be active over the same window).
+3. **Tier 2 — Type Pairing**: If windows do collide, apply an allow-list of composable type pairs.
+   Only explicitly allowed pairs may have colliding windows.
+
+### Allowed Type Pairs (Window Collision)
+
+The following cross-type combinations are permitted to have overlapping windows:
+
+| Pair | Allowed | Rationale |
+|------|---------|----------|
+| `extend` + `suspend` | ✅ | Suspend carves out a safety window from the extended hibernation; the carve-out semantics make the combination unambiguous. |
+| `extend` + `replace` | ✅ | Replace overrides the entire schedule for its window, making the extend window irrelevant for that slot. |
+| `suspend` + `replace` | ✅ | Replace takes full ownership during its window; suspend can coexist for different sub-windows. |
+| `extend` + `extend` | ❌ | Two overlapping extend windows create ambiguity. Same-type overlap is rejected. |
+| `suspend` + `suspend` | ❌ | Two overlapping suspend windows are redundant and confusing. Same-type overlap is rejected. |
+| `replace` + `replace` | ❌ | Two replace windows cannot coexist — which schedule applies? Rejected. |
+
+**Note**: Same-type exceptions whose windows do **not** collide are always allowed (Tier 1 check passes).
+The evaluator merges them using `mergeByType`.
+
+### Composition Semantics
+
+When multiple exceptions are active simultaneously, the scheduler evaluates them in this order:
+
+```
+replace  → if any Replace exception is active, its windows completely override the base schedule
+extend   → the effective base (or replaced) schedule is extended with Extend windows (union)
+suspend  → Suspend windows are carved out of the effective hibernation schedule as a final pass
+```
+
+**Evaluation Algorithm** (`scheduler.Evaluate`):
+
+1. Partition all active exceptions by type: `Replace[]`, `Extend[]`, `Suspend[]`.
+2. For each partition, call `mergeByType` to merge same-type exceptions into a single representative:
+   - The **merged validity** is the union of all individual validity periods.
+   - The **merged windows** are the union of all individual windows (deduplicated by start/end/days).
+3. Apply the merged exceptions:
+   a. If a merged Replace exception exists: evaluate using only replace windows (ignore base schedule).
+   b. If a merged Extend exception exists: union its windows into the effective base schedule.
+   c. If a merged Suspend exception exists: `applySuspendCarveOut` removes suspension windows from
+      the extended schedule. Lead time for the suspend is also applied.
+
+### Suspension Carve-Out from Extended Windows
+
+The carve-out is computed using `evaluateExtend → applySuspendCarveOut` rather than passing combined
+windows directly to `evaluateSuspend`. This is necessary because `ConvertOffHoursToCron` (the internal
+cron conversion utility) only supports a single window object. The two-step approach evaluates the
+extend normally, then applies the suspension carve-out as a correction pass over the already-evaluated
+acute result, avoiding duplication of cron conversion code.
+
+**Lead-time bleed guard**: When a merged Suspend exception carries a lead-time, the guard ensures that
+lead-time suppression is skipped for time slots where the cluster will naturally wake up before the
+suspension window opens. This prevents lead-time from leaking across day boundaries.
+
+### Same-Type Merging (`mergeByType`)
+
+Multiple exceptions of the same type (e.g., two `extend` exceptions with non-colliding windows) are
+automatically merged by the evaluator before processing. This allows operators to create fine-grained
+exceptions without having to collapse them into a single resource:
+
+```yaml
+# extend-morning: covers 09:00-12:00 Tue-Thu
+# extend-evening: covers 18:00-22:00 Mon-Fri
+# Both are merged transparently — the plan sees union(extend-morning.windows, extend-evening.windows)
+```
+
+**mergeByType behavior**:
+- All exceptions of the same type are merged into one `*scheduler.Exception`.
+- Validity: `union([validFrom_i], [validUntil_i])` → widest possible validity interval.
+- Windows: concatenation of all window slices (scheduler handles evaluation per-window).
+
+### Updated Validation Rules (Phase 5)
+
+The full webhook validation for `ScheduleException` now enforces:
+
+1. `planRef.name` must reference existing HibernatePlan *(unchanged)*
+2. `planRef.namespace` must equal exception namespace *(unchanged)*
+3. `validFrom <= validUntil` *(unchanged)*
+4. `validUntil - validFrom <= 90 days` *(unchanged)*
+5. `type` must be one of: `extend`, `suspend`, `replace` *(unchanged)*
+6. For `suspend` type: `leadTime` must be valid duration format *(unchanged)*
+7. `windows[]` must follow OffHourWindow format *(unchanged)*
+8. **[UPDATED]** Temporal overlap is permitted for allowed cross-type pairs with non-colliding windows, or for
+   allowed cross-type pairs even with colliding windows (see allowed pairs table above).
+   Same-type colliding windows are still rejected.
+9. Exception name must be unique within namespace *(unchanged)*
+
+### Schedule Evaluation Semantics (Updated)
+
+The original evaluation semantics in §[Schedule Evaluation Semantics](#schedule-evaluation-semantics) described
+"deterministic selection picks the newest one" for multiple active exceptions. That behavior is superseded:
+
+**Updated Rule (Phase 5)**:
+
+1. Load HibernatePlan base schedule (`offHours`).
+2. Query all `Active` ScheduleExceptions for the plan (label selector + `state=Active`).
+3. Filter to those within valid period (`validFrom` < `now` < `validUntil`).
+4. Pass the **full list** to `scheduler.Evaluate` — the evaluator merges same-type exceptions internally
+   and applies cross-type composition semantics.
+5. Evaluate effective schedule against current time.
+6. Update `status.exceptionReferences[]` history (unchanged).
+
+**No deterministic single-winner selection**: All active exceptions participate. The composition order
+(replace → extend → suspend) determines the final effective schedule.

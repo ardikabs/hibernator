@@ -160,55 +160,14 @@ func TestPlanReconciler_Reconcile_WithException_PopulatesExceptions(t *testing.T
 }
 
 // ---------------------------------------------------------------------------
-// PlanReconciler.selectActiveException
+// PlanReconciler.filterActiveExceptions (existing coverage, adapted)
 // ---------------------------------------------------------------------------
 
-func TestSelectActiveException_NoExceptions_ReturnsNil(t *testing.T) {
-	clk := clocktesting.NewFakeClock(time.Now())
-	r, _ := newPlanReconciler(clk)
-	plan := simplePlan("p", "default")
-
-	exc, err := r.selectActiveException(logr.Discard(), plan, nil)
-	require.NoError(t, err)
-	assert.Nil(t, exc)
-}
-
-func TestSelectActiveException_ActiveMatchingException_ReturnsException(t *testing.T) {
+func TestFilterActiveExceptions_PendingException_IsExcluded(t *testing.T) {
 	now := time.Date(2026, 3, 4, 10, 0, 0, 0, time.UTC)
 	clk := clocktesting.NewFakeClock(now)
 	r, _ := newPlanReconciler(clk)
-	plan := simplePlan("p", "default")
 
-	exceptions := []hibernatorv1alpha1.ScheduleException{
-		{
-			ObjectMeta: metav1.ObjectMeta{Name: "exc-1", Namespace: "default"},
-			Spec: hibernatorv1alpha1.ScheduleExceptionSpec{
-				PlanRef:    hibernatorv1alpha1.PlanReference{Name: "p"},
-				ValidFrom:  metav1.NewTime(now.Add(-1 * time.Hour)),
-				ValidUntil: metav1.NewTime(now.Add(1 * time.Hour)),
-				Type:       hibernatorv1alpha1.ExceptionSuspend,
-				Windows:    []hibernatorv1alpha1.OffHourWindow{{Start: "08:00", End: "22:00", DaysOfWeek: []string{"MON"}}},
-			},
-			Status: hibernatorv1alpha1.ScheduleExceptionStatus{
-				State: hibernatorv1alpha1.ExceptionStateActive,
-			},
-		},
-	}
-
-	exc, err := r.selectActiveException(logr.Discard(), plan, exceptions)
-	require.NoError(t, err)
-	require.NotNil(t, exc)
-}
-
-func TestSelectActiveException_PendingException_IsIgnored(t *testing.T) {
-	now := time.Date(2026, 3, 4, 10, 0, 0, 0, time.UTC)
-	clk := clocktesting.NewFakeClock(now)
-	r, _ := newPlanReconciler(clk)
-	plan := simplePlan("p", "default")
-
-	// Exception whose ValidFrom is still in the future — genuinely pending by time.
-	// filterActiveExceptions uses time-based logic only (no Status.State check),
-	// so this exception is correctly excluded before reaching selectActiveException.
 	exceptions := []hibernatorv1alpha1.ScheduleException{
 		{
 			ObjectMeta: metav1.ObjectMeta{Name: "exc-1", Namespace: "default"},
@@ -221,16 +180,13 @@ func TestSelectActiveException_PendingException_IsIgnored(t *testing.T) {
 	}
 
 	active := r.filterActiveExceptions(exceptions)
-	exc, err := r.selectActiveException(logr.Discard(), plan, active)
-	require.NoError(t, err)
-	assert.Nil(t, exc, "future-ValidFrom exception should be excluded from schedule evaluation")
+	assert.Empty(t, active, "future-ValidFrom exception should be filtered out")
 }
 
-func TestSelectActiveException_ExpiredTimeWindow_IsIgnored(t *testing.T) {
+func TestFilterActiveExceptions_ExpiredTimeWindow_IsExcluded(t *testing.T) {
 	now := time.Date(2026, 3, 4, 10, 0, 0, 0, time.UTC)
 	clk := clocktesting.NewFakeClock(now)
 	r, _ := newPlanReconciler(clk)
-	plan := simplePlan("p", "default")
 
 	exceptions := []hibernatorv1alpha1.ScheduleException{
 		{
@@ -244,16 +200,13 @@ func TestSelectActiveException_ExpiredTimeWindow_IsIgnored(t *testing.T) {
 	}
 
 	active := r.filterActiveExceptions(exceptions)
-	exc, err := r.selectActiveException(logr.Discard(), plan, active)
-	require.NoError(t, err)
-	assert.Nil(t, exc, "exception past ValidUntil should be excluded from schedule evaluation")
+	assert.Empty(t, active, "exception past ValidUntil should be filtered out")
 }
 
-func TestSelectActiveException_MultipleActive_PicksNewest(t *testing.T) {
+func TestFilterActiveExceptions_SortsNewestFirst(t *testing.T) {
 	now := time.Date(2026, 3, 4, 10, 0, 0, 0, time.UTC)
 	clk := clocktesting.NewFakeClock(now)
 	r, _ := newPlanReconciler(clk)
-	plan := simplePlan("p", "default")
 
 	older := hibernatorv1alpha1.ScheduleException{
 		ObjectMeta: metav1.ObjectMeta{
@@ -267,7 +220,6 @@ func TestSelectActiveException_MultipleActive_PicksNewest(t *testing.T) {
 			Type:       hibernatorv1alpha1.ExceptionSuspend,
 			Windows:    []hibernatorv1alpha1.OffHourWindow{{Start: "08:00", End: "22:00", DaysOfWeek: []string{"MON"}}},
 		},
-		Status: hibernatorv1alpha1.ScheduleExceptionStatus{State: hibernatorv1alpha1.ExceptionStateActive},
 	}
 	newer := hibernatorv1alpha1.ScheduleException{
 		ObjectMeta: metav1.ObjectMeta{
@@ -281,15 +233,97 @@ func TestSelectActiveException_MultipleActive_PicksNewest(t *testing.T) {
 			Type:       hibernatorv1alpha1.ExceptionExtend,
 			Windows:    []hibernatorv1alpha1.OffHourWindow{{Start: "08:00", End: "22:00", DaysOfWeek: []string{"TUE"}}},
 		},
-		Status: hibernatorv1alpha1.ScheduleExceptionStatus{State: hibernatorv1alpha1.ExceptionStateActive},
 	}
 
 	active := r.filterActiveExceptions([]hibernatorv1alpha1.ScheduleException{older, newer})
-	exc, err := r.selectActiveException(logr.Discard(), plan, active)
-	require.NoError(t, err)
-	require.NotNil(t, exc)
-	// The newer exception has ExceptionExtend type; verify correct exception was picked.
-	assert.Equal(t, scheduler.ExceptionType(hibernatorv1alpha1.ExceptionExtend), exc.Type)
+	require.Len(t, active, 2)
+	assert.Equal(t, "exc-newer", active[0].Name, "newest exception should be first")
+	assert.Equal(t, "exc-older", active[1].Name, "oldest exception should be last")
+}
+
+// ---------------------------------------------------------------------------
+// convertException (package-level function)
+// ---------------------------------------------------------------------------
+
+func TestConvertException_BasicConversion(t *testing.T) {
+	now := time.Date(2026, 3, 4, 10, 0, 0, 0, time.UTC)
+
+	exc := hibernatorv1alpha1.ScheduleException{
+		ObjectMeta: metav1.ObjectMeta{Name: "exc-basic"},
+		Spec: hibernatorv1alpha1.ScheduleExceptionSpec{
+			Type:       hibernatorv1alpha1.ExceptionSuspend,
+			ValidFrom:  metav1.NewTime(now.Add(-1 * time.Hour)),
+			ValidUntil: metav1.NewTime(now.Add(2 * time.Hour)),
+			LeadTime:   "15m",
+			Windows: []hibernatorv1alpha1.OffHourWindow{
+				{Start: "08:00", End: "12:00", DaysOfWeek: []string{"MON", "TUE"}},
+				{Start: "14:00", End: "18:00", DaysOfWeek: []string{"WED"}},
+			},
+		},
+	}
+
+	result := convertException(exc)
+	assert.Equal(t, scheduler.ExceptionType(hibernatorv1alpha1.ExceptionSuspend), result.Type)
+	assert.Equal(t, now.Add(-1*time.Hour), result.ValidFrom)
+	assert.Equal(t, now.Add(2*time.Hour), result.ValidUntil)
+	assert.Equal(t, 15*time.Minute, result.LeadTime)
+	require.Len(t, result.Windows, 2)
+	assert.Equal(t, "08:00", result.Windows[0].Start)
+	assert.Equal(t, "12:00", result.Windows[0].End)
+	assert.Equal(t, []string{"MON", "TUE"}, result.Windows[0].DaysOfWeek)
+	assert.Equal(t, "14:00", result.Windows[1].Start)
+}
+
+func TestConvertException_NoLeadTime(t *testing.T) {
+	now := time.Date(2026, 3, 4, 10, 0, 0, 0, time.UTC)
+
+	exc := hibernatorv1alpha1.ScheduleException{
+		Spec: hibernatorv1alpha1.ScheduleExceptionSpec{
+			Type:       hibernatorv1alpha1.ExceptionExtend,
+			ValidFrom:  metav1.NewTime(now),
+			ValidUntil: metav1.NewTime(now.Add(1 * time.Hour)),
+			Windows: []hibernatorv1alpha1.OffHourWindow{
+				{Start: "22:00", End: "02:00", DaysOfWeek: []string{"FRI"}},
+			},
+		},
+	}
+
+	result := convertException(exc)
+	assert.Equal(t, time.Duration(0), result.LeadTime)
+}
+
+func TestConvertException_InvalidLeadTime_ZeroDuration(t *testing.T) {
+	now := time.Date(2026, 3, 4, 10, 0, 0, 0, time.UTC)
+
+	exc := hibernatorv1alpha1.ScheduleException{
+		Spec: hibernatorv1alpha1.ScheduleExceptionSpec{
+			Type:       hibernatorv1alpha1.ExceptionSuspend,
+			ValidFrom:  metav1.NewTime(now),
+			ValidUntil: metav1.NewTime(now.Add(1 * time.Hour)),
+			LeadTime:   "invalid-duration",
+			Windows: []hibernatorv1alpha1.OffHourWindow{
+				{Start: "08:00", End: "12:00", DaysOfWeek: []string{"MON"}},
+			},
+		},
+	}
+
+	result := convertException(exc)
+	assert.Equal(t, time.Duration(0), result.LeadTime, "invalid lead time should default to zero")
+}
+
+func TestConvertException_EmptyWindows(t *testing.T) {
+	now := time.Date(2026, 3, 4, 10, 0, 0, 0, time.UTC)
+
+	exc := hibernatorv1alpha1.ScheduleException{
+		Spec: hibernatorv1alpha1.ScheduleExceptionSpec{
+			Type:       hibernatorv1alpha1.ExceptionReplace,
+			ValidFrom:  metav1.NewTime(now),
+			ValidUntil: metav1.NewTime(now.Add(1 * time.Hour)),
+		},
+	}
+
+	result := convertException(exc)
+	assert.Empty(t, result.Windows)
 }
 
 // ---------------------------------------------------------------------------

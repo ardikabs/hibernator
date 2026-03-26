@@ -81,7 +81,7 @@ func ConvertAPIException(exc hibernatorv1alpha1.ScheduleException) *scheduler.Ex
 // that state-transition boundaries respect schedule buffers and active exceptions.
 // The In field of every returned ScheduleEvent reflects the duration from when the
 // computation started (user's perspective) to when the event will occur.
-func ComputeUpcomingEvents(baseWindows []scheduler.OffHourWindow, timezone string, exception *scheduler.Exception, count int) ([]ScheduleEvent, error) {
+func ComputeUpcomingEvents(baseWindows []scheduler.OffHourWindow, timezone string, exceptions []*scheduler.Exception, count int) ([]ScheduleEvent, error) {
 	if len(baseWindows) == 0 {
 		return nil, fmt.Errorf("no base windows defined")
 	}
@@ -92,7 +92,7 @@ func ComputeUpcomingEvents(baseWindows []scheduler.OffHourWindow, timezone strin
 
 	for len(events) < count {
 		eval := scheduler.NewScheduleEvaluator(fixedClock{t: cursor})
-		result, err := eval.Evaluate(baseWindows, timezone, exception)
+		result, err := eval.Evaluate(baseWindows, timezone, exceptions)
 		if err != nil {
 			return nil, fmt.Errorf("evaluate schedule: %w", err)
 		}
@@ -131,12 +131,12 @@ func ComputeUpcomingEvents(baseWindows []scheduler.OffHourWindow, timezone strin
 // ComputeNextEvent computes the next hibernate or wakeup event for a schedule,
 // optionally considering an active exception.
 // Returns nil if the schedule has no off-hour windows defined.
-func ComputeNextEvent(schedule hibernatorv1alpha1.Schedule, exception *scheduler.Exception) (*ScheduleEvent, error) {
+func ComputeNextEvent(schedule hibernatorv1alpha1.Schedule, exceptions []*scheduler.Exception) (*ScheduleEvent, error) {
 	if len(schedule.OffHours) == 0 {
 		return nil, nil
 	}
 
-	events, err := ComputeUpcomingEvents(ConvertAPIWindows(schedule.OffHours), schedule.Timezone, exception, 1)
+	events, err := ComputeUpcomingEvents(ConvertAPIWindows(schedule.OffHours), schedule.Timezone, exceptions, 1)
 	if err != nil {
 		return nil, err
 	}
@@ -148,9 +148,10 @@ func ComputeNextEvent(schedule hibernatorv1alpha1.Schedule, exception *scheduler
 	return &events[0], nil
 }
 
-// FetchActiveException lists ScheduleException resources for the given plan and
-// returns the newest active one, mirroring the controller's getActiveException logic.
-func FetchActiveException(ctx context.Context, c client.Client, plan hibernatorv1alpha1.HibernatePlan) (*hibernatorv1alpha1.ScheduleException, error) {
+// FetchActiveExceptions lists ScheduleException resources for the given plan and
+// returns all active ones as scheduler exceptions, ordered by creation timestamp
+// descending (newest first).
+func FetchActiveExceptions(ctx context.Context, c client.Client, plan hibernatorv1alpha1.HibernatePlan) ([]*scheduler.Exception, error) {
 	var list hibernatorv1alpha1.ScheduleExceptionList
 	if err := c.List(ctx, &list,
 		client.InNamespace(plan.Namespace),
@@ -175,13 +176,10 @@ func FetchActiveException(ctx context.Context, c client.Client, plan hibernatorv
 		return nil, nil
 	}
 
-	// Pick the newest exception (latest creation timestamp = latest intent).
-	newest := active[0]
-	for _, exc := range active[1:] {
-		if newest.CreationTimestamp.Before(&exc.CreationTimestamp) {
-			newest = exc
-		}
+	result := make([]*scheduler.Exception, len(active))
+	for i, exc := range active {
+		result[i] = ConvertAPIException(exc)
 	}
 
-	return &newest, nil
+	return result, nil
 }

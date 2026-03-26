@@ -258,27 +258,26 @@ type OffHourWindow struct {
 	DaysOfWeek []string // MON, TUE, WED, THU, FRI, SAT, SUN
 }
 
-// ConvertOffHoursToCron converts OffHourWindow format to cron expressions.
+// ParseWindowToCron converts a single off-hour window to cron expressions.
 // Returns hibernateCron and wakeUpCron.
 // For overnight windows (where end time is before start time, e.g., 20:00 to 06:00),
 // the wake-up cron uses the next day's schedule.
-func ConvertOffHoursToCron(windows []OffHourWindow) (string, string, error) {
-	if len(windows) == 0 {
-		return "", "", fmt.Errorf("at least one off-hour window is required")
+//
+// Multi-window support is handled by evaluateWindows, which calls this function
+// per-window and OR-combines results.
+func ParseWindowToCron(start, end string, days ...string) (string, string, error) {
+	if len(days) == 0 {
+		return "", "", fmt.Errorf("at least one day of week is required")
 	}
 
-	// For simplicity, we'll use the first window
-	// TODO: Support multiple windows by generating multiple cron expressions or finding common patterns
-	window := windows[0]
-
 	// Parse start time (HH:MM)
-	startHour, startMin, err := parseTime(window.Start)
+	startHour, startMin, err := parseTime(start)
 	if err != nil {
 		return "", "", fmt.Errorf("invalid start time: %w", err)
 	}
 
 	// Parse end time (HH:MM)
-	endHour, endMin, err := parseTime(window.End)
+	endHour, endMin, err := parseTime(end)
 	if err != nil {
 		return "", "", fmt.Errorf("invalid end time: %w", err)
 	}
@@ -286,11 +285,11 @@ func ConvertOffHoursToCron(windows []OffHourWindow) (string, string, error) {
 	// Validate that start and end times are different
 	// A hibernation window must define a clear shutdown (start) and wakeup (end) period
 	if startHour == endHour && startMin == endMin {
-		return "", "", fmt.Errorf("start and end times must be different; start=%s, end=%s", window.Start, window.End)
+		return "", "", fmt.Errorf("start and end times must be different; start=%s, end=%s", start, end)
 	}
 
 	// Convert day names to cron dow format (0-6, SUN=0)
-	cronDays, err := convertDaysToCron(window.DaysOfWeek)
+	cronDays, err := convertDaysToCron(days)
 	if err != nil {
 		return "", "", err
 	}

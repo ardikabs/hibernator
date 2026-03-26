@@ -82,7 +82,7 @@ var _ = Describe("Plan Suspension E2E", func() {
 			}).
 			WithTarget(hibernatorv1alpha1.Target{
 				Name: "database",
-				Type: "rds",
+				Type: "noop",
 				ConnectorRef: hibernatorv1alpha1.ConnectorRef{
 					Kind: "CloudProvider",
 					Name: "suspension-aws",
@@ -127,7 +127,7 @@ var _ = Describe("Plan Suspension E2E", func() {
 			}).
 			WithTarget(hibernatorv1alpha1.Target{
 				Name: "database",
-				Type: "rds",
+				Type: "noop",
 				ConnectorRef: hibernatorv1alpha1.ConnectorRef{
 					Kind: "CloudProvider",
 					Name: "suspension-aws",
@@ -184,7 +184,7 @@ var _ = Describe("Plan Suspension E2E", func() {
 			}).
 			WithTarget(hibernatorv1alpha1.Target{
 				Name: "database",
-				Type: "rds",
+				Type: "noop",
 				ConnectorRef: hibernatorv1alpha1.ConnectorRef{
 					Kind: "CloudProvider",
 					Name: "suspension-aws",
@@ -260,7 +260,7 @@ var _ = Describe("Plan Suspension E2E", func() {
 			}).
 			WithTarget(hibernatorv1alpha1.Target{
 				Name: "database",
-				Type: "rds",
+				Type: "noop",
 				ConnectorRef: hibernatorv1alpha1.ConnectorRef{
 					Kind: "CloudProvider",
 					Name: "suspension-aws",
@@ -321,7 +321,7 @@ var _ = Describe("Plan Suspension E2E", func() {
 			WithTarget(
 				hibernatorv1alpha1.Target{
 					Name: "database",
-					Type: "rds",
+					Type: "noop",
 					ConnectorRef: hibernatorv1alpha1.ConnectorRef{
 						Kind: "CloudProvider",
 						Name: "suspension-aws",
@@ -329,7 +329,7 @@ var _ = Describe("Plan Suspension E2E", func() {
 				},
 				hibernatorv1alpha1.Target{
 					Name: "eks-cluster",
-					Type: "eks",
+					Type: "noop",
 					ConnectorRef: hibernatorv1alpha1.ConnectorRef{
 						Kind: "CloudProvider",
 						Name: "suspension-aws",
@@ -397,7 +397,7 @@ var _ = Describe("Plan Suspension E2E", func() {
 			WithTarget(
 				hibernatorv1alpha1.Target{
 					Name: "database",
-					Type: "rds",
+					Type: "noop",
 					ConnectorRef: hibernatorv1alpha1.ConnectorRef{
 						Kind: "CloudProvider",
 						Name: "suspension-aws",
@@ -405,7 +405,7 @@ var _ = Describe("Plan Suspension E2E", func() {
 				},
 				hibernatorv1alpha1.Target{
 					Name: "eks-cluster",
-					Type: "eks",
+					Type: "noop",
 					ConnectorRef: hibernatorv1alpha1.ConnectorRef{
 						Kind: "CloudProvider",
 						Name: "suspension-aws",
@@ -467,7 +467,7 @@ var _ = Describe("Plan Suspension E2E", func() {
 			}).
 			WithTarget(hibernatorv1alpha1.Target{
 				Name: "database",
-				Type: "rds",
+				Type: "noop",
 				ConnectorRef: hibernatorv1alpha1.ConnectorRef{
 					Kind: "CloudProvider",
 					Name: "suspension-aws",
@@ -548,7 +548,7 @@ var _ = Describe("Plan Suspension E2E", func() {
 			}).
 			WithTarget(hibernatorv1alpha1.Target{
 				Name: "database",
-				Type: "rds",
+				Type: "noop",
 				ConnectorRef: hibernatorv1alpha1.ConnectorRef{
 					Kind: "CloudProvider",
 					Name: "suspension-aws",
