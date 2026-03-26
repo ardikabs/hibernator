@@ -28,7 +28,7 @@ type StageStatus struct {
 	HasRunning bool
 	// HasPending is true when at least one target is still pending.
 	HasPending bool
-	// FailedCount is the number of targets that have failed.
+	// FailedCount is the number of targets that have failed (StateFailed) or been aborted (StateAborted).
 	FailedCount int
 	// CompletedCount is the number of targets that have completed successfully.
 	CompletedCount int
@@ -174,20 +174,6 @@ func FindFailedUpstream(plan *hibernatorv1alpha1.HibernatePlan, targetName strin
 		}
 	}
 	return failed
-}
-
-// FindFailedDependencies checks if any target in the stage depends on a failed target.
-func FindFailedDependencies(plan *hibernatorv1alpha1.HibernatePlan, stage scheduler.ExecutionStage) []string {
-	deps := plan.Spec.Execution.Strategy.Dependencies
-	if len(deps) == 0 {
-		return nil
-	}
-
-	var failedDeps []string
-	for _, targetName := range stage.Targets {
-		failedDeps = append(failedDeps, FindFailedUpstream(plan, targetName)...)
-	}
-	return failedDeps
 }
 
 // BuildOperationSummary creates a summary of the current operation from execution statuses.

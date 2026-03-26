@@ -308,30 +308,6 @@ func TestFindFailedUpstream_AbortedUpstream_Returned(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
-// FindFailedDependencies
-// ---------------------------------------------------------------------------
-
-func TestFindFailedDependencies_FailedDep_Returned(t *testing.T) {
-	plan := &hibernatorv1alpha1.HibernatePlan{}
-	plan.Spec.Targets = []hibernatorv1alpha1.Target{
-		{Name: "db", Type: "rds"},
-		{Name: "app", Type: "eks"},
-	}
-	plan.Spec.Execution.Strategy.Dependencies = []hibernatorv1alpha1.Dependency{{From: "db", To: "app"}}
-	plan.Status.Executions = []hibernatorv1alpha1.ExecutionStatus{
-		{Target: "db", Executor: "rds", State: hibernatorv1alpha1.StateFailed},
-	}
-
-	failed := FindFailedDependencies(plan, targetStage("app"))
-	assert.Equal(t, []string{"db"}, failed)
-}
-
-func TestFindFailedDependencies_NoDeps_ReturnsNil(t *testing.T) {
-	plan := planWithStatuses(execSt("t1", hibernatorv1alpha1.StateCompleted))
-	assert.Nil(t, FindFailedDependencies(plan, targetStage("t1")))
-}
-
-// ---------------------------------------------------------------------------
 // IsOperationComplete
 // ---------------------------------------------------------------------------
 
