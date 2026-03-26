@@ -48,7 +48,7 @@ func GetStageStatus(log logr.Logger, plan *hibernatorv1alpha1.HibernatePlan, sta
 				case hibernatorv1alpha1.StateCompleted:
 					status.CompletedCount++
 					terminalCount++
-				case hibernatorv1alpha1.StateFailed:
+				case hibernatorv1alpha1.StateFailed, hibernatorv1alpha1.StateAborted:
 					status.FailedCount++
 					terminalCount++
 				case hibernatorv1alpha1.StateRunning:
@@ -155,7 +155,7 @@ func FindExecutionStatus(plan *hibernatorv1alpha1.HibernatePlan, targetType, tar
 
 // FindFailedUpstream returns the names of failed upstream dependencies for a single target.
 // It checks each dependency where dep.To == targetName and returns the dep.From names
-// whose execution state is StateFailed. Returns nil when the target has no failed upstreams.
+// whose execution state is StateFailed or StateAborted. Returns nil when the target has no failed upstreams.
 func FindFailedUpstream(plan *hibernatorv1alpha1.HibernatePlan, targetName string) []string {
 	deps := plan.Spec.Execution.Strategy.Dependencies
 	if len(deps) == 0 {
@@ -168,7 +168,8 @@ func FindFailedUpstream(plan *hibernatorv1alpha1.HibernatePlan, targetName strin
 			continue
 		}
 		execStatus := FindExecutionStatus(plan, FindTargetType(plan, dep.From), dep.From)
-		if execStatus != nil && execStatus.State == hibernatorv1alpha1.StateFailed {
+		if execStatus != nil &&
+			(execStatus.State == hibernatorv1alpha1.StateFailed || execStatus.State == hibernatorv1alpha1.StateAborted) {
 			failed = append(failed, dep.From)
 		}
 	}
@@ -198,7 +199,7 @@ func BuildOperationSummary(clk clock.Clock, plan *hibernatorv1alpha1.HibernatePl
 	}
 
 	for _, exec := range plan.Status.Executions {
-		if exec.State == hibernatorv1alpha1.StateFailed {
+		if exec.State == hibernatorv1alpha1.StateFailed || exec.State == hibernatorv1alpha1.StateAborted {
 			summary.Success = false
 		}
 
@@ -229,7 +230,9 @@ func BuildOperationSummary(clk clock.Clock, plan *hibernatorv1alpha1.HibernatePl
 // IsOperationComplete checks if all targets in an operation have reached terminal state.
 func IsOperationComplete(plan *hibernatorv1alpha1.HibernatePlan) bool {
 	for _, exec := range plan.Status.Executions {
-		if exec.State != hibernatorv1alpha1.StateCompleted && exec.State != hibernatorv1alpha1.StateFailed {
+		if exec.State != hibernatorv1alpha1.StateCompleted &&
+			exec.State != hibernatorv1alpha1.StateFailed &&
+			exec.State != hibernatorv1alpha1.StateAborted {
 			return false
 		}
 	}

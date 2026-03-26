@@ -380,6 +380,7 @@ spec:
                                 - Running
                                 - Completed
                                 - Failed
+                                - Aborted
                                 type: string
                               target:
                                 description: Target is the target identifier (type/name).
@@ -449,6 +450,7 @@ spec:
                                 - Running
                                 - Completed
                                 - Failed
+                                - Aborted
                                 type: string
                               target:
                                 description: Target is the target identifier (type/name).
@@ -521,6 +523,7 @@ spec:
                       - Running
                       - Completed
                       - Failed
+                      - Aborted
                       type: string
                     target:
                       description: Target identifier (type/name).

@@ -56,14 +56,24 @@ const (
 )
 
 // ExecutionState represents per-target execution state.
-// +kubebuilder:validation:Enum=Pending;Running;Completed;Failed
+// +kubebuilder:validation:Enum=Pending;Running;Completed;Failed;Aborted
 type ExecutionState string
 
 const (
-	StatePending   ExecutionState = "Pending"
-	StateRunning   ExecutionState = "Running"
+	// StatePending means the target execution is waiting to start (e.g., waiting for schedule or dependencies).
+	StatePending ExecutionState = "Pending"
+	// StateRunning means the target execution is in progress (e.g., runner Job is active).
+	StateRunning ExecutionState = "Running"
+	// StateCompleted means the target execution finished successfully.
 	StateCompleted ExecutionState = "Completed"
-	StateFailed    ExecutionState = "Failed"
+	// StateFailed means the target execution finished with failure (e.g., runner Job failed).
+	StateFailed ExecutionState = "Failed"
+	// StateAborted indicates the target was not executed because an upstream
+	// dependency failed (DAG pruning). Distinct from StateFailed which means
+	// the target's own Job execution failed.
+	// Currently only relevant with DAG strategy and BestEffort behavior,
+	// but may be extended to other strategies/behaviors in the future.
+	StateAborted ExecutionState = "Aborted"
 )
 
 // OffHourWindow defines a time window for hibernation.

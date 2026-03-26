@@ -96,6 +96,18 @@ func TestGetStageStatus_SomeFailed(t *testing.T) {
 	assert.Equal(t, 1, ss.CompletedCount)
 }
 
+func TestGetStageStatus_SomeAborted(t *testing.T) {
+	plan := planWithStatuses(
+		execSt("t1", hibernatorv1alpha1.StateCompleted),
+		execSt("t2", hibernatorv1alpha1.StateAborted),
+	)
+	ss := GetStageStatus(logr.Discard(), plan, targetStage("t1", "t2"))
+
+	assert.True(t, ss.AllTerminal)
+	assert.Equal(t, 1, ss.FailedCount, "aborted targets count as failed")
+	assert.Equal(t, 1, ss.CompletedCount)
+}
+
 func TestGetStageStatus_SomeRunning_NotAllTerminal(t *testing.T) {
 	plan := planWithStatuses(
 		execSt("t1", hibernatorv1alpha1.StateCompleted),
@@ -280,6 +292,21 @@ func TestFindFailedUpstream_IndependentTarget_ReturnsNil(t *testing.T) {
 	assert.Nil(t, FindFailedUpstream(plan, "metrics-db"))
 }
 
+func TestFindFailedUpstream_AbortedUpstream_Returned(t *testing.T) {
+	plan := &hibernatorv1alpha1.HibernatePlan{}
+	plan.Spec.Targets = []hibernatorv1alpha1.Target{
+		{Name: "db", Type: "rds"},
+		{Name: "app", Type: "eks"},
+	}
+	plan.Spec.Execution.Strategy.Dependencies = []hibernatorv1alpha1.Dependency{{From: "db", To: "app"}}
+	plan.Status.Executions = []hibernatorv1alpha1.ExecutionStatus{
+		{Target: "db", Executor: "rds", State: hibernatorv1alpha1.StateAborted},
+	}
+
+	failed := FindFailedUpstream(plan, "app")
+	assert.Equal(t, []string{"db"}, failed, "aborted upstream should cascade to downstream")
+}
+
 // ---------------------------------------------------------------------------
 // FindFailedDependencies
 // ---------------------------------------------------------------------------
@@ -314,6 +341,14 @@ func TestIsOperationComplete_AllTerminal_True(t *testing.T) {
 		execSt("t2", hibernatorv1alpha1.StateFailed),
 	)
 	assert.True(t, IsOperationComplete(plan))
+}
+
+func TestIsOperationComplete_WithAborted_True(t *testing.T) {
+	plan := planWithStatuses(
+		execSt("t1", hibernatorv1alpha1.StateCompleted),
+		execSt("t2", hibernatorv1alpha1.StateAborted),
+	)
+	assert.True(t, IsOperationComplete(plan), "aborted is a terminal state")
 }
 
 func TestIsOperationComplete_SomeRunning_False(t *testing.T) {
@@ -412,6 +447,18 @@ func TestBuildOperationSummary_FailedTarget_SetsSuccessFalse(t *testing.T) {
 	summary := BuildOperationSummary(clk, plan, hibernatorv1alpha1.OperationWakeUp)
 
 	assert.False(t, summary.Success)
+}
+
+func TestBuildOperationSummary_AbortedTarget_SetsSuccessFalse(t *testing.T) {
+	clk := clocktesting.NewFakeClock(time.Now())
+	plan := planWithStatuses(
+		execSt("t1", hibernatorv1alpha1.StateCompleted),
+		execSt("t2", hibernatorv1alpha1.StateAborted),
+	)
+
+	summary := BuildOperationSummary(clk, plan, hibernatorv1alpha1.OperationHibernate)
+
+	assert.False(t, summary.Success, "aborted target should set success=false")
 }
 
 // ---------------------------------------------------------------------------

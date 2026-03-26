@@ -153,7 +153,8 @@ func (s *state) executeForStage(
 		execStatus := FindExecutionStatus(plan, target.Type, targetName)
 		if execStatus != nil &&
 			(execStatus.State == hibernatorv1alpha1.StateFailed ||
-				execStatus.State == hibernatorv1alpha1.StateCompleted) {
+				execStatus.State == hibernatorv1alpha1.StateCompleted ||
+				execStatus.State == hibernatorv1alpha1.StateAborted) {
 			continue
 		}
 
@@ -165,9 +166,9 @@ func (s *state) executeForStage(
 						"target %q blocked: upstream dependency %v failed", targetName, failedUpstream))
 				}
 
-				// BestEffort: prune this target — mark as failed so downstream cascades naturally.
-				pruneMsg := fmt.Sprintf("Pruned: upstream dependency %v failed", failedUpstream)
-				log.Info("pruning target with failed upstream dependency",
+				// BestEffort: prune this target — mark as aborted so downstream cascades naturally.
+				pruneMsg := fmt.Sprintf("Aborted: upstream dependency %v failed", failedUpstream)
+				log.Info("aborting target with failed upstream dependency",
 					"target", targetName, "failedUpstream", failedUpstream)
 				s.pruneTarget(plan, targetName, pruneMsg)
 				continue
@@ -203,13 +204,13 @@ func (s *state) executeForStage(
 	return StateResult{RequeueAfter: wellknown.RequeueIntervalDuringStage}, nil
 }
 
-// pruneTarget marks a target as StateFailed with a pruning message.
+// pruneTarget marks a target as StateAborted with an abort message.
 // This is used during DAG BestEffort execution to skip targets whose upstream
 // dependencies have failed, while allowing independent branches to proceed.
 func (s *state) pruneTarget(plan *hibernatorv1alpha1.HibernatePlan, targetName, message string) {
 	for i := range plan.Status.Executions {
 		if plan.Status.Executions[i].Target == targetName {
-			plan.Status.Executions[i].State = hibernatorv1alpha1.StateFailed
+			plan.Status.Executions[i].State = hibernatorv1alpha1.StateAborted
 			plan.Status.Executions[i].Message = message
 			break
 		}
@@ -221,7 +222,7 @@ func (s *state) pruneTarget(plan *hibernatorv1alpha1.HibernatePlan, targetName, 
 		Mutator: statusprocessor.MutatorFunc[*hibernatorv1alpha1.HibernatePlan](func(p *hibernatorv1alpha1.HibernatePlan) {
 			for i := range p.Status.Executions {
 				if p.Status.Executions[i].Target == targetName {
-					p.Status.Executions[i].State = hibernatorv1alpha1.StateFailed
+					p.Status.Executions[i].State = hibernatorv1alpha1.StateAborted
 					p.Status.Executions[i].Message = message
 					break
 				}

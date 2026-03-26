@@ -581,7 +581,7 @@ var _ = Describe("Execution Strategy E2E", func() {
 			jobE := testutil.EventuallyJobCreated(ctx, k8sClient, testNamespace, plan.Name, hibernatorv1alpha1.OperationHibernate, "e")
 			testutil.SimulateJobSuccess(ctx, k8sClient, jobE, fakeClock.Now())
 
-			// Verify 'd' was pruned — no Job created, state is Failed with pruning message.
+			// Verify 'd' was pruned — no Job created, state is Aborted with abort message.
 			Consistently(func() int {
 				var jl batchv1.JobList
 				_ = k8sClient.List(ctx, &jl, client.InNamespace(testNamespace), client.MatchingLabels{
@@ -593,7 +593,7 @@ var _ = Describe("Execution Strategy E2E", func() {
 			}, 2*time.Second, 250*time.Millisecond).Should(Equal(0), "'d' Job must not be created (pruned: upstream 'b' failed)")
 
 			By("[Stage 3] 'f' should be pruned (upstream 'd' was pruned)")
-			// 'f' depends on 'd' which was pruned (StateFailed) — cascade prune.
+			// 'f' depends on 'd' which was pruned (StateAborted) — cascade prune.
 			Consistently(func() int {
 				var jl batchv1.JobList
 				_ = k8sClient.List(ctx, &jl, client.InNamespace(testNamespace), client.MatchingLabels{
@@ -604,22 +604,25 @@ var _ = Describe("Execution Strategy E2E", func() {
 				return len(jl.Items)
 			}, 2*time.Second, 250*time.Millisecond).Should(Equal(0), "'f' Job must not be created (pruned: upstream 'd' was pruned)")
 
-			By("Verifying plan reaches PhaseHibernated (BestEffort: partial success)")
-			testutil.EventuallyPhase(ctx, k8sClient, plan, hibernatorv1alpha1.PhaseHibernated)
-
-			By("Verifying execution states: a=Completed, b=Failed, c=Completed, d=Failed(pruned), e=Completed, f=Failed(pruned)")
+			By("Verifying execution states: a=Completed, b=Failed, c=Completed, d=Aborted, e=Completed, f=Aborted")
 			// Execution indices follow spec target order: a=0, b=1, c=2, d=3, e=4, f=5
 			testutil.EventuallyTargetState(ctx, k8sClient, plan, 0, hibernatorv1alpha1.StateCompleted) // a
 			testutil.EventuallyTargetState(ctx, k8sClient, plan, 1, hibernatorv1alpha1.StateFailed)    // b (job failure)
 			testutil.EventuallyTargetState(ctx, k8sClient, plan, 2, hibernatorv1alpha1.StateCompleted) // c
-			testutil.EventuallyTargetState(ctx, k8sClient, plan, 3, hibernatorv1alpha1.StateFailed)    // d (pruned)
+			testutil.EventuallyTargetState(ctx, k8sClient, plan, 3, hibernatorv1alpha1.StateAborted)   // d (aborted: upstream b failed)
 			testutil.EventuallyTargetState(ctx, k8sClient, plan, 4, hibernatorv1alpha1.StateCompleted) // e
-			testutil.EventuallyTargetState(ctx, k8sClient, plan, 5, hibernatorv1alpha1.StateFailed)    // f (pruned)
+			testutil.EventuallyTargetState(ctx, k8sClient, plan, 5, hibernatorv1alpha1.StateAborted)   // f (aborted: upstream d aborted)
 
-			By("Verifying pruned targets have 'Pruned' message")
+			// Voluntary trigger to reflect the state changes in the plan status after job simulations
+			testutil.TriggerReconcile(ctx, k8sClient, plan)
+
+			By("Verifying plan reaches PhaseHibernated (BestEffort: partial success)")
+			testutil.EventuallyPhase(ctx, k8sClient, plan, hibernatorv1alpha1.PhaseHibernated)
+
+			By("Verifying aborted targets have 'Aborted' message")
 			_ = k8sClient.Get(ctx, client.ObjectKeyFromObject(plan), plan)
-			Expect(plan.Status.Executions[3].Message).To(ContainSubstring("Pruned"), "target 'd' should have pruning message")
-			Expect(plan.Status.Executions[5].Message).To(ContainSubstring("Pruned"), "target 'f' should have pruning message")
+			Expect(plan.Status.Executions[3].Message).To(ContainSubstring("Aborted"), "target 'd' should have abort message")
+			Expect(plan.Status.Executions[5].Message).To(ContainSubstring("Aborted"), "target 'f' should have abort message")
 		})
 	})
 
