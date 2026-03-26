@@ -168,7 +168,7 @@ func (e *ScheduleEvaluator) eval(window ScheduleWindow) (*EvaluationResult, erro
 			inGracePeriod = true
 			gracePeriodEnd = lastHibernate.Add(e.scheduleBuffer)
 
-			// Adjust nextHibernate to ensure composition functions (like evaluateExtend)
+			// Adjust nextHibernate to ensure composition functions (like applyExtend)
 			// pick up the correct next event time even if InGracePeriod flag is lost.
 			if gracePeriodEnd.Before(nextHibernate) {
 				nextHibernate = gracePeriodEnd
@@ -179,7 +179,7 @@ func (e *ScheduleEvaluator) eval(window ScheduleWindow) (*EvaluationResult, erro
 			inGracePeriod = true
 			gracePeriodEnd = lastWakeUp.Add(e.scheduleBuffer)
 
-			// Adjust nextWakeUp to ensure composition functions (like evaluateExtend)
+			// Adjust nextWakeUp to ensure composition functions (like applyExtend)
 			// pick up the correct next event time even if InGracePeriod flag is lost.
 			if gracePeriodEnd.Before(nextWakeUp) {
 				nextWakeUp = gracePeriodEnd
@@ -280,173 +280,45 @@ func (e *ScheduleEvaluator) NextRequeueTime(result *EvaluationResult) time.Durat
 // hibernation set (effectiveBase ∪ extend.Windows) so it correctly sees all
 // windows that could trigger hibernation.
 func (e *ScheduleEvaluator) Evaluate(baseWindows []OffHourWindow, timezone string, exceptions []*Exception) (*EvaluationResult, error) {
-	// Filter to only active exceptions.
+	activeExceptions := e.filterActive(exceptions)
+	rep := mergeByType(activeExceptions, ExceptionReplace)
+	ext := mergeByType(activeExceptions, ExceptionExtend)
+	sus := mergeByType(activeExceptions, ExceptionSuspend)
+
+	return runEvaluationPipeline(
+		// Stage 1: Base — seed the pipeline with the base schedule evaluation.
+		// Replace silently folds in here: applyReplace substitutes baseWindows
+		// with rep.Windows when a Replace exception is active.
+		func(_ *EvaluationResult) (*EvaluationResult, error) {
+			if rep != nil {
+				baseWindows = rep.Windows
+			}
+
+			return e.evaluateWindows(baseWindows, timezone)
+		},
+
+		// Stage 2: Extend — union additional hibernation windows on top of the base.
+		evaluateWhen(ext != nil, func(r *EvaluationResult) (*EvaluationResult, error) {
+			return e.applyExtend(r, ext.Windows, timezone)
+		}),
+
+		// Stage 3: Suspend — carve out suspension windows from the computed result.
+		evaluateWhen(sus != nil, func(r *EvaluationResult) (*EvaluationResult, error) {
+			return e.applySuspend(r, sus, timezone)
+		}),
+	)
+}
+
+// filterActive returns only the exceptions that are currently within their
+// valid time period, filtering out nil entries.
+func (e *ScheduleEvaluator) filterActive(exceptions []*Exception) []*Exception {
 	var active []*Exception
 	for _, exc := range exceptions {
 		if exc != nil && e.isExceptionActive(exc) {
 			active = append(active, exc)
 		}
 	}
-
-	if len(active) == 0 {
-		return e.evaluateWindows(baseWindows, timezone)
-	}
-
-	effectiveBase := baseWindows
-
-	// Phase 1: Replace — substitutes the base entirely.
-	if rep := mergeByType(active, ExceptionReplace); rep != nil {
-		effectiveBase = rep.Windows
-	}
-
-	ext := mergeByType(active, ExceptionExtend)
-	sus := mergeByType(active, ExceptionSuspend)
-
-	switch {
-	case ext != nil && sus != nil:
-		// Evaluate the extended schedule (base ∪ extend windows) via evaluateExtend,
-		// then overlay the suspend carve-out — including lead-time and grace-period
-		// logic — on top of that result via applySuspendCarveOut.
-		extResult, err := e.evaluateExtend(effectiveBase, ext.Windows, timezone)
-		if err != nil {
-			return nil, err
-		}
-		return e.applySuspendCarveOut(extResult, sus, timezone)
-
-	case ext != nil:
-		return e.evaluateExtend(effectiveBase, ext.Windows, timezone)
-
-	case sus != nil:
-		return e.evaluateSuspend(effectiveBase, sus, timezone)
-
-	default:
-		// Only replace (already applied) — evaluate the effective base.
-		return e.evaluateWindows(effectiveBase, timezone)
-	}
-}
-
-// mergeByType collects all exceptions of the given type and merges them into a
-// single logical exception. Windows are concatenated, validity is expanded to
-// the widest bounds, and LeadTime uses the maximum. Returns nil if no exception
-// of this type exists.
-func mergeByType(exceptions []*Exception, t ExceptionType) *Exception {
-	var matches []*Exception
-	for _, exc := range exceptions {
-		if exc.Type == t {
-			matches = append(matches, exc)
-		}
-	}
-
-	if len(matches) == 0 {
-		return nil
-	}
-	if len(matches) == 1 {
-		return matches[0]
-	}
-
-	merged := &Exception{
-		Type:       t,
-		ValidFrom:  matches[0].ValidFrom,
-		ValidUntil: matches[0].ValidUntil,
-	}
-	for _, m := range matches {
-		if m.ValidFrom.Before(merged.ValidFrom) {
-			merged.ValidFrom = m.ValidFrom
-		}
-		if m.ValidUntil.After(merged.ValidUntil) {
-			merged.ValidUntil = m.ValidUntil
-		}
-		merged.Windows = append(merged.Windows, m.Windows...)
-		if m.LeadTime > merged.LeadTime {
-			merged.LeadTime = m.LeadTime
-		}
-	}
-
-	return merged
-}
-
-// applySuspendCarveOut applies suspension exception logic on top of a pre-computed
-// base evaluation result. It mirrors the carve-out, lead-time, and grace-period
-// handling of evaluateSuspend but uses an already-evaluated base result instead of
-// re-running evaluateWindows(baseWindows). This is required for the ext+sus
-// composition case: evaluateWindows iterates per-window and OR-combines results,
-// so separating the extend evaluation from the suspend carve-out ensures the full
-// extended schedule is preserved correctly.
-func (e *ScheduleEvaluator) applySuspendCarveOut(baseResult *EvaluationResult, exception *Exception, timezone string) (*EvaluationResult, error) {
-	now := e.Clock.Now()
-	loc, err := time.LoadLocation(timezone)
-	if err != nil {
-		return nil, fmt.Errorf("invalid timezone %s: %w", timezone, err)
-	}
-	localNow := now.In(loc)
-
-	if len(exception.Windows) == 0 {
-		return baseResult, nil
-	}
-
-	inSuspensionWindow := isInTimeWindows(exception.Windows, localNow)
-
-	inSuspensionGrace := false
-	if !inSuspensionWindow && e.scheduleBuffer > 0 {
-		inSuspensionGrace = isInGraceTimeWindow(EndBoundary, exception.Windows, localNow, e.scheduleBuffer)
-	}
-
-	inLeadTimeWindow := false
-	if exception.LeadTime > 0 {
-		inLeadTimeWindow = isInLeadTimeWindow(exception.Windows, localNow, exception.LeadTime)
-	}
-
-	shouldHibernate := baseResult.ShouldHibernate
-
-	if inSuspensionWindow || inSuspensionGrace {
-		shouldHibernate = false
-	} else if inLeadTimeWindow && !baseResult.ShouldHibernate {
-		// Not hibernating — lead time's "don't start" is a no-op here.
-	} else if inLeadTimeWindow && baseResult.ShouldHibernate {
-		// Only suppress if the cluster would still be hibernating when the
-		// suspension window opens. If it wakes naturally before then (e.g.,
-		// extend window ends at 18:00 while suspend starts at Thu 09:00), the
-		// lead-time suppression is unnecessary and must be skipped.
-		nextSuspStart := e.findNextSuspensionStart(exception.Windows, localNow)
-		clusterWakesBeforeSusp := !nextSuspStart.IsZero() &&
-			!baseResult.NextWakeUpTime.IsZero() &&
-			!baseResult.NextWakeUpTime.After(nextSuspStart)
-		if !clusterWakesBeforeSusp {
-			shouldHibernate = false
-		}
-	}
-
-	state := "active"
-	if shouldHibernate {
-		state = "hibernated"
-	}
-
-	nextHibernate := baseResult.NextHibernateTime
-	nextWakeUp := baseResult.NextWakeUpTime
-
-	if inSuspensionWindow || inLeadTimeWindow || inSuspensionGrace {
-		suspensionEnd := e.findSuspensionEnd(exception.Windows, localNow)
-		if !suspensionEnd.IsZero() && suspensionEnd.After(localNow) {
-			if suspensionEnd.Before(nextHibernate) || nextHibernate.IsZero() {
-				nextHibernate = suspensionEnd
-			}
-		}
-	}
-
-	if shouldHibernate {
-		if next := e.findNextSuspensionStart(exception.Windows, localNow); !next.IsZero() {
-			nextWakeUp = earlierTime(nextWakeUp, next)
-		}
-	}
-
-	return &EvaluationResult{
-		ShouldHibernate:   shouldHibernate,
-		NextHibernateTime: nextHibernate,
-		NextWakeUpTime:    nextWakeUp,
-		CurrentState:      state,
-		InGracePeriod:     inSuspensionGrace,
-		GracePeriodEnd:    baseResult.GracePeriodEnd,
-	}, nil
+	return active
 }
 
 // isExceptionActive checks if the exception is currently within its valid period.
@@ -513,17 +385,11 @@ func (e *ScheduleEvaluator) evaluateWindows(windows []OffHourWindow, timezone st
 	return combined, nil
 }
 
-// evaluateExtend combines base windows with exception windows using a union (OR).
-// Hibernation occurs when EITHER the base schedule OR the exception schedule says hibernate.
-// Semantically, Extend adds additional hibernation windows on top of the base schedule.
-// To prevent hibernation during specific windows, use the Suspend exception type instead.
-func (e *ScheduleEvaluator) evaluateExtend(baseWindows, exceptionWindows []OffHourWindow, timezone string) (*EvaluationResult, error) {
-	// Evaluate base schedule
-	baseResult, err := e.evaluateWindows(baseWindows, timezone)
-	if err != nil {
-		return nil, fmt.Errorf("evaluate base windows: %w", err)
-	}
-
+// applyExtend combines a pre-computed base result with exception windows using a
+// union (OR). Hibernation occurs when EITHER the base schedule OR the exception
+// schedule says hibernate. Semantically, Extend adds additional hibernation windows
+// on top of the base schedule.
+func (e *ScheduleEvaluator) applyExtend(baseResult *EvaluationResult, exceptionWindows []OffHourWindow, timezone string) (*EvaluationResult, error) {
 	// Evaluate exception windows
 	exceptionResult, err := e.evaluateWindows(exceptionWindows, timezone)
 	if err != nil {
@@ -533,9 +399,21 @@ func (e *ScheduleEvaluator) evaluateExtend(baseWindows, exceptionWindows []OffHo
 	// Hibernate when either schedule says hibernate
 	shouldHibernate := baseResult.ShouldHibernate || exceptionResult.ShouldHibernate
 
-	// Calculate next events (take the earlier of the two for each)
+	// Calculate next hibernate (take the earlier of the two)
 	nextHibernate := earlierTime(baseResult.NextHibernateTime, exceptionResult.NextHibernateTime)
-	nextWakeUp := earlierTime(baseResult.NextWakeUpTime, exceptionResult.NextWakeUpTime)
+
+	// Calculate next wakeup: the naive min(base.nextWakeUp, extend.nextWakeUp) can produce a
+	// spurious wakeup event when the base wakeup time falls inside (or at the start of) an
+	// extend window — because the extend window would immediately re-hibernate at that instant.
+	// Example: base wakes at 06:00, extend is 06:00–13:00 → the true next wakeup is 13:00, not 06:00.
+	// Fix: if the base nextWakeUp falls inside an extend window, replace it with the extend wakeup.
+	nextWakeUp := baseResult.NextWakeUpTime
+	if !nextWakeUp.IsZero() && isInTimeWindows(exceptionWindows, nextWakeUp) {
+		// The base wakeup lands inside an extend (hibernate) window — skip it.
+		nextWakeUp = exceptionResult.NextWakeUpTime
+	} else {
+		nextWakeUp = earlierTime(nextWakeUp, exceptionResult.NextWakeUpTime)
+	}
 
 	state := "active"
 	if shouldHibernate {
@@ -564,69 +442,46 @@ func (e *ScheduleEvaluator) evaluateExtend(baseWindows, exceptionWindows []OffHo
 	}, nil
 }
 
-// evaluateSuspend evaluates schedule with suspension windows.
-// Suspension PREVENTS hibernation during exception windows, even if base schedule says hibernate.
-// Lead time prevents NEW hibernation starts within the buffer before suspension.
-//
-// NOTE: Suspend exceptions must have forward time windows (start < end).
-// Backward windows (e.g., start=23:59, end=00:00) are not supported and will be logged as errors then ignored.
-func (e *ScheduleEvaluator) evaluateSuspend(baseWindows []OffHourWindow, exception *Exception, timezone string) (*EvaluationResult, error) {
+// applySuspend applies suspension exception logic on top of a pre-computed
+// base evaluation result. It carves out suspension windows — including lead-time
+// and grace-period handling — from the given result. The base result may come
+// from evaluateWindows directly or from applyExtend; this function is agnostic
+// to the upstream evaluation pipeline.
+func (e *ScheduleEvaluator) applySuspend(baseResult *EvaluationResult, exception *Exception, timezone string) (*EvaluationResult, error) {
 	now := e.Clock.Now()
 	loc, err := time.LoadLocation(timezone)
 	if err != nil {
 		return nil, fmt.Errorf("invalid timezone %s: %w", timezone, err)
 	}
-
 	localNow := now.In(loc)
 
-	// First evaluate base schedule
-	baseResult, err := e.evaluateWindows(baseWindows, timezone)
-	if err != nil {
-		return nil, fmt.Errorf("evaluate base windows: %w", err)
-	}
-
-	// No special window validation needed - both forward and backward (overnight) windows are supported
 	if len(exception.Windows) == 0 {
 		return baseResult, nil
 	}
 
-	// Check if we're currently in a suspension window
 	inSuspensionWindow := isInTimeWindows(exception.Windows, localNow)
 
-	// Check if we're in grace period at end of suspension window
-	// This fixes the boundary gap at 23:59:00 where exclusive end boundary causes suspension to be considered inactive
 	inSuspensionGrace := false
 	if !inSuspensionWindow && e.scheduleBuffer > 0 {
 		inSuspensionGrace = isInGraceTimeWindow(EndBoundary, exception.Windows, localNow, e.scheduleBuffer)
 	}
 
-	// Check if we're in lead time window (before suspension starts)
 	inLeadTimeWindow := false
 	if exception.LeadTime > 0 {
 		inLeadTimeWindow = isInLeadTimeWindow(exception.Windows, localNow, exception.LeadTime)
 	}
 
-	// Determine final hibernation state
-	// - If in suspension window or grace period: DON'T hibernate (override base)
-	// - If in lead time window AND base says start hibernating: DON'T start (but ongoing hibernation continues)
-	// - Otherwise: follow base schedule
 	shouldHibernate := baseResult.ShouldHibernate
 
 	if inSuspensionWindow || inSuspensionGrace {
-		// Suspension active (or in grace period) - keep awake regardless of base schedule
 		shouldHibernate = false
 	} else if inLeadTimeWindow && !baseResult.ShouldHibernate {
-		// In lead time window but not currently hibernated
-		// Don't start hibernation (will wait until after suspension)
-		// Note: If already hibernated, continue hibernating until suspension window starts
+		// Not hibernating — lead time's "don't start" is a no-op here.
 	} else if inLeadTimeWindow && baseResult.ShouldHibernate {
-		// In lead-time window and currently hibernating.
-		// Only wake the cluster from hibernation for the lead-time if it will
-		// still be hibernating when the suspension window opens. If the base
-		// schedule delivers a natural wake-up before the suspension starts (e.g.,
-		// extend window ends at Wed 18:00, suspension starts Thu 09:00), the
-		// lead-time suppression is unnecessary and must be skipped to avoid
-		// incorrectly cutting short an unrelated hibernation window.
+		// Only suppress if the cluster would still be hibernating when the
+		// suspension window opens. If it wakes naturally before then (e.g.,
+		// extend window ends at 18:00 while suspend starts at Thu 09:00), the
+		// lead-time suppression is unnecessary and must be skipped.
 		nextSuspStart := e.findNextSuspensionStart(exception.Windows, localNow)
 		clusterWakesBeforeSusp := !nextSuspStart.IsZero() &&
 			!baseResult.NextWakeUpTime.IsZero() &&
@@ -641,30 +496,31 @@ func (e *ScheduleEvaluator) evaluateSuspend(baseWindows []OffHourWindow, excepti
 		state = "hibernated"
 	}
 
-	// Calculate next events considering suspension
 	nextHibernate := baseResult.NextHibernateTime
 	nextWakeUp := baseResult.NextWakeUpTime
 
-	// If in suspension, lead time, or grace period, we may need to adjust next hibernate time
 	if inSuspensionWindow || inLeadTimeWindow || inSuspensionGrace {
-		// Find when suspension ends to recalculate
 		suspensionEnd := e.findSuspensionEnd(exception.Windows, localNow)
 		if !suspensionEnd.IsZero() && suspensionEnd.After(localNow) {
-			// Schedule check after suspension ends
 			if suspensionEnd.Before(nextHibernate) || nextHibernate.IsZero() {
 				nextHibernate = suspensionEnd
 			}
 		}
 	}
 
-	// If currently hibernating but not yet inside a suspension window, check for an upcoming
-	// suspension start and pull nextWakeUp forward to that time.  Without this the controller
-	// would requeue based on the base wakeup time (e.g. 18:00) and completely miss the
-	// suspension transition at 09:00, leaving the system hibernated through the carve-out.
+	// Forward-look: if the upcoming hibernate time falls inside a suspension window, advance
+	// nextHibernate past that suspension's end. Symmetric to the nextWakeUp forward-look below.
+	if !shouldHibernate && !nextHibernate.IsZero() {
+		if isInTimeWindows(exception.Windows, nextHibernate) {
+			if end := e.findSuspensionEnd(exception.Windows, nextHibernate); !end.IsZero() {
+				nextHibernate = end
+			}
+		}
+	}
+
 	if shouldHibernate {
-		nextSuspensionStart := e.findNextSuspensionStart(exception.Windows, localNow)
-		if !nextSuspensionStart.IsZero() {
-			nextWakeUp = earlierTime(nextWakeUp, nextSuspensionStart)
+		if next := e.findNextSuspensionStart(exception.Windows, localNow); !next.IsZero() {
+			nextWakeUp = earlierTime(nextWakeUp, next)
 		}
 	}
 
@@ -674,7 +530,7 @@ func (e *ScheduleEvaluator) evaluateSuspend(baseWindows []OffHourWindow, excepti
 		NextWakeUpTime:    nextWakeUp,
 		CurrentState:      state,
 		InGracePeriod:     inSuspensionGrace,
-		GracePeriodEnd:    baseResult.GracePeriodEnd, // Use base result's grace period if applicable
+		GracePeriodEnd:    baseResult.GracePeriodEnd,
 	}, nil
 }
 
@@ -779,29 +635,4 @@ func (e *ScheduleEvaluator) findSuspensionEnd(windows []OffHourWindow, now time.
 	}
 
 	return time.Time{}
-}
-
-// ValidateCron validates a cron expression.
-func (e *ScheduleEvaluator) ValidateCron(expr string) error {
-	_, err := e.parser.Parse(expr)
-	if err != nil {
-		return fmt.Errorf("invalid cron expression %q: %w", expr, err)
-	}
-	return nil
-}
-
-// earlierTime returns the earlier of two times, handling zero values.
-// If one time is zero, the non-zero time is returned.
-// If both are zero, zero time is returned.
-func earlierTime(a, b time.Time) time.Time {
-	if a.IsZero() {
-		return b
-	}
-	if b.IsZero() {
-		return a
-	}
-	if a.Before(b) {
-		return a
-	}
-	return b
 }

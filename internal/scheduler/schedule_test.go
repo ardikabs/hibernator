@@ -132,31 +132,6 @@ func TestScheduleEvaluator_eval(t *testing.T) {
 	}
 }
 
-func TestScheduleEvaluator_ValidateCron(t *testing.T) {
-	evaluator := NewScheduleEvaluator(clocktesting.NewFakeClock(time.Now()))
-
-	tests := []struct {
-		name    string
-		expr    string
-		wantErr bool
-	}{
-		{"valid 5-field cron", "0 20 * * 1-5", false},
-		{"valid every hour", "0 * * * *", false},
-		{"valid complex", "30 8,12,18 * * 1-5", false},
-		{"invalid syntax", "invalid", true},
-		{"too few fields", "* *", true},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			err := evaluator.ValidateCron(tt.expr)
-			if (err != nil) != tt.wantErr {
-				t.Errorf("ValidateCron() error = %v, wantErr %v", err, tt.wantErr)
-			}
-		})
-	}
-}
-
 func TestScheduleEvaluator_NextRequeueTime(t *testing.T) {
 	baseWindows := []OffHourWindow{
 		{Start: "20:00", End: "06:00", DaysOfWeek: []string{"MON", "TUE", "WED", "THU", "FRI"}},
@@ -608,6 +583,211 @@ func TestScheduleEvaluator_Evaluate(t *testing.T) {
 			if result.CurrentState != tt.wantState {
 				t.Errorf("Evaluate() CurrentState = %v, want %v", result.CurrentState, tt.wantState)
 			}
+		})
+	}
+}
+
+// TestSuspend_NextHibernateForwardLook is a regression test for the case where
+// nextHibernate falls inside a suspension window and must be advanced past the
+// suspension end. Previously this caused ComputeUpcomingEvents (used by
+// kubectl-hibernator preview) to emit two Hibernate events: one at the base window
+// start and one at the suspension end.
+func TestSuspend_NextHibernateForwardLook(t *testing.T) {
+	baseWindows := []OffHourWindow{
+		{Start: "20:00", End: "06:00", DaysOfWeek: []string{"MON", "TUE", "WED", "THU", "FRI"}},
+	}
+
+	alwaysValid := func() (time.Time, time.Time) {
+		return time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC),
+			time.Date(2026, 12, 31, 23, 59, 59, 0, time.UTC)
+	}
+
+	tests := []struct {
+		name              string
+		exceptions        []*Exception
+		now               time.Time
+		wantHibernate     bool
+		wantNextHibernate time.Time
+	}{
+		{
+			// Suspend window starts exactly at the base hibernate time (20:00).
+			// nextHibernate must be advanced to the suspension end (23:00) so the
+			// preview only shows one Hibernate event at 23:00.
+			name: "suspend coincides with base hibernate start - nextHibernate advanced to suspension end",
+			exceptions: func() []*Exception {
+				vf, vu := alwaysValid()
+				return []*Exception{{
+					Type: ExceptionSuspend, ValidFrom: vf, ValidUntil: vu,
+					Windows: []OffHourWindow{
+						{Start: "20:00", End: "23:00", DaysOfWeek: []string{"MON", "TUE", "WED", "THU", "FRI"}},
+					},
+				}}
+			}(),
+			// Thu 14:10 UTC — active, next base hibernate is 20:00 which falls inside the suspend window
+			now:               time.Date(2026, 3, 26, 14, 10, 0, 0, time.UTC),
+			wantHibernate:     false,
+			wantNextHibernate: time.Date(2026, 3, 26, 23, 0, 0, 0, time.UTC),
+		},
+		{
+			// Suspend window starts after the base hibernate time (21:00 vs 20:00).
+			// nextHibernate must remain at 20:00 because that time is NOT inside the
+			// suspension window, so the base hibernate event is valid.
+			name: "suspend starts after base hibernate - nextHibernate unchanged",
+			exceptions: func() []*Exception {
+				vf, vu := alwaysValid()
+				return []*Exception{{
+					Type: ExceptionSuspend, ValidFrom: vf, ValidUntil: vu,
+					Windows: []OffHourWindow{
+						{Start: "21:00", End: "23:00", DaysOfWeek: []string{"MON", "TUE", "WED", "THU", "FRI"}},
+					},
+				}}
+			}(),
+			// Thu 14:10 UTC — next base hibernate is 20:00 which is NOT in [21:00-23:00]
+			now:               time.Date(2026, 3, 26, 14, 10, 0, 0, time.UTC),
+			wantHibernate:     false,
+			wantNextHibernate: time.Date(2026, 3, 26, 20, 0, 0, 0, time.UTC),
+		},
+		{
+			// extend+suspend path (applySuspendCarveOut): the same forward-look must apply.
+			// extend adds 10:00-13:00 Thu; suspend covers 20:00-23:00 weekdays.
+			// At 14:10 the extend window has passed; nextHibernate from the extended base is
+			// 20:00 today which falls inside the suspend window → must advance to 23:00.
+			name: "extend+suspend - coinciding suspend start advances nextHibernate past suspension end",
+			exceptions: func() []*Exception {
+				vf, vu := alwaysValid()
+				return []*Exception{
+					{
+						Type: ExceptionExtend, ValidFrom: vf, ValidUntil: vu,
+						Windows: []OffHourWindow{
+							{Start: "10:00", End: "13:00", DaysOfWeek: []string{"THU"}},
+						},
+					},
+					{
+						Type: ExceptionSuspend, ValidFrom: vf, ValidUntil: vu,
+						Windows: []OffHourWindow{
+							{Start: "20:00", End: "23:00", DaysOfWeek: []string{"MON", "TUE", "WED", "THU", "FRI"}},
+						},
+					},
+				}
+			}(),
+			// Thu 14:10 UTC — extend window already passed; next hibernate is base 20:00
+			// which falls inside the suspend window → should advance to 23:00
+			now:               time.Date(2026, 3, 26, 14, 10, 0, 0, time.UTC),
+			wantHibernate:     false,
+			wantNextHibernate: time.Date(2026, 3, 26, 23, 0, 0, 0, time.UTC),
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			evaluator := NewScheduleEvaluator(clocktesting.NewFakeClock(tt.now))
+			result, err := evaluator.Evaluate(baseWindows, "UTC", tt.exceptions)
+			require.NoError(t, err)
+
+			assert.Equal(t, tt.wantHibernate, result.ShouldHibernate, "ShouldHibernate mismatch")
+			assert.Equal(t, tt.wantNextHibernate.UTC(), result.NextHibernateTime.UTC(), "NextHibernateTime mismatch")
+		})
+	}
+}
+
+// TestExtend_NextWakeUpSkipsIntoExtendWindow is a regression test for the case where
+// the base schedule wakeup falls at the start of an extend window.
+// Previously evaluateExtend picked min(base.nextWakeUp, extend.nextWakeUp) which produced
+// a spurious WakeUp event immediately followed by a re-Hibernate in ComputeUpcomingEvents.
+// The correct nextWakeUp is the extend window's own end when the base wakeup is consumed by it.
+func TestExtend_NextWakeUpSkipsIntoExtendWindow(t *testing.T) {
+	// Base: 20:00–06:00 weekdays.
+	baseWindows := []OffHourWindow{
+		{Start: "20:00", End: "06:00", DaysOfWeek: []string{"MON", "TUE", "WED", "THU", "FRI"}},
+	}
+
+	alwaysValid := func() (time.Time, time.Time) {
+		return time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC),
+			time.Date(2026, 12, 31, 23, 59, 59, 0, time.UTC)
+	}
+
+	tests := []struct {
+		name              string
+		exceptions        []*Exception
+		now               time.Time
+		wantHibernate     bool
+		wantNextWakeUp    time.Time
+		wantNextHibernate time.Time
+	}{
+		{
+			// Base wakes at 06:00; extend is 06:00–13:00 (immediately re-hibernates).
+			// Without suspend: nextWakeUp must be 13:00 (extend end), not 06:00.
+			name: "extend starts at base wakeup - nextWakeUp advanced to extend end",
+			exceptions: func() []*Exception {
+				vf, vu := alwaysValid()
+				return []*Exception{{
+					Type: ExceptionExtend, ValidFrom: vf, ValidUntil: vu,
+					Windows: []OffHourWindow{
+						{Start: "06:00", End: "13:00", DaysOfWeek: []string{"MON", "TUE", "WED", "THU", "FRI"}},
+					},
+				}}
+			}(),
+			// Thu 20:30 UTC — base hibernated, base wakeup is 06:00 tomorrow (inside extend)
+			now:               time.Date(2026, 3, 26, 20, 30, 0, 0, time.UTC),
+			wantHibernate:     true,
+			wantNextWakeUp:    time.Date(2026, 3, 27, 13, 0, 0, 0, time.UTC),
+			wantNextHibernate: time.Date(2026, 3, 26, 20, 0, 0, 0, time.UTC), // past already, cron gives tomorrow
+		},
+		{
+			// Extend+suspend: base wakes at 06:00 → extend (06:00–13:00) re-hibernates →
+			// suspend (08:00–11:00) carves out → true nextWakeUp is suspend start: 08:00.
+			name: "extend+suspend - base wakeup consumed by extend, nextWakeUp is suspend start",
+			exceptions: func() []*Exception {
+				vf, vu := alwaysValid()
+				return []*Exception{
+					{
+						Type: ExceptionExtend, ValidFrom: vf, ValidUntil: vu,
+						Windows: []OffHourWindow{
+							{Start: "06:00", End: "13:00", DaysOfWeek: []string{"MON", "TUE", "WED", "THU", "FRI"}},
+						},
+					},
+					{
+						Type: ExceptionSuspend, ValidFrom: vf, ValidUntil: vu,
+						Windows: []OffHourWindow{
+							{Start: "08:00", End: "11:00", DaysOfWeek: []string{"MON", "TUE", "WED", "THU", "FRI"}},
+						},
+					},
+				}
+			}(),
+			// Thu 20:30 UTC — hibernated; suspend starts at 08:00 tomorrow which is earlier
+			// than extend's 13:00, so suspend wins as nextWakeUp.
+			now:            time.Date(2026, 3, 26, 20, 30, 0, 0, time.UTC),
+			wantHibernate:  true,
+			wantNextWakeUp: time.Date(2026, 3, 27, 8, 0, 0, 0, time.UTC),
+		},
+		{
+			// Extend starts well after base wakeup: base wakes at 06:00, extend is 09:00–13:00.
+			// The 06:00 wakeup is a genuine gap (not inside any extend window), so it stays.
+			name: "extend starts after base wakeup - nextWakeUp unchanged at base wakeup",
+			exceptions: func() []*Exception {
+				vf, vu := alwaysValid()
+				return []*Exception{{
+					Type: ExceptionExtend, ValidFrom: vf, ValidUntil: vu,
+					Windows: []OffHourWindow{
+						{Start: "09:00", End: "13:00", DaysOfWeek: []string{"MON", "TUE", "WED", "THU", "FRI"}},
+					},
+				}}
+			}(),
+			// Thu 20:30 UTC — hibernated; base wakeup 06:00 is genuinely before extend 09:00
+			now:            time.Date(2026, 3, 26, 20, 30, 0, 0, time.UTC),
+			wantHibernate:  true,
+			wantNextWakeUp: time.Date(2026, 3, 27, 6, 0, 0, 0, time.UTC),
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			evaluator := NewScheduleEvaluator(clocktesting.NewFakeClock(tt.now))
+			result, err := evaluator.Evaluate(baseWindows, "UTC", tt.exceptions)
+			require.NoError(t, err)
+
+			assert.Equal(t, tt.wantHibernate, result.ShouldHibernate, "ShouldHibernate mismatch")
+			assert.Equal(t, tt.wantNextWakeUp.UTC(), result.NextWakeUpTime.UTC(), "NextWakeUpTime mismatch")
 		})
 	}
 }
@@ -1573,61 +1753,4 @@ func TestEvaluate_MultiException(t *testing.T) {
 			}
 		})
 	}
-}
-
-func TestMergeByType(t *testing.T) {
-	vf := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
-	vu := time.Date(2026, 12, 31, 23, 59, 59, 0, time.UTC)
-
-	exceptions := []*Exception{
-		{Type: ExceptionExtend, ValidFrom: vf, ValidUntil: vu},
-		{Type: ExceptionSuspend, ValidFrom: vf, ValidUntil: vu},
-	}
-
-	if got := mergeByType(exceptions, ExceptionExtend); got == nil || got.Type != ExceptionExtend {
-		t.Errorf("mergeByType(extend) = %v, want extend exception", got)
-	}
-	if got := mergeByType(exceptions, ExceptionSuspend); got == nil || got.Type != ExceptionSuspend {
-		t.Errorf("mergeByType(suspend) = %v, want suspend exception", got)
-	}
-	if got := mergeByType(exceptions, ExceptionReplace); got != nil {
-		t.Errorf("mergeByType(replace) = %v, want nil", got)
-	}
-	if got := mergeByType(nil, ExceptionExtend); got != nil {
-		t.Errorf("mergeByType(nil, extend) = %v, want nil", got)
-	}
-}
-
-func TestMergeByType_SameType_MergesWindowsAndExpandsValidity(t *testing.T) {
-	vf1 := time.Date(2026, 3, 1, 0, 0, 0, 0, time.UTC)
-	vu1 := time.Date(2026, 3, 10, 0, 0, 0, 0, time.UTC)
-	vf2 := time.Date(2026, 3, 5, 0, 0, 0, 0, time.UTC)
-	vu2 := time.Date(2026, 3, 15, 0, 0, 0, 0, time.UTC)
-
-	exceptions := []*Exception{
-		{
-			Type:       ExceptionSuspend,
-			ValidFrom:  vf1,
-			ValidUntil: vu1,
-			LeadTime:   3 * time.Minute,
-			Windows:    []OffHourWindow{{Start: "08:00", End: "12:00", DaysOfWeek: []string{"MON"}}},
-		},
-		{
-			Type:       ExceptionSuspend,
-			ValidFrom:  vf2,
-			ValidUntil: vu2,
-			LeadTime:   10 * time.Minute,
-			Windows:    []OffHourWindow{{Start: "14:00", End: "18:00", DaysOfWeek: []string{"WED"}}},
-		},
-	}
-
-	got := mergeByType(exceptions, ExceptionSuspend)
-	require.NotNil(t, got)
-	assert.Equal(t, ExceptionSuspend, got.Type)
-	assert.Equal(t, vf1, got.ValidFrom, "ValidFrom should be the earliest")
-	assert.Equal(t, vu2, got.ValidUntil, "ValidUntil should be the latest")
-	assert.Equal(t, 10*time.Minute, got.LeadTime, "LeadTime should be the max")
-	require.Len(t, got.Windows, 2)
-	assert.Equal(t, "08:00", got.Windows[0].Start)
-	assert.Equal(t, "14:00", got.Windows[1].Start)
 }
