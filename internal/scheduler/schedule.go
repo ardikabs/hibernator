@@ -433,6 +433,16 @@ func (e *ScheduleEvaluator) applySuspendCarveOut(baseResult *EvaluationResult, e
 		}
 	}
 
+	// Forward-look: if the upcoming hibernate time falls inside a suspension window, advance
+	// nextHibernate past that suspension's end. Symmetric to the nextWakeUp forward-look below.
+	if !shouldHibernate && !nextHibernate.IsZero() {
+		if isInTimeWindows(exception.Windows, nextHibernate) {
+			if end := e.findSuspensionEnd(exception.Windows, nextHibernate); !end.IsZero() {
+				nextHibernate = end
+			}
+		}
+	}
+
 	if shouldHibernate {
 		if next := e.findNextSuspensionStart(exception.Windows, localNow); !next.IsZero() {
 			nextWakeUp = earlierTime(nextWakeUp, next)
@@ -533,9 +543,21 @@ func (e *ScheduleEvaluator) evaluateExtend(baseWindows, exceptionWindows []OffHo
 	// Hibernate when either schedule says hibernate
 	shouldHibernate := baseResult.ShouldHibernate || exceptionResult.ShouldHibernate
 
-	// Calculate next events (take the earlier of the two for each)
+	// Calculate next hibernate (take the earlier of the two)
 	nextHibernate := earlierTime(baseResult.NextHibernateTime, exceptionResult.NextHibernateTime)
-	nextWakeUp := earlierTime(baseResult.NextWakeUpTime, exceptionResult.NextWakeUpTime)
+
+	// Calculate next wakeup: the naive min(base.nextWakeUp, extend.nextWakeUp) can produce a
+	// spurious wakeup event when the base wakeup time falls inside (or at the start of) an
+	// extend window — because the extend window would immediately re-hibernate at that instant.
+	// Example: base wakes at 06:00, extend is 06:00–13:00 → the true next wakeup is 13:00, not 06:00.
+	// Fix: if the base nextWakeUp falls inside an extend window, replace it with the extend wakeup.
+	nextWakeUp := baseResult.NextWakeUpTime
+	if !nextWakeUp.IsZero() && isInTimeWindows(exceptionWindows, nextWakeUp) {
+		// The base wakeup lands inside an extend (hibernate) window — skip it.
+		nextWakeUp = exceptionResult.NextWakeUpTime
+	} else {
+		nextWakeUp = earlierTime(nextWakeUp, exceptionResult.NextWakeUpTime)
+	}
 
 	state := "active"
 	if shouldHibernate {
@@ -653,6 +675,19 @@ func (e *ScheduleEvaluator) evaluateSuspend(baseWindows []OffHourWindow, excepti
 			// Schedule check after suspension ends
 			if suspensionEnd.Before(nextHibernate) || nextHibernate.IsZero() {
 				nextHibernate = suspensionEnd
+			}
+		}
+	}
+
+	// Forward-look: if the upcoming hibernate time falls inside a suspension window, advance
+	// nextHibernate past that suspension's end. This is symmetric to the forward-look below
+	// that pulls nextWakeUp forward to the next suspension start when already hibernating.
+	// Example: base window hibernates at 20:00, suspend window is 20:00–23:00 →
+	// nextHibernate is pushed to 23:00 so only one Hibernate event appears in previews.
+	if !shouldHibernate && !nextHibernate.IsZero() {
+		if isInTimeWindows(exception.Windows, nextHibernate) {
+			if end := e.findSuspensionEnd(exception.Windows, nextHibernate); !end.IsZero() {
+				nextHibernate = end
 			}
 		}
 	}
