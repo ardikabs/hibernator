@@ -416,6 +416,211 @@ var _ = Describe("Execution Strategy E2E", func() {
 			})
 			Expect(dbJobs.Items).To(BeEmpty(), "'db' must never be scheduled when its dependency 'app' always fails")
 		})
+
+		// Multi-branch topology: a→b, a→c, b→d, c→e, d→f
+		// PlanDAG produces 4 stages: [a], [b,c], [d,e], [f]
+		//
+		// Strict test: 'b' fails at stage 1 → AsPlanError → PhaseError
+		// BestEffort test: 'b' fails → c succeeds → d,f pruned → e succeeds → PhaseHibernated (partial success)
+		It("StrictMultiBranch: should enter PhaseError when one branch fails in a multi-branch DAG", func() {
+			plan, _ = testutil.NewHibernatePlanBuilder("dag-strict-multi", testNamespace).
+				WithSchedule("20:00", "06:00").
+				WithExecutionStrategy(hibernatorv1alpha1.ExecutionStrategy{
+					Type:           hibernatorv1alpha1.StrategyDAG,
+					MaxConcurrency: ptr.To[int32](2),
+					Dependencies: []hibernatorv1alpha1.Dependency{
+						{From: "a", To: "b"},
+						{From: "a", To: "c"},
+						{From: "b", To: "d"},
+						{From: "c", To: "e"},
+						{From: "d", To: "f"},
+					},
+				}).
+				WithBehavior(hibernatorv1alpha1.Behavior{
+					Mode:    hibernatorv1alpha1.BehaviorStrict,
+					Retries: ptr.To[int32](0),
+				}).
+				WithTarget(
+					hibernatorv1alpha1.Target{
+						Name: "a", Type: "noop",
+						ConnectorRef: hibernatorv1alpha1.ConnectorRef{Kind: "CloudProvider", Name: "strategy-aws"},
+					},
+					hibernatorv1alpha1.Target{
+						Name: "b", Type: "noop",
+						ConnectorRef: hibernatorv1alpha1.ConnectorRef{Kind: "CloudProvider", Name: "strategy-aws"},
+					},
+					hibernatorv1alpha1.Target{
+						Name: "c", Type: "noop",
+						ConnectorRef: hibernatorv1alpha1.ConnectorRef{Kind: "CloudProvider", Name: "strategy-aws"},
+					},
+					hibernatorv1alpha1.Target{
+						Name: "d", Type: "noop",
+						ConnectorRef: hibernatorv1alpha1.ConnectorRef{Kind: "CloudProvider", Name: "strategy-aws"},
+					},
+					hibernatorv1alpha1.Target{
+						Name: "e", Type: "noop",
+						ConnectorRef: hibernatorv1alpha1.ConnectorRef{Kind: "CloudProvider", Name: "strategy-aws"},
+					},
+					hibernatorv1alpha1.Target{
+						Name: "f", Type: "noop",
+						ConnectorRef: hibernatorv1alpha1.ConnectorRef{Kind: "CloudProvider", Name: "strategy-aws"},
+					},
+				).
+				Build()
+
+			Expect(k8sClient.Create(ctx, plan)).To(Succeed())
+
+			By("Advancing time to hibernation window")
+			fakeClock.SetTime(time.Date(2026, 3, 16, 20, 1, 10, 0, time.UTC))
+			testutil.TriggerReconcile(ctx, k8sClient, plan)
+			testutil.EventuallyPhase(ctx, k8sClient, plan, hibernatorv1alpha1.PhaseHibernating)
+
+			By("[Stage 0] Simulating 'a' success")
+			jobA := testutil.EventuallyJobCreated(ctx, k8sClient, testNamespace, plan.Name, hibernatorv1alpha1.OperationHibernate, "a")
+			testutil.SimulateJobSuccess(ctx, k8sClient, jobA, fakeClock.Now())
+
+			By("[Stage 1] Waiting for 'b' and 'c' Jobs (dispatched in parallel)")
+			jobsBC := testutil.EventuallyMultiJobsCreated(ctx, k8sClient, testNamespace, plan.Name, hibernatorv1alpha1.OperationHibernate, "b", "c")
+
+			By("[Stage 1] Simulating 'b' failure — Strict mode should halt immediately")
+			for _, j := range jobsBC {
+				switch j.Labels[wellknown.LabelTarget] {
+				case "b":
+					testutil.SimulateJobFailure(ctx, k8sClient, j, fakeClock.Now())
+				case "c":
+					testutil.SimulateJobSuccess(ctx, k8sClient, j, fakeClock.Now())
+				}
+			}
+
+			By("Verifying plan enters PhaseError (Strict: stage 1 failure blocks entire plan)")
+			testutil.EventuallyPhase(ctx, k8sClient, plan, hibernatorv1alpha1.PhaseError)
+
+			By("Confirming 'd', 'e', 'f' Jobs were never created")
+			for _, target := range []string{"d", "e", "f"} {
+				var jl batchv1.JobList
+				_ = k8sClient.List(ctx, &jl, client.InNamespace(testNamespace), client.MatchingLabels{
+					wellknown.LabelPlan:      plan.Name,
+					wellknown.LabelOperation: "shutdown",
+					wellknown.LabelTarget:    target,
+				})
+				Expect(jl.Items).To(BeEmpty(), "Job for target %q must not be created when upstream fails in Strict mode", target)
+			}
+		})
+
+		It("BestEffortMultiBranch: should prune failed branch and continue independent branches", func() {
+			plan, _ = testutil.NewHibernatePlanBuilder("dag-besteffort-multi", testNamespace).
+				WithSchedule("20:00", "06:00").
+				WithExecutionStrategy(hibernatorv1alpha1.ExecutionStrategy{
+					Type:           hibernatorv1alpha1.StrategyDAG,
+					MaxConcurrency: ptr.To[int32](2),
+					Dependencies: []hibernatorv1alpha1.Dependency{
+						{From: "a", To: "b"},
+						{From: "a", To: "c"},
+						{From: "b", To: "d"},
+						{From: "c", To: "e"},
+						{From: "d", To: "f"},
+					},
+				}).
+				WithBehavior(hibernatorv1alpha1.Behavior{
+					Mode:    hibernatorv1alpha1.BehaviorBestEffort,
+					Retries: ptr.To[int32](0),
+				}).
+				WithTarget(
+					hibernatorv1alpha1.Target{
+						Name: "a", Type: "noop",
+						ConnectorRef: hibernatorv1alpha1.ConnectorRef{Kind: "CloudProvider", Name: "strategy-aws"},
+					},
+					hibernatorv1alpha1.Target{
+						Name: "b", Type: "noop",
+						ConnectorRef: hibernatorv1alpha1.ConnectorRef{Kind: "CloudProvider", Name: "strategy-aws"},
+					},
+					hibernatorv1alpha1.Target{
+						Name: "c", Type: "noop",
+						ConnectorRef: hibernatorv1alpha1.ConnectorRef{Kind: "CloudProvider", Name: "strategy-aws"},
+					},
+					hibernatorv1alpha1.Target{
+						Name: "d", Type: "noop",
+						ConnectorRef: hibernatorv1alpha1.ConnectorRef{Kind: "CloudProvider", Name: "strategy-aws"},
+					},
+					hibernatorv1alpha1.Target{
+						Name: "e", Type: "noop",
+						ConnectorRef: hibernatorv1alpha1.ConnectorRef{Kind: "CloudProvider", Name: "strategy-aws"},
+					},
+					hibernatorv1alpha1.Target{
+						Name: "f", Type: "noop",
+						ConnectorRef: hibernatorv1alpha1.ConnectorRef{Kind: "CloudProvider", Name: "strategy-aws"},
+					},
+				).
+				Build()
+
+			Expect(k8sClient.Create(ctx, plan)).To(Succeed())
+
+			By("Advancing time to hibernation window")
+			fakeClock.SetTime(time.Date(2026, 3, 16, 20, 1, 10, 0, time.UTC))
+			testutil.TriggerReconcile(ctx, k8sClient, plan)
+			testutil.EventuallyPhase(ctx, k8sClient, plan, hibernatorv1alpha1.PhaseHibernating)
+
+			By("[Stage 0] Simulating 'a' success")
+			jobA := testutil.EventuallyJobCreated(ctx, k8sClient, testNamespace, plan.Name, hibernatorv1alpha1.OperationHibernate, "a")
+			testutil.SimulateJobSuccess(ctx, k8sClient, jobA, fakeClock.Now())
+
+			By("[Stage 1] Waiting for 'b' and 'c' Jobs")
+			jobsBC := testutil.EventuallyMultiJobsCreated(ctx, k8sClient, testNamespace, plan.Name, hibernatorv1alpha1.OperationHibernate, "b", "c")
+
+			By("[Stage 1] Simulating 'b' failure and 'c' success")
+			for _, j := range jobsBC {
+				switch j.Labels[wellknown.LabelTarget] {
+				case "b":
+					testutil.SimulateJobFailure(ctx, k8sClient, j, fakeClock.Now())
+				case "c":
+					testutil.SimulateJobSuccess(ctx, k8sClient, j, fakeClock.Now())
+				}
+			}
+
+			By("[Stage 2] 'd' should be pruned (upstream 'b' failed), 'e' should execute (upstream 'c' ok)")
+			jobE := testutil.EventuallyJobCreated(ctx, k8sClient, testNamespace, plan.Name, hibernatorv1alpha1.OperationHibernate, "e")
+			testutil.SimulateJobSuccess(ctx, k8sClient, jobE, fakeClock.Now())
+
+			// Verify 'd' was pruned — no Job created, state is Failed with pruning message.
+			Consistently(func() int {
+				var jl batchv1.JobList
+				_ = k8sClient.List(ctx, &jl, client.InNamespace(testNamespace), client.MatchingLabels{
+					wellknown.LabelPlan:      plan.Name,
+					wellknown.LabelOperation: "shutdown",
+					wellknown.LabelTarget:    "d",
+				})
+				return len(jl.Items)
+			}, 2*time.Second, 250*time.Millisecond).Should(Equal(0), "'d' Job must not be created (pruned: upstream 'b' failed)")
+
+			By("[Stage 3] 'f' should be pruned (upstream 'd' was pruned)")
+			// 'f' depends on 'd' which was pruned (StateFailed) — cascade prune.
+			Consistently(func() int {
+				var jl batchv1.JobList
+				_ = k8sClient.List(ctx, &jl, client.InNamespace(testNamespace), client.MatchingLabels{
+					wellknown.LabelPlan:      plan.Name,
+					wellknown.LabelOperation: "shutdown",
+					wellknown.LabelTarget:    "f",
+				})
+				return len(jl.Items)
+			}, 2*time.Second, 250*time.Millisecond).Should(Equal(0), "'f' Job must not be created (pruned: upstream 'd' was pruned)")
+
+			By("Verifying plan reaches PhaseHibernated (BestEffort: partial success)")
+			testutil.EventuallyPhase(ctx, k8sClient, plan, hibernatorv1alpha1.PhaseHibernated)
+
+			By("Verifying execution states: a=Completed, b=Failed, c=Completed, d=Failed(pruned), e=Completed, f=Failed(pruned)")
+			// Execution indices follow spec target order: a=0, b=1, c=2, d=3, e=4, f=5
+			testutil.EventuallyTargetState(ctx, k8sClient, plan, 0, hibernatorv1alpha1.StateCompleted) // a
+			testutil.EventuallyTargetState(ctx, k8sClient, plan, 1, hibernatorv1alpha1.StateFailed)    // b (job failure)
+			testutil.EventuallyTargetState(ctx, k8sClient, plan, 2, hibernatorv1alpha1.StateCompleted) // c
+			testutil.EventuallyTargetState(ctx, k8sClient, plan, 3, hibernatorv1alpha1.StateFailed)    // d (pruned)
+			testutil.EventuallyTargetState(ctx, k8sClient, plan, 4, hibernatorv1alpha1.StateCompleted) // e
+			testutil.EventuallyTargetState(ctx, k8sClient, plan, 5, hibernatorv1alpha1.StateFailed)    // f (pruned)
+
+			By("Verifying pruned targets have 'Pruned' message")
+			_ = k8sClient.Get(ctx, client.ObjectKeyFromObject(plan), plan)
+			Expect(plan.Status.Executions[3].Message).To(ContainSubstring("Pruned"), "target 'd' should have pruning message")
+			Expect(plan.Status.Executions[5].Message).To(ContainSubstring("Pruned"), "target 'f' should have pruning message")
+		})
 	})
 
 	Describe("Staged Strategy", func() {

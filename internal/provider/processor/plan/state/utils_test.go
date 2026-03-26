@@ -40,7 +40,7 @@ func (u *captureUpdater[T]) Send(upd statusprocessor.Update[T]) {
 	}
 	u.ch <- upd
 }
-func (u *captureUpdater[T]) Len() int                           { return len(u.ch) }
+func (u *captureUpdater[T]) Len() int                            { return len(u.ch) }
 func (u *captureUpdater[T]) C() <-chan statusprocessor.Update[T] { return u.ch }
 
 // planStatuses returns the captureUpdater for plan statuses from the given state,
@@ -208,6 +208,79 @@ func TestFindExecutionStatus_NotFound_ReturnsNil(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
+// FindFailedUpstream
+// ---------------------------------------------------------------------------
+
+func TestFindFailedUpstream_FailedUpstream_Returned(t *testing.T) {
+	plan := &hibernatorv1alpha1.HibernatePlan{}
+	plan.Spec.Targets = []hibernatorv1alpha1.Target{
+		{Name: "db", Type: "rds"},
+		{Name: "app", Type: "eks"},
+	}
+	plan.Spec.Execution.Strategy.Dependencies = []hibernatorv1alpha1.Dependency{{From: "db", To: "app"}}
+	plan.Status.Executions = []hibernatorv1alpha1.ExecutionStatus{
+		{Target: "db", Executor: "rds", State: hibernatorv1alpha1.StateFailed},
+	}
+
+	failed := FindFailedUpstream(plan, "app")
+	assert.Equal(t, []string{"db"}, failed)
+}
+
+func TestFindFailedUpstream_NoDeps_ReturnsNil(t *testing.T) {
+	plan := planWithStatuses(execSt("t1", hibernatorv1alpha1.StateCompleted))
+	assert.Nil(t, FindFailedUpstream(plan, "t1"))
+}
+
+func TestFindFailedUpstream_AllDepsCompleted_ReturnsNil(t *testing.T) {
+	plan := &hibernatorv1alpha1.HibernatePlan{}
+	plan.Spec.Targets = []hibernatorv1alpha1.Target{
+		{Name: "db", Type: "rds"},
+		{Name: "app", Type: "eks"},
+	}
+	plan.Spec.Execution.Strategy.Dependencies = []hibernatorv1alpha1.Dependency{{From: "db", To: "app"}}
+	plan.Status.Executions = []hibernatorv1alpha1.ExecutionStatus{
+		{Target: "db", Executor: "rds", State: hibernatorv1alpha1.StateCompleted},
+	}
+
+	assert.Nil(t, FindFailedUpstream(plan, "app"))
+}
+
+func TestFindFailedUpstream_MultipleDeps_OneFailed(t *testing.T) {
+	plan := &hibernatorv1alpha1.HibernatePlan{}
+	plan.Spec.Targets = []hibernatorv1alpha1.Target{
+		{Name: "db", Type: "rds"},
+		{Name: "cache", Type: "ec2"},
+		{Name: "app", Type: "eks"},
+	}
+	plan.Spec.Execution.Strategy.Dependencies = []hibernatorv1alpha1.Dependency{
+		{From: "db", To: "app"},
+		{From: "cache", To: "app"},
+	}
+	plan.Status.Executions = []hibernatorv1alpha1.ExecutionStatus{
+		{Target: "db", Executor: "rds", State: hibernatorv1alpha1.StateCompleted},
+		{Target: "cache", Executor: "ec2", State: hibernatorv1alpha1.StateFailed},
+	}
+
+	failed := FindFailedUpstream(plan, "app")
+	assert.Equal(t, []string{"cache"}, failed)
+}
+
+func TestFindFailedUpstream_IndependentTarget_ReturnsNil(t *testing.T) {
+	plan := &hibernatorv1alpha1.HibernatePlan{}
+	plan.Spec.Targets = []hibernatorv1alpha1.Target{
+		{Name: "web", Type: "eks"},
+		{Name: "metrics-db", Type: "rds"},
+	}
+	plan.Spec.Execution.Strategy.Dependencies = []hibernatorv1alpha1.Dependency{{From: "web", To: "app"}}
+	plan.Status.Executions = []hibernatorv1alpha1.ExecutionStatus{
+		{Target: "web", Executor: "eks", State: hibernatorv1alpha1.StateFailed},
+	}
+
+	// metrics-db has no dependency on web
+	assert.Nil(t, FindFailedUpstream(plan, "metrics-db"))
+}
+
+// ---------------------------------------------------------------------------
 // FindFailedDependencies
 // ---------------------------------------------------------------------------
 
@@ -217,18 +290,18 @@ func TestFindFailedDependencies_FailedDep_Returned(t *testing.T) {
 		{Name: "db", Type: "rds"},
 		{Name: "app", Type: "eks"},
 	}
+	plan.Spec.Execution.Strategy.Dependencies = []hibernatorv1alpha1.Dependency{{From: "db", To: "app"}}
 	plan.Status.Executions = []hibernatorv1alpha1.ExecutionStatus{
 		{Target: "db", Executor: "rds", State: hibernatorv1alpha1.StateFailed},
 	}
 
-	deps := []hibernatorv1alpha1.Dependency{{From: "db", To: "app"}}
-	failed := FindFailedDependencies(plan, deps, targetStage("app"))
+	failed := FindFailedDependencies(plan, targetStage("app"))
 	assert.Equal(t, []string{"db"}, failed)
 }
 
 func TestFindFailedDependencies_NoDeps_ReturnsNil(t *testing.T) {
 	plan := planWithStatuses(execSt("t1", hibernatorv1alpha1.StateCompleted))
-	assert.Nil(t, FindFailedDependencies(plan, nil, targetStage("t1")))
+	assert.Nil(t, FindFailedDependencies(plan, targetStage("t1")))
 }
 
 // ---------------------------------------------------------------------------

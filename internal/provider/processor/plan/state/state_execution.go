@@ -129,12 +129,6 @@ func (s *state) executeForStage(
 	stage scheduler.ExecutionStage,
 	operation string,
 ) (StateResult, error) {
-	if plan.Spec.Execution.Strategy.Type == hibernatorv1alpha1.StrategyDAG {
-		if failed := FindFailedDependencies(plan, plan.Spec.Execution.Strategy.Dependencies, stage); len(failed) > 0 {
-			return StateResult{}, AsPlanError(fmt.Errorf("cannot execute stage: targets depend on failed targets: %v", failed))
-		}
-	}
-
 	runningCount := CountRunningJobsInStage(jobs, stage)
 	maxConcurrency := stage.MaxConcurrency
 	if maxConcurrency <= 0 {
@@ -146,11 +140,38 @@ func (s *state) executeForStage(
 		"runningCount", runningCount,
 		"maxConcurrency", maxConcurrency)
 
+	isDAG := plan.Spec.Execution.Strategy.Type == hibernatorv1alpha1.StrategyDAG
+
 	jobsCreated := 0
 	for _, targetName := range stage.Targets {
 		target := FindTarget(plan, targetName)
 		if target == nil {
 			continue
+		}
+
+		// Skip targets already in a terminal state (previously pruned or completed).
+		execStatus := FindExecutionStatus(plan, target.Type, targetName)
+		if execStatus != nil &&
+			(execStatus.State == hibernatorv1alpha1.StateFailed ||
+				execStatus.State == hibernatorv1alpha1.StateCompleted) {
+			continue
+		}
+
+		// DAG per-target dependency check: evaluate failed upstream for this specific target.
+		if isDAG {
+			if failedUpstream := FindFailedUpstream(plan, targetName); len(failedUpstream) > 0 {
+				if plan.Spec.Behavior.Mode == hibernatorv1alpha1.BehaviorStrict {
+					return StateResult{}, AsPlanError(fmt.Errorf(
+						"target %q blocked: upstream dependency %v failed", targetName, failedUpstream))
+				}
+
+				// BestEffort: prune this target — mark as failed so downstream cascades naturally.
+				pruneMsg := fmt.Sprintf("Pruned: upstream dependency %v failed", failedUpstream)
+				log.Info("pruning target with failed upstream dependency",
+					"target", targetName, "failedUpstream", failedUpstream)
+				s.pruneTarget(plan, targetName, pruneMsg)
+				continue
+			}
 		}
 
 		if JobExistsForTarget(jobs, targetName, operation, plan.Status.CurrentCycleID) {
@@ -180,6 +201,33 @@ func (s *state) executeForStage(
 		jobsCreated++
 	}
 	return StateResult{RequeueAfter: wellknown.RequeueIntervalDuringStage}, nil
+}
+
+// pruneTarget marks a target as StateFailed with a pruning message.
+// This is used during DAG BestEffort execution to skip targets whose upstream
+// dependencies have failed, while allowing independent branches to proceed.
+func (s *state) pruneTarget(plan *hibernatorv1alpha1.HibernatePlan, targetName, message string) {
+	for i := range plan.Status.Executions {
+		if plan.Status.Executions[i].Target == targetName {
+			plan.Status.Executions[i].State = hibernatorv1alpha1.StateFailed
+			plan.Status.Executions[i].Message = message
+			break
+		}
+	}
+
+	s.Statuses.PlanStatuses.Send(statusprocessor.Update[*hibernatorv1alpha1.HibernatePlan]{
+		NamespacedName: s.Key,
+		Resource:       plan,
+		Mutator: statusprocessor.MutatorFunc[*hibernatorv1alpha1.HibernatePlan](func(p *hibernatorv1alpha1.HibernatePlan) {
+			for i := range p.Status.Executions {
+				if p.Status.Executions[i].Target == targetName {
+					p.Status.Executions[i].State = hibernatorv1alpha1.StateFailed
+					p.Status.Executions[i].Message = message
+					break
+				}
+			}
+		}),
+	})
 }
 
 // getCurrentCycleJobs returns the runner Jobs for the current execution cycle of a plan.
