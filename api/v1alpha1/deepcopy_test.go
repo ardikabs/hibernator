@@ -468,7 +468,7 @@ func TestBehavior_DeepCopy(t *testing.T) {
 	original := Behavior{
 		Mode:     BehaviorBestEffort,
 		FailFast: false,
-		Retries:  ptr.To(int32(5)),
+		Retries:  ptr.To[int32](5),
 	}
 
 	copy := original.DeepCopy()
@@ -476,8 +476,8 @@ func TestBehavior_DeepCopy(t *testing.T) {
 	if copy.Mode != original.Mode {
 		t.Errorf("DeepCopy Mode: got %q, want %q", copy.Mode, original.Mode)
 	}
-	if copy.Retries != original.Retries {
-		t.Errorf("DeepCopy Retries: got %d, want %d", copy.Retries, original.Retries)
+	if *copy.Retries != *original.Retries {
+		t.Errorf("DeepCopy Retries: got %d, want %d", *copy.Retries, *original.Retries)
 	}
 }
 

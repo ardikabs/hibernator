@@ -88,6 +88,7 @@ func TestExecutionState_Constants(t *testing.T) {
 		{"Running", StateRunning, "Running"},
 		{"Completed", StateCompleted, "Completed"},
 		{"Failed", StateFailed, "Failed"},
+		{"Aborted", StateAborted, "Aborted"},
 	}
 
 	for _, tt := range tests {
