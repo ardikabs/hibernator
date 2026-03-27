@@ -24,12 +24,17 @@ LDFLAGS := -ldflags "-X github.com/ardikabs/hibernator/internal/version.Version=
 GOBIN ?= $(shell go env GOPATH)/bin
 GOCMD ?= go
 
+# Documentation configuration
+DOCS_IMAGE ?= squidfunk/mkdocs-material:9.6.14
+DOCS_DIR   := website
+
 # Tool binaries
 CONTROLLER_GEN ?= $(GOBIN)/controller-gen
 ENVTEST ?= $(GOBIN)/setup-envtest
 MOCKERY ?= $(GOBIN)/mockery
 PROTOC_GEN_GO ?= $(GOBIN)/protoc-gen-go
 PROTOC_GEN_GO_GRPC ?= $(GOBIN)/protoc-gen-go-grpc
+CRD_REF_DOCS ?= $(GOBIN)/crd-ref-docs
 
 # Test configuration
 COVERAGE_DIR ?= .coverage
@@ -67,7 +72,7 @@ help: ## Display this help.
 # ============================================================================
 
 .PHONY: generate
-generate: controller-gen ## Generate code (DeepCopy, CRDs) and sync to Helm chart.
+generate: controller-gen docs-api-gen docs-executor-params-gen ## Generate code (DeepCopy, CRDs), sync to Helm chart, and generate API reference docs.
 	$(CONTROLLER_GEN) object:headerFile="hack/boilerplate.go.txt" paths="./api/..."
 	$(CONTROLLER_GEN) crd paths="./api/..." output:crd:artifacts:config=config/crd/bases
 	@echo "$(CYAN)Syncing CRDs to Helm chart...$(RESET)"
@@ -321,5 +326,45 @@ mocks-rds: mockery ## Generate mocks for RDS executor clients.
 mocks-all: mocks-eks mocks-ec2 mocks-karpenter mocks-rds ## Generate all executor mocks.
 	@echo "$(GREEN)All mocks generated successfully$(RESET)"
 
+.PHONY: crd-ref-docs
+crd-ref-docs: ## Download crd-ref-docs locally if necessary.
+	@test -s $(CRD_REF_DOCS) || { \
+		echo "$(CYAN)Installing crd-ref-docs...$(RESET)"; \
+		go install github.com/elastic/crd-ref-docs@v0.3.0; \
+	}
+
 .PHONY: tools
-tools: controller-gen envtest mockery protoc-gen-go protoc-gen-go-grpc ## Install all required tools.
+tools: controller-gen envtest mockery protoc-gen-go protoc-gen-go-grpc crd-ref-docs ## Install all required tools.
+
+# ============================================================================
+##@ Documentation
+# ============================================================================
+
+.PHONY: docs-serve
+docs-serve: ## Serve the documentation site locally with live reload (requires Docker).
+	@echo "$(CYAN)Starting docs server at http://localhost:8000 ...$(RESET)"
+	docker run --rm -it -p 8000:8000 -v $(PWD)/$(DOCS_DIR):/docs $(DOCS_IMAGE)
+
+.PHONY: docs-api-gen
+docs-api-gen: crd-ref-docs ## Generate API reference documentation from CRD types.
+	@echo "$(CYAN)Generating API reference docs...$(RESET)"
+	@$(CRD_REF_DOCS) \
+		--source-path=api/v1alpha1 \
+		--config=hack/tools/crd-ref-docs/config.yaml \
+		--templates-dir=hack/tools/crd-ref-docs/templates \
+		--output-path=$(DOCS_DIR)/docs/api-reference/index.md \
+		--max-depth=100 \
+		--renderer=markdown
+	@echo "$(GREEN)API reference docs generated in $(DOCS_DIR)/docs/api-reference/$(RESET)"
+
+.PHONY: docs-executor-params-gen
+docs-executor-params-gen: ## Generate executor parameters reference from Go types.
+	@echo "$(CYAN)Generating executor parameters docs...$(RESET)"
+	@$(GOCMD) run ./hack/tools/gen-executor-params-docs/
+	@echo "$(GREEN)Executor parameters docs generated in $(DOCS_DIR)/docs/api-reference/$(RESET)"
+
+.PHONY: docs-build
+docs-build: ## Build the static documentation site into website/site/ (requires Docker).
+	@echo "$(CYAN)Building documentation site...$(RESET)"
+	docker run --rm -v $(PWD)/$(DOCS_DIR):/docs $(DOCS_IMAGE) build
+	@echo "$(GREEN)Documentation built: $(DOCS_DIR)/site/$(RESET)"

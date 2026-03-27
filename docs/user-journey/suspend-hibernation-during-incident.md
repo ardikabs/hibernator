@@ -222,4 +222,4 @@ If the plan already has an active `extend` exception (e.g., an on-site event add
 
 ## RFC References
 
-- [RFC-0003](../enhancements/0003-schedule-exceptions.md) — Temporary Schedule Exceptions; suspend type, lead time, auto-expiration, Phase 5 composability (extend+suspend allowed pair)
+- [RFC-0003](../proposals/0003-schedule-exceptions.md) — Temporary Schedule Exceptions; suspend type, lead time, auto-expiration, Phase 5 composability (extend+suspend allowed pair)

@@ -47,7 +47,7 @@ spec:
           metadata:
             type: object
           spec:
-            description: K8SClusterSpec defines the desired state of K8SCluster.
+            description: Spec defines the desired state of K8SCluster.
             properties:
               eks:
                 description: EKS holds EKS-specific configuration.
@@ -89,8 +89,11 @@ spec:
                     description: KubeconfigRef references a Secret containing kubeconfig.
                     properties:
                       name:
+                        description: Name is the name of the Secret containing kubeconfig
+                          data.
                         type: string
                       namespace:
+                        description: Namespace is the namespace of the Secret.
                         type: string
                     required:
                     - name
@@ -101,15 +104,17 @@ spec:
                   generic k8s).
                 properties:
                   name:
+                    description: Name is the name of the CloudProvider resource.
                     type: string
                   namespace:
+                    description: Namespace is the namespace of the CloudProvider resource.
                     type: string
                 required:
                 - name
                 type: object
             type: object
           status:
-            description: K8SClusterStatus defines the observed state of K8SCluster.
+            description: Status defines the observed state of K8SCluster.
             properties:
               clusterType:
                 description: ClusterType is the detected cluster type.

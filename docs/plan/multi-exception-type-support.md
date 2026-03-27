@@ -14,7 +14,7 @@ This issue proposes:
 
 ## Background
 
-[RFC-0003](../enhancements/0003-schedule-exceptions.md) explicitly listed "multiple simultaneous active exceptions" as a non-goal for v1, choosing simplicity over expressiveness. The enforcement lives in three places:
+[RFC-0003](../proposals/0003-schedule-exceptions.md) explicitly listed "multiple simultaneous active exceptions" as a non-goal for v1, choosing simplicity over expressiveness. The enforcement lives in three places:
 
 1. **Admission webhook** — `validateNoOverlappingExceptions` in `internal/validationwebhook/scheduleexception_validator.go` — rejects any new exception whose `validFrom`/`validUntil` range overlaps with an existing `Active` or `Pending` exception for the same plan, regardless of exception type or window content.
 2. **Provider reconciler** — `selectActiveException` in `internal/provider/provider.go` picks `lo.First()` (newest by `CreationTimestamp`) when multiple active exceptions exist, with a `TODO` noting that type-based prioritization is still needed.
@@ -244,7 +244,7 @@ type ScheduleEvaluation struct {
 | Shared types | `internal/message/plan.go` | No change (`ScheduleEvaluation.Exceptions` is already a slice) |
 | API | `api/v1alpha1/scheduleexception_types.go` | No change |
 | Tests | All components above | New test cases for composition, window collision, and `mergeByType` |
-| RFC | `enhancements/0003-schedule-exceptions.md` | Addendum documenting relaxed constraint and composition semantics |
+| RFC | `proposals/0003-schedule-exceptions.md` | Addendum documenting relaxed constraint and composition semantics |
 
 ---
 
@@ -264,7 +264,7 @@ type ScheduleEvaluation struct {
 
 ## Related
 
-- RFC-0003: [enhancements/0003-schedule-exceptions.md](../enhancements/0003-schedule-exceptions.md)
+- RFC-0003: [proposals/0003-schedule-exceptions.md](../proposals/0003-schedule-exceptions.md)
 - TODO in `selectActiveException`: `internal/provider/provider.go`
 - Webhook validator: `internal/validationwebhook/scheduleexception_validator.go`
 - Scheduler evaluator: `internal/scheduler/schedule.go`

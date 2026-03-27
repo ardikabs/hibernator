@@ -48,6 +48,9 @@ setup-envtest
 # Temporary files
 tmp/
 temp/
+
+# MkDocs build output
+website/site/
 *.tmp
 
 # Kubernetes configs (sensitive)

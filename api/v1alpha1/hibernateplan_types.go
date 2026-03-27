@@ -154,6 +154,7 @@ type ExecutionStrategy struct {
 
 // Execution holds strategy configuration.
 type Execution struct {
+	// Strategy defines how targets are executed.
 	Strategy ExecutionStrategy `json:"strategy"`
 }
 
@@ -210,6 +211,9 @@ type Target struct {
 }
 
 // Parameters is an opaque container for executor-specific config.
+// The JSON schema depends on the target's executor type. Each executor
+// defines its own parameter struct in pkg/executorparams (e.g.,
+// EKSParameters, RDSParameters, EC2Parameters, KarpenterParameters).
 // +kubebuilder:pruning:PreserveUnknownFields
 type Parameters struct {
 	// Raw holds the JSON-encoded parameters.
@@ -457,7 +461,10 @@ type HibernatePlan struct {
 	metav1.TypeMeta   `json:",inline"`
 	metav1.ObjectMeta `json:"metadata,omitempty"`
 
-	Spec   HibernatePlanSpec   `json:"spec,omitempty"`
+	// Spec defines the desired state of HibernatePlan.
+	Spec HibernatePlanSpec `json:"spec,omitempty"`
+
+	// Status defines the observed state of HibernatePlan.
 	Status HibernatePlanStatus `json:"status,omitempty"`
 }
 
@@ -467,7 +474,9 @@ type HibernatePlan struct {
 type HibernatePlanList struct {
 	metav1.TypeMeta `json:",inline"`
 	metav1.ListMeta `json:"metadata,omitempty"`
-	Items           []HibernatePlan `json:"items"`
+
+	// Items is the list of HibernatePlan resources.
+	Items []HibernatePlan `json:"items"`
 }
 
 // ExceptionReferencesEqual checks if two exception reference slices are equal.

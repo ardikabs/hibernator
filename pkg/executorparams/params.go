@@ -45,53 +45,68 @@ type AwaitCompletion struct {
 
 // EC2Parameters defines the expected parameters for the EC2 executor.
 type EC2Parameters struct {
-	Selector        EC2Selector     `json:"selector"`
+	// Selector defines how to find EC2 instances to hibernate.
+	Selector EC2Selector `json:"selector"`
+
+	// AwaitCompletion configures whether to wait for EC2 instances to reach the desired state.
 	AwaitCompletion AwaitCompletion `json:"awaitCompletion"`
 }
 
 // EC2Selector defines how to find EC2 instances.
 type EC2Selector struct {
-	Tags        map[string]string `json:"tags,omitempty"`
-	InstanceIDs []string          `json:"instanceIds,omitempty"`
+	// Tags filters instances by AWS resource tags.
+	Tags map[string]string `json:"tags,omitempty"`
+
+	// InstanceIDs is a list of explicit EC2 instance IDs to target.
+	InstanceIDs []string `json:"instanceIds,omitempty"`
 }
 
 // RDSParameters defines the expected parameters for the RDS executor.
 type RDSParameters struct {
-	SnapshotBeforeStop bool            `json:"snapshotBeforeStop,omitempty"`
-	Selector           RDSSelector     `json:"selector"`
-	AwaitCompletion    AwaitCompletion `json:"awaitCompletion"`
+	// SnapshotBeforeStop creates a final snapshot before stopping RDS instances.
+	SnapshotBeforeStop bool `json:"snapshotBeforeStop,omitempty"`
+
+	// Selector defines how to find RDS instances and clusters to hibernate.
+	Selector RDSSelector `json:"selector"`
+
+	// AwaitCompletion configures whether to wait for RDS resources to reach the desired state.
+	AwaitCompletion AwaitCompletion `json:"awaitCompletion"`
 }
 
 // RDSSelector defines how to find RDS instances and clusters.
 //
 // MUTUAL EXCLUSIVITY RULES:
 // Only ONE of the following selection methods can be used:
-//  1. Tag-based selection: Tags OR ExcludeTags (mutually exclusive with each other)
-//  2. Explicit IDs: InstanceIDs and/or ClusterIDs (intent-based, discovers exactly what you specify)
-//  3. Discovery mode: IncludeAll
+//  1. Tag-based selection: `tags` OR `excludeTags` (mutually exclusive with each other)
+//  2. Explicit IDs: `instanceIds` and/or `clusterIds` (intent-based, discovers exactly what you specify)
+//  3. Discovery mode: `includeAll`
 //
 // RESOURCE TYPE CONTROL:
-// For intent-based selection (InstanceIDs/ClusterIDs), resource types are implicit:
-//   - If InstanceIDs specified → discovers instances
-//   - If ClusterIDs specified → discovers clusters
+// For intent-based selection (`instanceIds`/`clusterIds`), resource types are implicit:
+//   - If `instanceIds` specified → discovers instances
+//   - If `clusterIds` specified → discovers clusters
 //   - If both specified → discovers both
 //
-// For dynamic discovery (Tags/ExcludeTags/IncludeAll), DiscoverInstances and DiscoverClusters
+// For dynamic discovery (`tags`/`excludeTags`/`includeAll`), `discoverInstances` and `discoverClusters`
 // must be explicitly enabled (opt-out by default):
 //   - Neither set: no resources discovered (no-op)
-//   - DiscoverInstances: true only: discovers only DB instances
-//   - DiscoverClusters: true only: discovers only DB clusters
+//   - `discoverInstances`: true only: discovers only DB instances
+//   - `discoverClusters`: true only: discovers only DB clusters
 //   - Both true: discovers both instances and clusters
 //
-// Examples:
-//   - Valid: {Tags: {"env": "prod"}, DiscoverInstances: true}  // only instances with tag
-//   - Valid: {ExcludeTags: {"critical": "true"}, DiscoverClusters: true}  // only clusters
-//   - Valid: {InstanceIDs: ["db-1", "db-2"], ClusterIDs: ["cluster-1"]}  // explicit both
-//   - Valid: {IncludeAll: true, DiscoverInstances: true, DiscoverClusters: true}  // all resources
-//   - No-op: {Tags: {"env": "prod"}}  // no discovery flags set, nothing discovered
-//   - Invalid: {Tags: {...}, InstanceIDs: [...]} - cannot mix tag-based with explicit IDs
-//   - Invalid: {Tags: {...}, ExcludeTags: {...}} - tags and excludeTags are mutually exclusive
-//   - Invalid: {IncludeAll: true, Tags: {...}} - includeAll cannot be combined with other methods
+// Examples (valid):
+//   - `{tags: {"env": "prod"}, discoverInstances: true}` — tag-based, discovers only DB instances
+//   - `{excludeTags: {"critical": "true"}, discoverClusters: true}` — exclusion-based, discovers only DB clusters
+//   - `{instanceIds: ["db-1", "db-2"], clusterIds: ["cluster-1"]}` — explicit IDs; resource types inferred from which IDs are provided
+//   - `{includeAll: true, discoverInstances: true, discoverClusters: true}` — discovers all instances and clusters in the region
+//
+// Examples (no-op — nothing will be discovered):
+//   - `{tags: {"env": "prod"}}` — tag-based selection requires at least one of `discoverInstances` or `discoverClusters`
+//
+// Examples (invalid — rejected at validation):
+//   - `{tags: {...}, instanceIds: [...]}` — cannot mix tag-based selection with explicit IDs
+//   - `{tags: {...}, excludeTags: {...}}` — tags and excludeTags are mutually exclusive
+//   - `{includeAll: true, tags: {...}}` — includeAll cannot be combined with any other selector
 type RDSSelector struct {
 	// Tags for inclusion. If value is empty string "", matches any instance with that key.
 	// If value is non-empty, matches only exact key=value.
@@ -115,12 +130,12 @@ type RDSSelector struct {
 	IncludeAll bool `json:"includeAll,omitempty"`
 
 	// DiscoverInstances controls whether to discover DB instances for dynamic selection methods.
-	// Only used with Tags, ExcludeTags, or IncludeAll (ignored for explicit InstanceIDs/ClusterIDs).
+	// Only used with `tags`, `excludeTags`, or `includeAll` (ignored for explicit `instanceIds`/`clusterIds`).
 	// Must be explicitly set to true to discover instances. Default: false (opt-out, no-op).
 	DiscoverInstances bool `json:"discoverInstances,omitempty"`
 
 	// DiscoverClusters controls whether to discover DB clusters for dynamic selection methods.
-	// Only used with Tags, ExcludeTags, or IncludeAll (ignored for explicit InstanceIDs/ClusterIDs).
+	// Only used with `tags`, `excludeTags`, or `includeAll` (ignored for explicit `instanceIds`/`clusterIds`).
 	// Must be explicitly set to true to discover clusters. Default: false (opt-out, no-op).
 	DiscoverClusters bool `json:"discoverClusters,omitempty"`
 }
@@ -132,30 +147,40 @@ type EKSParameters struct {
 	// ClusterName is the EKS cluster name (required).
 	ClusterName string `json:"clusterName"`
 	// NodeGroups to hibernate. If empty, all node groups in the cluster are targeted.
-	NodeGroups      []EKSNodeGroup  `json:"nodeGroups,omitempty"`
+	NodeGroups []EKSNodeGroup `json:"nodeGroups,omitempty"`
+
+	// AwaitCompletion configures whether to wait for node groups to reach the desired state.
 	AwaitCompletion AwaitCompletion `json:"awaitCompletion"`
 }
 
 // EKSNodeGroup specifies a managed node group to hibernate.
 type EKSNodeGroup struct {
+	// Name is the name of the managed node group.
 	Name string `json:"name"`
 }
 
 // KarpenterParameters defines the expected parameters for the Karpenter executor.
 type KarpenterParameters struct {
-	NodePools       []string        `json:"nodePools"`
+	// NodePools is a list of Karpenter NodePool names to hibernate.
+	NodePools []string `json:"nodePools"`
+
+	// AwaitCompletion configures whether to wait for node pools to drain.
 	AwaitCompletion AwaitCompletion `json:"awaitCompletion"`
 }
 
 // GKEParameters defines the expected parameters for the GKE executor.
 type GKEParameters struct {
+	// NodePools is a list of GKE node pool names to hibernate.
 	NodePools []string `json:"nodePools"`
 }
 
 // CloudSQLParameters defines the expected parameters for the Cloud SQL executor.
 type CloudSQLParameters struct {
+	// InstanceName is the Cloud SQL instance name.
 	InstanceName string `json:"instanceName"`
-	Project      string `json:"project"`
+
+	// Project is the GCP project ID containing the instance.
+	Project string `json:"project"`
 }
 
 // WorkloadScalerParameters defines the expected parameters for the workloadscaler executor.

@@ -1,4 +1,4 @@
-> **⚠️ ARCHIVED** — This document has been superseded by [RFC-0008](../../enhancements/0008-async-phase-driven-reconciler.md). Preserved for historical reference only.
+> **⚠️ ARCHIVED** — This document has been superseded by [RFC-0008](../../docs/proposals/0008-async-phase-driven-reconciler.md). Preserved for historical reference only.
 >
 > **Retractions (two items listed as ✅ Fixed were subsequently reverted in later refactoring):**
 > - **H3 / PR2**: `reconcileTruth()` was designed and documented here as fixed, but was **never implemented** in the codebase. The divergence-correction path is absent. See [docs/findings/async-reconciler-review.md F1](../findings/async-reconciler-review.md) for analysis.

@@ -44,7 +44,7 @@ spec:
           metadata:
             type: object
           spec:
-            description: HibernatePlanSpec defines the desired state of HibernatePlan.
+            description: Spec defines the desired state of HibernatePlan.
             properties:
               behavior:
                 description: Behavior defines how failures are handled.
@@ -73,7 +73,7 @@ spec:
                 description: Execution defines the execution strategy.
                 properties:
                   strategy:
-                    description: ExecutionStrategy defines how targets are executed.
+                    description: Strategy defines how targets are executed.
                     properties:
                       dependencies:
                         description: Dependencies define DAG edges (only valid when
@@ -248,7 +248,7 @@ spec:
             - targets
             type: object
           status:
-            description: HibernatePlanStatus defines the observed state of HibernatePlan.
+            description: Status defines the observed state of HibernatePlan.
             properties:
               currentCycleID:
                 description: CurrentCycleID is the current hibernation cycle identifier.

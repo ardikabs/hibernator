@@ -107,7 +107,7 @@ For entirely unimplemented features:
 ```markdown
 > **⚠️ FUTURE WORK NOTICE**
 > This journey describes the [feature] documented in **RFC-XXXX Phase N**, which is **NOT YET IMPLEMENTED**.
-> See [RFC-XXXX "Future Work"](../../enhancements/XXXX-name.md#section) for details.
+> See [RFC-XXXX "Future Work"](../../docs/proposals/XXXX-name.md#section) for details.
 ```
 
 ## Validation Checklist
@@ -138,7 +138,7 @@ Good reference journeys to study:
 
 - Review existing journeys in the parent directory
 - Check [User Journey Documentation](../README.md) for persona reference
-- Consult relevant RFCs in `enhancements/` directory
+- Consult relevant RFCs in `docs/proposals/` directory
 - Ask in #hibernator-dev channel
 
 ---

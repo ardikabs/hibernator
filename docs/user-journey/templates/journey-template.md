@@ -26,7 +26,7 @@
 > **⚠️ FUTURE WORK NOTICE**
 > This journey describes the [feature name] feature documented in **RFC-XXXX Phase N**, which is **NOT YET IMPLEMENTED**.
 > Current implementation (Phase 1-M) supports [what's currently available].
-> See [RFC-XXXX "Future Work: [Section Name]"](../../enhancements/XXXX-name.md#section-anchor) for the planned design.
+> See [RFC-XXXX "Future Work: [Section Name]"](../../proposals/XXXX-name.md#section-anchor) for the planned design.
 -->
 
 ---
@@ -205,8 +205,8 @@ kubectl logs [pod] -n hibernator-system
 
 ## RFC References
 
-- **[RFC-XXXX](../../enhancements/XXXX-name.md)** — [Brief description of which parts of the RFC this journey covers]
-- **[RFC-YYYY](../../enhancements/YYYY-name.md)** — [Another relevant RFC]
+- **[RFC-XXXX](../../proposals/XXXX-name.md)** — [Brief description of which parts of the RFC this journey covers]
+- **[RFC-YYYY](../../proposals/YYYY-name.md)** — [Another relevant RFC]
 
 ---
 

@@ -47,7 +47,11 @@ type StaticAuth struct {
 
 // SecretReference is a reference to a Secret.
 type SecretReference struct {
-	Name      string `json:"name"`
+	// Name is the name of the Secret.
+	Name string `json:"name"`
+
+	// Namespace is the namespace of the Secret.
+	// +optional
 	Namespace string `json:"namespace,omitempty"`
 }
 
@@ -110,7 +114,10 @@ type CloudProvider struct {
 	metav1.TypeMeta   `json:",inline"`
 	metav1.ObjectMeta `json:"metadata,omitempty"`
 
-	Spec   CloudProviderSpec   `json:"spec,omitempty"`
+	// Spec defines the desired state of CloudProvider.
+	Spec CloudProviderSpec `json:"spec,omitempty"`
+
+	// Status defines the observed state of CloudProvider.
 	Status CloudProviderStatus `json:"status,omitempty"`
 }
 
@@ -120,7 +127,9 @@ type CloudProvider struct {
 type CloudProviderList struct {
 	metav1.TypeMeta `json:",inline"`
 	metav1.ListMeta `json:"metadata,omitempty"`
-	Items           []CloudProvider `json:"items"`
+
+	// Items is the list of CloudProvider resources.
+	Items []CloudProvider `json:"items"`
 }
 
 func init() {

@@ -2,7 +2,7 @@
 
 **Focus**: Lean prototype of `kubectl hibernator` with 6 core commands
 
-**RFC Reference**: [enhancements/0007-kubectl-hibernator-cli-plugin.md](../../enhancements/0007-kubectl-hibernator-cli-plugin.md)
+**RFC Reference**: [docs/proposals/0007-kubectl-hibernator-cli-plugin.md](../../docs/proposals/0007-kubectl-hibernator-cli-plugin.md)
 
 **Last Updated**: 2026-02-20
 

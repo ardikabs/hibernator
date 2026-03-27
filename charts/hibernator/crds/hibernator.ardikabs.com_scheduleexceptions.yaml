@@ -58,7 +58,7 @@ spec:
           metadata:
             type: object
           spec:
-            description: ScheduleExceptionSpec defines the desired state of ScheduleException.
+            description: Spec defines the desired state of ScheduleException.
             properties:
               leadTime:
                 description: |-
@@ -150,7 +150,7 @@ spec:
             - windows
             type: object
           status:
-            description: ScheduleExceptionStatus defines the observed state of ScheduleException.
+            description: Status defines the observed state of ScheduleException.
             properties:
               appliedAt:
                 description: AppliedAt is when the exception was first applied.

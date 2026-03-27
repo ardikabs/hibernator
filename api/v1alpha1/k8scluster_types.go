@@ -21,7 +21,11 @@ const (
 
 // ProviderRef references a CloudProvider.
 type ProviderRef struct {
-	Name      string `json:"name"`
+	// Name is the name of the CloudProvider resource.
+	Name string `json:"name"`
+
+	// Namespace is the namespace of the CloudProvider resource.
+	// +optional
 	Namespace string `json:"namespace,omitempty"`
 }
 
@@ -53,7 +57,11 @@ type GKEConfig struct {
 
 // KubeconfigRef references a kubeconfig Secret.
 type KubeconfigRef struct {
-	Name      string `json:"name"`
+	// Name is the name of the Secret containing kubeconfig data.
+	Name string `json:"name"`
+
+	// Namespace is the namespace of the Secret.
+	// +optional
 	Namespace string `json:"namespace,omitempty"`
 }
 
@@ -116,7 +124,10 @@ type K8SCluster struct {
 	metav1.TypeMeta   `json:",inline"`
 	metav1.ObjectMeta `json:"metadata,omitempty"`
 
-	Spec   K8SClusterSpec   `json:"spec,omitempty"`
+	// Spec defines the desired state of K8SCluster.
+	Spec K8SClusterSpec `json:"spec,omitempty"`
+
+	// Status defines the observed state of K8SCluster.
 	Status K8SClusterStatus `json:"status,omitempty"`
 }
 
@@ -126,7 +137,9 @@ type K8SCluster struct {
 type K8SClusterList struct {
 	metav1.TypeMeta `json:",inline"`
 	metav1.ListMeta `json:"metadata,omitempty"`
-	Items           []K8SCluster `json:"items"`
+
+	// Items is the list of K8SCluster resources.
+	Items []K8SCluster `json:"items"`
 }
 
 func init() {

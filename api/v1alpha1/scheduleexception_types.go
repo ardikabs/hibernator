@@ -129,7 +129,10 @@ type ScheduleException struct {
 	metav1.TypeMeta   `json:",inline"`
 	metav1.ObjectMeta `json:"metadata,omitempty"`
 
-	Spec   ScheduleExceptionSpec   `json:"spec,omitempty"`
+	// Spec defines the desired state of ScheduleException.
+	Spec ScheduleExceptionSpec `json:"spec,omitempty"`
+
+	// Status defines the observed state of ScheduleException.
 	Status ScheduleExceptionStatus `json:"status,omitempty"`
 }
 
@@ -139,7 +142,9 @@ type ScheduleException struct {
 type ScheduleExceptionList struct {
 	metav1.TypeMeta `json:",inline"`
 	metav1.ListMeta `json:"metadata,omitempty"`
-	Items           []ScheduleException `json:"items"`
+
+	// Items is the list of ScheduleException resources.
+	Items []ScheduleException `json:"items"`
 }
 
 func init() {
