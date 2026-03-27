@@ -6,8 +6,9 @@ repo_name: ardikabs/hibernator
 
 theme:
   name: material
+  custom_dir: overrides
   logo: assets/img/hibernator-logo.png
-  favicon: assets/img/hibernator-logo.png
+  favicon: assets/img/hibernator-icon.png
   palette:
     - scheme: default
       primary: indigo
@@ -51,6 +52,9 @@ markdown_extensions:
   - tables
   - toc:
       permalink: true
+
+extra_css:
+  - assets/css/custom.css
 
 nav:
   - Home: index.md
