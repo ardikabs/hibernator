@@ -11,6 +11,15 @@ Step-by-step guides for common Hibernator operations.
 | [Schedule Exceptions](schedule-exceptions.md) | Create temporary schedule overrides |
 | [Multi-Window Schedules](multi-window-schedules.md) | Define multiple off-hour windows |
 
+## Operational Guides
+
+| Guide | Description |
+|-------|-------------|
+| [Plan Suspension](plan-suspension.md) | Temporarily disable a plan |
+| [Manual Actions](override-actions.md) | Override, restart, and retry operations outside the schedule |
+| [Error Recovery](error-recovery.md) | Handle and recover from execution failures |
+| [Schedule Boundaries](schedule-boundaries.md) | Understand edge cases in schedule evaluation |
+
 ## Executor Guides
 
 | Guide | Description |
@@ -22,13 +31,9 @@ Step-by-step guides for common Hibernator operations.
 | [WorkloadScaler Executor](workloadscaler-executor.md) | Scale Kubernetes workloads to zero |
 | [NoOp Executor](noop-executor.md) | Test plans without real resources |
 
-## Operational Guides
+## Reference
 
 | Guide | Description |
 |-------|-------------|
-| [Plan Suspension](plan-suspension.md) | Temporarily disable a plan |
-| [Manual Actions](override-actions.md) | Override, restart, and retry operations outside the schedule |
-| [Error Recovery](error-recovery.md) | Handle and recover from execution failures |
-| [Schedule Boundaries](schedule-boundaries.md) | Understand edge cases in schedule evaluation |
 | [CLI Reference](cli.md) | Install and use the `kubectl-hibernator` plugin |
 | [Troubleshooting](troubleshooting.md) | Diagnose common issues |

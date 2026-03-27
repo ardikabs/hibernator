@@ -1,4 +1,4 @@
-site_name: Hibernator
+site_name: Hibernator - A Cloud Off-Hours Manager
 site_description: Declarative Kubernetes operator for suspending and restoring cloud infrastructure during off-hours
 site_url: https://ardikabs.github.io/hibernator
 repo_url: https://github.com/ardikabs/hibernator
@@ -8,7 +8,7 @@ theme:
   name: material
   custom_dir: overrides
   logo: assets/img/hibernator-logo.png
-  favicon: assets/img/hibernator-icon.png
+  favicon: assets/img/hibernator-favicon.png
   palette:
     - scheme: default
       primary: indigo
@@ -25,10 +25,6 @@ theme:
   features:
     - navigation.instant
     - navigation.tracking
-    - navigation.tabs
-    - navigation.sections
-    - navigation.expand
-    - navigation.top
     - search.suggest
     - search.highlight
     - content.code.copy
@@ -63,28 +59,31 @@ nav:
       - Installation: getting-started/installation.md
       - Quick Start: getting-started/quickstart.md
   - Concepts:
-      - concepts/index.md
+      - Overview: concepts/index.md
       - Architecture: concepts/architecture.md
       - HibernatePlan: concepts/hibernateplan.md
       - Executors: concepts/executors.md
       - Schedule Exceptions: concepts/schedule-exceptions.md
       - Connectors: concepts/connectors.md
   - User Guides:
-      - user-guides/index.md
-      - Hibernation Lifecycle: user-guides/hibernation-lifecycle.md
-      - Execution Strategies: user-guides/execution-strategies.md
-      - EKS Executor: user-guides/eks-executor.md
-      - Karpenter Executor: user-guides/karpenter-executor.md
-      - EC2 Executor: user-guides/ec2-executor.md
-      - RDS Executor: user-guides/rds-executor.md
-      - WorkloadScaler Executor: user-guides/workloadscaler-executor.md
-      - NoOp Executor: user-guides/noop-executor.md
-      - Schedule Exceptions: user-guides/schedule-exceptions.md
-      - Multi-Window Schedules: user-guides/multi-window-schedules.md
-      - Plan Suspension: user-guides/plan-suspension.md
-      - Override Actions: user-guides/override-actions.md
-      - Error Recovery: user-guides/error-recovery.md
-      - Schedule Boundaries: user-guides/schedule-boundaries.md
+      - Overview: user-guides/index.md
+      - Core Operations:
+        - Hibernation Lifecycle: user-guides/hibernation-lifecycle.md
+        - Execution Strategies: user-guides/execution-strategies.md
+        - Schedule Exceptions: user-guides/schedule-exceptions.md
+        - Multi-Window Schedules: user-guides/multi-window-schedules.md
+      - Operational Guides:
+        - Plan Suspension: user-guides/plan-suspension.md
+        - Override Actions: user-guides/override-actions.md
+        - Error Recovery: user-guides/error-recovery.md
+        - Schedule Boundaries: user-guides/schedule-boundaries.md
+      - Executor Guides:
+        - EC2 Executor: user-guides/ec2-executor.md
+        - WorkloadScaler Executor: user-guides/workloadscaler-executor.md
+        - Karpenter Executor: user-guides/karpenter-executor.md
+        - EKS Executor: user-guides/eks-executor.md
+        - RDS Executor: user-guides/rds-executor.md
+        - NoOp Executor: user-guides/noop-executor.md
       - CLI Reference: user-guides/cli.md
       - Troubleshooting: user-guides/troubleshooting.md
   - API Reference:
