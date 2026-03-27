@@ -165,9 +165,6 @@ webhook:
 
 # controlPlane -- The Control plane configuration
 controlPlane:
-  # controlPlane.useLegacyReconciler -- Set to true to use the legacy reconciler implementation instead of the new one (async-phase driven reconciler).
-  useLegacyReconciler: true
-
   # controlPlane.endpoint -- Endpoint for the runner to connect to the control plane.
   # This should be the service DNS name of the control plane service (e.g., hibernator-control-plane.hibernator-system.svc) or an external endpoint if using a remote control plane.
   endpoint: "hibernator.hibernator-system.svc"

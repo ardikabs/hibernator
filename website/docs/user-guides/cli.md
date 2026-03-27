@@ -10,7 +10,7 @@ Download the binary for your platform from the [GitHub Releases](https://github.
 
     ```bash
     curl -Lo kubectl-hibernator \
-      https://github.com/ardikabs/hibernator/releases/download/v1.4.1/kubectl-hibernator-linux-amd64
+      https://github.com/ardikabs/hibernator/releases/download/v1.5.0/kubectl-hibernator-linux-amd64
     chmod +x kubectl-hibernator
     sudo mv kubectl-hibernator /usr/local/bin/
     ```
@@ -19,7 +19,7 @@ Download the binary for your platform from the [GitHub Releases](https://github.
 
     ```bash
     curl -Lo kubectl-hibernator \
-      https://github.com/ardikabs/hibernator/releases/download/v1.4.1/kubectl-hibernator-linux-arm64
+      https://github.com/ardikabs/hibernator/releases/download/v1.5.0/kubectl-hibernator-linux-arm64
     chmod +x kubectl-hibernator
     sudo mv kubectl-hibernator /usr/local/bin/
     ```
@@ -28,7 +28,7 @@ Download the binary for your platform from the [GitHub Releases](https://github.
 
     ```bash
     curl -Lo kubectl-hibernator \
-      https://github.com/ardikabs/hibernator/releases/download/v1.4.1/kubectl-hibernator-darwin-amd64
+      https://github.com/ardikabs/hibernator/releases/download/v1.5.0/kubectl-hibernator-darwin-amd64
     chmod +x kubectl-hibernator
     sudo mv kubectl-hibernator /usr/local/bin/
     ```
@@ -37,7 +37,7 @@ Download the binary for your platform from the [GitHub Releases](https://github.
 
     ```bash
     curl -Lo kubectl-hibernator \
-      https://github.com/ardikabs/hibernator/releases/download/v1.4.1/kubectl-hibernator-darwin-arm64
+      https://github.com/ardikabs/hibernator/releases/download/v1.5.0/kubectl-hibernator-darwin-arm64
     chmod +x kubectl-hibernator
     sudo mv kubectl-hibernator /usr/local/bin/
     ```
