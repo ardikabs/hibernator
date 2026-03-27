@@ -4,7 +4,7 @@
 
 ```bash
 # Install with default values
-helm install hibernator oci://ghcr.io/ardikabs/charts/hibernator --version 1.3.0 \
+helm install hibernator oci://ghcr.io/ardikabs/charts/hibernator --version 1.4.0 \
   -n hibernator-system --create-namespace
 ```
 
