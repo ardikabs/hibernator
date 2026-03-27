@@ -1,8 +1,3 @@
----
-hide:
-  - navigation
----
-
 # Hibernator
 
 <div align="center">
