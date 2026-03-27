@@ -82,7 +82,7 @@ The operator separates concerns:
 
 ## Documentation
 
-- 🚀 **[Usage Guide](USAGE.md)**: Installation, Quick Start, and Configuration.
-- 🗺️ **[Roadmap](ROADMAP.md)**: Current status, planned features, and known limitations.
+- 🚀 **[Usage Guide](https://ardikabs.github.io/hibernator/getting-started/)**: Installation, Quick Start, and Configuration.
+- 🗺️ **[Roadmap](https://ardikabs.github.io/hibernator/roadmap/)**: Current status, planned features, and known limitations.
 - 🤝 **[Contributing](CONTRIBUTING.md)**: How to get involved and development guidelines.
 - 📚 **[Reference Documentation](docs/proposals/)**: Detailed design RFCs and architecture principles.

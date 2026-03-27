@@ -343,7 +343,7 @@ tools: controller-gen envtest mockery protoc-gen-go protoc-gen-go-grpc crd-ref-d
 .PHONY: docs-serve
 docs-serve: ## Serve the documentation site locally with live reload (requires Docker).
 	@echo "$(CYAN)Starting docs server at http://localhost:8000 ...$(RESET)"
-	docker run --rm -it -p 8000:8000 -v $(PWD)/$(DOCS_DIR):/docs $(DOCS_IMAGE)
+	docker run --rm -it -p 8000:8000 -v $(PWD):/app --workdir /app/$(DOCS_DIR) $(DOCS_IMAGE)
 
 .PHONY: docs-api-gen
 docs-api-gen: crd-ref-docs ## Generate API reference documentation from CRD types.
@@ -366,5 +366,5 @@ docs-executor-params-gen: ## Generate executor parameters reference from Go type
 .PHONY: docs-build
 docs-build: ## Build the static documentation site into website/site/ (requires Docker).
 	@echo "$(CYAN)Building documentation site...$(RESET)"
-	docker run --rm -v $(PWD)/$(DOCS_DIR):/docs $(DOCS_IMAGE) build
+	docker run --rm -v $(PWD):/app --workdir=/app/$(DOCS_DIR) $(DOCS_IMAGE) build
 	@echo "$(GREEN)Documentation built: $(DOCS_DIR)/site/$(RESET)"

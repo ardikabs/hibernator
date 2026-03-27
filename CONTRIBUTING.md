@@ -47,7 +47,7 @@ make test-coverage
 1. **Read the RFCs**: Start with [`docs/proposals/0001-hibernate-operator.md`](docs/proposals/0001-hibernate-operator.md) for project architecture.
 2. **Discuss first**: Open an issue for major changes before implementation to ensure alignment with the project's goals.
 3. **Write tests**: Add unit tests for all new code and integration tests for new features.
-4. **Update docs**: Keep the `README.md`, `USAGE.md`, and relevant RFCs synchronized with your changes.
+4. **Update docs**: Keep the `README.md` and relevant RFCs synchronized with your changes. Documentation site source is in `website/docs/`.
 5. **Submit a Pull Request**: Ensure your code passes all linting and test checks before submitting.
 
 ## License
