@@ -47,7 +47,7 @@ spec:
           metadata:
             type: object
           spec:
-            description: CloudProviderSpec defines the desired state of CloudProvider.
+            description: Spec defines the desired state of CloudProvider.
             properties:
               aws:
                 description: AWS holds AWS-specific configuration (required when Type=aws).
@@ -78,8 +78,10 @@ spec:
                               credentials.
                             properties:
                               name:
+                                description: Name is the name of the Secret.
                                 type: string
                               namespace:
+                                description: Namespace is the namespace of the Secret.
                                 type: string
                             required:
                             - name
@@ -105,7 +107,7 @@ spec:
             - type
             type: object
           status:
-            description: CloudProviderStatus defines the observed state of CloudProvider.
+            description: Status defines the observed state of CloudProvider.
             properties:
               lastValidated:
                 description: LastValidated is when credentials were last validated.

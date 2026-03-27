@@ -79,10 +79,10 @@ kubectl hibernator show schedule my-hibernation-plan.yaml --next 14
 # Configured Schedule:
 #   Timezone: America/New_York
 #   Off-Hours: 20:00 - 06:00 (Monday - Friday)
-# 
+#
 # Current State: Active (Running normally)
 # Next Phase: Hibernating (in 3 hours 42 minutes at 2026-02-20 20:00 EST)
-# 
+#
 # Next 14 Scheduled Events:
 #   1. Hibernating  → 2026-02-20 20:00 EST (Fri)
 #   2. Hibernated   → 2026-02-21 06:00 EST (Fri)
@@ -302,9 +302,9 @@ kubectl hibernator show status app-prod-hibernation -n production
 
 ## RFC References
 
-- [RFC-0007](../enhancements/0007-kubectl-hibernator-cli-plugin.md) — CLI plugin design and implementation
-- [RFC-0001](../enhancements/0001-hibernate-operator.md) — Core operator architecture (context for operational tasks)
-- [RFC-0003](../enhancements/0003-schedule-exceptions.md) — Exception system (suspend alternative to CLI)
+- [RFC-0007](../proposals/0007-kubectl-hibernator-cli-plugin.md) — CLI plugin design and implementation
+- [RFC-0001](../proposals/0001-hibernate-operator.md) — Core operator architecture (context for operational tasks)
+- [RFC-0003](../proposals/0003-schedule-exceptions.md) — Exception system (suspend alternative to CLI)
 
 ---
 

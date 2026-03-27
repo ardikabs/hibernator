@@ -77,4 +77,4 @@ The E2E tests validate:
 
 - [API Types](../../api/v1alpha1/)
 - [Core Design Principles](../../.github/instructions/core-design-principles.md)
-- [RFC-0001 (Hibernation Operator)](../../enhancements/0001-hibernate-operator.md)
+- [RFC-0001 (Hibernation Operator)](../../docs/proposals/0001-hibernate-operator.md)

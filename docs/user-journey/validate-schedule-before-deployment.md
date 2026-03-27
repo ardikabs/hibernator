@@ -80,10 +80,10 @@ kubectl hibernator show schedule my-app-prod-hibernation.yaml
 # Configured Schedule:
 #   Timezone: America/New_York
 #   Off-Hours: 20:00 - 06:00 (Monday - Friday)
-# 
+#
 # ✓ Schedule is valid and unambiguous
 # ✓ No timezone conflicts detected
-# 
+#
 # Next 10 Scheduled Events (starting from now):
 #   1. Hibernating  → 2026-02-20 20:00 EST (Friday)
 #   2. Hibernated   → 2026-02-21 06:00 EST (Friday)
@@ -107,7 +107,7 @@ kubectl hibernator show schedule my-app-prod-hibernation.yaml
 ```bash
 # Share schedule output with team:
 # "Here's the schedule - every weekday 8 PM to 6 AM EST, offline on weekends"
-# 
+#
 # Team confirms:
 # ✓ Aligns with business hours (opens at 6 AM, closes at 8 PM)
 # ✓ Weekends are covered (resources stay online for Monday launch)
@@ -305,9 +305,9 @@ kubectl hibernator show schedule my-app-test-hibernation.yaml
 
 ## RFC References
 
-- [RFC-0007](../enhancements/0007-kubectl-hibernator-cli-plugin.md) — CLI plugin design (contains `show schedule` command specification)
-- [RFC-0002](../enhancements/0002-schedule-format-migration.md) — Schedule format specification (start/end/daysOfWeek)
-- [RFC-0003](../enhancements/0003-schedule-exceptions.md) — Exception system (exceptions interact with schedule validation)
+- [RFC-0007](../proposals/0007-kubectl-hibernator-cli-plugin.md) — CLI plugin design (contains `show schedule` command specification)
+- [RFC-0002](../proposals/0002-schedule-format-migration.md) — Schedule format specification (start/end/daysOfWeek)
+- [RFC-0003](../proposals/0003-schedule-exceptions.md) — Exception system (exceptions interact with schedule validation)
 
 ---
 

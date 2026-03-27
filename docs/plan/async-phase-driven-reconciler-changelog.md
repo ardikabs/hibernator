@@ -1,4 +1,4 @@
-> **⚠️ ARCHIVED** — This document has been superseded by [RFC-0008](../../enhancements/0008-async-phase-driven-reconciler.md). Do not modify. Preserved for historical reference only.
+> **⚠️ ARCHIVED** — This document has been superseded by [RFC-0008](../../docs/proposals/0008-async-phase-driven-reconciler.md). Do not modify. Preserved for historical reference only.
 
 # Async Phase-Driven Reconciler — Implementation Changelog
 

@@ -466,7 +466,7 @@ All user journeys are located in `docs/user-journey/` and follow this structure:
 
 ## RFC References
 
-- [RFC-XXXX](../enhancements/XXXX-name.md) — Brief description
+- [RFC-XXXX](../docs/proposals/XXXX-name.md) — Brief description
 ```
 
 ### When to Create User Journeys
@@ -484,11 +484,11 @@ User journeys are created **at RFC approval time**, not after implementation:
 
 | RFC | Status | Required Journeys | Documentation |
 |-----|--------|-------------------|---|
-| [RFC-0001](../enhancements/0001-hibernate-operator.md) | In Progress 🚀 | `hibernation-plan-initial-design.md`, `deploy-operator-to-cluster.md`, `monitor-hibernation-execution.md` | Document control-plane architecture, Job execution, and status tracking |
-| [RFC-0002](../enhancements/0002-schedule-format-migration.md) | Implemented ✅ | `hibernation-plan-initial-design.md` | Document schedule format with start/end/daysOfWeek syntax |
-| [RFC-0003](../enhancements/0003-schedule-exceptions.md) | Implemented ✅ | `create-emergency-exception.md`, `extend-hibernation-for-event.md`, `suspend-hibernation-during-incident.md` | Document time-bound exception types (extend, suspend, replace) and Phase 5 composable multi-exception semantics. Approval workflows (Phase 6+) are future work. |
-| [RFC-0004](../enhancements/0004-scale-subresource-executor.md) | Implemented ✅ | `scale-workloads-in-cluster.md` | Document workload scale subresource executor |
-| [RFC-0005](../enhancements/0005-serviceaccount-semantic-enhancements.md) | Proposed 📋 | TBD (future work) | Advanced ServiceAccount configuration patterns (not yet implemented) |
+| [RFC-0001](../docs/proposals/0001-hibernate-operator.md) | In Progress 🚀 | `hibernation-plan-initial-design.md`, `deploy-operator-to-cluster.md`, `monitor-hibernation-execution.md` | Document control-plane architecture, Job execution, and status tracking |
+| [RFC-0002](../docs/proposals/0002-schedule-format-migration.md) | Implemented ✅ | `hibernation-plan-initial-design.md` | Document schedule format with start/end/daysOfWeek syntax |
+| [RFC-0003](../docs/proposals/0003-schedule-exceptions.md) | Implemented ✅ | `create-emergency-exception.md`, `extend-hibernation-for-event.md`, `suspend-hibernation-during-incident.md` | Document time-bound exception types (extend, suspend, replace) and Phase 5 composable multi-exception semantics. Approval workflows (Phase 6+) are future work. |
+| [RFC-0004](../docs/proposals/0004-scale-subresource-executor.md) | Implemented ✅ | `scale-workloads-in-cluster.md` | Document workload scale subresource executor |
+| [RFC-0005](../docs/proposals/0005-serviceaccount-semantic-enhancements.md) | Proposed 📋 | TBD (future work) | Advanced ServiceAccount configuration patterns (not yet implemented) |
 
 ### User Journey as High-Level Interpretation
 
@@ -538,7 +538,7 @@ When creating a new user journey:
 
 5. **Link RFC(s):**
    - Every journey referencing an RFC should include RFC link in "## RFC References" section
-   - Format: `- [RFC-XXXX](../enhancements/XXXX-name.md) — Brief description of RFC relevance`
+   - Format: `- [RFC-XXXX](../docs/proposals/XXXX-name.md) — Brief description of RFC relevance`
 
 6. **Register in hub README:**
    - Add journey name and link to `docs/user-journey/README.md`
@@ -585,12 +585,12 @@ All findings are located in `docs/findings/` and **MUST** follow the template at
 
 | RFC | Status | Keywords | Use When |
 |-----|--------|----------|----------|
-| [RFC-0001](../enhancements/0001-hibernate-operator.md) | Implemented ✅ | Architecture, Control-Plane, Executors, Streaming, Security, Scheduling, Dependency-Resolution, Job-Lifecycle, RBAC, Restore-Metadata | User asks about operator architecture, execution model, streaming auth, security, or job lifecycle |
-| [RFC-0002](../enhancements/0002-schedule-format-migration.md) | Implemented ✅ | Schedule-Format, Time-Windows, Cron-Conversion, API-Design, Timezone-Aware, Validation, User-Experience, Migration, OffHourWindow, Conversion | User asks about schedule validation, time windows, cron conversion, timezone handling, or API changes |
-| [RFC-0003](../enhancements/0003-schedule-exceptions.md) | Implemented ✅ | Schedule-Exceptions, Maintenance-Windows, Lead-Time, Time-Bound, Extend, Suspend, Replace, Emergency-Events, Validation, Status-Tracking, Independent-CRD, GitOps, Composable-Exceptions, mergeByType | User asks about schedule exceptions, emergency overrides, maintenance windows, time-bound deviations, composable multi-exception semantics, or temporary schedule changes |
-| [RFC-0004](../enhancements/0004-scale-subresource-executor.md) | Implemented ✅ | Executors, Kubernetes, Scale-Subresource, Downscale, Restore-Metadata, RBAC, WorkloadScaler | User asks about workload downscaling, scale subresource usage, workloadscaler executor, or RBAC for scaling |
-| [RFC-0005](../enhancements/0005-serviceaccount-semantic-enhancements.md) | Proposed 📋 | ServiceAccount, IRSA, Workload-Identity, Multi-Cloud, Validation, Credential-Management, Federated-Identity, Audit | User asks about advanced ServiceAccount configurations, multi-cloud identity federation, or explicit pod identity management |
-| [RFC-0008](../enhancements/0008-async-phase-driven-reconciler.md) | In Progress 🚀 | AsyncReconciler, WatchablePipeline, PhaseProcessors, Provider, Worker, Coordinator, LegacyMigration, FeatureFlag, StatusWriter, IdempotencyGuarantees, Monolith-Refactor, PubSub | User asks about the async reconciler, watchable pipeline, Coordinator/Worker actor model, feature flag `--legacy-reconciler`, status writer, or refactoring the monolithic controller |
+| [RFC-0001](../docs/proposals/0001-hibernate-operator.md) | Implemented ✅ | Architecture, Control-Plane, Executors, Streaming, Security, Scheduling, Dependency-Resolution, Job-Lifecycle, RBAC, Restore-Metadata | User asks about operator architecture, execution model, streaming auth, security, or job lifecycle |
+| [RFC-0002](../docs/proposals/0002-schedule-format-migration.md) | Implemented ✅ | Schedule-Format, Time-Windows, Cron-Conversion, API-Design, Timezone-Aware, Validation, User-Experience, Migration, OffHourWindow, Conversion | User asks about schedule validation, time windows, cron conversion, timezone handling, or API changes |
+| [RFC-0003](../docs/proposals/0003-schedule-exceptions.md) | Implemented ✅ | Schedule-Exceptions, Maintenance-Windows, Lead-Time, Time-Bound, Extend, Suspend, Replace, Emergency-Events, Validation, Status-Tracking, Independent-CRD, GitOps, Composable-Exceptions, mergeByType | User asks about schedule exceptions, emergency overrides, maintenance windows, time-bound deviations, composable multi-exception semantics, or temporary schedule changes |
+| [RFC-0004](../docs/proposals/0004-scale-subresource-executor.md) | Implemented ✅ | Executors, Kubernetes, Scale-Subresource, Downscale, Restore-Metadata, RBAC, WorkloadScaler | User asks about workload downscaling, scale subresource usage, workloadscaler executor, or RBAC for scaling |
+| [RFC-0005](../docs/proposals/0005-serviceaccount-semantic-enhancements.md) | Proposed 📋 | ServiceAccount, IRSA, Workload-Identity, Multi-Cloud, Validation, Credential-Management, Federated-Identity, Audit | User asks about advanced ServiceAccount configurations, multi-cloud identity federation, or explicit pod identity management |
+| [RFC-0008](../docs/proposals/0008-async-phase-driven-reconciler.md) | In Progress 🚀 | AsyncReconciler, WatchablePipeline, PhaseProcessors, Provider, Worker, Coordinator, LegacyMigration, FeatureFlag, StatusWriter, IdempotencyGuarantees, Monolith-Refactor, PubSub | User asks about the async reconciler, watchable pipeline, Coordinator/Worker actor model, feature flag `--legacy-reconciler`, status writer, or refactoring the monolithic controller |
 
 **Keyword Matching Strategy:**
 1. Extract keywords from user request
@@ -600,7 +600,7 @@ All findings are located in `docs/findings/` and **MUST** follow the template at
 
 ## References
 
-- **RFCs Directory**: [All RFCs](../enhancements/) — Complete list of design documents
+- **RFCs Directory**: [All RFCs](../docs/proposals/) — Complete list of design documents
 - **User Journey Hub**: [User Journeys](../docs/user-journey/README.md) — Index of all user journey documents
 
 ---

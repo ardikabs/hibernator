@@ -7,7 +7,7 @@
 [![Kubernetes](https://img.shields.io/badge/Kubernetes-1.34+-326CE5?logo=kubernetes)](https://kubernetes.io)
 
 <div align="center">
-  <img src="docs/img/hibernator-full.png" alt="Hibernator Logo">
+  <img src="website/docs/assets/img/hibernator-full.png" alt="Hibernator Logo">
 </div>
 
 ## Overview
@@ -85,4 +85,4 @@ The operator separates concerns:
 - 🚀 **[Usage Guide](USAGE.md)**: Installation, Quick Start, and Configuration.
 - 🗺️ **[Roadmap](ROADMAP.md)**: Current status, planned features, and known limitations.
 - 🤝 **[Contributing](CONTRIBUTING.md)**: How to get involved and development guidelines.
-- 📚 **[Reference Documentation](enhancements/)**: Detailed design RFCs and architecture principles.
+- 📚 **[Reference Documentation](docs/proposals/)**: Detailed design RFCs and architecture principles.

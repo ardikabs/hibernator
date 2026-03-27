@@ -1,4 +1,4 @@
-> **⚠️ ARCHIVED** — This document has been superseded by [RFC-0008](../../enhancements/0008-async-phase-driven-reconciler.md). Do not modify. Preserved for historical reference only.
+> **⚠️ ARCHIVED** — This document has been superseded by [RFC-0008](../../docs/proposals/0008-async-phase-driven-reconciler.md). Do not modify. Preserved for historical reference only.
 
 # Async Phase-Driven Reconciler Architecture
 
@@ -715,5 +715,5 @@ Verify coalescing, initial state bootstrap, panic recovery, metrics.
 - [Envoy Gateway Architecture](https://github.com/envoyproxy/gateway) — Pipeline design inspiration
 - [Envoy Gateway HandleSubscription](https://github.com/envoyproxy/gateway/blob/main/internal/message/watchutil.go) — Subscription handler pattern
 - [telepresenceio/watchable](https://github.com/telepresenceio/watchable) — Pub/sub map library
-- [RFC-0001: Hibernate Operator](../../enhancements/0001-hibernate-operator.md) — Core architecture reference
-- [RFC-0006: Notification System](../../enhancements/0006-notification-system.md) — Future feature that benefits from async pipeline
+- [RFC-0001: Hibernate Operator](../../docs/proposals/0001-hibernate-operator.md) — Core architecture reference
+- [RFC-0006: Notification System](../../docs/proposals/0006-notification-system.md) — Future feature that benefits from async pipeline

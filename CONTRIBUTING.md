@@ -44,7 +44,7 @@ make test-coverage
 
 ## How to Contribute
 
-1. **Read the RFCs**: Start with [`enhancements/0001-hibernate-operator.md`](enhancements/0001-hibernate-operator.md) for project architecture.
+1. **Read the RFCs**: Start with [`docs/proposals/0001-hibernate-operator.md`](docs/proposals/0001-hibernate-operator.md) for project architecture.
 2. **Discuss first**: Open an issue for major changes before implementation to ensure alignment with the project's goals.
 3. **Write tests**: Add unit tests for all new code and integration tests for new features.
 4. **Update docs**: Keep the `README.md`, `USAGE.md`, and relevant RFCs synchronized with your changes.

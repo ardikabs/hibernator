@@ -217,7 +217,7 @@ rds_database: isLive=true
 
 ## RFC References
 
-- **[RFC-0001](../../enhancements/0001-hibernate-operator.md)** — Core Architecture (Restore Data Management)
+- **[RFC-0001](../../docs/proposals/0001-hibernate-operator.md)** — Core Architecture (Restore Data Management)
 
 ---
 

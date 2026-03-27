@@ -1,0 +1,90 @@
+site_name: Hibernator
+site_description: Declarative Kubernetes operator for suspending and restoring cloud infrastructure during off-hours
+site_url: https://ardikabs.github.io/hibernator
+repo_url: https://github.com/ardikabs/hibernator
+repo_name: ardikabs/hibernator
+
+theme:
+  name: material
+  logo: assets/img/hibernator-logo.png
+  favicon: assets/img/hibernator-logo.png
+  palette:
+    - scheme: default
+      primary: indigo
+      accent: indigo
+      toggle:
+        icon: material/brightness-7
+        name: Switch to dark mode
+    - scheme: slate
+      primary: indigo
+      accent: indigo
+      toggle:
+        icon: material/brightness-4
+        name: Switch to light mode
+  features:
+    - navigation.instant
+    - navigation.tracking
+    - navigation.tabs
+    - navigation.sections
+    - navigation.expand
+    - navigation.top
+    - search.suggest
+    - search.highlight
+    - content.code.copy
+    - content.tabs.link
+
+markdown_extensions:
+  - admonition
+  - pymdownx.details
+  - pymdownx.emoji:
+      emoji_index: !!python/name:material.extensions.emoji.twemoji
+      emoji_generator: !!python/name:material.extensions.emoji.to_svg
+  - pymdownx.superfences
+  - pymdownx.tabbed:
+      alternate_style: true
+  - pymdownx.highlight:
+      anchor_linenums: true
+  - pymdownx.inlinehilite
+  - pymdownx.snippets
+  - attr_list
+  - md_in_html
+  - tables
+  - toc:
+      permalink: true
+
+nav:
+  - Home: index.md
+  - Getting Started:
+      - getting-started/index.md
+      - Installation: getting-started/installation.md
+      - Quick Start: getting-started/quickstart.md
+  - Concepts:
+      - concepts/index.md
+      - Architecture: concepts/architecture.md
+      - HibernatePlan: concepts/hibernateplan.md
+      - Executors: concepts/executors.md
+      - Schedule Exceptions: concepts/schedule-exceptions.md
+      - Connectors: concepts/connectors.md
+  - User Guides:
+      - user-guides/index.md
+      - Hibernation Lifecycle: user-guides/hibernation-lifecycle.md
+      - Execution Strategies: user-guides/execution-strategies.md
+      - EKS Executor: user-guides/eks-executor.md
+      - Karpenter Executor: user-guides/karpenter-executor.md
+      - EC2 Executor: user-guides/ec2-executor.md
+      - RDS Executor: user-guides/rds-executor.md
+      - WorkloadScaler Executor: user-guides/workloadscaler-executor.md
+      - NoOp Executor: user-guides/noop-executor.md
+      - Schedule Exceptions: user-guides/schedule-exceptions.md
+      - Multi-Window Schedules: user-guides/multi-window-schedules.md
+      - Plan Suspension: user-guides/plan-suspension.md
+      - Override Actions: user-guides/override-actions.md
+      - Error Recovery: user-guides/error-recovery.md
+      - Schedule Boundaries: user-guides/schedule-boundaries.md
+      - CLI Reference: user-guides/cli.md
+      - Troubleshooting: user-guides/troubleshooting.md
+  - API Reference:
+      - api-reference/index.md
+      - Executor Parameters: api-reference/executor-parameters.md
+  - Roadmap: roadmap.md
+  - FAQ: faq.md
