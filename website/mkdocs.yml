@@ -87,4 +87,5 @@ nav:
       - api-reference/index.md
       - Executor Parameters: api-reference/executor-parameters.md
   - Roadmap: roadmap.md
+  - Changelog: changelog.md
   - FAQ: faq.md
