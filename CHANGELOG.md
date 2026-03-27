@@ -1,3 +1,32 @@
+<a name="v1.5.0"></a>
+
+## [v1.5.0](https://github.com/ardikabs/hibernator/compare/v1.4.1...v1.5.0) (2026-03-27)
+
+### ✨ Features
+
+* removing old controller as well as --legacy-controller flag ([#82](https://github.com/ardikabs/hibernator/issues/82))
+* new subcommand for override and restart action ([#79](https://github.com/ardikabs/hibernator/issues/79))
+* introduce override state handling ([#78](https://github.com/ardikabs/hibernator/issues/78))
+* **runner:** guarantee restore point on no-op shutdown + pipeline tests ([#76](https://github.com/ardikabs/hibernator/issues/76))
+
+### 🐛 Bug Fixes
+
+* the IN attribute in preview should be relative to user time ([#81](https://github.com/ardikabs/hibernator/issues/81))
+* **executor:** empty restore point is considered no-op ([#75](https://github.com/ardikabs/hibernator/issues/75))
+* **executor:** ignore notfound error on List API ([#70](https://github.com/ardikabs/hibernator/issues/70))
+* **scheduler:** advance next event times past exception window boundaries ([#87](https://github.com/ardikabs/hibernator/issues/87))
+
+### 🛠️ Code Refactoring
+
+* DAG execution with depedency check ([#86](https://github.com/ardikabs/hibernator/issues/86))
+* enhance provider reconciler  ([#83](https://github.com/ardikabs/hibernator/issues/83))
+* **scheduler:** add support for multi schedule exception ([#85](https://github.com/ardikabs/hibernator/issues/85))
+
+### 🧹 Miscellaneous
+
+* rename internal patch to a clearer name and avoid using Error logs for handler terminal ([#80](https://github.com/ardikabs/hibernator/issues/80))
+* refine recovery log ([#69](https://github.com/ardikabs/hibernator/issues/69))
+
 <a name="v1.4.1"></a>
 
 ## [v1.4.1](https://github.com/ardikabs/hibernator/compare/v1.4.0...v1.4.1) (2026-03-09)
