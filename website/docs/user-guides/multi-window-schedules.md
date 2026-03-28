@@ -74,16 +74,12 @@ spec:
           instanceIds: ["staging-db"]
 ```
 
-## Edge Cases
+## Adjacent Windows
 
-### Overnight Windows
+If a wakeup time from one window coincides with the start of another window on the same or next listed day, the controller handles this correctly — the system remains hibernated without an unnecessary wakeup/re-hibernate cycle. This is demonstrated in the three-window example above, where the Friday 17:00 window, weekend windows, and Monday 07:00 wakeup form a continuous hibernation period from Friday afternoon through Monday morning.
 
-When `end` is earlier than `start` (e.g., `start: "20:00"`, `end: "06:00"`), the window spans midnight into the next day.
-
-### Adjacent Windows
-
-If a wakeup time from one window coincides with the start of another window, the controller handles this correctly — the system remains hibernated without an unnecessary wakeup/re-hibernate cycle.
-
-### Window Collisions with Exceptions
+## Window Interactions with Exceptions
 
 When a `ScheduleException` of type `extend` adds windows, the new windows are merged with the base schedule using the same OR-logic. If an extend window contains a base wakeup time, the collision is resolved correctly.
+
+For combining multiple exceptions on the same plan (e.g., extend + suspend, replace + extend), see [Composing Multiple Exceptions](composing-multiple-exceptions.md).

@@ -139,11 +139,14 @@ kubectl logs -n hibernator-system -l hibernator/plan=dev-offhours
 
 ## What Happens Next?
 
-- At **20:00 Asia/Jakarta**, the controller evaluates the schedule and begins shutdown
+- At **20:00 Asia/Jakarta** on a listed day, the controller evaluates the schedule and begins shutdown
 - Targets are executed following DAG order: `dev-karpenter` and `dev-db` first (parallel), then `dev-eks-nodegroups`
 - Restore metadata is captured and persisted in ConfigMaps
-- At **06:00 Asia/Jakarta**, the controller triggers wakeup in reverse order
+- At **06:00 Asia/Jakarta** on the next listed day, the controller triggers wakeup in reverse order
 - Resources are restored using the saved metadata
+
+!!! note
+    Wakeup only triggers on days in `daysOfWeek`. With weekday-only schedules (MON–FRI), Friday 20:00 hibernation stays until **Monday 06:00** — Saturday and Sunday are not execution days.
 
 ## Next Steps
 
