@@ -19,6 +19,7 @@ Step-by-step guides for common Hibernator operations.
 | [Manual Actions](override-actions.md) | Override, restart, and retry operations outside the schedule |
 | [Error Recovery](error-recovery.md) | Handle and recover from execution failures |
 | [Schedule Boundaries](schedule-boundaries.md) | Understand edge cases in schedule evaluation |
+| [Composing Multiple Exceptions](composing-multiple-exceptions.md) | Combine extend, suspend, and replace exceptions on the same plan |
 
 ## Executor Guides
 

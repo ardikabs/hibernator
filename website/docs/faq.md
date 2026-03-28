@@ -34,7 +34,7 @@ The controller re-evaluates the schedule on startup and takes the appropriate ac
 
 ### How do overnight windows work?
 
-When `end` is earlier than `start` (e.g., 20:00–06:00), the window spans midnight into the next day. The `daysOfWeek` refers to the day the window starts.
+When `end` is earlier than `start` (e.g., 20:00–06:00), the window spans midnight. Both hibernation and wakeup are bounded to the days listed in `daysOfWeek`. For example, with `daysOfWeek: ["MON", "TUE", "WED", "THU", "FRI"]` and a 20:00–06:00 window, Friday’s hibernation does not wake up Saturday — resources stay hibernated until **Monday 06:00**, the next listed day.
 
 ## Execution
 

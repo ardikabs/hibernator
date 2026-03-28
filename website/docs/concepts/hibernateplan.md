@@ -32,9 +32,13 @@ schedule:
   timezone: "Asia/Jakarta"
   offHours:
     - start: "20:00"       # HH:MM format (24-hour)
-      end: "06:00"         # Next day when end < start
+      end: "06:00"         # Next eligible day when end < start
       daysOfWeek: ["MON", "TUE", "WED", "THU", "FRI"]
 ```
+
+All executions — both hibernation and wakeup — are bounded to `daysOfWeek`. Wakeup only triggers on days listed in the schedule. For example, Friday 20:00 hibernation does not wake up Saturday 06:00; resources stay hibernated until Monday 06:00.
+
+The controller applies a schedule buffer (default: 1 minute) and safety buffer (10 seconds) to every execution, so actual actions occur up to **1m 10s** after the nominal schedule time. See [Execution Timing](../user-guides/schedule-boundaries.md#execution-timing-schedule-buffer-and-safety-buffer) for details.
 
 ### Multiple Windows
 
