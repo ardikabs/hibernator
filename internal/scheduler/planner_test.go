@@ -73,13 +73,14 @@ func TestPlanDAG_Simple(t *testing.T) {
 
 func TestPlanDAG_Diamond(t *testing.T) {
 	p := NewPlanner()
-	// Diamond: a -> b, a -> c, b -> d, c -> d
-	targets := []string{"a", "b", "c", "d"}
+	// Diamond: a -> b, a -> c, b -> d, c -> d, e -> d
+	targets := []string{"a", "b", "c", "d", "e"}
 	deps := []Dependency{
 		{From: "a", To: "b"},
 		{From: "a", To: "c"},
 		{From: "b", To: "d"},
 		{From: "c", To: "d"},
+		{From: "e", To: "d"},
 	}
 
 	plan, err := p.PlanDAG(targets, deps, 2)
@@ -87,13 +88,13 @@ func TestPlanDAG_Diamond(t *testing.T) {
 		t.Fatalf("unexpected error: %v", err)
 	}
 
-	// Should produce 3 stages: [a], [b, c], [d]
+	// Should produce 3 stages: [a, e], [b, c], [d]
 	if len(plan.Stages) != 3 {
 		t.Errorf("expected 3 stages, got %d", len(plan.Stages))
 	}
 
-	if !reflect.DeepEqual(plan.Stages[0].Targets, []string{"a"}) {
-		t.Errorf("stage 0: expected [a], got %v", plan.Stages[0].Targets)
+	if !reflect.DeepEqual(plan.Stages[0].Targets, []string{"a", "e"}) {
+		t.Errorf("stage 0: expected [a, e], got %v", plan.Stages[0].Targets)
 	}
 	if !reflect.DeepEqual(plan.Stages[1].Targets, []string{"b", "c"}) {
 		t.Errorf("stage 1: expected [b, c], got %v", plan.Stages[1].Targets)

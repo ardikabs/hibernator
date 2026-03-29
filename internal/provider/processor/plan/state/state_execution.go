@@ -13,10 +13,12 @@ import (
 	"strings"
 
 	"github.com/go-logr/logr"
+	"github.com/samber/lo"
 	batchv1 "k8s.io/api/batch/v1"
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/utils/clock"
+	"k8s.io/utils/ptr"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
 
@@ -431,63 +433,48 @@ func (s *state) getDetailedErrorFromPod(ctx context.Context, job *batchv1.Job) s
 
 // buildExecutionPlan creates a scheduler.ExecutionPlan from the plan's strategy.
 func (s *state) buildExecutionPlan(plan *hibernatorv1alpha1.HibernatePlan, reverse bool) (scheduler.ExecutionPlan, error) {
-	targets := make([]string, len(plan.Spec.Targets))
-	for i, t := range plan.Spec.Targets {
-		targets[i] = t.Name
-	}
-
 	strategy := plan.Spec.Execution.Strategy
-	maxConcurrency := int32(1)
-	if strategy.MaxConcurrency != nil {
-		maxConcurrency = *strategy.MaxConcurrency
-	}
+	maxConcurrency := ptr.Deref(strategy.MaxConcurrency, 1)
 
-	var execPlan scheduler.ExecutionPlan
-	var err error
+	targets := lo.Map(plan.Spec.Targets, func(t hibernatorv1alpha1.Target, _ int) string {
+		return t.Name
+	})
+
+	var (
+		execPlan scheduler.ExecutionPlan
+		err      error
+	)
 
 	switch strategy.Type {
 	case hibernatorv1alpha1.StrategySequential:
-		execPlan = s.Planner.PlanSequential(targets)
+		execPlan = s.Planner.PlanSequential(ReverseIf(reverse, targets))
 	case hibernatorv1alpha1.StrategyParallel:
-		execPlan = s.Planner.PlanParallel(targets, maxConcurrency)
+		execPlan = s.Planner.PlanParallel(ReverseIf(reverse, targets), maxConcurrency)
+	case hibernatorv1alpha1.StrategyStaged:
+		stages := lo.Map(strategy.Stages, func(s hibernatorv1alpha1.Stage, _ int) scheduler.Stage {
+			return scheduler.Stage{
+				Name:           s.Name,
+				Parallel:       s.Parallel,
+				MaxConcurrency: ptr.Deref(s.MaxConcurrency, 0),
+				Targets:        s.Targets,
+			}
+		})
+
+		execPlan = s.Planner.PlanStaged(ReverseIf(reverse, stages), maxConcurrency)
 	case hibernatorv1alpha1.StrategyDAG:
-		deps := make([]scheduler.Dependency, len(strategy.Dependencies))
-		for i, d := range strategy.Dependencies {
-			deps[i] = scheduler.Dependency{From: d.From, To: d.To}
-		}
+		deps := lo.Map(strategy.Dependencies, func(d hibernatorv1alpha1.Dependency, _ int) scheduler.Dependency {
+			return scheduler.Dependency{
+				From: lo.Ternary(reverse, d.To, d.From),
+				To:   lo.Ternary(reverse, d.From, d.To),
+			}
+		})
 
 		execPlan, err = s.Planner.PlanDAG(targets, deps, maxConcurrency)
 		if err != nil {
 			return scheduler.ExecutionPlan{}, fmt.Errorf("build DAG execution plan: %w", err)
 		}
-
-	case hibernatorv1alpha1.StrategyStaged:
-		stages := make([]scheduler.Stage, len(strategy.Stages))
-		for i, s := range strategy.Stages {
-			var mc int32
-			if s.MaxConcurrency != nil {
-				mc = *s.MaxConcurrency
-			}
-			stages[i] = scheduler.Stage{
-				Name:           s.Name,
-				Parallel:       s.Parallel,
-				MaxConcurrency: mc,
-				Targets:        s.Targets,
-			}
-		}
-
-		execPlan = s.Planner.PlanStaged(stages, maxConcurrency)
 	default:
 		return scheduler.ExecutionPlan{}, fmt.Errorf("unknown strategy type: %s", strategy.Type)
-	}
-
-	// Reverse stage order for wakeup operations
-	if reverse {
-		reversed := make([]scheduler.ExecutionStage, len(execPlan.Stages))
-		for i, stage := range execPlan.Stages {
-			reversed[len(execPlan.Stages)-1-i] = stage
-		}
-		execPlan.Stages = reversed
 	}
 
 	return execPlan, nil
