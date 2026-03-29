@@ -10,6 +10,7 @@ import (
 	"strings"
 
 	"github.com/go-logr/logr"
+	"github.com/samber/lo/mutable"
 	batchv1 "k8s.io/api/batch/v1"
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -326,4 +327,13 @@ func executionStatesEqual(prev map[string]executionSnapshot, current []hibernato
 		}
 	}
 	return true
+}
+
+// ReverseIf is a generic helper that reverses a slice if the given condition is true.
+func ReverseIf[T any, Slice ~[]T](condition bool, collection Slice) Slice {
+	if condition {
+		mutable.Reverse(collection)
+	}
+
+	return collection
 }
