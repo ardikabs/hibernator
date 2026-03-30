@@ -37,41 +37,46 @@ Hibernator is a Kubernetes operator that provides centralized, declarative manag
 
 ## Architecture
 
-```
-┌──────────────────────────────────────────────────────┐
-│                   Control Plane                      │
-│  ┌────────────────────────────────────────────────┐  │
-│  │  HibernatePlan Controller                      │  │
-│  │  - Schedule evaluation                         │  │
-│  │  - Dependency resolution (DAG/Staged/Parallel) │  │
-│  │  - Job lifecycle management                    │  │
-│  │  - Status ledger updates                       │  │
-│  └────────────────────────────────────────────────┘  │
-│                         │                            │
-│  ┌────────────────────────────────────────────────┐  │
-│  │  Streaming Server (gRPC + Webhook)             │  │
-│  │  - TokenReview authentication                  │  │
-│  │  - Log aggregation                             │  │
-│  │  - Progress tracking                           │  │
-│  └────────────────────────────────────────────────┘  │
-└──────────────────────────────────────────────────────┘
-                          │
-        ┌─────────────────┼─────────────────┐
-        ▼                 ▼                 ▼
-┌───────────────┐  ┌───────────────┐  ┌───────────────┐
-│ Runner Job    │  │ Runner Job    │  │ Runner Job    │
-│ (EKS)         │  │ (RDS)         │  │ (EC2)         │
-│ - Executor    │  │ - Executor    │  │ - Executor    │
-│ - gRPC client │  │ - gRPC client │  │ - gRPC client │
-│ - IRSA        │  │ - IRSA        │  │ - IRSA        │
-└───────────────┘  └───────────────┘  └───────────────┘
+```mermaid
+graph TD
+    subgraph CP [Control Plane]
+        direction TB
+        Reconciler["<b>Unified Reconciler (HibernatePlan Controller)</b><br/>• Schedule evaluation<br/>• Dependency resolution<br/>• Job lifecycle management"]
+        
+        subgraph Processors [Resource Processors]
+            direction LR
+            P1[EKS]
+            P2[RDS]
+            P3[EC2]
+            P4[...]
+        end
+        
+        Connectors[("<b>Connectors (Metadata)</b><br/>• CloudProvider<br/>• K8SCluster")]
+        
+        Streaming["<b>Streaming Server</b><br/>• Log aggregation<br/>• Progress tracking"]
+        
+        Reconciler --> Processors
+        Processors -.-> Connectors
+        Reconciler --- Streaming
+    end
+
+    Processors --> RJ1["<b>Runner Job (EKS)</b><br/>• Executor<br/>• gRPC client"]
+    Processors --> RJ2["<b>Runner Job (RDS)</b><br/>• Executor<br/>• gRPC client"]
+    Processors --> RJ3["<b>Runner Job (EC2)</b><br/>• Executor<br/>• gRPC client"]
+
+    style CP fill:#f5f5f5,stroke:#333,stroke-width:2px
+    style Connectors fill:#fff,stroke:#333,stroke-dasharray: 5 5
+    style RJ1 fill:#fff,stroke:#333,stroke-width:1px
+    style RJ2 fill:#fff,stroke:#333,stroke-width:1px
+    style RJ3 fill:#fff,stroke:#333,stroke-width:1px
 ```
 
-The operator separates concerns:
+The operator adopts a **unified reconciler pattern**:
 
-- **Control Plane**: Schedules executions, manages Jobs, aggregates status, serves streaming API
-- **Runner Jobs**: Isolated Kubernetes Jobs per target, using shared ServiceAccount (configured at controller level) with RBAC-scoped permissions
-- **Executors**: Pluggable implementations (EKS, RDS, EC2) handling resource-specific shutdown/wakeup logic
+- **Control Plane**: The `HibernatePlan` controller acts as the central brain, orchestrating the lifecycle through resource-specific **processors**.
+- **Connectors**: Resources like `CloudProvider` and `K8SCluster` currently serve as metadata-only containers for credentials and connectivity details.
+- **Runner Jobs**: Isolated Kubernetes Jobs per target, performing the actual shutdown/wakeup operations while streaming logs back to the control plane.
+- **Executors**: Pluggable implementations within the runners (EKS, RDS, EC2) handling resource-specific logic.
 
 ## Features
 

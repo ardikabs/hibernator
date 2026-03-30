@@ -1,6 +1,6 @@
-# CLI Reference
+# CLI User Guide
 
-`kubectl-hibernator` is a kubectl plugin for managing HibernatePlan resources. It provides purpose-built commands for inspecting plans, controlling hibernation operations, managing restore data, and viewing executor logs.
+This guide covers how to use the `kubectl-hibernator` plugin for managing HibernatePlan resources. It provides practical commands for inspecting plans, controlling hibernation operations, managing restore data, and viewing executor logs.
 
 ## Installation
 

@@ -106,10 +106,10 @@ Example output:
 
 ```bash
 # List runner jobs
-kubectl get jobs -n hibernator-system -l hibernator/plan=dev-offhours
+kubectl get jobs -n hibernator-system -l hibernator.ardikabs.com/plan=dev-offhours
 
 # View logs from the most recent runner
-kubectl logs -n hibernator-system -l hibernator/plan=dev-offhours --tail=50
+kubectl logs -n hibernator-system -l hibernator.ardikabs.com/plan=dev-offhours --tail=50
 ```
 
 ## Phase Flow

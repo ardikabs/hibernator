@@ -2,7 +2,10 @@
 
 Execution strategies control the order and parallelism of target processing during hibernation and wakeup cycles.
 
+
 ## Sequential
+
+**Note:** For all execution strategies, wakeup order is always the reverse of shutdown order. This ensures dependencies are restored in the correct sequence.
 
 Targets execute one at a time in the order they are declared in `spec.targets`.
 
@@ -50,11 +53,12 @@ execution:
         to: database            # Workers before database
 ```
 
+
 ### Dependency Semantics
 
-- `from: A, to: B` means **A must complete before B starts** during shutdown
-- During wakeup, the order is **reversed**: B starts before A
-- Targets with no dependencies execute as soon as possible (respecting `maxConcurrency`)
+- `from: A, to: B` means **A must complete before B starts** during shutdown.
+- During wakeup, the order is **reversed**: B starts before A. This ensures that dependencies are restored in the correct order, mirroring the shutdown DAG in reverse.
+- Targets with no dependencies execute as soon as possible (respecting `maxConcurrency`).
 
 ### Cycle Detection
 

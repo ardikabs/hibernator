@@ -123,7 +123,7 @@ kubectl get hibernateplan dev-offhours -n hibernator-system \
   -o jsonpath='{.status}' | jq
 
 # View runner job logs
-kubectl logs -n hibernator-system -l hibernator/plan=dev-offhours
+kubectl logs -n hibernator-system -l hibernator.ardikabs.com/plan=dev-offhours
 ```
 
 ### Understanding Plan Phases

@@ -36,9 +36,15 @@ markdown_extensions:
   - pymdownx.emoji:
       emoji_index: !!python/name:material.extensions.emoji.twemoji
       emoji_generator: !!python/name:material.extensions.emoji.to_svg
-  - pymdownx.superfences
+  - pymdownx.superfences:
+      custom_fences:
+        - name: mermaid
+          class: mermaid
+          format: !!python/name:pymdownx.superfences.fence_code_format
   - pymdownx.tabbed:
       alternate_style: true
+  - pymdownx.tasklist:
+      custom_checkbox: true
   - pymdownx.highlight:
       anchor_linenums: true
   - pymdownx.inlinehilite
@@ -76,6 +82,7 @@ nav:
         - Plan Suspension: user-guides/plan-suspension.md
         - Override Actions: user-guides/override-actions.md
         - Error Recovery: user-guides/error-recovery.md
+        - Notifications: user-guides/notifications.md
         - Schedule Boundaries: user-guides/schedule-boundaries.md
         - Composing Multiple Exceptions: user-guides/composing-multiple-exceptions.md
       - Executor Guides:
@@ -85,11 +92,12 @@ nav:
         - EKS Executor: user-guides/eks-executor.md
         - RDS Executor: user-guides/rds-executor.md
         - NoOp Executor: user-guides/noop-executor.md
-      - CLI Reference: user-guides/cli.md
+      - CLI: user-guides/cli.md
       - Troubleshooting: user-guides/troubleshooting.md
-  - API Reference:
-      - api-reference/index.md
-      - Executor Parameters: api-reference/executor-parameters.md
+  - Reference:
+      - API Reference: reference/api.md
+      - Executor Parameters: reference/executor-parameters.md
+      - Metrics: reference/metrics.md
   - Roadmap: roadmap.md
   - Changelog: changelog.md
   - FAQ: faq.md

@@ -10,6 +10,7 @@ import (
 	"fmt"
 
 	hibernatorv1alpha1 "github.com/ardikabs/hibernator/api/v1alpha1"
+	"github.com/ardikabs/hibernator/internal/notification"
 	statusprocessor "github.com/ardikabs/hibernator/internal/provider/processor/status"
 	"github.com/ardikabs/hibernator/internal/recovery"
 	"github.com/ardikabs/hibernator/internal/wellknown"
@@ -124,6 +125,13 @@ func (state *recoveryState) handleRetry(ctx context.Context, log logr.Logger, la
 	state.Statuses.PlanStatuses.Send(statusprocessor.Update[*hibernatorv1alpha1.HibernatePlan]{
 		NamespacedName: state.Key,
 		Resource:       plan,
+		PreHook: state.notifyHook(hibernatorv1alpha1.EventRecovery, func(p *hibernatorv1alpha1.HibernatePlan) notification.Payload {
+			// PreHook sees pre-mutation state — override with target values.
+			payload := buildPayload(p, hibernatorv1alpha1.EventRecovery, state.Clock.Now)
+			payload.Phase = string(targetPhase)
+			payload.Operation = string(operation)
+			return payload
+		}),
 		Mutator: statusprocessor.MutatorFunc[*hibernatorv1alpha1.HibernatePlan](func(p *hibernatorv1alpha1.HibernatePlan) {
 			if lastErr == nil {
 				lastErr = fmt.Errorf("unknown error (no error message in status)")
@@ -146,6 +154,7 @@ func (state *recoveryState) handleRetry(ctx context.Context, log logr.Logger, la
 
 			p.Status.Phase = targetPhase
 		}),
+		PostHook: state.phaseChangePostHook(currentPhase),
 	})
 
 	log.Info("transitioning on recovery",

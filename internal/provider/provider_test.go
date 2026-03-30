@@ -354,3 +354,253 @@ func TestFindPlansForException_NonExceptionObject_ReturnsNil(t *testing.T) {
 	requests := r.findPlansForException(context.Background(), &hibernatorv1alpha1.HibernatePlan{})
 	assert.Nil(t, requests)
 }
+
+// ---------------------------------------------------------------------------
+// PlanReconciler.fetchAllNotifications
+// ---------------------------------------------------------------------------
+
+func TestFetchAllNotifications_MatchingSelector_ReturnsNotifications(t *testing.T) {
+	clk := clocktesting.NewFakeClock(time.Now())
+	plan := simplePlan("my-plan", "default")
+	plan.Labels = map[string]string{"env": "prod", "team": "infra"}
+
+	notif := &hibernatorv1alpha1.HibernateNotification{
+		ObjectMeta: metav1.ObjectMeta{Name: "notif-1", Namespace: "default"},
+		Spec: hibernatorv1alpha1.HibernateNotificationSpec{
+			Selector: metav1.LabelSelector{
+				MatchLabels: map[string]string{"env": "prod"},
+			},
+			OnEvents: []hibernatorv1alpha1.NotificationEvent{hibernatorv1alpha1.EventStart},
+			Sinks: []hibernatorv1alpha1.NotificationSink{
+				{
+					Name: "slack", Type: hibernatorv1alpha1.SinkSlack,
+					SecretRef: hibernatorv1alpha1.ObjectKeyReference{Name: "sink-config"},
+				},
+			},
+		},
+	}
+	r, _ := newPlanReconciler(clk, plan, notif)
+
+	result, err := r.fetchAllNotifications(context.Background(), plan)
+	require.NoError(t, err)
+	assert.Len(t, result, 1)
+	assert.Equal(t, "notif-1", result[0].Name)
+}
+
+func TestFetchAllNotifications_NonMatchingSelector_ReturnsEmpty(t *testing.T) {
+	clk := clocktesting.NewFakeClock(time.Now())
+	plan := simplePlan("my-plan", "default")
+	plan.Labels = map[string]string{"env": "staging"}
+
+	notif := &hibernatorv1alpha1.HibernateNotification{
+		ObjectMeta: metav1.ObjectMeta{Name: "notif-1", Namespace: "default"},
+		Spec: hibernatorv1alpha1.HibernateNotificationSpec{
+			Selector: metav1.LabelSelector{
+				MatchLabels: map[string]string{"env": "prod"},
+			},
+			OnEvents: []hibernatorv1alpha1.NotificationEvent{hibernatorv1alpha1.EventStart},
+			Sinks: []hibernatorv1alpha1.NotificationSink{
+				{Name: "slack", Type: hibernatorv1alpha1.SinkSlack, SecretRef: hibernatorv1alpha1.ObjectKeyReference{Name: "sink-config"}},
+			},
+		},
+	}
+	r, _ := newPlanReconciler(clk, plan, notif)
+
+	result, err := r.fetchAllNotifications(context.Background(), plan)
+	require.NoError(t, err)
+	assert.Empty(t, result)
+}
+
+func TestFetchAllNotifications_DifferentNamespace_NotReturned(t *testing.T) {
+	clk := clocktesting.NewFakeClock(time.Now())
+	plan := simplePlan("my-plan", "default")
+	plan.Labels = map[string]string{"env": "prod"}
+
+	notif := &hibernatorv1alpha1.HibernateNotification{
+		ObjectMeta: metav1.ObjectMeta{Name: "notif-1", Namespace: "other-ns"},
+		Spec: hibernatorv1alpha1.HibernateNotificationSpec{
+			Selector: metav1.LabelSelector{
+				MatchLabels: map[string]string{"env": "prod"},
+			},
+			OnEvents: []hibernatorv1alpha1.NotificationEvent{hibernatorv1alpha1.EventStart},
+			Sinks: []hibernatorv1alpha1.NotificationSink{
+				{Name: "slack", Type: hibernatorv1alpha1.SinkSlack, SecretRef: hibernatorv1alpha1.ObjectKeyReference{Name: "sink-config"}},
+			},
+		},
+	}
+	r, _ := newPlanReconciler(clk, plan, notif)
+
+	result, err := r.fetchAllNotifications(context.Background(), plan)
+	require.NoError(t, err)
+	assert.Empty(t, result)
+}
+
+func TestFetchAllNotifications_MultipleNotifications_FiltersCorrectly(t *testing.T) {
+	clk := clocktesting.NewFakeClock(time.Now())
+	plan := simplePlan("my-plan", "default")
+	plan.Labels = map[string]string{"env": "prod", "team": "infra"}
+
+	matching := &hibernatorv1alpha1.HibernateNotification{
+		ObjectMeta: metav1.ObjectMeta{Name: "notif-match", Namespace: "default"},
+		Spec: hibernatorv1alpha1.HibernateNotificationSpec{
+			Selector: metav1.LabelSelector{
+				MatchLabels: map[string]string{"team": "infra"},
+			},
+			OnEvents: []hibernatorv1alpha1.NotificationEvent{hibernatorv1alpha1.EventStart},
+			Sinks: []hibernatorv1alpha1.NotificationSink{
+				{Name: "slack", Type: hibernatorv1alpha1.SinkSlack, SecretRef: hibernatorv1alpha1.ObjectKeyReference{Name: "sink-config"}},
+			},
+		},
+	}
+	nonmatching := &hibernatorv1alpha1.HibernateNotification{
+		ObjectMeta: metav1.ObjectMeta{Name: "notif-no-match", Namespace: "default"},
+		Spec: hibernatorv1alpha1.HibernateNotificationSpec{
+			Selector: metav1.LabelSelector{
+				MatchLabels: map[string]string{"team": "security"},
+			},
+			OnEvents: []hibernatorv1alpha1.NotificationEvent{hibernatorv1alpha1.EventFailure},
+			Sinks: []hibernatorv1alpha1.NotificationSink{
+				{Name: "telegram", Type: hibernatorv1alpha1.SinkTelegram, SecretRef: hibernatorv1alpha1.ObjectKeyReference{Name: "sink-config"}},
+			},
+		},
+	}
+	r, _ := newPlanReconciler(clk, plan, matching, nonmatching)
+
+	result, err := r.fetchAllNotifications(context.Background(), plan)
+	require.NoError(t, err)
+	require.Len(t, result, 1)
+	assert.Equal(t, "notif-match", result[0].Name)
+}
+
+func TestFetchAllNotifications_EmptySelector_MatchesAllPlans(t *testing.T) {
+	clk := clocktesting.NewFakeClock(time.Now())
+	plan := simplePlan("my-plan", "default")
+	plan.Labels = map[string]string{"env": "prod"}
+
+	notif := &hibernatorv1alpha1.HibernateNotification{
+		ObjectMeta: metav1.ObjectMeta{Name: "notif-all", Namespace: "default"},
+		Spec: hibernatorv1alpha1.HibernateNotificationSpec{
+			Selector: metav1.LabelSelector{}, // empty selector = match all
+			OnEvents: []hibernatorv1alpha1.NotificationEvent{hibernatorv1alpha1.EventPhaseChange},
+			Sinks: []hibernatorv1alpha1.NotificationSink{
+				{Name: "slack", Type: hibernatorv1alpha1.SinkSlack, SecretRef: hibernatorv1alpha1.ObjectKeyReference{Name: "sink-config"}},
+			},
+		},
+	}
+	r, _ := newPlanReconciler(clk, plan, notif)
+
+	result, err := r.fetchAllNotifications(context.Background(), plan)
+	require.NoError(t, err)
+	assert.Len(t, result, 1)
+}
+
+func TestFetchAllNotifications_PlanWithNoLabels_MatchesEmptySelector(t *testing.T) {
+	clk := clocktesting.NewFakeClock(time.Now())
+	plan := simplePlan("my-plan", "default")
+	// No labels on plan
+
+	notif := &hibernatorv1alpha1.HibernateNotification{
+		ObjectMeta: metav1.ObjectMeta{Name: "notif-all", Namespace: "default"},
+		Spec: hibernatorv1alpha1.HibernateNotificationSpec{
+			Selector: metav1.LabelSelector{}, // empty selector = match all
+			OnEvents: []hibernatorv1alpha1.NotificationEvent{hibernatorv1alpha1.EventStart},
+			Sinks: []hibernatorv1alpha1.NotificationSink{
+				{Name: "slack", Type: hibernatorv1alpha1.SinkSlack, SecretRef: hibernatorv1alpha1.ObjectKeyReference{Name: "sink-config"}},
+			},
+		},
+	}
+	r, _ := newPlanReconciler(clk, plan, notif)
+
+	result, err := r.fetchAllNotifications(context.Background(), plan)
+	require.NoError(t, err)
+	assert.Len(t, result, 1)
+}
+
+// ---------------------------------------------------------------------------
+// PlanReconciler.findPlansForNotification
+// ---------------------------------------------------------------------------
+
+func TestFindPlansForNotification_MatchingPlans_ReturnsRequests(t *testing.T) {
+	clk := clocktesting.NewFakeClock(time.Now())
+	plan1 := simplePlan("plan-1", "default")
+	plan1.Labels = map[string]string{"env": "prod"}
+	plan2 := simplePlan("plan-2", "default")
+	plan2.Labels = map[string]string{"env": "staging"}
+
+	r, _ := newPlanReconciler(clk, plan1, plan2)
+
+	notif := &hibernatorv1alpha1.HibernateNotification{
+		ObjectMeta: metav1.ObjectMeta{Name: "notif-1", Namespace: "default"},
+		Spec: hibernatorv1alpha1.HibernateNotificationSpec{
+			Selector: metav1.LabelSelector{
+				MatchLabels: map[string]string{"env": "prod"},
+			},
+			OnEvents: []hibernatorv1alpha1.NotificationEvent{hibernatorv1alpha1.EventStart},
+			Sinks: []hibernatorv1alpha1.NotificationSink{
+				{Name: "slack", Type: hibernatorv1alpha1.SinkSlack, SecretRef: hibernatorv1alpha1.ObjectKeyReference{Name: "sink-config"}},
+			},
+		},
+	}
+
+	requests := r.findPlansForNotification(context.Background(), notif)
+	require.Len(t, requests, 1)
+	assert.Equal(t, "plan-1", requests[0].Name)
+	assert.Equal(t, "default", requests[0].Namespace)
+}
+
+func TestFindPlansForNotification_NonNotificationObject_ReturnsNil(t *testing.T) {
+	clk := clocktesting.NewFakeClock(time.Now())
+	r, _ := newPlanReconciler(clk)
+
+	requests := r.findPlansForNotification(context.Background(), &hibernatorv1alpha1.HibernatePlan{})
+	assert.Nil(t, requests)
+}
+
+// ---------------------------------------------------------------------------
+// PlanReconciler.Reconcile — notification integration
+// ---------------------------------------------------------------------------
+
+func TestPlanReconciler_Reconcile_WithNotification_PopulatesNotifications(t *testing.T) {
+	clk := clocktesting.NewFakeClock(time.Now())
+	plan := simplePlan("my-plan", "default")
+	plan.Labels = map[string]string{"env": "prod"}
+
+	notif := &hibernatorv1alpha1.HibernateNotification{
+		ObjectMeta: metav1.ObjectMeta{Name: "notif-1", Namespace: "default"},
+		Spec: hibernatorv1alpha1.HibernateNotificationSpec{
+			Selector: metav1.LabelSelector{
+				MatchLabels: map[string]string{"env": "prod"},
+			},
+			OnEvents: []hibernatorv1alpha1.NotificationEvent{hibernatorv1alpha1.EventStart},
+			Sinks: []hibernatorv1alpha1.NotificationSink{
+				{Name: "slack", Type: hibernatorv1alpha1.SinkSlack, SecretRef: hibernatorv1alpha1.ObjectKeyReference{Name: "sink-config"}},
+			},
+		},
+	}
+	r, resources := newPlanReconciler(clk, plan, notif)
+
+	key := types.NamespacedName{Name: "my-plan", Namespace: "default"}
+	_, err := r.Reconcile(context.Background(), ctrl.Request{NamespacedName: key})
+	require.NoError(t, err)
+
+	stored, ok := resources.PlanResources.Load(key)
+	require.True(t, ok)
+	assert.Len(t, stored.Notifications, 1)
+	assert.Equal(t, "notif-1", stored.Notifications[0].Name)
+}
+
+func TestPlanReconciler_Reconcile_NoNotification_EmptyNotifications(t *testing.T) {
+	clk := clocktesting.NewFakeClock(time.Now())
+	plan := simplePlan("my-plan", "default")
+	plan.Labels = map[string]string{"env": "prod"}
+
+	r, resources := newPlanReconciler(clk, plan)
+
+	key := types.NamespacedName{Name: "my-plan", Namespace: "default"}
+	_, err := r.Reconcile(context.Background(), ctrl.Request{NamespacedName: key})
+	require.NoError(t, err)
+
+	stored, ok := resources.PlanResources.Load(key)
+	require.True(t, ok)
+	assert.Empty(t, stored.Notifications)
+}

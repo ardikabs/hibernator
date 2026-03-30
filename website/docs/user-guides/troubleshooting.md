@@ -1,3 +1,26 @@
+## Notification Troubleshooting
+
+**Symptoms**: Notifications are not delivered to Slack, Telegram, or Webhook endpoints.
+
+**Check**:
+
+1. Verify the `HibernateNotification` selector matches your plan labels:
+  ```bash
+  kubectl get hnotif -o wide
+  ```
+2. Check the Secret for the sink exists and is valid:
+  ```bash
+  kubectl get secret <sink-secret> -n hibernator-system -o jsonpath='{.data.config}' | base64 -d
+  ```
+3. Check controller logs for notification errors:
+  ```bash
+  kubectl logs -l app=hibernator-controller -n hibernator-system | grep notification
+  ```
+4. For webhooks, check the HTTP status code and response body in the logs.
+5. Check notification metrics for error counts:
+  ```bash
+  curl -s http://localhost:8080/metrics | grep hibernator_notification
+  ```
 # Troubleshooting
 
 Common issues and their solutions.
@@ -23,7 +46,7 @@ Common issues and their solutions.
 3. Check if a `suspend` exception is active:
     ```bash
     kubectl get scheduleexception -n hibernator-system \
-      -l hibernator/plan=<name>
+      -l hibernator.ardikabs.com/plan=<name>
     ```
 
 4. Ensure `spec.suspend` is not `true`:
@@ -45,7 +68,7 @@ Common issues and their solutions.
 
 1. Find the failed Job:
     ```bash
-    kubectl get jobs -n hibernator-system -l hibernator/plan=<name>
+    kubectl get jobs -n hibernator-system -l hibernator.ardikabs.com/plan=<name>
     ```
 
 2. View pod logs:
@@ -120,7 +143,7 @@ Common issues and their solutions.
 
 1. Look for zombie Jobs:
     ```bash
-    kubectl get jobs -n hibernator-system -l hibernator/plan=<name> \
+    kubectl get jobs -n hibernator-system -l hibernator.ardikabs.com/plan=<name> \
       --field-selector status.successful=0
     ```
 

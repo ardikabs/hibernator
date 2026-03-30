@@ -73,4 +73,3 @@ func (s *restartState) Handle(ctx context.Context) (StateResult, error) {
 		return StateResult{}, nil
 	}
 }
-

@@ -22,13 +22,13 @@ func NewLogger() logr.Logger {
 		Development: false,
 		Encoding:    "console",
 		EncoderConfig: zapcore.EncoderConfig{
-			TimeKey:      "",           // Don't include timestamps in console output
-			LevelKey:     "level",
-			NameKey:      "logger",
-			CallerKey:    zapcore.OmitKey,
-			MessageKey:   "msg",
+			TimeKey:       "", // Don't include timestamps in console output
+			LevelKey:      "level",
+			NameKey:       "logger",
+			CallerKey:     zapcore.OmitKey,
+			MessageKey:    "msg",
 			StacktraceKey: zapcore.OmitKey,
-			LineEnding:   zapcore.DefaultLineEnding,
+			LineEnding:    zapcore.DefaultLineEnding,
 			EncodeLevel: func(l zapcore.Level, enc zapcore.PrimitiveArrayEncoder) {
 				// Don't encode level in console output for messages
 				// (we handle this semantically in Output handler)

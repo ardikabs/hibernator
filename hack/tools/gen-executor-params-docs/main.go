@@ -24,7 +24,7 @@ import (
 
 const (
 	sourceFile = "pkg/executorparams/params.go"
-	outputFile = "website/docs/api-reference/executor-parameters.md"
+	outputFile = "website/docs/reference/executor-parameters.md"
 )
 
 // executorTypes are the top-level parameter types that map to executor names.

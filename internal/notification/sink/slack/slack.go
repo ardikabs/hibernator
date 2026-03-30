@@ -1,0 +1,117 @@
+/*
+Copyright 2026 Ardika Saputro.
+Licensed under the Apache License, Version 2.0.
+*/
+
+package slack
+
+import (
+	"context"
+	"encoding/json"
+	"fmt"
+	"net/http"
+
+	slackapi "github.com/slack-go/slack"
+	"k8s.io/utils/ptr"
+
+	"github.com/ardikabs/hibernator/internal/notification/sink"
+)
+
+const (
+	// SinkType is the identifier for the Slack sink.
+	SinkType = "slack"
+)
+
+// DefaultTemplate is the built-in Go template for Slack notifications.
+var DefaultTemplate = `{{ if eq .Event "Failure" -}}
+:red_circle: *Hibernation Failed*
+{{ else if eq .Event "Success" -}}
+:white_check_mark: *Hibernation Succeeded*
+{{ else if eq .Event "Start" -}}
+:arrow_forward: *Execution Starting*
+{{ else if eq .Event "Recovery" -}}
+:recycle: *Recovery Triggered*
+{{ else -}}
+:information_source: *Phase Change*
+{{ end -}}
+*Plan:* {{ .Plan.Name }}
+*Namespace:* {{ .Plan.Namespace }}
+*Phase:* {{ .Phase }}
+*Operation:* {{ .Operation | default "N/A" }}
+{{ if .PreviousPhase -}}
+*Previous Phase:* {{ .PreviousPhase }}
+{{ end -}}
+{{ if .ErrorMessage -}}
+*Error:* {{ .ErrorMessage }}
+{{ end -}}
+*Timestamp:* {{ .Timestamp | date "2006-01-02 15:04:05 MST" }}
+{{ if .Targets -}}
+*Targets:*
+{{ range .Targets -}}
+• {{ .Name }} ({{ .Executor }}): {{ .State }}
+{{ end -}}
+{{ end }}`
+
+// Option configures a Sink.
+type Option func(*Sink)
+
+// WithHTTPClient overrides the HTTP client used for Slack webhook requests.
+// Use this in tests or to supply a custom transport/timeout.
+func WithHTTPClient(client *http.Client) Option {
+	return func(s *Sink) {
+		s.client = client
+	}
+}
+
+// slackConfig is the expected JSON schema for the Secret's "config" key.
+type slackConfig struct {
+	// WebhookURL is the Slack Incoming Webhook URL.
+	WebhookURL string `json:"webhook_url"`
+}
+
+// Sink sends notifications to Slack via Incoming Webhook URL.
+type Sink struct {
+	renderer sink.Renderer
+	client   *http.Client
+}
+
+// New creates a new Slack sink.
+// renderer is a required first-class parameter — Slack always needs template
+// rendering to produce formatted messages.
+// By default it uses http.DefaultClient. In production the caller should supply a
+// shared retryable client via WithHTTPClient (see notification.NewHTTPClient).
+func New(renderer sink.Renderer, opts ...Option) *Sink {
+	s := &Sink{renderer: renderer, client: http.DefaultClient}
+	for _, opt := range opts {
+		opt(s)
+	}
+	return s
+}
+
+// Type returns the sink type identifier.
+func (s *Sink) Type() string {
+	return SinkType
+}
+
+// Send renders the notification payload using the Slack template and delivers it
+// via Incoming Webhook. If opts.CustomTemplateRef is set, that template is used
+// instead of the built-in default.
+func (s *Sink) Send(ctx context.Context, payload sink.Payload, opts sink.SendOptions) error {
+	var cfg slackConfig
+	if err := json.Unmarshal(opts.Config, &cfg); err != nil {
+		return fmt.Errorf("parse slack sink config: %w", err)
+	}
+	if cfg.WebhookURL == "" {
+		return fmt.Errorf("slack sink config: webhook_url is required")
+	}
+
+	tmpl := ptr.Deref(opts.CustomTemplate, DefaultTemplate)
+	content := s.renderer.Render(ctx, tmpl, payload)
+	msg := &slackapi.WebhookMessage{Text: content}
+
+	if err := slackapi.PostWebhookCustomHTTPContext(ctx, cfg.WebhookURL, s.client, msg); err != nil {
+		return fmt.Errorf("send slack notification: %w", err)
+	}
+
+	return nil
+}

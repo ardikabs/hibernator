@@ -352,16 +352,16 @@ docs-api-gen: crd-ref-docs ## Generate API reference documentation from CRD type
 		--source-path=api/v1alpha1 \
 		--config=hack/tools/crd-ref-docs/config.yaml \
 		--templates-dir=hack/tools/crd-ref-docs/templates \
-		--output-path=$(DOCS_DIR)/docs/api-reference/index.md \
+		--output-path=$(DOCS_DIR)/docs/reference/api.md \
 		--max-depth=100 \
 		--renderer=markdown
-	@echo "$(GREEN)API reference docs generated in $(DOCS_DIR)/docs/api-reference/$(RESET)"
+	@echo "$(GREEN)API reference docs generated in $(DOCS_DIR)/docs/reference/api.md$(RESET)"
 
 .PHONY: docs-executor-params-gen
 docs-executor-params-gen: ## Generate executor parameters reference from Go types.
 	@echo "$(CYAN)Generating executor parameters docs...$(RESET)"
 	@$(GOCMD) run ./hack/tools/gen-executor-params-docs/
-	@echo "$(GREEN)Executor parameters docs generated in $(DOCS_DIR)/docs/api-reference/$(RESET)"
+	@echo "$(GREEN)Executor parameters docs generated in $(DOCS_DIR)/docs/reference/executor-parameters.md$(RESET)"
 
 .PHONY: docs-build
 docs-build: ## Build the static documentation site into website/site/ (requires Docker).

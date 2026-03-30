@@ -11,6 +11,8 @@ func KindOf(obj interface{}) string {
 		kind = "CloudProvider"
 	case *K8SCluster:
 		kind = "K8SCluster"
+	case *HibernateNotification:
+		kind = "HibernateNotification"
 	default:
 		kind = "Unknown"
 	}

@@ -4,7 +4,8 @@
 
 ```bash
 # Install with default values
-helm install hibernator oci://ghcr.io/ardikabs/charts/hibernator --version 1.4.0 \
+helm install hibernator oci://ghcr.io/ardikabs/charts/hibernator \
+  --version 1.4.0 \
   -n hibernator-system --create-namespace
 ```
 
@@ -25,7 +26,8 @@ controller:
 Then install with:
 
 ```bash
-helm install hibernator hibernator/hibernator \
+helm install hibernator oci://ghcr.io/ardikabs/charts/hibernator \
+  --version 1.4.0 \
   -n hibernator-system --create-namespace \
   -f values.yaml
 ```

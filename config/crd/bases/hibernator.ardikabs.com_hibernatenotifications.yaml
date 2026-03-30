@@ -1,0 +1,206 @@
+---
+apiVersion: apiextensions.k8s.io/v1
+kind: CustomResourceDefinition
+metadata:
+  annotations:
+    controller-gen.kubebuilder.io/version: v0.20.1
+  name: hibernatenotifications.hibernator.ardikabs.com
+spec:
+  group: hibernator.ardikabs.com
+  names:
+    kind: HibernateNotification
+    listKind: HibernateNotificationList
+    plural: hibernatenotifications
+    shortNames:
+    - hnotif
+    singular: hibernatenotification
+  scope: Namespaced
+  versions:
+  - additionalPrinterColumns:
+    - jsonPath: .spec.onEvents
+      name: Events
+      type: string
+    - jsonPath: .spec.sinks
+      name: Sinks
+      type: integer
+    - jsonPath: .status.matchedPlans
+      name: Matched
+      type: integer
+    - jsonPath: .metadata.creationTimestamp
+      name: Age
+      type: date
+    name: v1alpha1
+    schema:
+      openAPIV3Schema:
+        description: HibernateNotification is the Schema for the hibernatenotifications
+          API.
+        properties:
+          apiVersion:
+            description: |-
+              APIVersion defines the versioned schema of this representation of an object.
+              Servers should convert recognized schemas to the latest internal value, and
+              may reject unrecognized values.
+              More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#resources
+            type: string
+          kind:
+            description: |-
+              Kind is a string value representing the REST resource this object represents.
+              Servers may infer this from the endpoint the client submits requests to.
+              Cannot be updated.
+              In CamelCase.
+              More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#types-kinds
+            type: string
+          metadata:
+            type: object
+          spec:
+            description: Spec defines the desired state of HibernateNotification.
+            properties:
+              onEvents:
+                description: OnEvents specifies which hook points trigger this notification.
+                items:
+                  description: NotificationEvent defines the hook point that triggers
+                    a notification.
+                  enum:
+                  - Start
+                  - Success
+                  - Failure
+                  - Recovery
+                  - PhaseChange
+                  type: string
+                minItems: 1
+                type: array
+              selector:
+                description: |-
+                  Selector selects HibernatePlans by label.
+                  The notification applies to all plans in the same namespace matching this selector.
+                properties:
+                  matchExpressions:
+                    description: matchExpressions is a list of label selector requirements.
+                      The requirements are ANDed.
+                    items:
+                      description: |-
+                        A label selector requirement is a selector that contains values, a key, and an operator that
+                        relates the key and values.
+                      properties:
+                        key:
+                          description: key is the label key that the selector applies
+                            to.
+                          type: string
+                        operator:
+                          description: |-
+                            operator represents a key's relationship to a set of values.
+                            Valid operators are In, NotIn, Exists and DoesNotExist.
+                          type: string
+                        values:
+                          description: |-
+                            values is an array of string values. If the operator is In or NotIn,
+                            the values array must be non-empty. If the operator is Exists or DoesNotExist,
+                            the values array must be empty. This array is replaced during a strategic
+                            merge patch.
+                          items:
+                            type: string
+                          type: array
+                          x-kubernetes-list-type: atomic
+                      required:
+                      - key
+                      - operator
+                      type: object
+                    type: array
+                    x-kubernetes-list-type: atomic
+                  matchLabels:
+                    additionalProperties:
+                      type: string
+                    description: |-
+                      matchLabels is a map of {key,value} pairs. A single {key,value} in the matchLabels
+                      map is equivalent to an element of matchExpressions, whose key field is "key", the
+                      operator is "In", and the values array contains only "value". The requirements are ANDed.
+                    type: object
+                type: object
+                x-kubernetes-map-type: atomic
+              sinks:
+                description: Sinks defines the notification destinations.
+                items:
+                  description: |-
+                    NotificationSink defines a destination for notification delivery.
+                    All sink-specific configuration (endpoints, credentials, options) is delegated
+                    to the referenced Secret under a well-known key ("config"). This minimizes
+                    the CRD footprint and keeps sensitive data out of the resource spec.
+                  properties:
+                    name:
+                      description: Name is a human-readable identifier for this sink
+                        (unique within spec.sinks).
+                      minLength: 1
+                      type: string
+                    secretRef:
+                      description: |-
+                        SecretRef is the name of the Secret containing the sink configuration.
+                        The Secret must contain a key named "config" whose value is a JSON object
+                        with all sink-specific settings (endpoint URL, credentials, options).
+
+                        Slack config example:   {"webhook_url": "https://hooks.slack.com/services/..."}
+                        Telegram config example: {"token": "bot123:ABC", "chat_id": "-100123", "parse_mode": "MarkdownV2"}
+                        Webhook config example:  {"url": "https://example.com/hook", "headers": {"Authorization": "Bearer ..."}}
+                      properties:
+                        key:
+                          description: |-
+                            Key is the key within the ConfigMap data.
+                            Must end in .gotpl by convention.
+                          type: string
+                        name:
+                          description: Name is the name of the object.
+                          type: string
+                      required:
+                      - name
+                      type: object
+                    templateRef:
+                      description: |-
+                        TemplateRef references a ConfigMap key containing a Go template for message formatting.
+                        If omitted, a built-in default template is used for the sink type.
+                      properties:
+                        key:
+                          description: |-
+                            Key is the key within the ConfigMap data.
+                            Must end in .gotpl by convention.
+                          type: string
+                        name:
+                          description: Name is the name of the object.
+                          type: string
+                      required:
+                      - name
+                      type: object
+                    type:
+                      description: Type is the sink provider type.
+                      enum:
+                      - slack
+                      - telegram
+                      - webhook
+                      type: string
+                  required:
+                  - name
+                  - secretRef
+                  - type
+                  type: object
+                minItems: 1
+                type: array
+            required:
+            - onEvents
+            - selector
+            - sinks
+            type: object
+          status:
+            description: Status defines the observed state of HibernateNotification.
+            properties:
+              matchedPlans:
+                description: MatchedPlans is the count of HibernatePlans currently
+                  matching the selector.
+                format: int32
+                type: integer
+              message:
+                description: Message provides diagnostic information.
+                type: string
+            type: object
+        type: object
+    served: true
+    storage: true
+    subresources:
+      status: {}

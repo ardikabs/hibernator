@@ -91,6 +91,12 @@ func (b *HibernatePlanBuilder) WithSuspend(suspend bool) *HibernatePlanBuilder {
 	return b
 }
 
+// WithLabels sets or replaces the labels on the plan.
+func (b *HibernatePlanBuilder) WithLabels(labels map[string]string) *HibernatePlanBuilder {
+	b.plan.Labels = labels
+	return b
+}
+
 // WithAnnotation adds or updates an annotation on the plan.
 func (b *HibernatePlanBuilder) WithAnnotation(key, value string) *HibernatePlanBuilder {
 	if b.plan.Annotations == nil {

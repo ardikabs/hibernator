@@ -10,13 +10,16 @@ For detailed design documents, see the [proposals directory](https://github.com/
 |-----------|--------|---------|
 | **Core Operator** | :white_check_mark: Shipped | v1.x complete |
 | **Schedule Exceptions** | :white_check_mark: Implemented | Phases 1–5 complete |
-| **Stateless Error Reporting** | :arrows_counterclockwise: In Progress | Kubernetes Termination Messages |
-| **E2E Tests** | :arrows_counterclockwise: In Progress | Framework established |
-| **kubectl hibernator CLI** | :arrows_counterclockwise: In Progress | Client-side complete |
-| **Async Reconciler** | :arrows_counterclockwise: In Progress | Monolith refactor |
-| **Helm Chart** | :hourglass: Pending | Deployment packaging |
-| **GCP Executors** | :hourglass: Pending | GKE, Cloud SQL |
-| **Azure Executors** | :hourglass: Pending | AKS, Azure SQL |
+| **Stateless Error Reporting** | :white_check_mark: Implemented | Runner writes to termination-log |
+| **E2E Tests** | :white_check_mark: Implemented | Living document, grows over time |
+| **Async Reconciler** | :white_check_mark: Implemented | Default; legacy reconciler removed |
+| **Helm Chart** | :white_check_mark: Implemented | [Available](getting-started/installation.md#using-helm-recommended) |
+| **CI/CD Pipeline** | :white_check_mark: Implemented | GitHub Actions |
+| **kubectl hibernator CLI** | :white_check_mark: Implemented | [Available](user-guides/cli.md) |
+| **Notification System** | :rocket: In Progress | [RFC-0006](https://github.com/ardikabs/hibernator/tree/main/docs/proposals/0006-notification-system.md) |
+| **CLI One-Line Installer** | :hourglass: Pending | curl + bash installer |
+| **GCP Executors** | :zzz: On-Demand | Implemented when use case arises |
+| **Azure Executors** | :zzz: On-Demand | Implemented when use case arises |
 
 ## Completed (v1.x)
 
@@ -61,39 +64,29 @@ For detailed design documents, see the [proposals directory](https://github.com/
 ### Observability
 
 - [x] Structured logging with logr
-- [x] 8 core Prometheus metrics
+- [x] [Prometheus metrics](reference/metrics.md) for execution, reconciliation, pipeline, and notifications
 - [x] Per-target execution ledger in plan status
 - [x] Streaming infrastructure: gRPC + HTTP webhook fallback
 
-## In Progress
+### Reliability & Operations
 
-### Stateless Error Reporting
-
-Runner writes detailed error info to `/dev/termination-log`. Controller extracts termination messages for informed recovery and status updates.
-
-### E2E Test Framework
-
-Full hibernation cycle validation with envtest. Framework established with test suites for lifecycle, execution strategies, schedule exceptions, and error recovery.
-
-### kubectl hibernator CLI Plugin
-
-Client-side implementation complete with commands for `show schedule`, `show status`, `suspend`, `resume`, `retry`, and `logs`. Server-side verification pending.
-
-### Async Phase-Driven Reconciler
-
-Refactoring the monolithic controller into an async message-driven pipeline with Coordinator/Worker actor model. Feature-flagged via `--legacy-reconciler`.
+- [x] Stateless error reporting via Kubernetes Termination Messages
+- [x] Async phase-driven reconciler (Coordinator/Worker actor model)
+- [x] E2E test framework (lifecycle, execution strategies, schedule exceptions, error recovery)
+- [x] Helm Chart packaging
+- [x] CI/CD pipeline (GitHub Actions)
+- [x] kubectl hibernator CLI plugin
 
 ## Planned
 
 ### Near-Term
 
-- **Helm Chart** — Production deployment packaging with configurable values
-- **CI/CD Pipeline** — GitHub Actions for build, test, and release automation
+- **Notification System** — Slack, email, and webhook notifications for hibernation events ([RFC-0006](https://github.com/ardikabs/hibernator/tree/main/docs/proposals/0006-notification-system.md))
+- **CLI One-Line Installer** — `curl | bash` style installer for `kubectl-hibernator` via custom URL
+- **Lifecycle Processors for Connectors** — Introduce active status monitoring and lifecycle management for `K8SCluster` and `CloudProvider` resources.
 
 ### Medium-Term
 
-- **GCP Executors** — GKE node pool, Cloud SQL, and Compute Engine support
-- **Azure Executors** — AKS, Azure SQL, and VM management
 - **Exception Approval Workflows** — Slack/email-based approvals (Phase 6+)
 
 ### Long-Term
@@ -101,3 +94,10 @@ Refactoring the monolithic controller into an async message-driven pipeline with
 - **Multi-Cluster Management** — Cross-cluster hibernation coordination
 - **Web Dashboard** — UI for monitoring and managing plans
 - **Custom Executor SDK** — Framework for building out-of-tree executors
+
+### On-Demand
+
+The following are not scheduled but will be implemented when a concrete use case is demanded:
+
+- **GCP Executors** — GKE node pool, Cloud SQL, and Compute Engine support
+- **Azure Executors** — AKS, Azure SQL, and VM management

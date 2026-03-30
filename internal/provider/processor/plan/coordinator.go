@@ -23,6 +23,7 @@ import (
 
 	"github.com/ardikabs/hibernator/internal/message"
 	"github.com/ardikabs/hibernator/internal/metrics"
+	"github.com/ardikabs/hibernator/internal/notification"
 	statusprocessor "github.com/ardikabs/hibernator/internal/provider/processor/status"
 	"github.com/ardikabs/hibernator/internal/restore"
 	"github.com/ardikabs/hibernator/internal/scheduler"
@@ -46,6 +47,7 @@ type Coordinator struct {
 	Resources            *message.ControllerResources
 	Statuses             *statusprocessor.ControllerStatuses
 	RestoreManager       *restore.Manager
+	Notifier             notification.Notifier
 	ControlPlaneEndpoint string
 	RunnerImage          string
 	RunnerServiceAccount string
@@ -103,6 +105,7 @@ func (e *Coordinator) workerFactory(key types.NamespacedName, slot keyedworker.S
 		Resources:            e.Resources,
 		Statuses:             e.Statuses,
 		RestoreManager:       e.RestoreManager,
+		Notifier:             e.Notifier,
 		ControlPlaneEndpoint: e.ControlPlaneEndpoint,
 		RunnerImage:          e.RunnerImage,
 		RunnerServiceAccount: e.RunnerServiceAccount,

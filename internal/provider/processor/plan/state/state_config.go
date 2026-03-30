@@ -12,6 +12,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
 	"github.com/ardikabs/hibernator/internal/message"
+	"github.com/ardikabs/hibernator/internal/notification"
 	statusprocessor "github.com/ardikabs/hibernator/internal/provider/processor/status"
 	"github.com/ardikabs/hibernator/internal/restore"
 	"github.com/ardikabs/hibernator/internal/scheduler"
@@ -34,6 +35,7 @@ type Config struct {
 	Resources            *message.ControllerResources
 	Statuses             *statusprocessor.ControllerStatuses
 	RestoreManager       *restore.Manager
+	Notifier             notification.Notifier
 	ControlPlaneEndpoint string
 	RunnerImage          string
 	RunnerServiceAccount string

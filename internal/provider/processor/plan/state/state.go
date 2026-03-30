@@ -21,6 +21,7 @@ import (
 
 	hibernatorv1alpha1 "github.com/ardikabs/hibernator/api/v1alpha1"
 	"github.com/ardikabs/hibernator/internal/message"
+	"github.com/ardikabs/hibernator/internal/notification"
 	statusprocessor "github.com/ardikabs/hibernator/internal/provider/processor/status"
 	"github.com/ardikabs/hibernator/internal/restore"
 	"github.com/ardikabs/hibernator/internal/scheduler"
@@ -159,6 +160,7 @@ func newState(key types.NamespacedName, planCtx *message.PlanContext, cfg *Confi
 		Resources:            cfg.Resources,
 		Statuses:             cfg.Statuses,
 		RestoreManager:       cfg.RestoreManager,
+		Notifier:             cfg.Notifier,
 		ControlPlaneEndpoint: cfg.ControlPlaneEndpoint,
 		RunnerImage:          cfg.RunnerImage,
 		RunnerServiceAccount: cfg.RunnerServiceAccount,
@@ -188,6 +190,7 @@ type state struct {
 	Resources            *message.ControllerResources
 	Statuses             *statusprocessor.ControllerStatuses
 	RestoreManager       *restore.Manager
+	Notifier             notification.Notifier
 	ControlPlaneEndpoint string
 	RunnerImage          string
 	RunnerServiceAccount string
@@ -262,6 +265,7 @@ func (b *state) setError(_ context.Context, phaseErr error) {
 	b.Log.V(1).Info("transitioning plan to error state", "error", errMsg)
 
 	plan := b.plan()
+	previousPhase := plan.Status.Phase
 	b.Statuses.PlanStatuses.Send(statusprocessor.Update[*hibernatorv1alpha1.HibernatePlan]{
 		NamespacedName: b.Key,
 		Resource:       plan,
@@ -270,6 +274,12 @@ func (b *state) setError(_ context.Context, phaseErr error) {
 			p.Status.LastTransitionTime = ptr.To(metav1.NewTime(b.Clock.Now()))
 			p.Status.ErrorMessage = errMsg
 		}),
+		PostHook: chainHooks(
+			b.notifyHook(hibernatorv1alpha1.EventFailure, func(p *hibernatorv1alpha1.HibernatePlan) notification.Payload {
+				return buildPayload(p, hibernatorv1alpha1.EventFailure, b.Clock.Now)
+			}),
+			b.phaseChangePostHook(previousPhase),
+		),
 	})
 }
 

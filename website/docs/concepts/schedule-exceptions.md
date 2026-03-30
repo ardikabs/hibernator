@@ -26,7 +26,10 @@ spec:
       daysOfWeek: ["WED"]
 ```
 
-**Use case**: A weekday public holiday falls on Wednesday. The base schedule (20:00–06:00 MON–FRI) would wake resources at 06:00, but nobody is working. The extend exception fills the daytime gap (06:00–20:00), creating continuous hibernation from Tuesday 20:00 through Wednesday 20:00.
+**Use cases**:
+
+- **Public Holiday**: A weekday holiday falls on Wednesday. The base schedule (20:00–06:00 MON–FRI) would wake resources at 06:00, but nobody is working. The extend exception fills the daytime gap (06:00–20:00), creating continuous hibernation from Tuesday 20:00 through Wednesday 20:00.
+- **Full-Day Training**: The entire engineering team is offsite for training on a specific Thursday. You can extend the hibernation to cover the full day (06:00–20:00) so resources don't wake up unnecessarily.
 
 !!! note
     If your base schedule uses `daysOfWeek: ["MON", "TUE", "WED", "THU", "FRI"]`, weekends are already fully hibernated — wakeup only triggers on listed days. There is no need to extend for weekends.
@@ -54,7 +57,10 @@ spec:
       daysOfWeek: ["WED"]
 ```
 
-**Use case**: The base schedule hibernates resources at 20:00 Asia/Jakarta, but a team in Bangalore (IST/UTC+5:30) needs to continue debugging on Wednesday might. The suspend exception holds off hibernation from 20:00–23:59, keeping resources alive past the normal cutoff.
+**Use cases**:
+
+- **Cross-timezone Collaboration**: The base schedule hibernates resources at 20:00 Asia/Jakarta, but a team in Bangalore (IST/UTC+5:30) needs to continue debugging on Wednesday night. The suspend exception holds off hibernation from 20:00–23:59, keeping resources alive past the normal cutoff.
+- **Late Night Maintenance**: An SRE needs to perform a manual database migration starting at 21:00 on a Tuesday. A suspend exception ensures the resources stay awake during the maintenance window.
 
 The `leadTime` field creates a buffer before the suspension window. With `leadTime: "1h"`, the controller won't start a new hibernation cycle within 1 hour before the suspension begins (i.e., from 19:00 onward).
 
@@ -80,7 +86,10 @@ spec:
       daysOfWeek: ["MON", "TUE", "WED", "THU", "FRI", "SAT", "SUN"]
 ```
 
-**Use case**: Apply a completely different schedule during holidays.
+**Use cases**:
+
+- **Annual Change Freeze**: Apply a completely different schedule during year-end holidays where resources remain hibernated 24/7.
+- **Migration Period**: During a major infrastructure migration week, you might want a more relaxed hibernation schedule (e.g., only 00:00-04:00) to allow for longer working hours.
 
 ## Lifecycle States
 
@@ -143,5 +152,5 @@ For practical scenarios showing how to combine exceptions (extend + suspend, rep
 
 ## See Also
 
-- [API Reference: ScheduleException](../api-reference/index.md#scheduleexception) — Full field documentation
+- [API Reference: ScheduleException](../reference/api.md#scheduleexception) — Full field documentation
 - [User Guide: Schedule Exceptions](../user-guides/schedule-exceptions.md) — Step-by-step operations

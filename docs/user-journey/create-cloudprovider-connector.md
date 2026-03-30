@@ -231,8 +231,8 @@ spec:
 EOF
 
 # Monitor the Job:
-kubectl get jobs -l hibernator/plan=connectivity-test -w
-kubectl logs job/$(kubectl get jobs -l hibernator/plan=connectivity-test -o name) -f
+kubectl get jobs -l hibernator.ardikabs.com/plan=connectivity-test -w
+kubectl logs job/$(kubectl get jobs -l hibernator.ardikabs.com/plan=connectivity-test -o name) -f
 ```
 
 ---
