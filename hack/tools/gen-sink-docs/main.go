@@ -154,13 +154,11 @@ func parseSink(root, dir, displayName, description string, extras []extraSection
 	pkgDir := filepath.Join(root, sinkBaseDir, dir)
 
 	fset := token.NewFileSet()
-	pkgs, err := parser.ParseDir(fset, pkgDir, nil, parser.ParseComments)
+	localFiles, err := parseGoFiles(fset, pkgDir, nil)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "error parsing %s: %v\n", pkgDir, err)
 		os.Exit(1)
 	}
-
-	localFiles := collectFiles(pkgs)
 
 	for _, f := range localFiles {
 		extractSinkType(f, &info)
@@ -171,14 +169,13 @@ func parseSink(root, dir, displayName, description string, extras []extraSection
 	// Parse the parent sink package for cross-package type resolution
 	// (e.g., sink.Payload referenced by webhookBody).
 	parentDir := filepath.Join(root, sinkBaseDir)
-	parentPkgs, err := parser.ParseDir(fset, parentDir, func(fi os.FileInfo) bool {
-		return !strings.HasSuffix(fi.Name(), "_test.go")
-	}, parser.ParseComments)
+	parentFiles, err := parseGoFiles(fset, parentDir, func(e os.DirEntry) bool {
+		return !strings.HasSuffix(e.Name(), "_test.go")
+	})
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "error parsing parent sink package: %v\n", err)
 		os.Exit(1)
 	}
-	parentFiles := collectFiles(parentPkgs)
 
 	// Resolve extra sections (e.g., webhook Payload → webhookBody struct).
 	for _, es := range extras {
@@ -195,15 +192,27 @@ func parseSink(root, dir, displayName, description string, extras []extraSection
 	return info
 }
 
-// collectFiles gathers all *ast.File from parsed packages.
-func collectFiles(pkgs map[string]*ast.Package) []*ast.File {
-	var files []*ast.File
-	for _, pkg := range pkgs {
-		for _, f := range pkg.Files {
-			files = append(files, f)
-		}
+// parseGoFiles parses all Go files in a directory, optionally filtering with fn.
+func parseGoFiles(fset *token.FileSet, dir string, filter func(os.DirEntry) bool) ([]*ast.File, error) {
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		return nil, err
 	}
-	return files
+	var files []*ast.File
+	for _, e := range entries {
+		if e.IsDir() || !strings.HasSuffix(e.Name(), ".go") {
+			continue
+		}
+		if filter != nil && !filter(e) {
+			continue
+		}
+		f, err := parser.ParseFile(fset, filepath.Join(dir, e.Name()), nil, parser.ParseComments)
+		if err != nil {
+			return nil, err
+		}
+		files = append(files, f)
+	}
+	return files, nil
 }
 
 // findStruct searches files for a struct type with the given name.
