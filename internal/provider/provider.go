@@ -76,12 +76,17 @@ type PlanReconciler struct {
 	DependencyNonces dependencyNonceMap
 }
 
+// +kubebuilder:rbac:groups=hibernator.ardikabs.com,resources=hibernatenotifications,verbs=get;list;watch;create;update;patch;delete
+// +kubebuilder:rbac:groups=hibernator.ardikabs.com,resources=hibernatenotifications/status,verbs=get;update;patch
+// +kubebuilder:rbac:groups=hibernator.ardikabs.com,resources=hibernatenotifications/finalizers,verbs=update
 // +kubebuilder:rbac:groups=hibernator.ardikabs.com,resources=hibernateplans,verbs=get;list;watch;create;update;patch;delete
 // +kubebuilder:rbac:groups=hibernator.ardikabs.com,resources=hibernateplans/status,verbs=get;update;patch
 // +kubebuilder:rbac:groups=hibernator.ardikabs.com,resources=hibernateplans/finalizers,verbs=update
+// +kubebuilder:rbac:groups=hibernator.ardikabs.com,resources=scheduleexceptions,verbs=get;list;watch;create;update;patch;delete
+// +kubebuilder:rbac:groups=hibernator.ardikabs.com,resources=scheduleexceptions/status,verbs=get;update;patch
+// +kubebuilder:rbac:groups=hibernator.ardikabs.com,resources=scheduleexceptions/finalizers,verbs=update
 // +kubebuilder:rbac:groups=hibernator.ardikabs.com,resources=cloudproviders,verbs=get;list;watch
 // +kubebuilder:rbac:groups=hibernator.ardikabs.com,resources=k8sclusters,verbs=get;list;watch
-// +kubebuilder:rbac:groups=hibernator.ardikabs.com,resources=hibernatenotifications,verbs=get;list;watch
 // +kubebuilder:rbac:groups=batch,resources=jobs,verbs=get;list;watch;create;update;patch;delete
 // +kubebuilder:rbac:groups="",resources=secrets,verbs=get;list;watch
 // +kubebuilder:rbac:groups="",resources=configmaps,verbs=get;list;watch;create;update;patch;delete
@@ -487,7 +492,7 @@ func (r *PlanReconciler) SetupWithManager(mgr ctrl.Manager, workers int) error {
 			handler.EnqueueRequestsFromMapFunc(r.findPlansForException),
 			// Only Spec changes matter — no state handler reads exc.Status.State;
 			// schedule evaluation uses ValidFrom/ValidUntil directly. Suppressing
-			// exception status writes eliminates the ExceptionLifecycleProcessor
+			// scheduleexception status writes eliminates the scheduleexception.LifecycleProcessor
 			// status-write → reconcile loop.
 			builder.WithPredicates(predicate.GenerationChangedPredicate{}),
 		).
