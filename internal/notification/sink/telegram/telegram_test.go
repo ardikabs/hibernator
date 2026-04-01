@@ -14,6 +14,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/go-telegram/bot/models"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"k8s.io/apimachinery/pkg/types"
@@ -145,7 +146,7 @@ func TestSendWithoutParseMode(t *testing.T) {
 	})
 
 	require.NoError(t, err)
-	assert.Empty(t, receivedParseMode)
+	assert.Equal(t, string(models.ParseModeHTML), receivedParseMode)
 }
 
 func TestSendWithChannelUsername(t *testing.T) {

@@ -32,14 +32,17 @@ const (
 	// defaultDispatchTimeout is the per-sink HTTP call timeout.
 	defaultDispatchTimeout = 5 * time.Second
 
+	// defaultDrainTimeout is the maximum time to wait for workers to drain remaining items during shutdown.
+	defaultDrainTimeout = 30 * time.Second
+
 	// defaultChannelSize is the default buffered channel capacity for dispatch requests.
 	defaultChannelSize = 256
 
 	// defaultWorkers is the default number of concurrent dispatch goroutines.
 	defaultWorkers = 4
 
-	// maxOverflowSize is the maximum number of requests allowed in the overflow queue before new requests are dropped.
-	maxOverflowSize = 4096
+	// defaultMaxOverflowSize is the default maximum number of requests allowed in the overflow queue before new requests are dropped.
+	defaultMaxOverflowSize = 4096
 )
 
 // DispatcherConfig holds tuning knobs for the notification Dispatcher.
@@ -56,6 +59,10 @@ type DispatcherConfig struct {
 	// DispatchTimeout is the per-sink HTTP call timeout.
 	// Default: 5s.
 	DispatchTimeout time.Duration
+
+	// MaxOverflowSize is the maximum number of requests allowed in the overflow queue before new requests are dropped.
+	// Default: 4096.
+	MaxOverflowSize int
 }
 
 // withDefaults returns a copy with zero fields replaced by defaults.
@@ -68,6 +75,9 @@ func (c DispatcherConfig) withDefaults() DispatcherConfig {
 	}
 	if c.DispatchTimeout <= 0 {
 		c.DispatchTimeout = defaultDispatchTimeout
+	}
+	if c.MaxOverflowSize <= 0 {
+		c.MaxOverflowSize = defaultMaxOverflowSize
 	}
 	return c
 }
@@ -94,19 +104,35 @@ type Dispatcher struct {
 	channelSize     int
 	workers         int
 	dispatchTimeout time.Duration
+	maxOverflowSize int
 
-	// ch is the primary buffered channel between Submit and workers.
-	ch chan Request
-	// done is closed when the dispatcher is shutting down.
+	// requestCh is the primary buffered channel between Submit and workers.
+	// It is NEVER closed — workers exit via the allFlushed signal instead,
+	// which avoids send-on-closed-channel panics from concurrent Submit calls.
+	requestCh chan Request
+
+	// done is closed when the dispatcher begins shutting down.
+	// Submit checks this via non-blocking select for the fast-path discard.
 	done chan struct{}
 
-	// overflow is a mutex-protected unbounded queue for requests that
-	// could not be sent to ch without blocking.
-	mu       sync.Mutex
-	overflow []Request
-	// signal is a 1-buffered channel used to wake the drainer goroutine
+	// drained is closed after the drainer goroutine has fully stopped and returned
+	// any undrained items back to the overflow queue. This signals Start() that
+	// it's safe to flush the overflow queue into the channel without racing with the drainer.
+	drained chan struct{}
+
+	// flushed is closed after overflow has been fully flushed into requestCh.
+	// Workers switch from their main loop to a drain loop once this fires.
+	flushed chan struct{}
+
+	// overflow holds requests that couldn't fit in the channel when submitted.
+	//
+	// The overflow is concurrency-safe internally, but the dispatcher ensures that only the drainer goroutine mutates it,
+	// so no external locking is needed when the drainer appends or moves items back to the channel.
+	overflow *Overflow[Request]
+
+	// drainSignal is a 1-buffered channel used to wake the drainer goroutine
 	// when items are added to overflow.
-	signal chan struct{}
+	drainSignal chan struct{}
 }
 
 // NewDispatcher creates a new NotificationDispatcher.
@@ -120,9 +146,13 @@ func NewDispatcher(log logr.Logger, c client.Reader, registry *sink.Registry, cf
 		channelSize:     cfg.ChannelSize,
 		workers:         cfg.Workers,
 		dispatchTimeout: cfg.DispatchTimeout,
-		ch:              make(chan Request, cfg.ChannelSize),
+		maxOverflowSize: cfg.MaxOverflowSize,
+		overflow:        new(Overflow[Request]),
+		requestCh:       make(chan Request, cfg.ChannelSize),
 		done:            make(chan struct{}),
-		signal:          make(chan struct{}, 1),
+		drained:         make(chan struct{}),
+		flushed:         make(chan struct{}),
+		drainSignal:     make(chan struct{}, 1),
 	}
 }
 
@@ -135,41 +165,44 @@ func (d *Dispatcher) NeedLeaderElection() bool { return true }
 func (d *Dispatcher) Notifier() Notifier { return d }
 
 // Start implements manager.Runnable. It spawns the overflow drainer, worker
-// goroutines, and blocks until ctx is cancelled. On shutdown, the drainer exits
-// first, then remaining overflow is flushed into the channel, the channel is
-// closed, and workers drain remaining items before returning.
+// goroutines, and blocks until ctx is cancelled. On shutdown it ensures all
+// in-flight and overflow items are delivered before returning.
+//
+// Shutdown sequence:
+//  1. close(d.done)         — Submit fast-path discards new requests
+//  2. d.shuttingDown = true — Submit overflow-path discards too
+//  3. Stop drainer, wait    — drainer returns unsent items to overflow
+//  4. Flush overflow → ch   — workers are still consuming from ch
+//  5. close(d.allFlushed)   — workers switch to drain-and-exit mode
+//  6. d.wg.Wait()           — all workers finish
+//
+// requestCh is never closed, so Submit can never panic with a
+// send-on-closed-channel even in a tiny race window.
 func (d *Dispatcher) Start(ctx context.Context) error {
 	d.log.Info("starting notification dispatcher", "workers", d.workers, "channelSize", d.channelSize)
 
-	// Spawn overflow drainer.
-	drainerDone := make(chan struct{})
-	go func() {
-		defer close(drainerDone)
-		d.drainOverflow()
-	}()
+	// Start workers and overflow drainer.
+	go d.run(ctx)
 
-	// Spawn worker goroutines.
-	workersDone := make(chan struct{})
-	go func() {
-		defer close(workersDone)
-		d.runWorkers(ctx)
-	}()
-
+	d.log.V(1).Info("notification dispatcher running", "workers", d.workers, "channelSize", d.channelSize)
 	// Block until context is cancelled.
 	<-ctx.Done()
 
-	// 1. Signal shutdown — stops drainer loop and makes Submit discard new requests.
+	// --- Shutdown sequence ---
+	d.log.V(1).Info("notification dispatcher initiating shutdown")
+
+	// Signal shutdown to drainer and prevent Submit from accepting new requests.
 	close(d.done)
 
-	// 2. Wait for the drainer to fully exit so no goroutine races on ch or overflow.
-	<-drainerDone
-
-	// 3. Flush any remaining overflow items into ch.
-	d.flushOverflow()
-
-	// 4. Close ch so workers drain remaining items and exit.
-	close(d.ch)
-	<-workersDone
+	d.log.V(1).Info("notification dispatcher shutting down, waiting for flush",
+		"workers", d.workers,
+		"channelSize", len(d.requestCh),
+		"remainingOverflow", d.overflow.Len(),
+	)
+	// At this point, workers goroutine might still performing flush from the remaining
+	// requests in the channel, once it dones, it will close the d.flushed channel
+	// to signal that all items have been flushed and processed regardless of the status.
+	<-d.flushed
 
 	d.log.Info("notification dispatcher stopped")
 	return nil
@@ -178,9 +211,9 @@ func (d *Dispatcher) Start(ctx context.Context) error {
 // Submit enqueues a dispatch request. It never blocks the caller: if the buffered
 // channel has room the request goes directly; otherwise it is appended to the
 // internal overflow queue and the drainer will move it to the channel asynchronously.
-// After shutdown, requests are discarded with a metric.
+// After shutdown begins (d.done closed), requests are discarded with a metric.
 func (d *Dispatcher) Submit(req Request) {
-	// Fast path — check shutdown first.
+	// Fast-path — non-blocking shutdown check via channel.
 	select {
 	case <-d.done:
 		d.log.V(1).Info("notification dispatcher stopped, discarding request",
@@ -190,17 +223,16 @@ func (d *Dispatcher) Submit(req Request) {
 	default:
 	}
 
-	// Try non-blocking send to the channel.
+	// Try non-blocking send to the channel. No lock needed here because
+	// requestCh is never closed — the worst case is sending one extra item
+	// after shutdown, which workers will drain.
 	select {
-	case d.ch <- req:
+	case d.requestCh <- req:
 		return
 	default:
 	}
 
-	// Channel full — park in overflow queue (non-blocking for the caller).
-	d.mu.Lock()
-	if len(d.overflow) >= maxOverflowSize {
-		d.mu.Unlock()
+	if d.overflow.Len() >= d.maxOverflowSize {
 		d.log.Error(fmt.Errorf("overflow queue full, dropping notification request"),
 			"id", req.Payload.ID,
 			"sink", req.SinkName,
@@ -210,97 +242,132 @@ func (d *Dispatcher) Submit(req Request) {
 		metrics.NotificationDropTotal.WithLabelValues(req.SinkType, req.Payload.Event).Inc()
 		return
 	}
-	d.overflow = append(d.overflow, req)
-	d.mu.Unlock()
+
+	d.overflow.Append(req)
+	d.log.V(1).Info("request channel full, adding notification request to overflow",
+		"id", req.Payload.ID,
+		"sink", req.SinkName,
+		"sinkType", req.SinkType,
+		"event", req.Payload.Event,
+		"overflowSize", d.overflow.Len(),
+	)
 
 	// Wake the drainer (non-blocking signal).
 	select {
-	case d.signal <- struct{}{}:
+	case d.drainSignal <- struct{}{}:
 	default: // already signaled
 	}
 }
 
-// drainOverflow continuously moves requests from the overflow queue into ch.
-// It exits when done is closed and the overflow is empty.
-func (d *Dispatcher) drainOverflow() {
+// overflowDrainerLoop runs in a goroutine, waiting for signals to move items
+// from the overflow queue to the main channel.
+// Exits when drainStop is closed (shutdown).
+func (d *Dispatcher) overflowDrainerLoop() {
+	d.log.Info("notification overflow drainer started")
+
 	for {
 		select {
-		case <-d.signal:
-			d.transferOverflow()
+		case <-d.drainSignal:
+			if interrupted := d.drainOverflow(); interrupted {
+				d.log.V(1).Info("notification overflow drainer interrupted during shutdown, returning remaining items to overflow",
+					"remainingOverflow", d.overflow.Len())
+			}
 		case <-d.done:
+			d.log.Info("notification overflow drainer stopped")
+			close(d.drained)
 			return
 		}
 	}
 }
 
-// transferOverflow drains the current overflow slice into ch, blocking on each
-// send so backpressure is absorbed by the drainer goroutine, not the caller.
-func (d *Dispatcher) transferOverflow() {
-	d.mu.Lock()
-	batch := d.overflow
-	d.overflow = nil
-	d.mu.Unlock()
+// drainOverflow moves all items currently in the overflow queue into the main channel.
+// It sends items to the channel in a select with d.drainStop so it can be
+// interrupted during shutdown — any unsent items are returned to the overflow
+// queue for the final flush in Start().
+func (d *Dispatcher) drainOverflow() bool {
+	var interrupted bool
 
-	for _, req := range batch {
+	d.overflow.Consume(func(ctx context.Context, req Request) bool {
 		select {
-		case d.ch <- req:
+		case d.requestCh <- req:
+			return true
+
+			// Context canceled after 5 seconds
+		case <-ctx.Done():
+			return false
+
+			// Dispatcher shutdown is signaled via d.done,
+			// but we also need to listen to ctx.Done() here to avoid blocking on send if the dispatcher is trying to shut down while we're draining overflow. This allows the drainer to exit promptly without getting stuck trying to send on a full channel during shutdown.
 		case <-d.done:
-			// Shutdown — put remaining items back for flushOverflow.
-			d.mu.Lock()
-			d.overflow = append(d.overflow, req)
-			d.mu.Unlock()
-			return
+			interrupted = true
+			return false
 		}
-	}
+	})
+
+	return interrupted
 }
 
-// flushOverflow moves any remaining overflow items into ch. Called during shutdown
-// after done is closed and before ch is closed.
-func (d *Dispatcher) flushOverflow() {
-	d.mu.Lock()
-	remaining := d.overflow
-	d.overflow = nil
-	d.mu.Unlock()
+// run starts the worker goroutines responsible for processing dispatch requests
+// from the channel, including the overflow drainer.
+//
+// On shutdown, workers exit their loop when ctx is cancelled. After all workers
+// have stopped, run() waits for the drainer to finish and then drains both the
+// request channel and the overflow queue in a single goroutine. This avoids
+// duplicate dispatches that would occur if multiple workers each independently
+// drained the overflow, and ensures channel items are not lost.
+func (d *Dispatcher) run(ctx context.Context) {
+	go d.overflowDrainerLoop()
 
-	for _, req := range remaining {
-		d.ch <- req
-	}
-}
-
-// runWorkers spawns d.workers goroutines that drain the dispatch channel.
-// All goroutines exit when the channel is closed (after ctx cancellation).
-func (d *Dispatcher) runWorkers(ctx context.Context) {
-	var wg sync.WaitGroup
+	var activeWorkers sync.WaitGroup
 	for i := 0; i < d.workers; i++ {
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
+		activeWorkers.Add(1)
+		go func(workerID int) {
+			defer activeWorkers.Done()
+			d.log.Info("notification worker started", "workerID", workerID)
 
 			for {
 				select {
-				case req, ok := <-d.ch:
-					if !ok {
-						return
-					}
-
-					dCtx := ctx
-					var cancel context.CancelFunc
-					select {
-					case <-ctx.Done():
-						dCtx, cancel = context.WithTimeout(context.Background(), d.dispatchTimeout)
-						defer cancel()
-					default:
-					}
-
-					d.dispatch(dCtx, req)
+				case req := <-d.requestCh:
+					d.dispatch(ctx, req)
 
 				case <-ctx.Done():
+					d.log.Info("notification worker stopped", "workerID", workerID)
 					return
 				}
 			}
-		}()
+		}(i + 1)
 	}
-	wg.Wait()
+
+	activeWorkers.Wait()
+
+	// Wait for the drainer to finish and return any undrained items back to overflow.
+	<-d.drained
+
+	d.log.V(1).Info("draining remaining requests after shutdown",
+		"channelLen", len(d.requestCh),
+		"remainingOverflow", d.overflow.Len(),
+	)
+
+	dCtx, dCancel := context.WithTimeout(context.Background(), defaultDrainTimeout)
+	defer dCancel()
+
+	// Drain any items left in the request channel.
+drainChannel:
+	for {
+		select {
+		case req := <-d.requestCh:
+			d.dispatch(dCtx, req)
+		default:
+			break drainChannel
+		}
+	}
+
+	// Drain remaining overflow items.
+	d.overflow.Range(func(r Request) {
+		d.dispatch(dCtx, r)
+	})
+
+	close(d.flushed)
 }
 
 // dispatch processes a single DispatchRequest: resolves credentials, builds

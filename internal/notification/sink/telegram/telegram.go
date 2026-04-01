@@ -133,7 +133,7 @@ func (s *Sink) Send(ctx context.Context, payload sink.Payload, opts sink.SendOpt
 	}
 
 	tmpl := ptr.Deref(opts.CustomTemplate, DefaultTemplate)
-	parseMode := ptr.Deref(cfg.ParseMode, "HTML")
+	parseMode := ptr.Deref(cfg.ParseMode, string(models.ParseModeHTML))
 	renderOpts := []sink.RenderOption{
 		sink.WithExtraFuncs(template.FuncMap{
 			"autoEscape": autoEscape(parseMode),
