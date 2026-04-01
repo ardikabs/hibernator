@@ -33,12 +33,12 @@ metadata:
     cert-manager.io/inject-ca-from: {{ .Release.Namespace }}/{{ include "hibernator.fullname" . }}-webhook
   {{- end }}
 webhooks:
-  - name: validate.hibernateplan.hibernator.ardikabs.com
+  - name: validate.hibernator.ardikabs.com
     clientConfig:
       service:
         name: {{ include "hibernator.fullname" . }}-webhook
         namespace: {{ .Release.Namespace }}
-        path: "/validate-hibernator-ardikabs-com-v1alpha1-hibernateplan"
+        path: "/validate"
       {{- if not .Values.webhook.certManager.enabled }}
       {{- $caBundle := include "hibernator.webhook.caBundle" . }}
       {{- if $caBundle }}
@@ -49,29 +49,11 @@ webhooks:
       - operations: ["CREATE", "UPDATE"]
         apiGroups: ["hibernator.ardikabs.com"]
         apiVersions: ["v1alpha1"]
-        resources: ["hibernateplans"]
-    admissionReviewVersions: ["v1"]
-    sideEffects: None
-    timeoutSeconds: 5
-    failurePolicy: Fail
-
-  - name: validate.scheduleexception.hibernator.ardikabs.com
-    clientConfig:
-      service:
-        name: {{ include "hibernator.fullname" . }}-webhook
-        namespace: {{ .Release.Namespace }}
-        path: "/validate-hibernator-ardikabs-com-v1alpha1-scheduleexception"
-      {{- if not .Values.webhook.certManager.enabled }}
-      {{- $caBundle := include "hibernator.webhook.caBundle" . }}
-      {{- if $caBundle }}
-      caBundle: {{ $caBundle }}
-      {{- end }}
-      {{- end }}
-    rules:
-      - operations: ["CREATE", "UPDATE"]
-        apiGroups: ["hibernator.ardikabs.com"]
-        apiVersions: ["v1alpha1"]
-        resources: ["scheduleexceptions"]
+        resources:
+          - hibernateplans
+          - scheduleexceptions
+          - cloudproviders
+          - hibernatenotifications
     admissionReviewVersions: ["v1"]
     sideEffects: None
     timeoutSeconds: 5

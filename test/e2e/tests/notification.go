@@ -21,6 +21,7 @@ import (
 	"github.com/ardikabs/hibernator/internal/restore"
 	"github.com/ardikabs/hibernator/test/e2e/helper/fakenotif"
 	"github.com/ardikabs/hibernator/test/e2e/testutil"
+	"sigs.k8s.io/controller-runtime/pkg/client"
 )
 
 var _ = Describe("Notification E2E", func() {
@@ -308,6 +309,173 @@ var _ = Describe("Notification E2E", func() {
 			return false
 		}, testutil.DefaultTimeout, testutil.DefaultInterval).
 			Should(BeTrue(), "expected PhaseChange notification for Hibernating→Hibernated transition")
+	})
+
+	It("WebhookRejects_DuplicateSinkNames: should reject notification with duplicate sink names", func() {
+		By("Attempting to create HibernateNotification with duplicate sink names")
+		dup := &hibernatorv1alpha1.HibernateNotification{
+			ObjectMeta: metav1.ObjectMeta{
+				Name:      "notif-dup-sink",
+				Namespace: testNamespace,
+			},
+			Spec: hibernatorv1alpha1.HibernateNotificationSpec{
+				Selector: metav1.LabelSelector{
+					MatchLabels: map[string]string{"app": "test"},
+				},
+				OnEvents: []hibernatorv1alpha1.NotificationEvent{hibernatorv1alpha1.EventStart},
+				Sinks: []hibernatorv1alpha1.NotificationSink{
+					{
+						Name:      "my-sink",
+						Type:      hibernatorv1alpha1.SinkSlack,
+						SecretRef: hibernatorv1alpha1.ObjectKeyReference{Name: "s1"},
+					},
+					{
+						Name:      "my-sink",
+						Type:      hibernatorv1alpha1.SinkTelegram,
+						SecretRef: hibernatorv1alpha1.ObjectKeyReference{Name: "s2"},
+					},
+				},
+			},
+		}
+
+		err := k8sClient.Create(ctx, dup)
+		Expect(err).To(HaveOccurred(), "Webhook must reject HibernateNotification with duplicate sink names")
+		Expect(errors.IsInvalid(err) || errors.IsForbidden(err)).To(BeTrue(),
+			"Expected 422 Invalid or 403 Forbidden, got: %v", err)
+	})
+
+	It("WebhookRejects_MultipleDuplicateSinkNames: should reject notification with multiple duplicate sink names", func() {
+		By("Attempting to create HibernateNotification with multiple duplicate sink names")
+		dup := &hibernatorv1alpha1.HibernateNotification{
+			ObjectMeta: metav1.ObjectMeta{
+				Name:      "notif-multi-dup-sink",
+				Namespace: testNamespace,
+			},
+			Spec: hibernatorv1alpha1.HibernateNotificationSpec{
+				Selector: metav1.LabelSelector{
+					MatchLabels: map[string]string{"app": "test"},
+				},
+				OnEvents: []hibernatorv1alpha1.NotificationEvent{hibernatorv1alpha1.EventStart},
+				Sinks: []hibernatorv1alpha1.NotificationSink{
+					{
+						Name:      "dup",
+						Type:      hibernatorv1alpha1.SinkSlack,
+						SecretRef: hibernatorv1alpha1.ObjectKeyReference{Name: "s1"},
+					},
+					{
+						Name:      "unique",
+						Type:      hibernatorv1alpha1.SinkTelegram,
+						SecretRef: hibernatorv1alpha1.ObjectKeyReference{Name: "s2"},
+					},
+					{
+						Name:      "dup",
+						Type:      hibernatorv1alpha1.SinkWebhook,
+						SecretRef: hibernatorv1alpha1.ObjectKeyReference{Name: "s3"},
+					},
+					{
+						Name:      "dup",
+						Type:      hibernatorv1alpha1.SinkSlack,
+						SecretRef: hibernatorv1alpha1.ObjectKeyReference{Name: "s4"},
+					},
+				},
+			},
+		}
+
+		err := k8sClient.Create(ctx, dup)
+		Expect(err).To(HaveOccurred(), "Webhook must reject HibernateNotification with multiple duplicate sink names")
+		Expect(errors.IsInvalid(err) || errors.IsForbidden(err)).To(BeTrue(),
+			"Expected 422 Invalid or 403 Forbidden, got: %v", err)
+	})
+
+	It("WebhookAccepts_UniqueSinkNames: should accept notification with unique sink names", func() {
+		By("Creating HibernateNotification with unique sink names")
+		notif := &hibernatorv1alpha1.HibernateNotification{
+			ObjectMeta: metav1.ObjectMeta{
+				Name:      "notif-unique-sinks",
+				Namespace: testNamespace,
+			},
+			Spec: hibernatorv1alpha1.HibernateNotificationSpec{
+				Selector: metav1.LabelSelector{
+					MatchLabels: map[string]string{"app": "test"},
+				},
+				OnEvents: []hibernatorv1alpha1.NotificationEvent{hibernatorv1alpha1.EventStart},
+				Sinks: []hibernatorv1alpha1.NotificationSink{
+					{
+						Name:      "slack-prod",
+						Type:      hibernatorv1alpha1.SinkSlack,
+						SecretRef: hibernatorv1alpha1.ObjectKeyReference{Name: "s1"},
+					},
+					{
+						Name:      "telegram-prod",
+						Type:      hibernatorv1alpha1.SinkTelegram,
+						SecretRef: hibernatorv1alpha1.ObjectKeyReference{Name: "s2"},
+					},
+					{
+						Name:      "webhook-prod",
+						Type:      hibernatorv1alpha1.SinkWebhook,
+						SecretRef: hibernatorv1alpha1.ObjectKeyReference{Name: "s3"},
+					},
+				},
+			},
+		}
+
+		Expect(k8sClient.Create(ctx, notif)).To(Succeed(),
+			"Webhook should accept HibernateNotification with unique sink names")
+
+		By("Cleaning up accepted notification")
+		testutil.EnsureDeleted(ctx, k8sClient, notif)
+	})
+
+	It("WebhookRejects_UpdateIntroducesDuplicateSinkNames: should reject update that introduces duplicate sink names", func() {
+		By("Creating a valid HibernateNotification with unique sink names")
+		notif := &hibernatorv1alpha1.HibernateNotification{
+			ObjectMeta: metav1.ObjectMeta{
+				Name:      "notif-update-dup",
+				Namespace: testNamespace,
+			},
+			Spec: hibernatorv1alpha1.HibernateNotificationSpec{
+				Selector: metav1.LabelSelector{
+					MatchLabels: map[string]string{"app": "test"},
+				},
+				OnEvents: []hibernatorv1alpha1.NotificationEvent{hibernatorv1alpha1.EventStart},
+				Sinks: []hibernatorv1alpha1.NotificationSink{
+					{
+						Name:      "sink-a",
+						Type:      hibernatorv1alpha1.SinkSlack,
+						SecretRef: hibernatorv1alpha1.ObjectKeyReference{Name: "s1"},
+					},
+					{
+						Name:      "sink-b",
+						Type:      hibernatorv1alpha1.SinkTelegram,
+						SecretRef: hibernatorv1alpha1.ObjectKeyReference{Name: "s2"},
+					},
+				},
+			},
+		}
+		Expect(k8sClient.Create(ctx, notif)).To(Succeed())
+
+		By("Updating the notification to introduce duplicate sink names")
+		Expect(k8sClient.Get(ctx, client.ObjectKeyFromObject(notif), notif)).To(Succeed())
+		notif.Spec.Sinks = []hibernatorv1alpha1.NotificationSink{
+			{
+				Name:      "sink-a",
+				Type:      hibernatorv1alpha1.SinkSlack,
+				SecretRef: hibernatorv1alpha1.ObjectKeyReference{Name: "s1"},
+			},
+			{
+				Name:      "sink-a",
+				Type:      hibernatorv1alpha1.SinkTelegram,
+				SecretRef: hibernatorv1alpha1.ObjectKeyReference{Name: "s2"},
+			},
+		}
+
+		err := k8sClient.Update(ctx, notif)
+		Expect(err).To(HaveOccurred(), "Webhook must reject update that introduces duplicate sink names")
+		Expect(errors.IsInvalid(err) || errors.IsForbidden(err)).To(BeTrue(),
+			"Expected 422 Invalid or 403 Forbidden, got: %v", err)
+
+		By("Cleaning up notification")
+		testutil.EnsureDeleted(ctx, k8sClient, notif)
 	})
 
 	It("SelectorMismatch: should not fire notifications when plan labels do not match the selector", func() {

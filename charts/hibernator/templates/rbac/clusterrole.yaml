@@ -43,6 +43,17 @@ rules:
     resources: ["scheduleexceptions/finalizers"]
     verbs: ["update"]
 
+  # ScheduleException
+  - apiGroups: ["hibernator.ardikabs.com"]
+    resources: ["hibernatenotifications"]
+    verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
+  - apiGroups: ["hibernator.ardikabs.com"]
+    resources: ["hibernatenotifications/status"]
+    verbs: ["get", "patch", "update"]
+  - apiGroups: ["hibernator.ardikabs.com"]
+    resources: ["hibernatenotifications/finalizers"]
+    verbs: ["update"]
+
   # Job management
   - apiGroups: ["batch"]
     resources: ["jobs"]

@@ -101,9 +101,8 @@ func submitForNotification(_ context.Context, n notification.Notifier, notif *hi
 
 	done := make(map[string]struct{})
 	for _, sink := range notif.Spec.Sinks {
-		// Best-effort deduplication of sinks by name within a notification
+		// Ensure with deduplication of sinks by name within a notification
 		// to avoid sending duplicate requests for functionally identical sinks.
-		// TODO(ardikabs): also add validation to the API to enforce unique sink names within a notification spec.
 		if _, ok := done[sink.Name]; ok {
 			continue
 		}
