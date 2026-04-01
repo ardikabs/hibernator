@@ -17,4 +17,7 @@ type ControllerStatuses struct {
 
 	// ExceptionStatuses accepts status mutations for ScheduleException objects.
 	ExceptionStatuses Updater[*hibernatorv1alpha1.ScheduleException]
+
+	// NotificationStatuses accepts status mutations for HibernateNotification objects.
+	NotificationStatuses Updater[*hibernatorv1alpha1.HibernateNotification]
 }

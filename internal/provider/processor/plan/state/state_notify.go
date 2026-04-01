@@ -109,10 +109,11 @@ func submitForNotification(_ context.Context, n notification.Notifier, notif *hi
 		done[sink.Name] = struct{}{}
 
 		req := notification.Request{
-			Payload:   payload,
-			SinkName:  sink.Name,
-			SinkType:  string(sink.Type),
-			SecretRef: sink.SecretRef,
+			Payload:         payload,
+			SinkName:        sink.Name,
+			SinkType:        string(sink.Type),
+			SecretRef:       sink.SecretRef,
+			NotificationRef: client.ObjectKeyFromObject(notif),
 		}
 		if sink.TemplateRef != nil {
 			req.TemplateRef = sink.TemplateRef

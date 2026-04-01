@@ -51,6 +51,9 @@ type config struct {
 
 	// dispatcherConfig is forwarded to NewDispatcher.
 	dispatcherConfig DispatcherConfig
+
+	// deliveryCallback is invoked after each dispatch attempt for status tracking.
+	deliveryCallback DeliveryCallback
 }
 
 // Option configures the notification subsystem constructed by New.
@@ -78,6 +81,14 @@ func DisableDefaultSinks() Option {
 func WithDispatcherConfig(cfg DispatcherConfig) Option {
 	return func(c *config) {
 		c.dispatcherConfig = cfg
+	}
+}
+
+// WithDeliveryCallback registers a callback invoked after each dispatch attempt.
+// Used by the notification lifecycle processor to track per-sink delivery status.
+func WithDeliveryCallback(cb DeliveryCallback) Option {
+	return func(c *config) {
+		c.deliveryCallback = cb
 	}
 }
 
@@ -117,6 +128,7 @@ func New(log logr.Logger, c client.Client, opts ...Option) Instance {
 		registry,
 		cfg.dispatcherConfig,
 	)
+	dispatcher.deliveryCallback = cfg.deliveryCallback
 
 	return Instance{
 		Notifier: dispatcher.Notifier(),

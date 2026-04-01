@@ -533,4 +533,281 @@ var _ = Describe("Notification E2E", func() {
 		Consistently(fakeNotifSink.Len, 2*time.Second, testutil.DefaultInterval).
 			Should(BeZero(), "no notifications should be sent when selector does not match the plan")
 	})
+
+	It("NotificationLifecycle: should populate watchedPlans, sinkStatuses, and delivery timestamps after successful notification", func() {
+		const planLabel = "notif-status-test"
+
+		By("Creating HibernateNotification subscribed to Start events")
+		notification = &hibernatorv1alpha1.HibernateNotification{
+			ObjectMeta: metav1.ObjectMeta{
+				Name:      "notif-status",
+				Namespace: testNamespace,
+			},
+			Spec: hibernatorv1alpha1.HibernateNotificationSpec{
+				Selector: metav1.LabelSelector{
+					MatchLabels: map[string]string{"test-scenario": planLabel},
+				},
+				OnEvents: []hibernatorv1alpha1.NotificationEvent{
+					hibernatorv1alpha1.EventStart,
+				},
+				Sinks: []hibernatorv1alpha1.NotificationSink{
+					{
+						Name:      "fake-webhook",
+						Type:      hibernatorv1alpha1.NotificationSinkType(fakenotif.SinkType),
+						SecretRef: hibernatorv1alpha1.ObjectKeyReference{Name: sinkSecret.Name, Key: ptr.To("config")},
+					},
+				},
+			},
+		}
+		Expect(k8sClient.Create(ctx, notification)).To(Succeed())
+
+		// Start in on-hours so the plan initializes to Active.
+		fakeClock.SetTime(time.Date(2026, 5, 4, 8, 0, 0, 0, time.UTC))
+
+		By("Creating HibernatePlan with labels matching the notification selector")
+		plan, _ = testutil.NewHibernatePlanBuilder("notif-status", testNamespace).
+			WithLabels(map[string]string{"test-scenario": planLabel}).
+			WithSchedule("20:00", "06:00", "MON", "TUE", "WED", "THU", "FRI", "SAT", "SUN").
+			WithExecutionStrategy(hibernatorv1alpha1.ExecutionStrategy{
+				Type: hibernatorv1alpha1.StrategySequential,
+			}).
+			WithTarget(hibernatorv1alpha1.Target{
+				Name: "app",
+				Type: "noop",
+				ConnectorRef: hibernatorv1alpha1.ConnectorRef{
+					Kind: "CloudProvider",
+					Name: "notif-aws",
+				},
+			}).
+			Build()
+		Expect(k8sClient.Create(ctx, plan)).To(Succeed())
+
+		By("Verifying plan initializes to Active")
+		testutil.EventuallyPhase(ctx, k8sClient, plan, hibernatorv1alpha1.PhaseActive)
+
+		By("Verifying watchedPlans is populated with the matching plan")
+		Eventually(func(g Gomega) {
+			fresh := &hibernatorv1alpha1.HibernateNotification{}
+			g.Expect(k8sClient.Get(ctx, client.ObjectKeyFromObject(notification), fresh)).To(Succeed())
+			g.Expect(fresh.Status.WatchedPlans).To(ContainElement(
+				hibernatorv1alpha1.PlanReference{Name: plan.Name},
+			))
+		}, testutil.DefaultTimeout, testutil.DefaultInterval).Should(Succeed())
+
+		// ------------------------------------------------------------------ Trigger hibernation
+		By("Advancing clock to off-hours to trigger hibernation")
+		fakeClock.SetTime(time.Date(2026, 5, 4, 20, 1, 10, 0, time.UTC))
+		testutil.TriggerReconcile(ctx, k8sClient, plan)
+
+		By("Verifying plan transitions to Hibernating")
+		testutil.EventuallyPhase(ctx, k8sClient, plan, hibernatorv1alpha1.PhaseHibernating)
+
+		By("Waiting for at least one notification to be sent")
+		Eventually(fakeNotifSink.Len, testutil.DefaultTimeout, testutil.DefaultInterval).
+			Should(BeNumerically(">=", 1))
+
+		By("Verifying notification status has sinkStatuses and lastDeliveryTime populated")
+		Eventually(func(g Gomega) {
+			fresh := &hibernatorv1alpha1.HibernateNotification{}
+			g.Expect(k8sClient.Get(ctx, client.ObjectKeyFromObject(notification), fresh)).To(Succeed())
+
+			// SinkStatuses history should have at least one entry.
+			g.Expect(fresh.Status.SinkStatuses).NotTo(BeEmpty(), "sinkStatuses should have delivery history")
+
+			// The newest entry should be a success for our fake-webhook sink.
+			newest := fresh.Status.SinkStatuses[0]
+			g.Expect(newest.Name).To(Equal("fake-webhook"))
+			g.Expect(newest.Success).To(BeTrue())
+			g.Expect(newest.TransitionTimestamp.IsZero()).To(BeFalse())
+			g.Expect(newest.Message).NotTo(BeEmpty())
+
+			// LastDeliveryTime should be set after a successful delivery.
+			g.Expect(fresh.Status.LastDeliveryTime).NotTo(BeNil(), "lastDeliveryTime should be set after successful delivery")
+		}, testutil.DefaultTimeout, testutil.DefaultInterval).Should(Succeed())
+	})
+
+	It("NotificationLifecycleOnUpdate: should track multiple plans in watchedPlans when selector matches more than one plan", func() {
+		const planLabel = "notif-multi-plan-test"
+
+		var plan2 *hibernatorv1alpha1.HibernatePlan
+
+		By("Creating HibernateNotification subscribed to Start events")
+		notification = &hibernatorv1alpha1.HibernateNotification{
+			ObjectMeta: metav1.ObjectMeta{
+				Name:      "notif-multi-plan",
+				Namespace: testNamespace,
+			},
+			Spec: hibernatorv1alpha1.HibernateNotificationSpec{
+				Selector: metav1.LabelSelector{
+					MatchLabels: map[string]string{"test-scenario": planLabel},
+				},
+				OnEvents: []hibernatorv1alpha1.NotificationEvent{
+					hibernatorv1alpha1.EventStart,
+				},
+				Sinks: []hibernatorv1alpha1.NotificationSink{
+					{
+						Name:      "fake-webhook",
+						Type:      hibernatorv1alpha1.NotificationSinkType(fakenotif.SinkType),
+						SecretRef: hibernatorv1alpha1.ObjectKeyReference{Name: sinkSecret.Name, Key: ptr.To("config")},
+					},
+				},
+			},
+		}
+		Expect(k8sClient.Create(ctx, notification)).To(Succeed())
+
+		fakeClock.SetTime(time.Date(2026, 5, 11, 8, 0, 0, 0, time.UTC))
+
+		By("Creating first HibernatePlan with matching labels")
+		plan, _ = testutil.NewHibernatePlanBuilder("notif-mp-plan-a", testNamespace).
+			WithLabels(map[string]string{"test-scenario": planLabel}).
+			WithSchedule("20:00", "06:00", "MON", "TUE", "WED", "THU", "FRI", "SAT", "SUN").
+			WithExecutionStrategy(hibernatorv1alpha1.ExecutionStrategy{
+				Type: hibernatorv1alpha1.StrategySequential,
+			}).
+			WithTarget(hibernatorv1alpha1.Target{
+				Name: "database",
+				Type: "noop",
+				ConnectorRef: hibernatorv1alpha1.ConnectorRef{
+					Kind: "CloudProvider",
+					Name: "notif-aws",
+				},
+			}).
+			Build()
+		Expect(k8sClient.Create(ctx, plan)).To(Succeed())
+
+		By("Creating second HibernatePlan with matching labels")
+		plan2, _ = testutil.NewHibernatePlanBuilder("notif-mp-plan-b", testNamespace).
+			WithLabels(map[string]string{"test-scenario": planLabel}).
+			WithSchedule("20:00", "06:00", "MON", "TUE", "WED", "THU", "FRI", "SAT", "SUN").
+			WithExecutionStrategy(hibernatorv1alpha1.ExecutionStrategy{
+				Type: hibernatorv1alpha1.StrategySequential,
+			}).
+			WithTarget(hibernatorv1alpha1.Target{
+				Name: "cache",
+				Type: "noop",
+				ConnectorRef: hibernatorv1alpha1.ConnectorRef{
+					Kind: "CloudProvider",
+					Name: "notif-aws",
+				},
+			}).
+			Build()
+		Expect(k8sClient.Create(ctx, plan2)).To(Succeed())
+
+		By("Verifying both plans initialize to Active")
+		testutil.EventuallyPhase(ctx, k8sClient, plan, hibernatorv1alpha1.PhaseActive)
+		testutil.EventuallyPhase(ctx, k8sClient, plan2, hibernatorv1alpha1.PhaseActive)
+
+		By("Verifying watchedPlans contains both plans (sorted by name)")
+		Eventually(func(g Gomega) {
+			fresh := &hibernatorv1alpha1.HibernateNotification{}
+			g.Expect(k8sClient.Get(ctx, client.ObjectKeyFromObject(notification), fresh)).To(Succeed())
+			g.Expect(fresh.Status.WatchedPlans).To(HaveLen(2))
+			g.Expect(fresh.Status.WatchedPlans[0].Name).To(HavePrefix("notif-mp-plan-a"))
+			g.Expect(fresh.Status.WatchedPlans[1].Name).To(HavePrefix("notif-mp-plan-b"))
+		}, testutil.DefaultTimeout, testutil.DefaultInterval).Should(Succeed())
+
+		// Cleanup plan2 explicitly since AfterEach only cleans `plan`.
+		defer testutil.EnsureDeleted(ctx, k8sClient, plan2)
+	})
+
+	It("NotificationLifecycleOnProgress: should accumulate sinkStatuses history across multiple delivery cycles", func() {
+		const planLabel = "notif-history-test"
+
+		By("Creating HibernateNotification subscribed to Start and Success events")
+		notification = &hibernatorv1alpha1.HibernateNotification{
+			ObjectMeta: metav1.ObjectMeta{
+				Name:      "notif-history",
+				Namespace: testNamespace,
+			},
+			Spec: hibernatorv1alpha1.HibernateNotificationSpec{
+				Selector: metav1.LabelSelector{
+					MatchLabels: map[string]string{"test-scenario": planLabel},
+				},
+				OnEvents: []hibernatorv1alpha1.NotificationEvent{
+					hibernatorv1alpha1.EventStart,
+					hibernatorv1alpha1.EventSuccess,
+				},
+				Sinks: []hibernatorv1alpha1.NotificationSink{
+					{
+						Name:      "fake-webhook",
+						Type:      hibernatorv1alpha1.NotificationSinkType(fakenotif.SinkType),
+						SecretRef: hibernatorv1alpha1.ObjectKeyReference{Name: sinkSecret.Name, Key: ptr.To("config")},
+					},
+				},
+			},
+		}
+		Expect(k8sClient.Create(ctx, notification)).To(Succeed())
+
+		fakeClock.SetTime(time.Date(2026, 5, 18, 8, 0, 0, 0, time.UTC))
+
+		By("Creating HibernatePlan with matching labels")
+		plan, _ = testutil.NewHibernatePlanBuilder("notif-history", testNamespace).
+			WithLabels(map[string]string{"test-scenario": planLabel}).
+			WithSchedule("20:00", "06:00", "MON", "TUE", "WED", "THU", "FRI", "SAT", "SUN").
+			WithExecutionStrategy(hibernatorv1alpha1.ExecutionStrategy{
+				Type: hibernatorv1alpha1.StrategySequential,
+			}).
+			WithTarget(hibernatorv1alpha1.Target{
+				Name: "app",
+				Type: "noop",
+				ConnectorRef: hibernatorv1alpha1.ConnectorRef{
+					Kind: "CloudProvider",
+					Name: "notif-aws",
+				},
+			}).
+			Build()
+		Expect(k8sClient.Create(ctx, plan)).To(Succeed())
+
+		By("Verifying plan initializes to Active")
+		testutil.EventuallyPhase(ctx, k8sClient, plan, hibernatorv1alpha1.PhaseActive)
+
+		// ------------------------------------------------------------------ First cycle: hibernate
+		By("Advancing clock to off-hours to trigger hibernation")
+		fakeClock.SetTime(time.Date(2026, 5, 18, 20, 1, 10, 0, time.UTC))
+		testutil.TriggerReconcile(ctx, k8sClient, plan)
+
+		By("Verifying plan transitions to Hibernating")
+		testutil.EventuallyPhase(ctx, k8sClient, plan, hibernatorv1alpha1.PhaseHibernating)
+
+		By("Waiting for Start notification")
+		Eventually(fakeNotifSink.Len, testutil.DefaultTimeout, testutil.DefaultInterval).
+			Should(BeNumerically(">=", 1))
+
+		By("Simulating hibernation Job success")
+		hibernationJob := testutil.EventuallyJobCreated(ctx, k8sClient, testNamespace, plan.Name,
+			hibernatorv1alpha1.OperationHibernate, "app")
+		testutil.SimulateJobSuccess(ctx, k8sClient, hibernationJob, fakeClock.Now())
+
+		By("Verifying plan transitions to Hibernated")
+		testutil.EventuallyPhase(ctx, k8sClient, plan, hibernatorv1alpha1.PhaseHibernated)
+
+		By("Waiting for Success notification")
+		Eventually(fakeNotifSink.Len, testutil.DefaultTimeout, testutil.DefaultInterval).
+			Should(BeNumerically(">=", 2))
+
+		By("Verifying sinkStatuses history has multiple entries in newest-first order")
+		Eventually(func(g Gomega) {
+			fresh := &hibernatorv1alpha1.HibernateNotification{}
+			g.Expect(k8sClient.Get(ctx, client.ObjectKeyFromObject(notification), fresh)).To(Succeed())
+
+			// At least 2 entries (Start + Success) delivered.
+			g.Expect(len(fresh.Status.SinkStatuses)).To(BeNumerically(">=", 2),
+				"sinkStatuses should have at least 2 entries after Start+Success delivery")
+
+			// History is newest-first: the second delivery (Success) should appear before the first (Start).
+			g.Expect(fresh.Status.SinkStatuses[0].TransitionTimestamp.Time).To(
+				BeTemporally(">=", fresh.Status.SinkStatuses[1].TransitionTimestamp.Time),
+				"sinkStatuses should be ordered newest-first",
+			)
+
+			// All entries should be successes since the fake sink never errors.
+			for _, ss := range fresh.Status.SinkStatuses {
+				g.Expect(ss.Success).To(BeTrue())
+				g.Expect(ss.Name).To(Equal("fake-webhook"))
+			}
+
+			// History should not exceed the cap.
+			g.Expect(len(fresh.Status.SinkStatuses)).To(BeNumerically("<=", hibernatorv1alpha1.MaxSinkStatusHistory))
+		}, testutil.DefaultTimeout, testutil.DefaultInterval).Should(Succeed())
+	})
 })

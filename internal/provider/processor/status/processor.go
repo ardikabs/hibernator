@@ -268,6 +268,10 @@ func isStatusEqual(objA, objB any) bool {
 		if b, ok := objB.(*hibernatorv1alpha1.ScheduleException); ok {
 			return cmp.Equal(a.Status, b.Status, defaultOpts)
 		}
+	case *hibernatorv1alpha1.HibernateNotification:
+		if b, ok := objB.(*hibernatorv1alpha1.HibernateNotification); ok {
+			return cmp.Equal(a.Status, b.Status, defaultOpts)
+		}
 	}
 
 	return false

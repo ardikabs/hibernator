@@ -19,6 +19,7 @@ import (
 	hibernatorv1alpha1 "github.com/ardikabs/hibernator/api/v1alpha1"
 	"github.com/ardikabs/hibernator/internal/message"
 	"github.com/ardikabs/hibernator/internal/notification"
+	notificationprocessor "github.com/ardikabs/hibernator/internal/provider/processor/notification"
 	planprocessor "github.com/ardikabs/hibernator/internal/provider/processor/plan"
 	requeueprocessor "github.com/ardikabs/hibernator/internal/provider/processor/requeue"
 	scheduleexceptionprocessor "github.com/ardikabs/hibernator/internal/provider/processor/scheduleexception"
@@ -97,16 +98,32 @@ func Setup(mgr ctrl.Manager, clk clock.Clock, opts ProviderOptions) error {
 		mgr.GetClient(),
 		mgr.GetAPIReader())
 
+	notificationStatusProcessor := statusprocessor.NewUpdateProcessor[*hibernatorv1alpha1.HibernateNotification](
+		opts.Logger.WithName("processor").WithName("notification-status"),
+		mgr.GetClient(),
+		mgr.GetAPIReader())
+
 	statuses := &statusprocessor.ControllerStatuses{
-		PlanStatuses:      planStatusProcessor.Writer(),
-		ExceptionStatuses: exceptionStatusProcessor.Writer(),
+		PlanStatuses:         planStatusProcessor.Writer(),
+		ExceptionStatuses:    exceptionStatusProcessor.Writer(),
+		NotificationStatuses: notificationStatusProcessor.Writer(),
 	}
 
-	// --- Notification ---
+	// --- Notification Lifecycle ---
+	notifLifecycle := &notificationprocessor.LifecycleProcessor{
+		Clock:     clk,
+		Log:       opts.Logger.WithName("processor").WithName("notification"),
+		Resources: resources,
+		Statuses:  statuses,
+	}
+
+	// --- Notification Dispatcher ---
 	notifInstance := notification.New(
 		opts.Logger.WithName("notification"),
 		mgr.GetClient(),
-		opts.NotificationOptions...,
+		append(opts.NotificationOptions,
+			notification.WithDeliveryCallback(notifLifecycle.HandleDeliveryResult),
+		)...,
 	)
 
 	// --- Providers (K8s reconciler → watchable map) ---
@@ -180,6 +197,14 @@ func Setup(mgr ctrl.Manager, clk clock.Clock, opts ProviderOptions) error {
 		{
 			name:     "exception.status",
 			runnable: exceptionStatusProcessor,
+		},
+		{
+			name:     "notification.lifecycle",
+			runnable: notifLifecycle,
+		},
+		{
+			name:     "notification.status",
+			runnable: notificationStatusProcessor,
 		},
 		{
 			name:     "notification.dispatcher",

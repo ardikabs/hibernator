@@ -17,15 +17,22 @@ spec:
   scope: Namespaced
   versions:
   - additionalPrinterColumns:
-    - jsonPath: .spec.onEvents
-      name: Events
-      type: string
-    - jsonPath: .spec.sinks
+    - description: Number of watched HibernatePlans
+      jsonPath: .status.watchedPlans
+      name: Plans
+      type: integer
+    - description: Number of configured sinks
+      jsonPath: .spec.sinks
       name: Sinks
       type: integer
-    - jsonPath: .status.matchedPlans
-      name: Matched
-      type: integer
+    - description: Last successful delivery time
+      jsonPath: .status.lastDeliveryTime
+      name: Last Delivery
+      type: date
+    - description: Last failure time
+      jsonPath: .status.lastFailureTime
+      name: Last Failure
+      type: date
     - jsonPath: .metadata.creationTimestamp
       name: Age
       type: date
@@ -190,14 +197,73 @@ spec:
           status:
             description: Status defines the observed state of HibernateNotification.
             properties:
-              matchedPlans:
-                description: MatchedPlans is the count of HibernatePlans currently
-                  matching the selector.
-                format: int32
-                type: integer
-              message:
-                description: Message provides diagnostic information.
+              lastDeliveryTime:
+                description: |-
+                  LastDeliveryTime is the timestamp of the most recent successful notification delivery
+                  across all sinks. Nil if no successful delivery has occurred.
+                format: date-time
                 type: string
+              lastFailureTime:
+                description: |-
+                  LastFailureTime is the timestamp of the most recent failed notification delivery
+                  across all sinks. Nil if no failure has occurred.
+                format: date-time
+                type: string
+              observedGeneration:
+                description: ObservedGeneration is the most recent .metadata.generation
+                  observed by the controller.
+                format: int64
+                type: integer
+              sinkStatuses:
+                description: |-
+                  SinkStatuses is a history log of per-sink delivery attempts, ordered newest-first.
+                  The controller retains at most 20 entries; older entries are evicted when the cap is reached.
+                items:
+                  description: NotificationSinkStatus records the outcome of a single
+                    notification delivery attempt.
+                  properties:
+                    message:
+                      description: |-
+                        Message is a human-readable description of the delivery outcome.
+                        On success: "Successfully sent notification for <sink-name>"
+                        On failure: the error string from the sink provider.
+                      type: string
+                    name:
+                      description: Name is the sink name as defined in spec.sinks[].name.
+                      type: string
+                    success:
+                      description: Success indicates whether this delivery attempt
+                        succeeded.
+                      type: boolean
+                    transitionTimestamp:
+                      description: TransitionTimestamp is when the delivery attempt
+                        completed.
+                      format: date-time
+                      type: string
+                  required:
+                  - name
+                  - success
+                  - transitionTimestamp
+                  type: object
+                type: array
+              watchedPlans:
+                description: WatchedPlans is the list of HibernatePlan references
+                  currently matching the selector.
+                items:
+                  description: PlanReference references a HibernatePlan.
+                  properties:
+                    name:
+                      description: Name of the HibernatePlan.
+                      type: string
+                    namespace:
+                      description: |-
+                        Namespace of the HibernatePlan.
+                        If empty, defaults to the exception's namespace.
+                      type: string
+                  required:
+                  - name
+                  type: object
+                type: array
             type: object
         type: object
     served: true
