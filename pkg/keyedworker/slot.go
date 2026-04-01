@@ -130,9 +130,9 @@ type latestWinsSlot[V any] struct {
 	p *conflate.Pipeline[V]
 }
 
-func (s *latestWinsSlot[V]) Send(v V)          { s.p.Send(v) }
+func (s *latestWinsSlot[V]) Send(v V)           { s.p.Send(v) }
 func (s *latestWinsSlot[V]) C() <-chan struct{} { return s.p.C() }
-func (s *latestWinsSlot[V]) Recv() V           { return s.p.Recv() }
+func (s *latestWinsSlot[V]) Recv() V            { return s.p.Recv() }
 
 // Len returns 1 if a value is pending, 0 otherwise. conflate.Pipeline is a
 // single-value store: the signal channel has capacity 1.

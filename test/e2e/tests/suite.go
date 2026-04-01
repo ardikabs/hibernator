@@ -27,19 +27,22 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/webhook"
 
 	hibernatorv1alpha1 "github.com/ardikabs/hibernator/api/v1alpha1"
+	"github.com/ardikabs/hibernator/internal/notification"
 	"github.com/ardikabs/hibernator/internal/provider"
 	"github.com/ardikabs/hibernator/internal/restore"
 	"github.com/ardikabs/hibernator/internal/validationwebhook"
+	"github.com/ardikabs/hibernator/test/e2e/helper/fakenotif"
 )
 
 var (
-	cfg       *rest.Config
-	k8sClient client.Client
-	testEnv   *envtest.Environment
-	ctx       context.Context
-	cancel    context.CancelFunc
-	mgr       manager.Manager
-	fakeClock *clocktesting.FakeClock
+	cfg           *rest.Config
+	k8sClient     client.Client
+	testEnv       *envtest.Environment
+	ctx           context.Context
+	cancel        context.CancelFunc
+	mgr           manager.Manager
+	fakeClock     *clocktesting.FakeClock
+	fakeNotifSink *fakenotif.Sink
 	// hibernateplanReconciler *hibernateplan.Reconciler
 	restoreManager *restore.Manager
 	testNamespace  = "hibernator-e2e-test"
@@ -104,6 +107,7 @@ var _ = BeforeSuite(func() {
 
 	fakeClock = clocktesting.NewFakeClock(time.Now())
 	restoreManager = restore.NewManager(mgr.GetClient())
+	fakeNotifSink = fakenotif.New()
 
 	err = provider.Setup(mgr, fakeClock, provider.ProviderOptions{
 		Logger: ctrl.Log.WithName("e2e-test"),
@@ -113,6 +117,10 @@ var _ = BeforeSuite(func() {
 		ControlPlaneEndpoint:   "https://hibernator.example.com",
 		RunnerImage:            "ghcr.io/ardikabs/hibernator-runner:test",
 		RunnerServiceAccount:   "hibernator-runner-sa",
+		NotificationOptions: []notification.Option{
+			notification.DisableDefaultSinks(),
+			notification.WithSink(fakeNotifSink),
+		},
 	})
 
 	Expect(err).NotTo(HaveOccurred())

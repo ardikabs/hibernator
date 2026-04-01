@@ -50,7 +50,7 @@ Supported `execution.strategy.type` values: `Sequential`, `Parallel`, `DAG`, `St
 1. Controller reconciles `HibernatePlan` and computes an execution plan (stages/DAG nodes) honoring `maxConcurrency`.
 2. For each target ready to run, controller creates:
 
-    - A Kubernetes `Job` (runner pod) with annotations `hibernator/plan` and `hibernator/target`.
+    - A Kubernetes `Job` (runner pod) with annotations `hibernator.ardikabs.com/plan` and `hibernator.ardikabs.com/target`.
     - The Job uses a fixed ServiceAccount configured via controller flag (no per-plan ServiceAccount creation).
     - A `ConfigMap` is used to persist restore hints that must survive until wake-up.
 

@@ -175,6 +175,6 @@ Set back to `false` to resume.
 
 ## See Also
 
-- [API Reference: HibernatePlan](../api-reference/index.md#hibernateplan) — Full field documentation
+- [API Reference: HibernatePlan](../reference/api.md#hibernateplan) — Full field documentation
 - [User Guide: Hibernation Lifecycle](../user-guides/hibernation-lifecycle.md) — Step-by-step operations
 - [User Guide: Execution Strategies](../user-guides/execution-strategies.md) — Strategy deep dive

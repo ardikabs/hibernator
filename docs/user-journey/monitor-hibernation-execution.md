@@ -108,10 +108,10 @@ For detailed execution logs, check the Kubernetes Job:
 
 ```bash
 # Find the runner Job
-kubectl get jobs -l hibernator/plan=prod-offhours -l hibernator/target=database
+kubectl get jobs -l hibernator.ardikabs.com/plan=prod-offhours -l hibernator.ardikabs.com/target=database
 
 # Get Job name
-kubectl get jobs -l hibernator/plan=prod-offhours -l hibernator/target=database \
+kubectl get jobs -l hibernator.ardikabs.com/plan=prod-offhours -l hibernator.ardikabs.com/target=database \
   -o jsonpath='{.items[0].metadata.name}'
 # Output: hibernate-runner-abc123
 
@@ -128,7 +128,7 @@ Verify restore data was captured (needed for wakeup):
 
 ```bash
 # List restore ConfigMaps
-kubectl get cm -l hibernator/plan=prod-offhours
+kubectl get cm -l hibernator.ardikabs.com/plan=prod-offhours
 
 # Output:
 # NAME                        DATA   AGE

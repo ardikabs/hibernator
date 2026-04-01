@@ -4,39 +4,52 @@ Hibernator follows a **brain-and-hands** architecture where the control plane (b
 
 ## High-Level Overview
 
-```
-┌──────────────────────────────────────────────────────┐
-│                   Control Plane                      │
-│  ┌────────────────────────────────────────────────┐  │
-│  │  HibernatePlan Controller                      │  │
-│  │  - Schedule evaluation                         │  │
-│  │  - Dependency resolution (DAG/Staged/Parallel) │  │
-│  │  - Job lifecycle management                    │  │
-│  │  - Status ledger updates                       │  │
-│  └────────────────────────────────────────────────┘  │
-│                         │                            │
-│  ┌────────────────────────────────────────────────┐  │
-│  │  Streaming Server (gRPC + Webhook)             │  │
-│  │  - TokenReview authentication                  │  │
-│  │  - Log aggregation                             │  │
-│  │  - Progress tracking                           │  │
-│  └────────────────────────────────────────────────┘  │
-└──────────────────────────────────────────────────────┘
-                          │
-        ┌─────────────────┼─────────────────┐
-        ▼                 ▼                 ▼
-┌───────────────┐  ┌───────────────┐  ┌───────────────┐
-│ Runner Job    │  │ Runner Job    │  │ Runner Job    │
-│ (EKS)         │  │ (RDS)         │  │ (EC2)         │
-│ - Executor    │  │ - Executor    │  │ - Executor    │
-│ - gRPC client │  │ - gRPC client │  │ - gRPC client │
-│ - IRSA        │  │ - IRSA        │  │ - IRSA        │
-└───────────────┘  └───────────────┘  └───────────────┘
+```mermaid
+graph TD
+    subgraph CP [Control Plane]
+        direction TB
+        Reconciler["<b>Unified Reconciler (HibernatePlan Controller)</b><br/>• Schedule evaluation<br/>• Dependency resolution<br/>• Job lifecycle management"]
+        
+        subgraph Processors [Resource Processors]
+            direction LR
+            P1[EKS]
+            P2[RDS]
+            P3[EC2]
+            P4[...]
+        end
+        
+        Connectors[("<b>Connectors (Metadata)</b><br/>• CloudProvider<br/>• K8SCluster")]
+        
+        Streaming["<b>Streaming Server</b><br/>• Log aggregation<br/>• Progress tracking"]
+        
+        Reconciler --> Processors
+        Processors -.-> Connectors
+        Reconciler --- Streaming
+    end
+
+    Processors --> RJ1["<b>Runner Job (EKS)</b><br/>• Executor<br/>• gRPC client"]
+    Processors --> RJ2["<b>Runner Job (RDS)</b><br/>• Executor<br/>• gRPC client"]
+    Processors --> RJ3["<b>Runner Job (EC2)</b><br/>• Executor<br/>• gRPC client"]
+
+    style CP fill:#f5f5f5,stroke:#333,stroke-width:2px
+    style Connectors fill:#fff,stroke:#333,stroke-dasharray: 5 5
+    style RJ1 fill:#fff,stroke:#333,stroke-width:1px
+    style RJ2 fill:#fff,stroke:#333,stroke-width:1px
+    style RJ3 fill:#fff,stroke:#333,stroke-width:1px
 ```
 
 ## Control Plane
 
-The control plane is the operator's brain. It runs inside the Kubernetes cluster as a Deployment and is responsible for:
+The control plane is the operator's brain. It runs inside the Kubernetes cluster as a Deployment and adopts a **unified reconciler pattern**. While multiple Custom Resources (CRs) exist, they are centrally managed by the `HibernatePlan` controller, which coordinates the lifecycle of the entire hibernation ecosystem.
+
+### Unified Reconciler & Processors
+
+The `HibernatePlan` controller acts as a central orchestrator. It dispatches work to resource-specific **processors** that understand how to handle the different components of a plan. 
+
+- **Lifecycle Oriented**: Most resources are currently bounded by their association with a `HibernatePlan`. When a plan triggers, the controller uses the appropriate processor for each target.
+- **Connectors (Metadata Only)**: resources like `CloudProvider` and `K8SCluster` currently serve as **metadata-only containers**. They hold credentials and connection details but do not yet have their own active lifecycle processors for tasks like health checking or connectivity validation beyond their use within a `HibernatePlan` execution.
+
+The controller is specifically responsible for:
 
 ### Schedule Evaluation
 

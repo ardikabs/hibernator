@@ -18,6 +18,7 @@ import (
 	hibernatorv1alpha1 "github.com/ardikabs/hibernator/api/v1alpha1"
 	"github.com/ardikabs/hibernator/internal/message"
 	"github.com/ardikabs/hibernator/internal/metrics"
+	"github.com/ardikabs/hibernator/internal/notification"
 	"github.com/ardikabs/hibernator/internal/provider/processor/plan/state"
 	statusprocessor "github.com/ardikabs/hibernator/internal/provider/processor/status"
 	"github.com/ardikabs/hibernator/internal/restore"
@@ -68,6 +69,7 @@ type Worker struct {
 	Resources            *message.ControllerResources
 	Statuses             *statusprocessor.ControllerStatuses
 	RestoreManager       *restore.Manager
+	Notifier             notification.Notifier
 	ControlPlaneEndpoint string
 	RunnerImage          string
 	RunnerServiceAccount string
@@ -154,6 +156,7 @@ func (s *Worker) buildConfig() *state.Config {
 		Resources:            s.Resources,
 		Statuses:             s.Statuses,
 		RestoreManager:       s.RestoreManager,
+		Notifier:             s.Notifier,
 		ControlPlaneEndpoint: s.ControlPlaneEndpoint,
 		RunnerImage:          s.RunnerImage,
 		RunnerServiceAccount: s.RunnerServiceAccount,

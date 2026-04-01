@@ -24,7 +24,7 @@ import (
 
 const (
 	sourceFile = "pkg/executorparams/params.go"
-	outputFile = "website/docs/api-reference/executor-parameters.md"
+	outputFile = "website/docs/reference/executor-parameters.md"
 )
 
 // executorTypes are the top-level parameter types that map to executor names.
@@ -163,7 +163,7 @@ func extractStructs(f *ast.File) map[string]*structType {
 func render(buf *bytes.Buffer, types map[string]*structType) {
 	buf.WriteString("# Executor Parameters Reference\n\n")
 	buf.WriteString("Each executor type accepts a specific parameter schema in the `parameters` field of a HibernatePlan target.\n")
-	buf.WriteString("See [API Reference](index.md) for the core CRD types.\n\n")
+	buf.WriteString("See [API Reference](api.md) for the core CRD types.\n\n")
 
 	// Executor type index
 	buf.WriteString("## Executor Types\n\n")

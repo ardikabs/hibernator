@@ -72,7 +72,7 @@ kubectl get hibernateplan dev-offhours -n hibernator-system \
 
 ```bash
 # Find the failed job
-kubectl get jobs -n hibernator-system -l hibernator/plan=dev-offhours
+kubectl get jobs -n hibernator-system -l hibernator.ardikabs.com/plan=dev-offhours
 
 # Check the pod logs
 kubectl logs job/hibernate-runner-dev-offhours-dev-database -n hibernator-system

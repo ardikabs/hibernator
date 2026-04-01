@@ -1,7 +1,7 @@
 ---
 rfc: RFC-0007
 title: kubectl hibernator Plugin for Day-to-Day Operations
-status: In Progress 🚀
+status: Implemented ✅
 date: 2026-02-20
 last-updated: 2026-02-23
 ---

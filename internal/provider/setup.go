@@ -18,6 +18,7 @@ import (
 
 	hibernatorv1alpha1 "github.com/ardikabs/hibernator/api/v1alpha1"
 	"github.com/ardikabs/hibernator/internal/message"
+	"github.com/ardikabs/hibernator/internal/notification"
 	planprocessor "github.com/ardikabs/hibernator/internal/provider/processor/plan"
 	requeueprocessor "github.com/ardikabs/hibernator/internal/provider/processor/requeue"
 	scheduleexceptionprocessor "github.com/ardikabs/hibernator/internal/provider/processor/scheduleexception"
@@ -48,6 +49,10 @@ type ProviderOptions struct {
 	RunnerImage string
 	// RunnerServiceAccount is the ServiceAccount name used by runner Jobs.
 	RunnerServiceAccount string
+
+	// NotificationOptions configures the notification subsystem.
+	// E2E tests use this to inject custom sinks via notification.WithSink().
+	NotificationOptions []notification.Option
 }
 
 // Setup wires the full async phase-driven reconciler pipeline and registers all providers
@@ -97,6 +102,13 @@ func Setup(mgr ctrl.Manager, clk clock.Clock, opts ProviderOptions) error {
 		ExceptionStatuses: exceptionStatusProcessor.Writer(),
 	}
 
+	// --- Notification ---
+	notifInstance := notification.New(
+		opts.Logger.WithName("notification"),
+		mgr.GetClient(),
+		opts.NotificationOptions...,
+	)
+
 	// --- Providers (K8s reconciler → watchable map) ---
 	provider := &PlanReconciler{
 		Client:            mgr.GetClient(),
@@ -136,6 +148,7 @@ func Setup(mgr ctrl.Manager, clk clock.Clock, opts ProviderOptions) error {
 				Resources:            resources,
 				Statuses:             statuses,
 				RestoreManager:       restoreMgr,
+				Notifier:             notifInstance.Notifier,
 				ControlPlaneEndpoint: opts.ControlPlaneEndpoint,
 				RunnerImage:          opts.RunnerImage,
 				RunnerServiceAccount: opts.RunnerServiceAccount,
@@ -167,6 +180,10 @@ func Setup(mgr ctrl.Manager, clk clock.Clock, opts ProviderOptions) error {
 		{
 			name:     "exception.status",
 			runnable: exceptionStatusProcessor,
+		},
+		{
+			name:     "notification.dispatcher",
+			runnable: notifInstance.Runnable,
 		},
 	}
 

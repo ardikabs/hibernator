@@ -168,4 +168,46 @@ var (
 		},
 		[]string{"plan"},
 	)
+
+	// NotificationSentTotal counts successfully dispatched notifications.
+	// Labels: sink_type (slack, telegram, webhook), event (Start, Success, Failure, Recovery, PhaseChange).
+	NotificationSentTotal = factory.NewCounterVec(
+		prometheus.CounterOpts{
+			Name: "hibernator_notification_sent_total",
+			Help: "Total number of notifications successfully sent",
+		},
+		[]string{"sink_type", "event"},
+	)
+
+	// NotificationErrorsTotal counts notification dispatch failures.
+	// Labels: sink_type, event.
+	NotificationErrorsTotal = factory.NewCounterVec(
+		prometheus.CounterOpts{
+			Name: "hibernator_notification_errors_total",
+			Help: "Total number of notification dispatch failures",
+		},
+		[]string{"sink_type", "event"},
+	)
+
+	// NotificationLatency tracks end-to-end notification dispatch latency (Secret lookup + render + HTTP POST).
+	// Labels: sink_type.
+	NotificationLatency = factory.NewHistogramVec(
+		prometheus.HistogramOpts{
+			Name:    "hibernator_notification_latency_seconds",
+			Help:    "Notification dispatch latency from submission to HTTP response",
+			Buckets: prometheus.DefBuckets,
+		},
+		[]string{"sink_type"},
+	)
+
+	// NotificationDropTotal counts notifications dropped because the dispatcher's
+	// dispatch channel was full (backpressure). A non-zero value signals the
+	// notification system is overloaded.
+	NotificationDropTotal = factory.NewCounterVec(
+		prometheus.CounterOpts{
+			Name: "hibernator_notification_drop_total",
+			Help: "Total number of notifications dropped because the dispatch buffer was full",
+		},
+		[]string{"sink_type", "event"},
+	)
 )

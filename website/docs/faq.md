@@ -10,9 +10,10 @@ Hibernator is a Kubernetes operator that automates the suspension and restoratio
 
 Currently, **AWS** is fully supported with executors for EKS (managed node groups and Karpenter), RDS, and EC2. GCP and Azure executors are planned.
 
-### What Kubernetes version is required?
 
-Kubernetes **1.34+** is required.
+### What Kubernetes versions are supported?
+
+Hibernator is built and tested with Kubernetes versions **v1.30** through **v1.34**. Other versions may work, but these are the officially supported and validated releases. Kubernetes is not strictly required to be at a specific version, but using a version within this range is recommended for best results.
 
 ### Does Hibernator support multi-cluster setups?
 

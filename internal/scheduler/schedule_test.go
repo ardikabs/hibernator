@@ -179,8 +179,6 @@ func TestScheduleEvaluator_NextRequeueTime(t *testing.T) {
 				t.Fatalf("Evaluate() error = %v", err)
 			}
 
-			// fmt.Println("Result:", "HibernateAt:", result.NextHibernateTime, "WakeUpAt:", result.NextWakeUpTime, "ShouldHibernate:", result.ShouldHibernate)
-
 			requeueDuration := evaluator.NextRequeueTime(result)
 			if requeueDuration != tt.want {
 				t.Errorf("NextRequeueTime() = %v, want %v", requeueDuration, tt.want)

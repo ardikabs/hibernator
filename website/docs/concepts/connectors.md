@@ -138,5 +138,5 @@ targets:
 
 ## See Also
 
-- [API Reference: CloudProvider](../api-reference/index.md#cloudprovider) — Full field documentation
-- [API Reference: K8SCluster](../api-reference/index.md#k8scluster) — Full field documentation
+- [API Reference: CloudProvider](../reference/api.md#cloudprovider) — Full field documentation
+- [API Reference: K8SCluster](../reference/api.md#k8scluster) — Full field documentation

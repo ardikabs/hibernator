@@ -1,7 +1,7 @@
 # Executor Parameters Reference
 
 Each executor type accepts a specific parameter schema in the `parameters` field of a HibernatePlan target.
-See [API Reference](index.md) for the core CRD types.
+See [API Reference](api.md) for the core CRD types.
 
 ## Executor Types
 

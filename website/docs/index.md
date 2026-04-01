@@ -49,7 +49,7 @@ Hibernator is a Kubernetes operator that provides centralized, declarative manag
 
     Step-by-step guides for common operations.
 
--   :material-file-document-outline: **[API Reference](api-reference/index.md)**
+-   :material-file-document-outline: **[API Reference](reference/api.md)**
 
     Complete CRD field documentation.
 

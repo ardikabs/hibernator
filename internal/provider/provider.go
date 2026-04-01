@@ -18,6 +18,7 @@ import (
 	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/labels"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/utils/clock"
@@ -80,6 +81,7 @@ type PlanReconciler struct {
 // +kubebuilder:rbac:groups=hibernator.ardikabs.com,resources=hibernateplans/finalizers,verbs=update
 // +kubebuilder:rbac:groups=hibernator.ardikabs.com,resources=cloudproviders,verbs=get;list;watch
 // +kubebuilder:rbac:groups=hibernator.ardikabs.com,resources=k8sclusters,verbs=get;list;watch
+// +kubebuilder:rbac:groups=hibernator.ardikabs.com,resources=hibernatenotifications,verbs=get;list;watch
 // +kubebuilder:rbac:groups=batch,resources=jobs,verbs=get;list;watch;create;update;patch;delete
 // +kubebuilder:rbac:groups="",resources=secrets,verbs=get;list;watch
 // +kubebuilder:rbac:groups="",resources=configmaps,verbs=get;list;watch;create;update;patch;delete
@@ -114,6 +116,12 @@ func (r *PlanReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.
 		log.Error(err, "failed to fetch all exceptions")
 	}
 
+	// Fetch matching HibernateNotifications via label selector.
+	notifications, err := r.fetchAllNotifications(ctx, plan)
+	if err != nil {
+		log.Error(err, "failed to fetch notifications")
+	}
+
 	schedule, err := r.evaluateSchedule(ctx, plan, allExceptions, log)
 	if err != nil {
 		log.Error(err, "failed to evaluate schedule")
@@ -135,6 +143,7 @@ func (r *PlanReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.
 		Plan:           plan,
 		Schedule:       schedule,
 		Exceptions:     allExceptions,
+		Notifications:  notifications,
 		HasRestoreData: hasRestoreData,
 		DeliveryNonce:  r.DependencyNonces.Get(key),
 	}
@@ -145,6 +154,7 @@ func (r *PlanReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.
 		"phase", plan.Status.Phase,
 		"hasRestoreData", hasRestoreData,
 		"totalExceptions", len(allExceptions),
+		"totalNotifications", len(notifications),
 		"deliveryNonce", planCtx.DeliveryNonce,
 	)
 
@@ -163,6 +173,31 @@ func (r *PlanReconciler) fetchAllExceptions(ctx context.Context, plan *hibernato
 	}
 
 	return exceptionList.Items, nil
+}
+
+// fetchAllNotifications retrieves all HibernateNotifications in the plan's namespace
+// whose label selector matches the plan's labels.
+func (r *PlanReconciler) fetchAllNotifications(ctx context.Context, plan *hibernatorv1alpha1.HibernatePlan) ([]hibernatorv1alpha1.HibernateNotification, error) {
+	var notifList hibernatorv1alpha1.HibernateNotificationList
+	if err := r.List(ctx, &notifList, client.InNamespace(plan.Namespace)); err != nil {
+		return nil, err
+	}
+
+	planLabels := labels.Set(plan.Labels)
+	var matched []hibernatorv1alpha1.HibernateNotification
+	for _, notif := range notifList.Items {
+		selector, err := metav1.LabelSelectorAsSelector(&notif.Spec.Selector)
+		if err != nil {
+			// Skip notifications with invalid selectors — validation webhook
+			// should prevent this, but be defensive.
+			continue
+		}
+		if selector.Matches(planLabels) {
+			matched = append(matched, notif)
+		}
+	}
+
+	return matched, nil
 }
 
 // evaluateSchedule checks if we should be in hibernation based on schedule and active exceptions.
@@ -317,6 +352,40 @@ func (r *PlanReconciler) findPlansForException(ctx context.Context, obj client.O
 	}
 }
 
+// findPlansForNotification returns reconcile requests for all HibernatePlans in the same namespace
+// whose labels match the notification's selector.
+func (r *PlanReconciler) findPlansForNotification(ctx context.Context, obj client.Object) []reconcile.Request {
+	notif, ok := obj.(*hibernatorv1alpha1.HibernateNotification)
+	if !ok {
+		return nil
+	}
+
+	selector, err := metav1.LabelSelectorAsSelector(&notif.Spec.Selector)
+	if err != nil {
+		return nil
+	}
+
+	var planList hibernatorv1alpha1.HibernatePlanList
+	if err := r.List(ctx, &planList,
+		client.InNamespace(notif.Namespace),
+		client.MatchingLabelsSelector{Selector: selector},
+	); err != nil {
+		r.Log.Error(err, "failed to list plans for notification", "notification", client.ObjectKeyFromObject(notif))
+		return nil
+	}
+
+	requests := make([]reconcile.Request, len(planList.Items))
+	for i, plan := range planList.Items {
+		requests[i] = reconcile.Request{
+			NamespacedName: types.NamespacedName{
+				Name:      plan.Name,
+				Namespace: plan.Namespace,
+			},
+		}
+	}
+	return requests
+}
+
 // onJobTerminalUpdate is the predicate UpdateFunc for owned Jobs. It detects the
 // first 0→1+ transition of Job.Status.Succeeded or Job.Status.Failed, signalling
 // that the Job has reached a terminal state. On detection, it increments
@@ -420,6 +489,13 @@ func (r *PlanReconciler) SetupWithManager(mgr ctrl.Manager, workers int) error {
 			// schedule evaluation uses ValidFrom/ValidUntil directly. Suppressing
 			// exception status writes eliminates the ExceptionLifecycleProcessor
 			// status-write → reconcile loop.
+			builder.WithPredicates(predicate.GenerationChangedPredicate{}),
+		).
+		Watches(
+			&hibernatorv1alpha1.HibernateNotification{},
+			handler.EnqueueRequestsFromMapFunc(r.findPlansForNotification),
+			// Only Spec changes matter — selector or sink changes affect which plans
+			// receive notifications. Status writes are excluded.
 			builder.WithPredicates(predicate.GenerationChangedPredicate{}),
 		).
 		WatchesRawSource(source.Channel(r.EnqueueCh, &handler.EnqueueRequestForObject{})).

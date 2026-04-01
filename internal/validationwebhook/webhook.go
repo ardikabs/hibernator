@@ -38,5 +38,13 @@ func SetupWithManager(mgr ctrl.Manager, log logr.Logger) error {
 		return err
 	}
 
+	// HibernateNotification webhook
+	if err := ctrl.NewWebhookManagedBy(mgr).
+		For(&hibernatorv1alpha1.HibernateNotification{}).
+		WithValidator(NewHibernateNotificationValidator(log)).
+		Complete(); err != nil {
+		return err
+	}
+
 	return nil
 }

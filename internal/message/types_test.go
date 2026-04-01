@@ -156,3 +156,70 @@ func TestPlanContext_Equal_NilPlanOneNil_IsFalse(t *testing.T) {
 	b := &PlanContext{Plan: nil}
 	assert.False(t, a.Equal(b))
 }
+
+// ---------------------------------------------------------------------------
+// PlanContext.DeepCopy — Notifications
+// ---------------------------------------------------------------------------
+
+func TestPlanContext_DeepCopy_WithNotifications_IsDeep(t *testing.T) {
+	orig := &PlanContext{
+		Notifications: []hibernatorv1alpha1.HibernateNotification{
+			{ObjectMeta: metav1.ObjectMeta{Name: "notif-1", Namespace: "default"}},
+			{ObjectMeta: metav1.ObjectMeta{Name: "notif-2", Namespace: "default"}},
+		},
+	}
+
+	copy := orig.DeepCopy()
+	require.NotNil(t, copy)
+	require.Len(t, copy.Notifications, 2)
+	assert.Equal(t, "notif-1", copy.Notifications[0].Name)
+	assert.Equal(t, "notif-2", copy.Notifications[1].Name)
+
+	// Verify deep copy — mutation of original shouldn't affect copy
+	orig.Notifications[0].Name = "mutated"
+	assert.Equal(t, "notif-1", copy.Notifications[0].Name)
+}
+
+func TestPlanContext_DeepCopy_EmptyNotifications_OK(t *testing.T) {
+	orig := &PlanContext{}
+	copy := orig.DeepCopy()
+	require.NotNil(t, copy)
+	assert.Nil(t, copy.Notifications)
+}
+
+// ---------------------------------------------------------------------------
+// PlanContext.Equal — Notifications
+// ---------------------------------------------------------------------------
+
+func TestPlanContext_Equal_DifferentNotificationCount_IsFalse(t *testing.T) {
+	a := &PlanContext{
+		Notifications: []hibernatorv1alpha1.HibernateNotification{
+			{ObjectMeta: metav1.ObjectMeta{Name: "notif-1"}},
+		},
+	}
+	b := &PlanContext{}
+	assert.False(t, a.Equal(b))
+}
+
+func TestPlanContext_Equal_SameNotifications_IsTrue(t *testing.T) {
+	notif := hibernatorv1alpha1.HibernateNotification{
+		ObjectMeta: metav1.ObjectMeta{Name: "notif-1", Namespace: "default", ResourceVersion: "1"},
+	}
+	a := &PlanContext{Notifications: []hibernatorv1alpha1.HibernateNotification{notif}}
+	b := &PlanContext{Notifications: []hibernatorv1alpha1.HibernateNotification{notif}}
+	assert.True(t, a.Equal(b))
+}
+
+func TestPlanContext_Equal_DifferentNotificationResourceVersion_IsFalse(t *testing.T) {
+	a := &PlanContext{
+		Notifications: []hibernatorv1alpha1.HibernateNotification{
+			{ObjectMeta: metav1.ObjectMeta{Name: "notif-1", ResourceVersion: "1"}},
+		},
+	}
+	b := &PlanContext{
+		Notifications: []hibernatorv1alpha1.HibernateNotification{
+			{ObjectMeta: metav1.ObjectMeta{Name: "notif-1", ResourceVersion: "2"}},
+		},
+	}
+	assert.False(t, a.Equal(b))
+}

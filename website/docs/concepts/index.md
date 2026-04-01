@@ -10,6 +10,7 @@ Hibernator introduces four Custom Resource Definitions (CRDs):
 |----------|---------|
 | **[HibernatePlan](hibernateplan.md)** | Defines hibernation intent — schedule, targets, and execution strategy |
 | **[ScheduleException](schedule-exceptions.md)** | Temporary overrides to a plan's schedule |
+| **[HibernateNotification](../user-guides/notifications.md)** | Notification delivery configuration (e.g., Slack, Telegram, Webhook) |
 | **[CloudProvider](connectors.md#cloudprovider)** | Cloud credentials and region configuration |
 | **[K8SCluster](connectors.md#k8scluster)** | Kubernetes cluster access configuration |
 

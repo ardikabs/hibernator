@@ -10,6 +10,7 @@ import (
 	"fmt"
 
 	hibernatorv1alpha1 "github.com/ardikabs/hibernator/api/v1alpha1"
+	"github.com/ardikabs/hibernator/internal/notification"
 	statusprocessor "github.com/ardikabs/hibernator/internal/provider/processor/status"
 	"github.com/ardikabs/hibernator/internal/scheduler"
 	"github.com/go-logr/logr"
@@ -57,6 +58,7 @@ func (state *hibernatingState) finalize(_ context.Context, log logr.Logger, _ sc
 	summary := BuildOperationSummary(state.Clock, plan, hibernatorv1alpha1.OperationHibernate)
 	currentCycleID := plan.Status.CurrentCycleID
 
+	previousPhase := plan.Status.Phase
 	state.Statuses.PlanStatuses.Send(statusprocessor.Update[*hibernatorv1alpha1.HibernatePlan]{
 		NamespacedName: state.Key,
 		Resource:       plan,
@@ -74,5 +76,11 @@ func (state *hibernatingState) finalize(_ context.Context, log logr.Logger, _ sc
 			p.Status.LastRetryTime = nil
 			p.Status.ErrorMessage = ""
 		}),
+		PostHook: chainHooks(
+			state.notifyHook(hibernatorv1alpha1.EventSuccess, func(p *hibernatorv1alpha1.HibernatePlan) notification.Payload {
+				return buildPayload(p, hibernatorv1alpha1.EventSuccess, state.Clock.Now)
+			}),
+			state.phaseChangePostHook(previousPhase),
+		),
 	})
 }

@@ -39,6 +39,10 @@ type PlanContext struct {
 	// for schedule evaluation.
 	Exceptions []hibernatorv1alpha1.ScheduleException
 
+	// Notifications is the list of HibernateNotifications whose selector matches this plan.
+	// Used by the NotificationDispatcher to send notifications on lifecycle events.
+	Notifications []hibernatorv1alpha1.HibernateNotification
+
 	// HasRestoreData indicates whether restore data exists for this plan.
 	HasRestoreData bool
 
@@ -74,6 +78,12 @@ func (pc *PlanContext) DeepCopy() *PlanContext {
 		result.Exceptions = make([]hibernatorv1alpha1.ScheduleException, len(pc.Exceptions))
 		for i, exc := range pc.Exceptions {
 			result.Exceptions[i] = *exc.DeepCopy()
+		}
+	}
+	if len(pc.Notifications) > 0 {
+		result.Notifications = make([]hibernatorv1alpha1.HibernateNotification, len(pc.Notifications))
+		for i, notif := range pc.Notifications {
+			result.Notifications[i] = *notif.DeepCopy()
 		}
 	}
 	if pc.Schedule != nil {
@@ -129,6 +139,16 @@ func (pc *PlanContext) Equal(other *PlanContext) bool {
 		}
 	}
 
+	if len(pc.Notifications) != len(other.Notifications) {
+		return false
+	}
+
+	for i := range pc.Notifications {
+		if !notificationsEqual(&pc.Notifications[i], &other.Notifications[i]) {
+			return false
+		}
+	}
+
 	if (pc.Schedule == nil) != (other.Schedule == nil) {
 		return false
 	}
@@ -177,6 +197,16 @@ func planEqual(a, b *hibernatorv1alpha1.HibernatePlan) bool {
 }
 
 func exceptionsEqual(a, b *hibernatorv1alpha1.ScheduleException) bool {
+	if a == b {
+		return true
+	}
+	if a == nil || b == nil {
+		return false
+	}
+	return a.Name == b.Name && a.Namespace == b.Namespace && a.UID == b.UID && a.ResourceVersion == b.ResourceVersion
+}
+
+func notificationsEqual(a, b *hibernatorv1alpha1.HibernateNotification) bool {
 	if a == b {
 		return true
 	}

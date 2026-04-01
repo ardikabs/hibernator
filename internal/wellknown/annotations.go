@@ -2,10 +2,10 @@ package wellknown
 
 const (
 	// AnnotationPlan is the annotation for plan name.
-	AnnotationPlan = "hibernator/plan"
+	AnnotationPlan = "hibernator.ardikabs.com/plan"
 
 	// AnnotationTarget is the annotation for target name.
-	AnnotationTarget = "hibernator/target"
+	AnnotationTarget = "hibernator.ardikabs.com/target"
 
 	// AnnotationSuspendedAtPhase is the annotation for the plan phase at suspension time.
 	AnnotationSuspendedAtPhase = "hibernator.ardikabs.com/suspended-at-phase"

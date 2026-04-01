@@ -520,5 +520,3 @@ func TestStreamLogs_UnexpectedError(t *testing.T) {
 		t.Error("expected error for unexpected stream error")
 	}
 }
-
-

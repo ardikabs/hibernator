@@ -4,7 +4,7 @@ This guide covers edge cases and boundary conditions in schedule evaluation.
 
 ## The `daysOfWeek` Execution Boundary
 
-**All executions — both hibernation and wakeup — are bounded to `daysOfWeek`.** A day not listed in `daysOfWeek` is never a subject of execution. This means:
+**All executions — both hibernation and wakeup — are bounded to `daysOfWeek`.** A day not listed in `daysOfWeek` is never an execution day. This means:
 
 - Hibernation only **starts** on days listed in `daysOfWeek`
 - Wakeup only **triggers** on days listed in `daysOfWeek`

@@ -415,4 +415,13 @@ A **testing executor** that simulates hibernation operations without touching an
 | GKE node pools | `gke` | :construction: Not yet implemented |
 | Cloud SQL instances | `cloudsql` | :construction: Not yet implemented |
 
-For the full parameter schema of each executor, see the [Executor Parameters Reference](../api-reference/executor-parameters.md).
+For the full parameter schema of each executor, see the [Executor Parameters Reference](../reference/executor-parameters.md).
+
+**Operational Guides:**
+
+- [EKS Executor](../user-guides/eks-executor.md)
+- [Karpenter Executor](../user-guides/karpenter-executor.md)
+- [EC2 Executor](../user-guides/ec2-executor.md)
+- [RDS Executor](../user-guides/rds-executor.md)
+- [WorkloadScaler Executor](../user-guides/workloadscaler-executor.md)
+- [NoOp Executor](../user-guides/noop-executor.md)

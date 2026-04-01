@@ -164,8 +164,8 @@ spec:
 EOF
 
 # Monitor Job:
-kubectl get jobs -l hibernator/plan=k8s-connectivity-test -w
-kubectl logs job/$(kubectl get jobs -l hibernator/plan=k8s-connectivity-test -o name) -f
+kubectl get jobs -l hibernator.ardikabs.com/plan=k8s-connectivity-test -w
+kubectl logs job/$(kubectl get jobs -l hibernator.ardikabs.com/plan=k8s-connectivity-test -o name) -f
 ```
 
 ---
