@@ -35,8 +35,8 @@ type TargetInfo struct {
 	// State is the execution state (e.g., "Completed", "Failed").
 	State string
 
-	// ErrorMessage provides error details for failed targets.
-	ErrorMessage string
+	// Message provides details for the target's execution state.
+	Message string
 }
 
 // Payload carries structured notification event data to a Sink.
@@ -44,43 +44,43 @@ type TargetInfo struct {
 // generic sinks (webhook) can forward it as raw JSON.
 type Payload struct {
 	// ID represents the identifier of the associated object.
-	ID types.NamespacedName
+	ID types.NamespacedName `json:"id"`
 
 	// Labels are the labels of the associated object.
-	Labels map[string]string
+	Labels map[string]string `json:"labels"`
 
 	// Event is the hook point that triggered this notification (e.g., "Start", "Failure").
-	Event string
+	Event string `json:"event"`
 
 	// Timestamp is when the event occurred.
-	Timestamp time.Time
+	Timestamp time.Time `json:"timestamp"`
 
 	// Phase is the plan phase after the transition.
-	Phase string
+	Phase string `json:"phase"`
 
 	// PreviousPhase is the plan phase before the transition (empty on Start).
-	PreviousPhase string
+	PreviousPhase string `json:"previousPhase"`
 
 	// Operation is the current operation: "Hibernate" or "WakeUp".
-	Operation string
+	Operation string `json:"operation"`
 
 	// CycleID is the current execution cycle identifier.
-	CycleID string
+	CycleID string `json:"cycleId"`
 
 	// Targets holds per-target execution state (available on Success/Failure).
-	Targets []TargetInfo
+	Targets []TargetInfo `json:"targets"`
 
 	// ErrorMessage provides error details (Failure/Recovery only).
-	ErrorMessage string
+	ErrorMessage string `json:"errorMessage"`
 
 	// RetryCount is the current retry attempt number (Recovery/Failure only).
-	RetryCount int32
+	RetryCount int32 `json:"retryCount"`
 
 	// SinkName is the human-readable name of the sink being dispatched to.
-	SinkName string
+	SinkName string `json:"sinkName"`
 
 	// SinkType is the sink provider type (e.g., "slack", "telegram", "webhook").
-	SinkType string
+	SinkType string `json:"sinkType"`
 }
 
 // Sink is the interface that all notification sink providers must implement.

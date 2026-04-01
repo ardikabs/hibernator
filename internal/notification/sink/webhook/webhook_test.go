@@ -66,7 +66,7 @@ func TestSendWithoutRenderer(t *testing.T) {
 	}))
 	defer server.Close()
 
-	cfg, _ := json.Marshal(webhookConfig{URL: server.URL})
+	cfg, _ := json.Marshal(config{URL: server.URL})
 	s := New(nil, WithHTTPClient(&http.Client{Timeout: 5 * time.Second}))
 
 	err := s.Send(context.Background(), testPayload(), sink.SendOptions{Config: cfg})
@@ -89,7 +89,7 @@ func TestSendWithRendererEnabled(t *testing.T) {
 	}))
 	defer server.Close()
 
-	cfg, _ := json.Marshal(webhookConfig{URL: server.URL, EnableRenderer: true})
+	cfg, _ := json.Marshal(config{URL: server.URL, EnableRenderer: true})
 	s := New(&stubRenderer{}, WithHTTPClient(&http.Client{Timeout: 5 * time.Second}))
 
 	err := s.Send(context.Background(), testPayload(), sink.SendOptions{Config: cfg})
@@ -118,7 +118,7 @@ func TestSendWithRendererEnabledAndCustomTemplate(t *testing.T) {
 	}))
 	defer server.Close()
 
-	cfg, _ := json.Marshal(webhookConfig{URL: server.URL, EnableRenderer: true})
+	cfg, _ := json.Marshal(config{URL: server.URL, EnableRenderer: true})
 	customTmpl := "{{ .Plan.Name }} custom"
 	s := New(renderer, WithHTTPClient(&http.Client{Timeout: 5 * time.Second}))
 
@@ -143,7 +143,7 @@ func TestSendWithCustomHeaders(t *testing.T) {
 	}))
 	defer server.Close()
 
-	cfg, _ := json.Marshal(webhookConfig{
+	cfg, _ := json.Marshal(config{
 		URL: server.URL,
 		Headers: map[string]string{
 			"Authorization":   "Bearer test-token",
@@ -160,7 +160,7 @@ func TestSendWithCustomHeaders(t *testing.T) {
 }
 
 func TestSendMissingURL(t *testing.T) {
-	cfg, _ := json.Marshal(webhookConfig{})
+	cfg, _ := json.Marshal(config{})
 	s := New(nil)
 
 	err := s.Send(context.Background(), testPayload(), sink.SendOptions{Config: cfg})
@@ -183,7 +183,7 @@ func TestSendNon2xxStatus(t *testing.T) {
 	}))
 	defer server.Close()
 
-	cfg, _ := json.Marshal(webhookConfig{URL: server.URL})
+	cfg, _ := json.Marshal(config{URL: server.URL})
 	s := New(nil, WithHTTPClient(&http.Client{Timeout: 5 * time.Second}))
 
 	err := s.Send(context.Background(), testPayload(), sink.SendOptions{Config: cfg})
@@ -203,7 +203,7 @@ func TestSendRendererEnabledButNilRenderer(t *testing.T) {
 	}))
 	defer server.Close()
 
-	cfg, _ := json.Marshal(webhookConfig{URL: server.URL, EnableRenderer: true})
+	cfg, _ := json.Marshal(config{URL: server.URL, EnableRenderer: true})
 	s := New(nil, WithHTTPClient(&http.Client{Timeout: 5 * time.Second}))
 
 	err := s.Send(context.Background(), testPayload(), sink.SendOptions{Config: cfg})
@@ -219,7 +219,7 @@ func TestSendContextCancellation(t *testing.T) {
 	}))
 	defer server.Close()
 
-	cfg, _ := json.Marshal(webhookConfig{URL: server.URL})
+	cfg, _ := json.Marshal(config{URL: server.URL})
 	s := New(nil, WithHTTPClient(&http.Client{Timeout: 5 * time.Second}))
 
 	ctx, cancel := context.WithTimeout(context.Background(), 50*time.Millisecond)

@@ -145,10 +145,10 @@ func buildPayload(plan *hibernatorv1alpha1.HibernatePlan, event hibernatorv1alph
 	targets := make([]notification.TargetInfo, len(plan.Status.Executions))
 	for i, exec := range plan.Status.Executions {
 		targets[i] = notification.TargetInfo{
-			Name:         exec.Target,
-			Executor:     exec.Executor,
-			State:        string(exec.State),
-			ErrorMessage: exec.Message,
+			Name:     exec.Target,
+			Executor: exec.Executor,
+			State:    string(exec.State),
+			Message:  exec.Message,
 		}
 	}
 	p.Targets = targets

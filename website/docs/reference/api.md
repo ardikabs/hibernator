@@ -10,11 +10,11 @@ Package v1alpha1 contains API Schema definitions for the hibernator v1alpha1 API
 
 ### Resource Types
 
-- CloudProvider
-- HibernateNotification
 - HibernatePlan
 - K8SCluster
 - ScheduleException
+- CloudProvider
+- HibernateNotification
 
 
 ### AWSAuth
@@ -375,7 +375,7 @@ ObjectKeyReference is a reference to a specific key in a namespaced object.
 | Field | Type | Description | Validation |
 | ----- | ---- | ----------- | ---------- |
 | `name` | _string_ | Name is the name of the object. | [Required: {}] |
-| `key` | _string_ | Key is the key within the ConfigMap data.<br />Must end in .gotpl by convention. | [Optional: {}] |
+| `key` | _string_ | Key is the key within the object primarily for Secret or ConfigMap data.<br />If omitted, the dispatcher uses a default key ("config" for SecretRef, "template.gotpl" for TemplateRef). | [Optional: {}] |
 
 ### OffHourWindow
 

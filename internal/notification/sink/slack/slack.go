@@ -22,36 +22,6 @@ const (
 	SinkType = "slack"
 )
 
-// DefaultTemplate is the built-in Go template for Slack notifications.
-var DefaultTemplate = `{{ if eq .Event "Failure" -}}
-:red_circle: *Hibernation Failed*
-{{ else if eq .Event "Success" -}}
-:white_check_mark: *Hibernation Succeeded*
-{{ else if eq .Event "Start" -}}
-:arrow_forward: *Execution Starting*
-{{ else if eq .Event "Recovery" -}}
-:recycle: *Recovery Triggered*
-{{ else -}}
-:information_source: *Phase Change*
-{{ end -}}
-*Plan:* {{ .Plan.Name }}
-*Namespace:* {{ .Plan.Namespace }}
-*Phase:* {{ .Phase }}
-*Operation:* {{ .Operation | default "N/A" }}
-{{ if .PreviousPhase -}}
-*Previous Phase:* {{ .PreviousPhase }}
-{{ end -}}
-{{ if .ErrorMessage -}}
-*Error:* {{ .ErrorMessage }}
-{{ end -}}
-*Timestamp:* {{ .Timestamp | date "2006-01-02 15:04:05 MST" }}
-{{ if .Targets -}}
-*Targets:*
-{{ range .Targets -}}
-• {{ .Name }} ({{ .Executor }}): {{ .State }}
-{{ end -}}
-{{ end }}`
-
 // Option configures a Sink.
 type Option func(*Sink)
 
@@ -61,12 +31,6 @@ func WithHTTPClient(client *http.Client) Option {
 	return func(s *Sink) {
 		s.client = client
 	}
-}
-
-// slackConfig is the expected JSON schema for the Secret's "config" key.
-type slackConfig struct {
-	// WebhookURL is the Slack Incoming Webhook URL.
-	WebhookURL string `json:"webhook_url"`
 }
 
 // Sink sends notifications to Slack via Incoming Webhook URL.
@@ -97,7 +61,7 @@ func (s *Sink) Type() string {
 // via Incoming Webhook. If opts.CustomTemplateRef is set, that template is used
 // instead of the built-in default.
 func (s *Sink) Send(ctx context.Context, payload sink.Payload, opts sink.SendOptions) error {
-	var cfg slackConfig
+	var cfg config
 	if err := json.Unmarshal(opts.Config, &cfg); err != nil {
 		return fmt.Errorf("parse slack sink config: %w", err)
 	}

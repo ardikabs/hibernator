@@ -72,7 +72,7 @@ help: ## Display this help.
 # ============================================================================
 
 .PHONY: generate
-generate: controller-gen docs-api-gen docs-executor-params-gen ## Generate code (DeepCopy, CRDs), sync to Helm chart, and generate API reference docs.
+generate: controller-gen docs-api-gen docs-executor-params-gen docs-sink-gen ## Generate code (DeepCopy, CRDs), sync to Helm chart, and generate API reference docs.
 	$(CONTROLLER_GEN) object:headerFile="hack/boilerplate.go.txt" paths="./api/..."
 	$(CONTROLLER_GEN) crd paths="./api/..." output:crd:artifacts:config=config/crd/bases
 	@echo "$(CYAN)Syncing CRDs to Helm chart...$(RESET)"
@@ -362,6 +362,12 @@ docs-executor-params-gen: ## Generate executor parameters reference from Go type
 	@echo "$(CYAN)Generating executor parameters docs...$(RESET)"
 	@$(GOCMD) run ./hack/tools/gen-executor-params-docs/
 	@echo "$(GREEN)Executor parameters docs generated in $(DOCS_DIR)/docs/reference/executor-parameters.md$(RESET)"
+
+.PHONY: docs-sink-gen
+docs-sink-gen: ## Generate notification sink reference from Go types.
+	@echo "$(CYAN)Generating notification sink docs...$(RESET)"
+	@$(GOCMD) run ./hack/tools/gen-sink-docs/
+	@echo "$(GREEN)Notification sink docs generated in $(DOCS_DIR)/docs/reference/notification-sinks.md$(RESET)"
 
 .PHONY: docs-build
 docs-build: ## Build the static documentation site into website/site/ (requires Docker).

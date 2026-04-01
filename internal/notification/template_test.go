@@ -118,7 +118,7 @@ func TestPayloadToContext(t *testing.T) {
 		SinkName:      "slack-alerts",
 		SinkType:      "slack",
 		Targets: []TargetInfo{
-			{Name: "db", Executor: "rds", State: "Failed", ErrorMessage: "timeout"},
+			{Name: "db", Executor: "rds", State: "Failed", Message: "timeout"},
 		},
 	}
 

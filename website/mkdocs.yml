@@ -97,6 +97,7 @@ nav:
   - Reference:
       - API Reference: reference/api.md
       - Executor Parameters: reference/executor-parameters.md
+      - Notification Sinks: reference/notification-sinks.md
       - Metrics: reference/metrics.md
   - Roadmap: roadmap.md
   - Changelog: changelog.md

@@ -94,7 +94,7 @@ func TestSendSuccess(t *testing.T) {
 
 	s := newWithServerURL(&stubRenderer{}, &http.Client{Timeout: 5 * time.Second}, server.URL)
 
-	cfg, _ := json.Marshal(telegramConfig{
+	cfg, _ := json.Marshal(config{
 		Token:     "my-test-token",
 		ChatID:    "-100123456789",
 		ParseMode: ptr.To("MarkdownV2"),
@@ -120,7 +120,7 @@ func TestSendWithHTMLParseMode(t *testing.T) {
 	defer server.Close()
 
 	s := newWithServerURL(&stubRenderer{}, &http.Client{Timeout: 5 * time.Second}, server.URL)
-	cfg, _ := json.Marshal(telegramConfig{Token: "token", ChatID: "12345", ParseMode: ptr.To("HTML")})
+	cfg, _ := json.Marshal(config{Token: "token", ChatID: "12345", ParseMode: ptr.To("HTML")})
 	err := s.Send(context.Background(), testPayload(), sink.SendOptions{
 		Config: cfg,
 	})
@@ -140,7 +140,7 @@ func TestSendWithoutParseMode(t *testing.T) {
 	defer server.Close()
 
 	s := newWithServerURL(&stubRenderer{}, &http.Client{Timeout: 5 * time.Second}, server.URL)
-	cfg, _ := json.Marshal(telegramConfig{Token: "token", ChatID: "12345"})
+	cfg, _ := json.Marshal(config{Token: "token", ChatID: "12345"})
 	err := s.Send(context.Background(), testPayload(), sink.SendOptions{
 		Config: cfg,
 	})
@@ -160,7 +160,7 @@ func TestSendWithChannelUsername(t *testing.T) {
 	defer server.Close()
 
 	s := newWithServerURL(&stubRenderer{}, &http.Client{Timeout: 5 * time.Second}, server.URL)
-	cfg, _ := json.Marshal(telegramConfig{Token: "token", ChatID: "@mychannel"})
+	cfg, _ := json.Marshal(config{Token: "token", ChatID: "@mychannel"})
 	err := s.Send(context.Background(), testPayload(), sink.SendOptions{
 		Config: cfg,
 	})
@@ -171,7 +171,7 @@ func TestSendWithChannelUsername(t *testing.T) {
 
 func TestSendMissingChatID(t *testing.T) {
 	s := New(&stubRenderer{})
-	cfg, _ := json.Marshal(telegramConfig{Token: "token"})
+	cfg, _ := json.Marshal(config{Token: "token"})
 	err := s.Send(context.Background(), testPayload(), sink.SendOptions{Config: cfg})
 
 	require.Error(t, err)
@@ -180,7 +180,7 @@ func TestSendMissingChatID(t *testing.T) {
 
 func TestSendMissingToken(t *testing.T) {
 	s := New(&stubRenderer{})
-	cfg, _ := json.Marshal(telegramConfig{ChatID: "12345"})
+	cfg, _ := json.Marshal(config{ChatID: "12345"})
 	err := s.Send(context.Background(), testPayload(), sink.SendOptions{Config: cfg})
 
 	require.Error(t, err)
@@ -203,7 +203,7 @@ func TestSendHTTPError(t *testing.T) {
 	defer server.Close()
 
 	s := newWithServerURL(&stubRenderer{}, &http.Client{Timeout: 5 * time.Second}, server.URL)
-	cfg, _ := json.Marshal(telegramConfig{Token: "token", ChatID: "12345"})
+	cfg, _ := json.Marshal(config{Token: "token", ChatID: "12345"})
 	err := s.Send(context.Background(), testPayload(), sink.SendOptions{
 		Config: cfg,
 	})
@@ -220,7 +220,7 @@ func TestSendAPIError(t *testing.T) {
 	defer server.Close()
 
 	s := newWithServerURL(&stubRenderer{}, &http.Client{Timeout: 5 * time.Second}, server.URL)
-	cfg, _ := json.Marshal(telegramConfig{Token: "token", ChatID: "nonexistent"})
+	cfg, _ := json.Marshal(config{Token: "token", ChatID: "nonexistent"})
 	err := s.Send(context.Background(), testPayload(), sink.SendOptions{
 		Config: cfg,
 	})
@@ -240,7 +240,7 @@ func TestSendContextCanceled(t *testing.T) {
 	cancel()
 
 	s := newWithServerURL(&stubRenderer{}, &http.Client{Timeout: 5 * time.Second}, server.URL)
-	cfg, _ := json.Marshal(telegramConfig{Token: "token", ChatID: "12345"})
+	cfg, _ := json.Marshal(config{Token: "token", ChatID: "12345"})
 	err := s.Send(ctx, testPayload(), sink.SendOptions{
 		Config: cfg,
 	})
@@ -256,7 +256,7 @@ func TestSendRateLimited(t *testing.T) {
 	defer server.Close()
 
 	s := newWithServerURL(&stubRenderer{}, &http.Client{Timeout: 5 * time.Second}, server.URL)
-	cfg, _ := json.Marshal(telegramConfig{Token: "token", ChatID: "12345"})
+	cfg, _ := json.Marshal(config{Token: "token", ChatID: "12345"})
 	err := s.Send(context.Background(), testPayload(), sink.SendOptions{
 		Config: cfg,
 	})

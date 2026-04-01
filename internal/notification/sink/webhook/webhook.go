@@ -21,26 +21,6 @@ const (
 	SinkType = "webhook"
 )
 
-// webhookConfig is the expected JSON schema for the Secret's "config" key.
-type webhookConfig struct {
-	// URL is the endpoint to POST notifications to.
-	URL string `json:"url"`
-	// Headers are additional HTTP headers to include in the request.
-	Headers map[string]string `json:"headers,omitempty"`
-	// EnableRenderer when true, renders the payload through the template engine
-	// and includes the result in the "rendered" field of the JSON body.
-	EnableRenderer bool `json:"enable_renderer,omitempty"`
-}
-
-// webhookBody is the JSON body sent to the webhook endpoint.
-type webhookBody struct {
-	// Context carries the structured notification event data.
-	Context sink.Payload `json:"context"`
-	// Rendered is the template-rendered message string.
-	// Omitted when enable_renderer is false or unset.
-	Rendered string `json:"rendered,omitempty"`
-}
-
 // Option configures a Sink.
 type Option func(*Sink)
 
@@ -50,10 +30,6 @@ func WithHTTPClient(client *http.Client) Option {
 		s.client = client
 	}
 }
-
-// DefaultTemplate is the built-in Go template for webhook notifications.
-// It produces a concise one-line summary suitable for generic integrations.
-var DefaultTemplate = `[{{ .Event }}] {{ .Operation }} — {{ .Plan.Namespace }}/{{ .Plan.Name }} | Phase: {{ .Phase }}{{ if .ErrorMessage }} | Error: {{ .ErrorMessage }}{{ end }}`
 
 // Sink sends notifications via HTTP POST to a user-configured URL.
 type Sink struct {
@@ -83,7 +59,7 @@ func (s *Sink) Type() string {
 // enable_renderer is true in the config, a "rendered" field is added with
 // the template-rendered message.
 func (s *Sink) Send(ctx context.Context, payload sink.Payload, opts sink.SendOptions) error {
-	var cfg webhookConfig
+	var cfg config
 	if err := json.Unmarshal(opts.Config, &cfg); err != nil {
 		return fmt.Errorf("parse webhook sink config: %w", err)
 	}
@@ -92,7 +68,7 @@ func (s *Sink) Send(ctx context.Context, payload sink.Payload, opts sink.SendOpt
 	}
 
 	body := webhookBody{
-		Context: payload,
+		Context: toWebhookContext(payload),
 	}
 
 	if cfg.EnableRenderer && s.renderer != nil {

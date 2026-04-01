@@ -26,48 +26,6 @@ const (
 	SinkType = "telegram"
 )
 
-// DefaultTemplate is the built-in Go template for Telegram notifications.
-// Dynamic values are piped through htmlSafe to prevent HTML injection when
-// parse_mode is set to HTML.
-var DefaultTemplate = `{{ if eq .Event "Failure" -}}
-🔴 <b>Hibernation Failed</b>
-{{ else if eq .Event "Success" -}}
-✅ <b>Hibernation Succeeded</b>
-{{ else if eq .Event "Start" -}}
-▶️ <b>Execution Starting</b>
-{{ else if eq .Event "Recovery" -}}
-♻️ <b>Recovery Triggered</b>
-{{ else -}}
-ℹ️ <b>Phase Change</b>
-{{ end -}}
-<b>Plan:</b> {{ .Plan.Name | autoEscape }}
-<b>Namespace:</b> {{ .Plan.Namespace | autoEscape }}
-<b>Phase:</b> {{ .Phase | autoEscape }}
-<b>Operation:</b> {{ .Operation | default "N/A" | autoEscape }}
-{{ if .PreviousPhase -}}
-<b>Previous Phase:</b> {{ .PreviousPhase | autoEscape }}
-{{ end -}}
-{{ if .ErrorMessage -}}
-<b>Error:</b> {{ .ErrorMessage | autoEscape }}
-{{ end -}}
-<b>Timestamp:</b> {{ .Timestamp | date "2006-01-02 15:04:05 MST" | autoEscape }}
-{{ if .Targets -}}
-<b>Targets:</b>
-{{ range .Targets -}}
-• {{ .Name | autoEscape }} ({{ .Executor | autoEscape }}): {{ .State | autoEscape }}
-{{ end -}}
-{{ end }}`
-
-// telegramConfig is the expected JSON schema for the Secret's "config" key.
-type telegramConfig struct {
-	// Token is the Telegram Bot API token.
-	Token string `json:"token"`
-	// ChatID is the target chat ID (numeric ID or channel username like "@mychannel").
-	ChatID string `json:"chat_id"`
-	// ParseMode is the message parse mode (MarkdownV2, HTML, or empty for plain text).
-	ParseMode *string `json:"parse_mode,omitempty"`
-}
-
 // Option configures a Sink.
 type Option func(*Sink)
 
@@ -121,7 +79,7 @@ func (s *Sink) Type() string {
 // via the Bot API SDK. If opts.CustomTemplateRef is set, that template is used
 // instead of the built-in default.
 func (s *Sink) Send(ctx context.Context, payload sink.Payload, opts sink.SendOptions) error {
-	var cfg telegramConfig
+	var cfg config
 	if err := json.Unmarshal(opts.Config, &cfg); err != nil {
 		return fmt.Errorf("parse telegram sink config: %w", err)
 	}

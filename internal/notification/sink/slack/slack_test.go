@@ -65,10 +65,10 @@ func TestSendSuccess(t *testing.T) {
 	}))
 	defer server.Close()
 
-	cfg, _ := json.Marshal(slackConfig{WebhookURL: server.URL})
+	cfg, _ := json.Marshal(config{WebhookURL: server.URL})
 	s := New(&stubRenderer{}, WithHTTPClient(&http.Client{Timeout: 5 * time.Second}))
 	err := s.Send(context.Background(), testPayload(), sink.SendOptions{
-		Config:   cfg,
+		Config: cfg,
 	})
 
 	require.NoError(t, err)
@@ -82,10 +82,10 @@ func TestSendHTTPError(t *testing.T) {
 	}))
 	defer server.Close()
 
-	cfg, _ := json.Marshal(slackConfig{WebhookURL: server.URL})
+	cfg, _ := json.Marshal(config{WebhookURL: server.URL})
 	s := New(&stubRenderer{}, WithHTTPClient(&http.Client{Timeout: 5 * time.Second}))
 	err := s.Send(context.Background(), testPayload(), sink.SendOptions{
-		Config:   cfg,
+		Config: cfg,
 	})
 
 	require.Error(t, err)
@@ -99,10 +99,10 @@ func TestSendRateLimited(t *testing.T) {
 	}))
 	defer server.Close()
 
-	cfg, _ := json.Marshal(slackConfig{WebhookURL: server.URL})
+	cfg, _ := json.Marshal(config{WebhookURL: server.URL})
 	s := New(&stubRenderer{}, WithHTTPClient(&http.Client{Timeout: 5 * time.Second}))
 	err := s.Send(context.Background(), testPayload(), sink.SendOptions{
-		Config:   cfg,
+		Config: cfg,
 	})
 
 	require.Error(t, err)
@@ -119,27 +119,27 @@ func TestSendContextCanceled(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
 
-	cfg, _ := json.Marshal(slackConfig{WebhookURL: server.URL})
+	cfg, _ := json.Marshal(config{WebhookURL: server.URL})
 	s := New(&stubRenderer{}, WithHTTPClient(&http.Client{Timeout: 5 * time.Second}))
 	err := s.Send(ctx, testPayload(), sink.SendOptions{
-		Config:   cfg,
+		Config: cfg,
 	})
 
 	require.Error(t, err)
 }
 
 func TestSendInvalidURL(t *testing.T) {
-	cfg, _ := json.Marshal(slackConfig{WebhookURL: "://invalid"})
+	cfg, _ := json.Marshal(config{WebhookURL: "://invalid"})
 	s := New(&stubRenderer{}, WithHTTPClient(&http.Client{Timeout: 5 * time.Second}))
 	err := s.Send(context.Background(), testPayload(), sink.SendOptions{
-		Config:   cfg,
+		Config: cfg,
 	})
 
 	require.Error(t, err)
 }
 
 func TestSendMissingWebhookURL(t *testing.T) {
-	cfg, _ := json.Marshal(slackConfig{})
+	cfg, _ := json.Marshal(config{})
 	s := New(&stubRenderer{}, WithHTTPClient(&http.Client{Timeout: 5 * time.Second}))
 	err := s.Send(context.Background(), testPayload(), sink.SendOptions{Config: cfg})
 

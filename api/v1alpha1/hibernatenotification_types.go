@@ -46,8 +46,8 @@ type ObjectKeyReference struct {
 	// +kubebuilder:validation:Required
 	Name string `json:"name"`
 
-	// Key is the key within the ConfigMap data.
-	// Must end in .gotpl by convention.
+	// Key is the key within the object primarily for Secret or ConfigMap data.
+	// If omitted, the dispatcher uses a default key ("config" for SecretRef, "template.gotpl" for TemplateRef).
 	// +optional
 	Key *string `json:"key,omitempty"`
 }
