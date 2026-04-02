@@ -77,7 +77,7 @@ The configuration must be in a JSON object stored under `config` key in secret r
 {{ if .Targets -}}
 *Targets:*
 {{ range .Targets -}}
-• {{ .Name }} ({{ .Executor }}): {{ .State }}
+• {{ .Name }} ({{ .Executor }}): {{ .State }}{{ if .Connector.AccountID }} | Account: {{ .Connector.AccountID }}{{ end }}{{ if .Connector.ClusterName }} | Cluster: {{ .Connector.ClusterName }}{{ end }}{{ if .Connector.Region }} | Region: {{ .Connector.Region }}{{ end }}
 {{ end -}}
 {{ end }}
 ```
@@ -88,10 +88,14 @@ _Sink type: `telegram`_
 
 Delivers messages via the [Telegram Bot API](https://core.telegram.org/bots/api).
 
-!!! tip "Auto-Escaping Reserved Characters (Telegram)"
+!!! tip "Escaping Reserved Characters (Telegram)"
     The Telegram Bot API requires certain characters to be escaped depending on the `parse_mode`.
-    Hibernator handles this automatically via the `autoEscape` template function.
-    If you write a [custom template](../user-guides/notifications.md#custom-templates) for Telegram, use `{{ .SomeField | autoEscape }}` on any dynamic value to prevent parse errors.
+    Two helper functions are available in all templates:
+
+    - **`escapeHTML`** — use when `parse_mode` is `HTML` (the default). Escapes `<`, `>`, `&`, and `"`.
+    - **`escapeMarkdown`** — use when `parse_mode` is `MarkdownV2`. Escapes `_`, `*`, `[`, `]`, `(`, `)`, `~`, `` ` ``, `>`, `#`, `+`, `-`, `=`, `|`, `{`, `}`, `.`, `!`.
+
+    Always pipe dynamic values through the appropriate escape function in custom Telegram templates, otherwise Telegram will reject the message.
 
 ### Configuration
 
@@ -141,21 +145,21 @@ The configuration must be in a JSON object stored under `config` key in secret r
 {{ else -}}
 ℹ️ <b>Phase Change</b>
 {{ end -}}
-<b>Plan:</b> {{ .Plan.Name | autoEscape }}
-<b>Namespace:</b> {{ .Plan.Namespace | autoEscape }}
-<b>Phase:</b> {{ .Phase | autoEscape }}
-<b>Operation:</b> {{ .Operation | default "N/A" | autoEscape }}
+<b>Plan:</b> {{ .Plan.Name | escapeHTML }}
+<b>Namespace:</b> {{ .Plan.Namespace | escapeHTML }}
+<b>Phase:</b> {{ .Phase | escapeHTML }}
+<b>Operation:</b> {{ .Operation | default "N/A" | escapeHTML }}
 {{ if .PreviousPhase -}}
-<b>Previous Phase:</b> {{ .PreviousPhase | autoEscape }}
+<b>Previous Phase:</b> {{ .PreviousPhase | escapeHTML }}
 {{ end -}}
 {{ if .ErrorMessage -}}
-<b>Error:</b> {{ .ErrorMessage | autoEscape }}
+<b>Error:</b> {{ .ErrorMessage | escapeHTML }}
 {{ end -}}
-<b>Timestamp:</b> {{ .Timestamp | date "2006-01-02 15:04:05 MST" | autoEscape }}
+<b>Timestamp:</b> {{ .Timestamp | date "2006-01-02 15:04:05 MST" | escapeHTML }}
 {{ if .Targets -}}
 <b>Targets:</b>
 {{ range .Targets -}}
-• {{ .Name | autoEscape }} ({{ .Executor | autoEscape }}): {{ .State | autoEscape }}
+• {{ .Name | escapeHTML }} ({{ .Executor | escapeHTML }}): {{ .State | escapeHTML }}{{ if .Connector.AccountID }} | Account: {{ .Connector.AccountID | escapeHTML }}{{ end }}{{ if .Connector.ClusterName }} | Cluster: {{ .Connector.ClusterName | escapeHTML }}{{ end }}{{ if .Connector.Region }} | Region: {{ .Connector.Region | escapeHTML }}{{ end }}
 {{ end -}}
 {{ end }}
 ```
@@ -199,11 +203,12 @@ The configuration must be in a JSON object stored under `config` key in secret r
 ```json
 {
   "context": {
-    "id": {
+    "plan": {
+      "name": "<name>",
       "namespace": "<namespace>",
-      "name": "<name>"
+      "labels": {},
+      "annotations": {}
     },
-    "labels": {},
     "event": "<event>",
     "timestamp": "<timestamp>",
     "phase": "<phase>",
@@ -215,7 +220,16 @@ The configuration must be in a JSON object stored under `config` key in secret r
         "name": "<name>",
         "executor": "<executor>",
         "state": "<state>",
-        "message": "<message>"
+        "message": "<message>",
+        "connector": {
+          "kind": "<kind>",
+          "name": "<name>",
+          "provider": "<provider>",
+          "accountId": "<accountId>",
+          "projectId": "<projectId>",
+          "region": "<region>",
+          "clusterName": "<clusterName>"
+        }
       }
     ],
     "errorMessage": "<errorMessage>",
@@ -230,10 +244,11 @@ The configuration must be in a JSON object stored under `config` key in secret r
 | Field | Type | Description |
 |-------|------|-------------|
 | `context` | `object` | Context carries the structured notification event data as a webhook-specific DTO. |
-| `context.id` | `object` | ID represents the identifier of the associated object. |
-| `context.id.namespace` | `string` | Kubernetes namespace. |
-| `context.id.name` | `string` | Resource name. |
-| `context.labels` | `map[string]string` | Labels are the labels of the associated object. |
+| `context.plan` | `object` | Plan carries plan metadata. |
+| `context.plan.name` | `string` | Name is the plan name. |
+| `context.plan.namespace` | `string` | Namespace is the Kubernetes namespace. |
+| `context.plan.labels` | `map[string]string` | Labels are the plan labels. |
+| `context.plan.annotations` | `map[string]string` | Annotations are the plan annotations. |
 | `context.event` | `string` | Event is the hook point that triggered this notification (e.g., "Start", "Failure"). |
 | `context.timestamp` | `string` | Timestamp is when the event occurred. |
 | `context.phase` | `string` | Phase is the plan phase after the transition. |
@@ -245,6 +260,14 @@ The configuration must be in a JSON object stored under `config` key in secret r
 | `context.targets[].executor` | `string` | Executor is the executor type (e.g., "rds", "eks"). |
 | `context.targets[].state` | `string` | State is the execution state (e.g., "Completed", "Failed"). |
 | `context.targets[].message` | `string` | Message provides details for the target's execution state. |
+| `context.targets[].connector` | `object` | Connector carries resolved connector metadata. |
+| `context.targets[].connector.kind` | `string` | Kind is the connector type: "CloudProvider" or "K8SCluster". |
+| `context.targets[].connector.name` | `string` | Name is the connector resource name. |
+| `context.targets[].connector.provider` | `string` | Provider is the cloud provider type (e.g., "aws", "gcp"). |
+| `context.targets[].connector.accountId` | `string` | AccountID is the cloud account identifier, it is relevant for AWS cloud provider. |
+| `context.targets[].connector.projectId` | `string` | ProjectID is the cloud project identifier, it is relevant for GCP cloud provider. |
+| `context.targets[].connector.region` | `string` | Region is the cloud region. |
+| `context.targets[].connector.clusterName` | `string` | ClusterName is the Kubernetes cluster name. |
 | `context.errorMessage` | `string` | ErrorMessage provides error details (Failure/Recovery only). |
 | `context.retryCount` | `int32` | RetryCount is the current retry attempt number (Recovery/Failure only). |
 | `context.sinkName` | `string` | SinkName is the human-readable name of the sink being dispatched to. |

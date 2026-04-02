@@ -17,7 +17,6 @@ import (
 	"github.com/go-telegram/bot/models"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
-	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/utils/ptr"
 
 	hibernatorv1alpha1 "github.com/ardikabs/hibernator/api/v1alpha1"
@@ -33,7 +32,10 @@ func (r *stubRenderer) Render(_ context.Context, _ string, _ sink.Payload, _ ...
 
 func testPayload() sink.Payload {
 	return sink.Payload{
-		ID:        types.NamespacedName{Namespace: "default", Name: "test-plan"},
+		Plan: sink.PlanInfo{
+			Name:      "test-plan",
+			Namespace: "default",
+		},
 		Event:     "Start",
 		Timestamp: time.Date(2026, 3, 28, 10, 0, 0, 0, time.UTC),
 		Phase:     string(hibernatorv1alpha1.PhaseHibernating),

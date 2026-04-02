@@ -12,6 +12,7 @@ import (
 
 	hibernatorv1alpha1 "github.com/ardikabs/hibernator/api/v1alpha1"
 	"github.com/ardikabs/hibernator/internal/notification"
+	"github.com/samber/lo"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 )
 
@@ -38,6 +39,7 @@ func (s *state) notifyHook(event hibernatorv1alpha1.NotificationEvent, payloadFn
 
 	return func(ctx context.Context, plan *hibernatorv1alpha1.HibernatePlan) error {
 		payload := payloadFn(plan)
+		enrichConnectorInfo(ctx, s.APIReader, plan.Namespace, payload.Targets)
 		for i := range notifications {
 			submitForNotification(ctx, s.Notifier, &notifications[i], event, payload)
 		}
@@ -60,6 +62,7 @@ func (s *state) phaseChangePostHook(previousPhase hibernatorv1alpha1.PlanPhase) 
 	return func(ctx context.Context, plan *hibernatorv1alpha1.HibernatePlan) error {
 		payload := buildPayload(plan, hibernatorv1alpha1.EventPhaseChange, s.Clock.Now)
 		payload.PreviousPhase = string(previousPhase)
+		enrichConnectorInfo(ctx, s.APIReader, plan.Namespace, payload.Targets)
 		for i := range notifications {
 			submitForNotification(ctx, s.Notifier, &notifications[i], hibernatorv1alpha1.EventPhaseChange, payload)
 		}
@@ -131,8 +134,12 @@ func subscribesToEvent(notif *hibernatorv1alpha1.HibernateNotification, event hi
 // buildPayload constructs a notification.Payload from the plan's current status.
 func buildPayload(plan *hibernatorv1alpha1.HibernatePlan, event hibernatorv1alpha1.NotificationEvent, clk func() time.Time) notification.Payload {
 	p := notification.Payload{
-		ID:           client.ObjectKeyFromObject(plan),
-		Labels:       plan.Labels,
+		Plan: notification.PlanInfo{
+			Name:        plan.Name,
+			Namespace:   plan.Namespace,
+			Labels:      plan.Labels,
+			Annotations: plan.Annotations,
+		},
 		Event:        string(event),
 		Timestamp:    clk(),
 		Phase:        string(plan.Status.Phase),
@@ -140,6 +147,12 @@ func buildPayload(plan *hibernatorv1alpha1.HibernatePlan, event hibernatorv1alph
 		CycleID:      plan.Status.CurrentCycleID,
 		ErrorMessage: plan.Status.ErrorMessage,
 		RetryCount:   plan.Status.RetryCount,
+	}
+
+	// Index spec targets by name for connector ref lookup.
+	specTargets := make(map[string]*hibernatorv1alpha1.Target, len(plan.Spec.Targets))
+	for i := range plan.Spec.Targets {
+		specTargets[plan.Spec.Targets[i].Name] = &plan.Spec.Targets[i]
 	}
 
 	targets := make([]notification.TargetInfo, len(plan.Status.Executions))
@@ -150,7 +163,75 @@ func buildPayload(plan *hibernatorv1alpha1.HibernatePlan, event hibernatorv1alph
 			State:    string(exec.State),
 			Message:  exec.Message,
 		}
+
+		if spec, ok := specTargets[exec.Target]; ok {
+			targets[i].Connector = notification.ConnectorInfo{
+				Kind: spec.ConnectorRef.Kind,
+				Name: spec.ConnectorRef.Name,
+			}
+		}
 	}
 	p.Targets = targets
 	return p
+}
+
+// enrichConnectorInfo populates cloud-specific fields on each target's
+// ConnectorInfo by reading the referenced CloudProvider or K8SCluster
+// resources. Errors are silently ignored — connector metadata is best-effort
+// for notification rendering.
+func enrichConnectorInfo(ctx context.Context, reader client.Reader, namespace string, targets []notification.TargetInfo) {
+	for i := range targets {
+		ci := &targets[i].Connector
+		if ci.Kind == "" || ci.Name == "" {
+			continue
+		}
+
+		ns := namespace
+		switch ci.Kind {
+		case "CloudProvider":
+			var cp hibernatorv1alpha1.CloudProvider
+			if err := reader.Get(ctx, client.ObjectKey{Namespace: ns, Name: ci.Name}, &cp); err != nil {
+				continue
+			}
+			ci.Provider = string(cp.Spec.Type)
+			if cp.Spec.AWS != nil {
+				ci.AccountID = cp.Spec.AWS.AccountId
+				ci.Region = cp.Spec.AWS.Region
+			}
+
+		case "K8SCluster":
+			var kc hibernatorv1alpha1.K8SCluster
+			if err := reader.Get(ctx, client.ObjectKey{Namespace: ns, Name: ci.Name}, &kc); err != nil {
+				continue
+			}
+			if kc.Spec.EKS != nil {
+				ci.ClusterName = kc.Spec.EKS.Name
+				ci.Region = kc.Spec.EKS.Region
+			} else if kc.Spec.GKE != nil {
+				ci.ClusterName = kc.Spec.GKE.Name
+				ci.Region = kc.Spec.GKE.Location
+				ci.ProjectID = kc.Spec.GKE.Project
+			} else if kc.Spec.K8S != nil {
+				ci.ClusterName = lo.Ternary(kc.Spec.K8S.InCluster, "in-cluster", "remote")
+			}
+
+			// Resolve cloud provider fields via ProviderRef if present.
+			if kc.Spec.ProviderRef != nil {
+				provNS := kc.Spec.ProviderRef.Namespace
+				if provNS == "" {
+					provNS = ns
+				}
+				var cp hibernatorv1alpha1.CloudProvider
+				if err := reader.Get(ctx, client.ObjectKey{Namespace: provNS, Name: kc.Spec.ProviderRef.Name}, &cp); err == nil {
+					ci.Provider = string(cp.Spec.Type)
+					if cp.Spec.AWS != nil {
+						ci.AccountID = cp.Spec.AWS.AccountId
+						ci.Region = lo.Ternary(ci.Region == "", cp.Spec.AWS.Region, ci.Region)
+					}
+
+					// TODO: handle GCP provider fields if needed
+				}
+			}
+		}
+	}
 }

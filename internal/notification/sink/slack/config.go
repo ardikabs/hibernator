@@ -48,7 +48,7 @@ var DefaultTemplate = `{{ if eq .Event "Start" -}}
 {{ if .Targets -}}
 *Targets:*
 {{ range .Targets -}}
-• {{ .Name }} ({{ .Executor }}): {{ .State }}
+• {{ .Name }} ({{ .Executor }}): {{ .State }}{{ if .Connector.AccountID }} | Account: {{ .Connector.AccountID }}{{ end }}{{ if .Connector.ClusterName }} | Cluster: {{ .Connector.ClusterName }}{{ end }}{{ if .Connector.Region }} | Region: {{ .Connector.Region }}{{ end }}
 {{ end -}}
 {{ end }}`
 

@@ -217,11 +217,17 @@ func (d *Dispatcher) Start(ctx context.Context) error {
 // internal overflow queue and the drainer will move it to the channel asynchronously.
 // After shutdown begins (d.done closed), requests are discarded with a metric.
 func (d *Dispatcher) Submit(req Request) {
+	log := d.log.WithValues(
+		"plan", req.Payload.Plan.String(),
+		"sink", req.SinkName,
+		"sinkType", req.SinkType,
+		"event", req.Payload.Event,
+	)
+
 	// Fast-path — non-blocking shutdown check via channel.
 	select {
 	case <-d.done:
-		d.log.V(1).Info("notification dispatcher stopped, discarding request",
-			"sink", req.SinkName, "sinkType", req.SinkType, "event", req.Payload.Event)
+		log.V(1).Info("notification dispatcher stopped, discarding request")
 		metrics.NotificationDropTotal.WithLabelValues(req.SinkType, req.Payload.Event).Inc()
 		return
 	default:
@@ -237,24 +243,13 @@ func (d *Dispatcher) Submit(req Request) {
 	}
 
 	if d.overflow.Len() >= d.maxOverflowSize {
-		d.log.Error(fmt.Errorf("overflow queue full, dropping notification request"),
-			"id", req.Payload.ID,
-			"sink", req.SinkName,
-			"sinkType", req.SinkType,
-			"event", req.Payload.Event,
-		)
+		log.Info("overflow queue full, dropping notification request")
 		metrics.NotificationDropTotal.WithLabelValues(req.SinkType, req.Payload.Event).Inc()
 		return
 	}
 
+	log.V(1).Info("request channel full, adding notification request to overflow")
 	d.overflow.Append(req)
-	d.log.V(1).Info("request channel full, adding notification request to overflow",
-		"id", req.Payload.ID,
-		"sink", req.SinkName,
-		"sinkType", req.SinkType,
-		"event", req.Payload.Event,
-		"overflowSize", d.overflow.Len(),
-	)
 
 	// Wake the drainer (non-blocking signal).
 	select {
@@ -380,10 +375,10 @@ drainChannel:
 func (d *Dispatcher) dispatch(ctx context.Context, req Request) {
 	start := time.Now()
 	log := d.log.WithValues(
+		"plan", req.Payload.Plan.String(),
 		"sink", req.SinkName,
 		"sinkType", req.SinkType,
 		"event", req.Payload.Event,
-		"plan", req.Payload.ID,
 	)
 
 	// Look up the sink implementation.
@@ -395,7 +390,7 @@ func (d *Dispatcher) dispatch(ctx context.Context, req Request) {
 	}
 
 	// Resolve sink credentials from Secret.
-	config, err := d.resolveSecret(ctx, req.Payload.ID.Namespace, req.SecretRef)
+	config, err := d.resolveSecret(ctx, req.Payload.Plan.Namespace, req.SecretRef)
 	if err != nil {
 		log.Error(err, "failed to resolve sink secret")
 		metrics.NotificationErrorsTotal.WithLabelValues(req.SinkType, req.Payload.Event).Inc()
@@ -404,8 +399,7 @@ func (d *Dispatcher) dispatch(ctx context.Context, req Request) {
 
 	// Build the sink payload from the notification request.
 	sinkPayload := Payload{
-		ID:            req.Payload.ID,
-		Labels:        req.Payload.Labels,
+		Plan:          req.Payload.Plan,
 		Event:         req.Payload.Event,
 		Timestamp:     req.Payload.Timestamp,
 		Phase:         req.Payload.Phase,
@@ -428,7 +422,7 @@ func (d *Dispatcher) dispatch(ctx context.Context, req Request) {
 	// Resolve optional custom template from ConfigMap.
 	var customTmpl *string
 	if req.TemplateRef != nil {
-		tmplStr, tmplErr := d.resolveCustomTemplate(ctx, req.Payload.ID.Namespace, *req.TemplateRef)
+		tmplStr, tmplErr := d.resolveCustomTemplate(ctx, req.Payload.Plan.Namespace, *req.TemplateRef)
 		if tmplErr != nil {
 			log.Error(tmplErr, "failed to resolve custom template, falling back to sink default",
 				"configMap", req.TemplateRef.Name,

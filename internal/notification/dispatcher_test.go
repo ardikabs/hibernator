@@ -22,7 +22,6 @@ import (
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
-	"k8s.io/apimachinery/pkg/types"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
 
 	hibernatorv1alpha1 "github.com/ardikabs/hibernator/api/v1alpha1"
@@ -116,7 +115,10 @@ func sinkSecret(namespace, name string, config []byte) *corev1.Secret {
 
 func testPayload(event string) Payload {
 	return Payload{
-		ID:        types.NamespacedName{Namespace: "default", Name: "test-plan"},
+		Plan: PlanInfo{
+			Name:      "test-plan",
+			Namespace: "default",
+		},
 		Event:     event,
 		Timestamp: time.Date(2026, 3, 28, 10, 0, 0, 0, time.UTC),
 		Phase:     "Hibernating",
@@ -181,7 +183,7 @@ func TestDispatcher_SendsNotification(t *testing.T) {
 	calls := stub.getCalls()
 	require.Len(t, calls, 1)
 	assert.Equal(t, "Start", calls[0].Payload.Event)
-	assert.Equal(t, "test-plan", calls[0].Payload.ID.Name)
+	assert.Equal(t, "test-plan", calls[0].Payload.Plan.Name)
 	assert.Equal(t, []byte(`{"webhook_url":"https://hooks.slack.com/test"}`), calls[0].Config)
 }
 
@@ -500,7 +502,7 @@ func TestDispatcher_PassesPayloadToSink(t *testing.T) {
 			calls := stub.getCalls()
 			require.Len(t, calls, 1)
 			assert.Equal(t, tt.event, calls[0].Payload.Event)
-			assert.Equal(t, "test-plan", calls[0].Payload.ID.Name)
+			assert.Equal(t, "test-plan", calls[0].Payload.Plan.Name)
 			assert.Equal(t, "Hibernating", calls[0].Payload.Phase)
 			assert.Equal(t, "Hibernate", calls[0].Payload.Operation)
 			assert.Equal(t, "test-sink", calls[0].Payload.SinkName)
