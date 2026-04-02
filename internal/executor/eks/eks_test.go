@@ -181,7 +181,7 @@ func TestShutdown_WithSpecificNodeGroups(t *testing.T) {
 		},
 	}
 
-	err := e.Shutdown(ctx, logr.Discard(), spec)
+	_, err := e.Shutdown(ctx, logr.Discard(), spec)
 	assert.NoError(t, err)
 
 	mockEKS.AssertExpectations(t)
@@ -249,7 +249,7 @@ func TestShutdown_WithListAllNodeGroups(t *testing.T) {
 		},
 	}
 
-	err := e.Shutdown(ctx, logr.Discard(), spec)
+	_, err := e.Shutdown(ctx, logr.Discard(), spec)
 	assert.NoError(t, err)
 
 	mockEKS.AssertExpectations(t)
@@ -295,7 +295,7 @@ func TestShutdown_DescribeNodegroupError(t *testing.T) {
 		},
 	}
 
-	err := e.Shutdown(ctx, logr.Discard(), spec)
+	_, err := e.Shutdown(ctx, logr.Discard(), spec)
 	assert.Error(t, err)
 	assert.Contains(t, err.Error(), "access denied")
 }
@@ -336,7 +336,7 @@ func TestWakeUp_RestoreNodeGroups(t *testing.T) {
 		},
 	}
 
-	err := e.WakeUp(ctx, logr.Discard(), spec, restore)
+	_, err := e.WakeUp(ctx, logr.Discard(), spec, restore)
 	assert.NoError(t, err)
 
 	mockEKS.AssertExpectations(t)
@@ -361,7 +361,7 @@ func TestWakeUp_InvalidRestoreData(t *testing.T) {
 		},
 	}
 
-	err := e.WakeUp(ctx, logr.Discard(), spec, restore)
+	_, err := e.WakeUp(ctx, logr.Discard(), spec, restore)
 	assert.Error(t, err)
 }
 
@@ -378,7 +378,7 @@ func TestShutdown_InvalidParameters(t *testing.T) {
 		},
 	}
 
-	err := e.Shutdown(ctx, logr.Discard(), spec)
+	_, err := e.Shutdown(ctx, logr.Discard(), spec)
 	assert.Error(t, err)
 }
 

@@ -56,13 +56,13 @@ func (e *Executor) Validate(spec executor.Spec) error {
 }
 
 // Shutdown scales GKE node pools to zero.
-func (e *Executor) Shutdown(ctx context.Context, log logr.Logger, spec executor.Spec) error {
+func (e *Executor) Shutdown(ctx context.Context, log logr.Logger, spec executor.Spec) (*executor.Result, error) {
 	log = log.WithName("gke").WithValues("target", spec.TargetName, "targetType", spec.TargetType)
 	log.Info("executor starting shutdown")
 
 	var params executorparams.GKEParameters
 	if err := json.Unmarshal(spec.Parameters, &params); err != nil {
-		return fmt.Errorf("parse parameters: %w", err)
+		return nil, fmt.Errorf("parse parameters: %w", err)
 	}
 
 	// Store original state
@@ -80,23 +80,23 @@ func (e *Executor) Shutdown(ctx context.Context, log logr.Logger, spec executor.
 	}
 
 	log.Info("shutdown completed", "nodePoolCount", len(nodePoolStates))
-	return nil
+	return &executor.Result{Message: fmt.Sprintf("scaled %d GKE node pool(s) to zero", len(nodePoolStates))}, nil
 }
 
 // WakeUp restores GKE node pools from hibernation.
-func (e *Executor) WakeUp(ctx context.Context, log logr.Logger, spec executor.Spec, restore executor.RestoreData) error {
+func (e *Executor) WakeUp(ctx context.Context, log logr.Logger, spec executor.Spec, restore executor.RestoreData) (*executor.Result, error) {
 	log = log.WithName("gke").WithValues("target", spec.TargetName, "targetType", spec.TargetType)
 	log.Info("executor starting wakeup")
 
 	if len(restore.Data) == 0 {
-		return fmt.Errorf("restore data is required for wake-up")
+		return nil, fmt.Errorf("restore data is required for wake-up")
 	}
 
 	// Iterate over all node pools in restore data
 	for nodePoolName, stateBytes := range restore.Data {
 		var state NodePoolState
 		if err := json.Unmarshal(stateBytes, &state); err != nil {
-			return fmt.Errorf("unmarshal node pool state %s: %w", nodePoolName, err)
+			return nil, fmt.Errorf("unmarshal node pool state %s: %w", nodePoolName, err)
 		}
 
 		// TODO: Implement actual GKE API calls to restore node pools
@@ -105,7 +105,7 @@ func (e *Executor) WakeUp(ctx context.Context, log logr.Logger, spec executor.Sp
 	}
 
 	log.Info("wakeup completed", "nodePoolCount", len(restore.Data))
-	return nil
+	return &executor.Result{Message: fmt.Sprintf("restored %d GKE node pool(s)", len(restore.Data))}, nil
 }
 
 // NodePoolState stores the original state of a GKE NodePool.

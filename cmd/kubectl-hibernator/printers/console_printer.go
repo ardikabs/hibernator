@@ -185,11 +185,11 @@ func (p *ConsolePrinter) printStatus(out *StatusOutput, w io.Writer) error {
 			if exec.Attempts > 0 {
 				tw.text("  (attempts: %d)", exec.Attempts)
 			}
-			if exec.Message != "" {
-				tw.text("  %s", exec.Message)
-			}
 			tw.newline()
 
+			if exec.Message != "" {
+				tw.line("    Message:  %s", exec.Message)
+			}
 			if exec.StartedAt != nil {
 				tw.line("    Started:  %s", exec.StartedAt.Format(time.RFC3339))
 			}

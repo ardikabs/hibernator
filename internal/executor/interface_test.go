@@ -26,14 +26,20 @@ func (m *MockExecutor) Type() string { return m.TypeValue }
 
 func (m *MockExecutor) Validate(spec Spec) error { return m.ValidateErr }
 
-func (m *MockExecutor) Shutdown(ctx context.Context, log logr.Logger, spec Spec) error {
+func (m *MockExecutor) Shutdown(ctx context.Context, log logr.Logger, spec Spec) (*Result, error) {
 	_ = log
-	return m.ShutdownErr
+	if m.ShutdownErr != nil {
+		return nil, m.ShutdownErr
+	}
+	return &Result{Message: "mock shutdown completed"}, nil
 }
 
-func (m *MockExecutor) WakeUp(ctx context.Context, log logr.Logger, spec Spec, restore RestoreData) error {
+func (m *MockExecutor) WakeUp(ctx context.Context, log logr.Logger, spec Spec, restore RestoreData) (*Result, error) {
 	_ = log
-	return m.WakeUpErr
+	if m.WakeUpErr != nil {
+		return nil, m.WakeUpErr
+	}
+	return &Result{Message: "mock wakeup completed"}, nil
 }
 
 func TestRegistry_RegisterAndGet(t *testing.T) {

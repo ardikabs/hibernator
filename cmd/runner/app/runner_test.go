@@ -59,22 +59,28 @@ type fakeExecutor struct {
 func (f *fakeExecutor) Type() string                   { return f.typeVal }
 func (f *fakeExecutor) Validate(_ executor.Spec) error { return f.validateErr }
 
-func (f *fakeExecutor) Shutdown(_ context.Context, _ logr.Logger, spec executor.Spec) error {
+func (f *fakeExecutor) Shutdown(_ context.Context, _ logr.Logger, spec executor.Spec) (*executor.Result, error) {
 	f.shutdownCalled = true
 	if spec.SaveRestoreData != nil {
 		for k, v := range f.restoreKeysToEmit {
 			if err := spec.SaveRestoreData(k, v, true); err != nil {
-				return fmt.Errorf("save restore data for %s: %w", k, err)
+				return nil, fmt.Errorf("save restore data for %s: %w", k, err)
 			}
 		}
 	}
-	return f.shutdownErr
+	if f.shutdownErr != nil {
+		return nil, f.shutdownErr
+	}
+	return &executor.Result{Message: "fake shutdown completed"}, nil
 }
 
-func (f *fakeExecutor) WakeUp(_ context.Context, _ logr.Logger, _ executor.Spec, rd executor.RestoreData) error {
+func (f *fakeExecutor) WakeUp(_ context.Context, _ logr.Logger, _ executor.Spec, rd executor.RestoreData) (*executor.Result, error) {
 	f.wakeupCalled = true
 	f.receivedRestore = rd
-	return f.wakeupErr
+	if f.wakeupErr != nil {
+		return nil, f.wakeupErr
+	}
+	return &executor.Result{Message: "fake wakeup completed"}, nil
 }
 
 // ----------------------------------------------------------------------------
@@ -174,7 +180,7 @@ func TestRunner_Shutdown_WritesRestorePoint(t *testing.T) {
 	}
 	r := newTestRunner(baseConfig("shutdown", "fake"), fakeExec)
 
-	require.NoError(t, r.run(context.Background()))
+	_, runErr := r.run(context.Background()); require.NoError(t, runErr)
 
 	assert.True(t, fakeExec.shutdownCalled)
 
@@ -193,7 +199,7 @@ func TestRunner_Shutdown_NoOp_WritesEmptyRestorePoint(t *testing.T) {
 	fakeExec := &fakeExecutor{typeVal: "fake"}
 	r := newTestRunner(baseConfig("shutdown", "fake"), fakeExec)
 
-	require.NoError(t, r.run(context.Background()))
+	_, runErr := r.run(context.Background()); require.NoError(t, runErr)
 	assert.True(t, fakeExec.shutdownCalled)
 
 	rd := readRestoreData(t, r.k8sClient)
@@ -210,7 +216,7 @@ func TestRunner_Wakeup_ReadsRestorePoint(t *testing.T) {
 	fakeExec := &fakeExecutor{typeVal: "fake"}
 	r := newTestRunner(baseConfig("wakeup", "fake"), fakeExec, restoreCM(t, state))
 
-	require.NoError(t, r.run(context.Background()))
+	_, runErr := r.run(context.Background()); require.NoError(t, runErr)
 
 	assert.True(t, fakeExec.wakeupCalled)
 	assert.True(t, fakeExec.receivedRestore.IsLive)
@@ -226,7 +232,7 @@ func TestRunner_Wakeup_EmptyRestorePoint_Succeeds(t *testing.T) {
 	// Pre-seed the empty restore point that a no-op shutdown would have written.
 	r := newTestRunner(baseConfig("wakeup", "fake"), fakeExec, restoreCM(t, nil))
 
-	require.NoError(t, r.run(context.Background()))
+	_, runErr := r.run(context.Background()); require.NoError(t, runErr)
 
 	assert.True(t, fakeExec.wakeupCalled)
 	assert.Empty(t, fakeExec.receivedRestore.Data,
@@ -242,7 +248,7 @@ func TestRunner_Shutdown_ExecutorError_ReturnsError(t *testing.T) {
 	}
 	r := newTestRunner(baseConfig("shutdown", "fake"), fakeExec)
 
-	err := r.run(context.Background())
+	_, err := r.run(context.Background())
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "disk full")
 	assert.True(t, fakeExec.shutdownCalled)
@@ -255,7 +261,7 @@ func TestRunner_Wakeup_MissingRestoreData_ReturnsError(t *testing.T) {
 	// No preloaded ConfigMap.
 	r := newTestRunner(baseConfig("wakeup", "fake"), fakeExec)
 
-	err := r.run(context.Background())
+	_, err := r.run(context.Background())
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "no restore data found")
 	assert.False(t, fakeExec.wakeupCalled, "WakeUp should not be called when restore data is missing")
@@ -268,7 +274,7 @@ func TestRunner_UnknownExecutorType_ReturnsError(t *testing.T) {
 	// Config requests "nonexistent", but only "fake" is registered.
 	r := newTestRunner(baseConfig("shutdown", "nonexistent"), fakeExec)
 
-	err := r.run(context.Background())
+	_, err := r.run(context.Background())
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "executor not found")
 }

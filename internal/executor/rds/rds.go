@@ -13,6 +13,7 @@ import (
 	"fmt"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
@@ -143,13 +144,13 @@ func (e *Executor) Validate(spec executor.Spec) error {
 }
 
 // Shutdown stops RDS instances/clusters with optional snapshot.
-func (e *Executor) Shutdown(ctx context.Context, log logr.Logger, spec executor.Spec) error {
+func (e *Executor) Shutdown(ctx context.Context, log logr.Logger, spec executor.Spec) (*executor.Result, error) {
 	log = log.WithName("rds").WithValues("target", spec.TargetName, "targetType", spec.TargetType)
 	log.Info("executor starting shutdown")
 
 	params, err := e.parseParams(spec.Parameters)
 	if err != nil {
-		return fmt.Errorf("parse parameters: %w", err)
+		return nil, fmt.Errorf("parse parameters: %w", err)
 	}
 
 	log.Info("parameters parsed",
@@ -164,7 +165,7 @@ func (e *Executor) Shutdown(ctx context.Context, log logr.Logger, spec executor.
 	cfg, err := e.loadAWSConfig(ctx, spec)
 	if err != nil {
 		log.Error(err, "failed to load AWS config")
-		return fmt.Errorf("load AWS config: %w", err)
+		return nil, fmt.Errorf("load AWS config: %w", err)
 	}
 
 	client := e.rdsFactory(cfg)
@@ -193,7 +194,7 @@ func (e *Executor) Shutdown(ctx context.Context, log logr.Logger, spec executor.
 		instances, err = e.findDBInstances(ctx, log, client, params.Selector)
 		if err != nil {
 			log.Error(err, "failed to find DB instances")
-			return fmt.Errorf("find DB instances: %w", err)
+			return nil, fmt.Errorf("find DB instances: %w", err)
 		}
 		log.Info("DB instances discovered", "totalInstances", len(instances))
 	}
@@ -205,7 +206,7 @@ func (e *Executor) Shutdown(ctx context.Context, log logr.Logger, spec executor.
 		clusters, err = e.findDBClusters(ctx, log, client, params.Selector)
 		if err != nil {
 			log.Error(err, "failed to find DB clusters")
-			return fmt.Errorf("find DB clusters: %w", err)
+			return nil, fmt.Errorf("find DB clusters: %w", err)
 		}
 		log.Info("DB clusters discovered", "totalClusters", len(clusters))
 	}
@@ -217,7 +218,7 @@ func (e *Executor) Shutdown(ctx context.Context, log logr.Logger, spec executor.
 
 		if err := e.stopInstance(ctx, log, client, instanceID, params.SnapshotBeforeStop, params, spec.SaveRestoreData); err != nil {
 			log.Error(err, "failed to stop instance", "instanceId", instanceID)
-			return fmt.Errorf("stop instance %s: %w", instanceID, err)
+			return nil, fmt.Errorf("stop instance %s: %w", instanceID, err)
 		}
 	}
 
@@ -228,22 +229,27 @@ func (e *Executor) Shutdown(ctx context.Context, log logr.Logger, spec executor.
 
 		if err := e.stopCluster(ctx, log, client, clusterID, params.SnapshotBeforeStop, params, spec.SaveRestoreData); err != nil {
 			log.Error(err, "failed to stop cluster", "clusterId", clusterID)
-			return fmt.Errorf("stop cluster %s: %w", clusterID, err)
+			return nil, fmt.Errorf("stop cluster %s: %w", clusterID, err)
 		}
 	}
 
 	// Wait for all stopping operations to complete if configured
+	msg := fmt.Sprintf("stopped %d RDS instance(s) and %d cluster(s)", len(instances), len(clusters))
+
 	if params.AwaitCompletion.Enabled {
 		timeout := params.AwaitCompletion.Timeout
 		if timeout == "" {
 			timeout = DefaultWaitTimeout
 		}
 
+		var timedOut atomic.Int32
+
 		for _, inst := range e.waitinglistForInstances {
 			e.completionWg.Add(1)
 			go func(id string) {
 				defer e.completionWg.Done()
 				if err := e.waitForInstanceStopped(ctx, log, client, id, timeout); err != nil {
+					timedOut.Add(1)
 					log.Error(err, "failed to wait for RDS instance stopped", "instanceId", id)
 				}
 			}(inst)
@@ -254,13 +260,20 @@ func (e *Executor) Shutdown(ctx context.Context, log logr.Logger, spec executor.
 			go func(id string) {
 				defer e.completionWg.Done()
 				if err := e.waitForClusterStopped(ctx, log, client, id, timeout); err != nil {
+					timedOut.Add(1)
 					log.Error(err, "failed to wait for Aurora cluster stopped", "clusterId", id)
 				}
 			}(cluster)
-
 		}
 
 		e.completionWg.Wait()
+
+		total := len(e.waitinglistForInstances) + len(e.waitinglistForClusters)
+		if failed := int(timedOut.Load()); failed > 0 {
+			msg += fmt.Sprintf("; %d of %d resource(s) not yet stopped after %s timeout", failed, total, timeout)
+		} else {
+			msg += "; all resources confirmed stopped"
+		}
 	}
 
 	log.Info("shutdown completed",
@@ -268,24 +281,24 @@ func (e *Executor) Shutdown(ctx context.Context, log logr.Logger, spec executor.
 		"totalClusters", len(clusters),
 	)
 
-	return nil
+	return &executor.Result{Message: msg}, nil
 }
 
 // WakeUp starts RDS instances/clusters.
-func (e *Executor) WakeUp(ctx context.Context, log logr.Logger, spec executor.Spec, restore executor.RestoreData) error {
+func (e *Executor) WakeUp(ctx context.Context, log logr.Logger, spec executor.Spec, restore executor.RestoreData) (*executor.Result, error) {
 	log = log.WithName("rds").WithValues("target", spec.TargetName, "targetType", spec.TargetType)
 	log.Info("executor starting wakeup")
 
 	if len(restore.Data) == 0 {
 		log.Info("no restore data available, wakeup operation is no-op")
-		return nil
+		return &executor.Result{Message: "wakeup completed for RDS (no restore data)"}, nil
 	}
 
 	// Parse parameters
 	params, err := e.parseParams(spec.Parameters)
 	if err != nil {
 		log.Error(err, "failed to parse parameters")
-		return fmt.Errorf("parse parameters: %w", err)
+		return nil, fmt.Errorf("parse parameters: %w", err)
 	}
 
 	log.Info("restore state loaded", "resourceCount", len(restore.Data))
@@ -293,7 +306,7 @@ func (e *Executor) WakeUp(ctx context.Context, log logr.Logger, spec executor.Sp
 	cfg, err := e.loadAWSConfig(ctx, spec)
 	if err != nil {
 		log.Error(err, "failed to load AWS config")
-		return fmt.Errorf("load AWS config: %w", err)
+		return nil, fmt.Errorf("load AWS config: %w", err)
 	}
 
 	client := e.rdsFactory(cfg)
@@ -306,14 +319,14 @@ func (e *Executor) WakeUp(ctx context.Context, log logr.Logger, spec executor.Sp
 			var state DBInstanceState
 			if err := json.Unmarshal(stateBytes, &state); err != nil {
 				log.Error(err, "failed to unmarshal instance state", "instanceId", instanceID)
-				return fmt.Errorf("unmarshal instance state %s: %w", instanceID, err)
+				return nil, fmt.Errorf("unmarshal instance state %s: %w", instanceID, err)
 			}
 
 			if !state.WasStopped {
 				log.Info("starting RDS instance", "instanceId", state.InstanceId)
 				if err := e.startInstance(ctx, log, client, state.InstanceId, params); err != nil {
 					log.Error(err, "failed to start instance", "instanceId", state.InstanceId)
-					return fmt.Errorf("start instance %s: %w", state.InstanceId, err)
+					return nil, fmt.Errorf("start instance %s: %w", state.InstanceId, err)
 				}
 				log.Info("instance started successfully", "instanceId", state.InstanceId)
 			} else {
@@ -325,14 +338,14 @@ func (e *Executor) WakeUp(ctx context.Context, log logr.Logger, spec executor.Sp
 			var state DBClusterState
 			if err := json.Unmarshal(stateBytes, &state); err != nil {
 				log.Error(err, "failed to unmarshal cluster state", "clusterId", clusterID)
-				return fmt.Errorf("unmarshal cluster state %s: %w", clusterID, err)
+				return nil, fmt.Errorf("unmarshal cluster state %s: %w", clusterID, err)
 			}
 
 			if !state.WasStopped {
 				log.Info("starting RDS cluster", "clusterId", state.ClusterId)
 				if err := e.startCluster(ctx, log, client, state.ClusterId, params); err != nil {
 					log.Error(err, "failed to start cluster", "clusterId", state.ClusterId)
-					return fmt.Errorf("start cluster %s: %w", state.ClusterId, err)
+					return nil, fmt.Errorf("start cluster %s: %w", state.ClusterId, err)
 				}
 				log.Info("cluster started successfully", "clusterId", state.ClusterId)
 			} else {
@@ -343,16 +356,22 @@ func (e *Executor) WakeUp(ctx context.Context, log logr.Logger, spec executor.Sp
 		}
 	}
 
+	msg := fmt.Sprintf("started %d RDS resource(s)", len(restore.Data))
+
 	if params.AwaitCompletion.Enabled {
 		timeout := params.AwaitCompletion.Timeout
 		if timeout == "" {
 			timeout = DefaultWaitTimeout
 		}
+
+		var timedOut atomic.Int32
+
 		for _, inst := range e.waitinglistForInstances {
 			e.completionWg.Add(1)
 			go func(id string) {
 				defer e.completionWg.Done()
 				if err := e.waitForInstanceAvailable(ctx, log, client, id, timeout); err != nil {
+					timedOut.Add(1)
 					log.Error(err, "failed to wait for RDS instance available", "instanceId", id)
 				}
 			}(inst)
@@ -363,16 +382,24 @@ func (e *Executor) WakeUp(ctx context.Context, log logr.Logger, spec executor.Sp
 			go func(id string) {
 				defer e.completionWg.Done()
 				if err := e.waitForClusterAvailable(ctx, log, client, id, timeout); err != nil {
+					timedOut.Add(1)
 					log.Error(err, "failed to wait for RDS cluster available", "clusterId", id)
 				}
 			}(clust)
 		}
 
 		e.completionWg.Wait()
+
+		total := len(e.waitinglistForInstances) + len(e.waitinglistForClusters)
+		if failed := int(timedOut.Load()); failed > 0 {
+			msg += fmt.Sprintf("; %d of %d resource(s) not yet available after %s timeout", failed, total, timeout)
+		} else {
+			msg += "; all resources confirmed available"
+		}
 	}
 
 	log.Info("wakeup completed", "resourceCount", len(restore.Data))
-	return nil
+	return &executor.Result{Message: msg}, nil
 }
 
 func (e *Executor) parseParams(raw json.RawMessage) (Parameters, error) {

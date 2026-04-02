@@ -146,7 +146,7 @@ func TestShutdown_StopRunningInstances(t *testing.T) {
 		},
 	}
 
-	err := e.Shutdown(ctx, logr.Discard(), spec)
+	_, err := e.Shutdown(ctx, logr.Discard(), spec)
 	assert.NoError(t, err)
 
 	mockEC2.AssertExpectations(t)
@@ -175,7 +175,7 @@ func TestShutdown_NoInstancesToStop(t *testing.T) {
 		},
 	}
 
-	err := e.Shutdown(ctx, logr.Discard(), spec)
+	_, err := e.Shutdown(ctx, logr.Discard(), spec)
 	assert.NoError(t, err)
 }
 
@@ -201,7 +201,7 @@ func TestShutdown_DescribeInstancesError(t *testing.T) {
 		},
 	}
 
-	err := e.Shutdown(ctx, logr.Discard(), spec)
+	_, err := e.Shutdown(ctx, logr.Discard(), spec)
 	assert.Error(t, err)
 	assert.Contains(t, err.Error(), "access denied")
 }
@@ -240,7 +240,7 @@ func TestWakeUp_StartPreviouslyRunningInstances(t *testing.T) {
 		},
 	}
 
-	err := e.WakeUp(ctx, logr.Discard(), spec, restore)
+	_, err := e.WakeUp(ctx, logr.Discard(), spec, restore)
 	assert.NoError(t, err)
 
 	mockEC2.AssertExpectations(t)
@@ -265,7 +265,7 @@ func TestWakeUp_InvalidRestoreData(t *testing.T) {
 		},
 	}
 
-	err := e.WakeUp(ctx, logr.Discard(), spec, restore)
+	_, err := e.WakeUp(ctx, logr.Discard(), spec, restore)
 	assert.Error(t, err)
 }
 
@@ -282,7 +282,7 @@ func TestShutdown_InvalidParameters(t *testing.T) {
 		},
 	}
 
-	err := e.Shutdown(ctx, logr.Discard(), spec)
+	_, err := e.Shutdown(ctx, logr.Discard(), spec)
 	assert.Error(t, err)
 }
 

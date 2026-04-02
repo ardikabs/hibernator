@@ -11,6 +11,7 @@ import (
 	"fmt"
 	"strings"
 	"sync"
+	"sync/atomic"
 
 	"github.com/go-logr/logr"
 
@@ -127,14 +128,14 @@ type RestoreState struct {
 }
 
 // Shutdown scales down all matched workloads to zero replicas.
-func (e *Executor) Shutdown(ctx context.Context, log logr.Logger, spec executor.Spec) error {
+func (e *Executor) Shutdown(ctx context.Context, log logr.Logger, spec executor.Spec) (*executor.Result, error) {
 	log = log.WithName("workloadscaler").WithValues("target", spec.TargetName, "targetType", spec.TargetType)
 	log.Info("executor starting shutdown")
 
 	var params executorparams.WorkloadScalerParameters
 	if len(spec.Parameters) > 0 {
 		if err := json.Unmarshal(spec.Parameters, &params); err != nil {
-			return fmt.Errorf("parse parameters: %w", err)
+			return nil, fmt.Errorf("parse parameters: %w", err)
 		}
 	}
 
@@ -153,17 +154,17 @@ func (e *Executor) Shutdown(ctx context.Context, log logr.Logger, spec executor.
 	// Build clients using injected factory
 	client, err := e.clientFactory(ctx, &spec)
 	if err != nil {
-		return fmt.Errorf("build kubernetes clients: %w", err)
+		return nil, fmt.Errorf("build kubernetes clients: %w", err)
 	}
 
 	// Discover target namespaces
 	targetNamespaces, err := e.discoverNamespaces(ctx, client, params.Namespace)
 	if err != nil {
-		return fmt.Errorf("discover namespaces: %w", err)
+		return nil, fmt.Errorf("discover namespaces: %w", err)
 	}
 
 	if len(targetNamespaces) == 0 {
-		return fmt.Errorf("no namespaces found matching selector")
+		return nil, fmt.Errorf("no namespaces found matching selector")
 	}
 
 	log.Info("target namespaces discovered", "count", len(targetNamespaces), "namespaces", strings.Join(targetNamespaces, ", "))
@@ -173,12 +174,12 @@ func (e *Executor) Shutdown(ctx context.Context, log logr.Logger, spec executor.
 		for _, kind := range includedGroups {
 			gvr, err := e.resolveGVR(kind)
 			if err != nil {
-				return fmt.Errorf("resolve GVR for %s: %w", kind, err)
+				return nil, fmt.Errorf("resolve GVR for %s: %w", kind, err)
 			}
 
 			counts, err := e.scaleDownWorkloads(ctx, log, client, ns, gvr, params.WorkloadSelector, params, spec.SaveRestoreData)
 			if err != nil {
-				return fmt.Errorf("scale down %s in namespace %s: %w", kind, ns, err)
+				return nil, fmt.Errorf("scale down %s in namespace %s: %w", kind, ns, err)
 			}
 
 			// Track if any workload had non-zero replicas
@@ -189,17 +190,21 @@ func (e *Executor) Shutdown(ctx context.Context, log logr.Logger, spec executor.
 	}
 
 	// Wait for all workloads to scale if configured
+	msg := fmt.Sprintf("scaled %d workload(s) to zero across %d namespace(s)", totalWorkloadscaled, len(targetNamespaces))
+
 	if params.AwaitCompletion.Enabled {
 		timeout := params.AwaitCompletion.Timeout
 		if timeout == "" {
 			timeout = DefaultWaitTimeout
 		}
 
+		var timedOut atomic.Int32
 		for _, state := range e.waitinglist {
 			e.completionWg.Add(1)
 			go func(state WorkloadState) {
 				defer e.completionWg.Done()
 				if err := e.waitForReplicasScaled(ctx, log, client, state.GetGVR(), state.Namespace, state.Name, 0, timeout); err != nil {
+					timedOut.Add(1)
 					log.Error(err, "wait for workload to scale", "workload", state.String())
 				}
 
@@ -207,15 +212,22 @@ func (e *Executor) Shutdown(ctx context.Context, log logr.Logger, spec executor.
 		}
 
 		e.completionWg.Wait()
+
+		total := len(e.waitinglist)
+		if failed := int(timedOut.Load()); failed > 0 {
+			msg += fmt.Sprintf("; %d of %d workload(s) not yet at zero replicas after %s timeout", failed, total, timeout)
+		} else {
+			msg += "; all workloads confirmed at zero replicas"
+		}
 	}
 
 	log.Info("shutdown completed", "numberOfWorkloadsScaled", totalWorkloadscaled)
 
-	return nil
+	return &executor.Result{Message: msg}, nil
 }
 
 // WakeUp restores all workloads to their previous replica counts.
-func (e *Executor) WakeUp(ctx context.Context, log logr.Logger, spec executor.Spec, restore executor.RestoreData) error {
+func (e *Executor) WakeUp(ctx context.Context, log logr.Logger, spec executor.Spec, restore executor.RestoreData) (*executor.Result, error) {
 	log = log.WithName("workloadscaler").WithValues("target", spec.TargetName, "targetType", spec.TargetType)
 	log.Info("executor starting wakeup")
 
@@ -223,12 +235,12 @@ func (e *Executor) WakeUp(ctx context.Context, log logr.Logger, spec executor.Sp
 
 	if len(restore.Data) == 0 {
 		log.Info("no restore data available, wakeup operation is no-op")
-		return nil
+		return &executor.Result{Message: "wakeup completed for workloadscaler (no restore data)"}, nil
 	}
 
 	if len(spec.Parameters) > 0 {
 		if err := json.Unmarshal(spec.Parameters, &params); err != nil {
-			return fmt.Errorf("parse parameters: %w", err)
+			return nil, fmt.Errorf("parse parameters: %w", err)
 		}
 	}
 
@@ -237,7 +249,7 @@ func (e *Executor) WakeUp(ctx context.Context, log logr.Logger, spec executor.Sp
 	// Build clients using injected factory
 	client, err := e.clientFactory(ctx, &spec)
 	if err != nil {
-		return fmt.Errorf("build kubernetes clients: %w", err)
+		return nil, fmt.Errorf("build kubernetes clients: %w", err)
 	}
 
 	// Restore each workload
@@ -245,26 +257,30 @@ func (e *Executor) WakeUp(ctx context.Context, log logr.Logger, spec executor.Sp
 		var state WorkloadState
 		if err := json.Unmarshal(stateBytes, &state); err != nil {
 			log.Error(err, "failed to unmarshal workload state", "workload", workloadKey)
-			return fmt.Errorf("unmarshal workload state %s: %w", workloadKey, err)
+			return nil, fmt.Errorf("unmarshal workload state %s: %w", workloadKey, err)
 		}
 
 		if err := e.restoreWorkload(ctx, log, client, state, params); err != nil {
-			return fmt.Errorf("restore %s/%s in namespace %s: %w", state.Kind, state.Name, state.Namespace, err)
+			return nil, fmt.Errorf("restore %s/%s in namespace %s: %w", state.Kind, state.Name, state.Namespace, err)
 		}
 	}
 
 	// Wait for all workloads to scale if configured
+	msg := fmt.Sprintf("restored %d workload(s)", len(restore.Data))
+
 	if params.AwaitCompletion.Enabled {
 		timeout := params.AwaitCompletion.Timeout
 		if timeout == "" {
 			timeout = DefaultWaitTimeout
 		}
 
+		var timedOut atomic.Int32
 		for _, state := range e.waitinglist {
 			e.completionWg.Add(1)
 			go func(state WorkloadState) {
 				defer e.completionWg.Done()
 				if err := e.waitForReplicasScaled(ctx, log, client, state.GetGVR(), state.Namespace, state.Name, int64(state.Replicas), timeout); err != nil {
+					timedOut.Add(1)
 					log.Error(err, "wait for workload to scale", "workload", state.String())
 				}
 
@@ -272,11 +288,18 @@ func (e *Executor) WakeUp(ctx context.Context, log logr.Logger, spec executor.Sp
 		}
 
 		e.completionWg.Wait()
+
+		total := len(e.waitinglist)
+		if failed := int(timedOut.Load()); failed > 0 {
+			msg += fmt.Sprintf("; %d of %d workload(s) not yet at desired replicas after %s timeout", failed, total, timeout)
+		} else {
+			msg += "; all workloads confirmed at desired replicas"
+		}
 	}
 
 	log.Info("wakeup completed", "workloadCount", len(restore.Data))
 
-	return nil
+	return &executor.Result{Message: msg}, nil
 }
 
 // discoverNamespaces returns the list of target namespaces based on the selector.

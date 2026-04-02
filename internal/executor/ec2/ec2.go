@@ -93,14 +93,14 @@ func (e *Executor) Validate(spec executor.Spec) error {
 }
 
 // Shutdown stops EC2 instances matching the selector.
-func (e *Executor) Shutdown(ctx context.Context, log logr.Logger, spec executor.Spec) error {
+func (e *Executor) Shutdown(ctx context.Context, log logr.Logger, spec executor.Spec) (*executor.Result, error) {
 	log = log.WithName("ec2").WithValues("target", spec.TargetName, "targetType", spec.TargetType)
 	log.Info("executor starting shutdown")
 
 	params, err := e.parseParams(spec.Parameters)
 	if err != nil {
 		log.Error(err, "failed to parse parameters")
-		return fmt.Errorf("parse parameters: %w", err)
+		return nil, fmt.Errorf("parse parameters: %w", err)
 	}
 
 	log.Info("parameters parsed",
@@ -113,7 +113,7 @@ func (e *Executor) Shutdown(ctx context.Context, log logr.Logger, spec executor.
 	cfg, err := e.loadAWSConfig(ctx, spec)
 	if err != nil {
 		log.Error(err, "failed to load AWS config")
-		return fmt.Errorf("load AWS config: %w", err)
+		return nil, fmt.Errorf("load AWS config: %w", err)
 	}
 
 	client := e.ec2Factory(cfg)
@@ -123,7 +123,7 @@ func (e *Executor) Shutdown(ctx context.Context, log logr.Logger, spec executor.
 	instances, err := e.findInstances(ctx, client, params.Selector)
 	if err != nil {
 		log.Error(err, "failed to find instances")
-		return fmt.Errorf("find instances: %w", err)
+		return nil, fmt.Errorf("find instances: %w", err)
 	}
 
 	log.Info("instances discovered", "totalInstances", len(instances))
@@ -169,6 +169,8 @@ func (e *Executor) Shutdown(ctx context.Context, log logr.Logger, spec executor.
 	}
 
 	// Stop running instances
+	msg := fmt.Sprintf("stopped %d of %d EC2 instance(s)", len(instancesToStop), len(instances))
+
 	if len(instancesToStop) > 0 {
 		log.Info("stopping running instances", "count", len(instancesToStop))
 		_, err = client.StopInstances(ctx, &ec2.StopInstancesInput{
@@ -176,7 +178,7 @@ func (e *Executor) Shutdown(ctx context.Context, log logr.Logger, spec executor.
 		})
 		if err != nil {
 			log.Error(err, "failed to stop instances")
-			return fmt.Errorf("stop instances: %w", err)
+			return nil, fmt.Errorf("stop instances: %w", err)
 		}
 		log.Info("instances stopped successfully", "count", len(instancesToStop))
 
@@ -187,7 +189,10 @@ func (e *Executor) Shutdown(ctx context.Context, log logr.Logger, spec executor.
 				timeout = DefaultWaitTimeout
 			}
 			if err := e.waitForInstancesStopped(ctx, log, client, instancesToStop, timeout); err != nil {
-				return fmt.Errorf("wait for instances stopped: %w", err)
+				log.Error(err, "timeout waiting for instances to stop")
+				msg += fmt.Sprintf("; not all instances confirmed stopped after %s timeout", timeout)
+			} else {
+				msg += "; all instances confirmed stopped"
 			}
 		}
 	} else {
@@ -200,23 +205,23 @@ func (e *Executor) Shutdown(ctx context.Context, log logr.Logger, spec executor.
 		"isLive", hasRunningInstances,
 	)
 
-	return nil
+	return &executor.Result{Message: msg}, nil
 }
 
 // WakeUp starts previously running EC2 instances.
-func (e *Executor) WakeUp(ctx context.Context, log logr.Logger, spec executor.Spec, restore executor.RestoreData) error {
+func (e *Executor) WakeUp(ctx context.Context, log logr.Logger, spec executor.Spec, restore executor.RestoreData) (*executor.Result, error) {
 	log = log.WithName("ec2").WithValues("target", spec.TargetName, "targetType", spec.TargetType)
 	log.Info("executor starting wakeup")
 
 	if len(restore.Data) == 0 {
 		log.Info("no restore data available, wakeup operation is no-op")
-		return nil
+		return &executor.Result{Message: "wakeup completed for EC2 (no restore data)"}, nil
 	}
 
 	params, err := e.parseParams(spec.Parameters)
 	if err != nil {
 		log.Error(err, "failed to parse parameters")
-		return fmt.Errorf("parse parameters: %w", err)
+		return nil, fmt.Errorf("parse parameters: %w", err)
 	}
 
 	log.Info("restore state loaded", "instanceCount", len(restore.Data))
@@ -224,7 +229,7 @@ func (e *Executor) WakeUp(ctx context.Context, log logr.Logger, spec executor.Sp
 	cfg, err := e.loadAWSConfig(ctx, spec)
 	if err != nil {
 		log.Error(err, "failed to load AWS config")
-		return fmt.Errorf("load AWS config: %w", err)
+		return nil, fmt.Errorf("load AWS config: %w", err)
 	}
 
 	client := e.ec2Factory(cfg)
@@ -235,7 +240,7 @@ func (e *Executor) WakeUp(ctx context.Context, log logr.Logger, spec executor.Sp
 		var inst InstanceState
 		if err := json.Unmarshal(stateBytes, &inst); err != nil {
 			log.Error(err, "failed to unmarshal instance state", "instanceId", instanceID)
-			return fmt.Errorf("unmarshal instance state %s: %w", instanceID, err)
+			return nil, fmt.Errorf("unmarshal instance state %s: %w", instanceID, err)
 		}
 
 		if inst.WasRunning {
@@ -247,6 +252,8 @@ func (e *Executor) WakeUp(ctx context.Context, log logr.Logger, spec executor.Sp
 		}
 	}
 
+	msg := fmt.Sprintf("started %d EC2 instance(s)", len(instancesToStart))
+
 	if len(instancesToStart) > 0 {
 		log.Info("starting instances", "count", len(instancesToStart))
 		_, err = client.StartInstances(ctx, &ec2.StartInstancesInput{
@@ -254,7 +261,7 @@ func (e *Executor) WakeUp(ctx context.Context, log logr.Logger, spec executor.Sp
 		})
 		if err != nil {
 			log.Error(err, "failed to start instances")
-			return fmt.Errorf("start instances: %w", err)
+			return nil, fmt.Errorf("start instances: %w", err)
 		}
 		log.Info("instances started successfully", "count", len(instancesToStart))
 
@@ -265,7 +272,10 @@ func (e *Executor) WakeUp(ctx context.Context, log logr.Logger, spec executor.Sp
 				timeout = DefaultWaitTimeout
 			}
 			if err := e.waitForInstancesRunning(ctx, log, client, instancesToStart, timeout); err != nil {
-				return fmt.Errorf("wait for instances running: %w", err)
+				log.Error(err, "timeout waiting for instances to start")
+				msg += fmt.Sprintf("; not all instances confirmed running after %s timeout", timeout)
+			} else {
+				msg += "; all instances confirmed running"
 			}
 		}
 	} else {
@@ -274,7 +284,7 @@ func (e *Executor) WakeUp(ctx context.Context, log logr.Logger, spec executor.Sp
 
 	log.Info("wakeup completed", "instanceCount", len(instancesToStart))
 
-	return nil
+	return &executor.Result{Message: msg}, nil
 }
 
 // waitForInstancesStopped waits for all instances to reach stopped state.

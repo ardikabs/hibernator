@@ -105,7 +105,7 @@ func TestShutdown_ScalesMatchingWorkloads(t *testing.T) {
 		},
 	}
 
-	err := e.Shutdown(ctx, logr.Discard(), spec)
+	_, err := e.Shutdown(ctx, logr.Discard(), spec)
 	assert.NoError(t, err)
 }
 
@@ -146,7 +146,7 @@ func TestShutdown_SelectorNamespaces(t *testing.T) {
 		},
 	}
 
-	err := e.Shutdown(ctx, logr.Discard(), spec)
+	_, err := e.Shutdown(ctx, logr.Discard(), spec)
 	assert.NoError(t, err)
 }
 
@@ -208,7 +208,7 @@ func TestWakeUp_RestoresReplicas(t *testing.T) {
 		},
 	}
 
-	err := e.WakeUp(ctx, logr.Discard(), spec, restoreData)
+	_, err := e.WakeUp(ctx, logr.Discard(), spec, restoreData)
 	assert.NoError(t, err)
 }
 
@@ -225,7 +225,7 @@ func TestShutdown_InvalidParameters(t *testing.T) {
 		},
 	}
 
-	err := e.Shutdown(ctx, logr.Discard(), spec)
+	_, err := e.Shutdown(ctx, logr.Discard(), spec)
 	assert.Error(t, err)
 }
 
@@ -249,7 +249,7 @@ func TestShutdown_K8sFactoryError(t *testing.T) {
 		},
 	}
 
-	err := e.Shutdown(ctx, logr.Discard(), spec)
+	_, err := e.Shutdown(ctx, logr.Discard(), spec)
 	assert.Error(t, err)
 	assert.Contains(t, err.Error(), "build kubernetes clients")
 }
@@ -273,7 +273,7 @@ func TestWakeUp_InvalidRestoreData(t *testing.T) {
 		},
 	}
 
-	err := e.WakeUp(ctx, logr.Discard(), spec, restore)
+	_, err := e.WakeUp(ctx, logr.Discard(), spec, restore)
 	assert.Error(t, err)
 }
 
@@ -305,7 +305,7 @@ func TestWakeUp_K8sFactoryError(t *testing.T) {
 		},
 	}
 
-	err := e.WakeUp(ctx, logr.Discard(), spec, restore)
+	_, err := e.WakeUp(ctx, logr.Discard(), spec, restore)
 	assert.Error(t, err)
 	assert.Contains(t, err.Error(), "build kubernetes clients")
 }

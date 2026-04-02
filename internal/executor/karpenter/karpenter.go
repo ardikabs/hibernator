@@ -10,6 +10,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"sync"
+	"sync/atomic"
 
 	"github.com/go-logr/logr"
 
@@ -94,7 +95,7 @@ func (e *Executor) Validate(spec executor.Spec) error {
 }
 
 // Shutdown scales Karpenter NodePools to zero by setting disruption budgets and resource limits.
-func (e *Executor) Shutdown(ctx context.Context, log logr.Logger, spec executor.Spec) error {
+func (e *Executor) Shutdown(ctx context.Context, log logr.Logger, spec executor.Spec) (*executor.Result, error) {
 
 	log = log.WithName("karpenter").WithValues("target", spec.TargetName, "targetType", spec.TargetType)
 	log.Info("executor starting shutdown")
@@ -103,7 +104,7 @@ func (e *Executor) Shutdown(ctx context.Context, log logr.Logger, spec executor.
 	if len(spec.Parameters) > 0 {
 		if err := json.Unmarshal(spec.Parameters, &params); err != nil {
 			log.Error(err, "failed to parse parameters")
-			return fmt.Errorf("parse parameters: %w", err)
+			return nil, fmt.Errorf("parse parameters: %w", err)
 		}
 	}
 
@@ -116,7 +117,7 @@ func (e *Executor) Shutdown(ctx context.Context, log logr.Logger, spec executor.
 	client, err := e.clientFactory(ctx, &spec)
 	if err != nil {
 		log.Error(err, "failed to build kubernetes client")
-		return fmt.Errorf("build kubernetes client: %w", err)
+		return nil, fmt.Errorf("build kubernetes client: %w", err)
 	}
 
 	// Determine target NodePools
@@ -127,7 +128,7 @@ func (e *Executor) Shutdown(ctx context.Context, log logr.Logger, spec executor.
 		discovered, err := e.listAllNodePools(ctx, client)
 		if err != nil {
 			log.Error(err, "failed to list all NodePools")
-			return fmt.Errorf("list all NodePools: %w", err)
+			return nil, fmt.Errorf("list all NodePools: %w", err)
 		}
 		targetNodePools = discovered
 	}
@@ -136,7 +137,7 @@ func (e *Executor) Shutdown(ctx context.Context, log logr.Logger, spec executor.
 
 	if len(targetNodePools) == 0 {
 		log.Error(nil, "no NodePools found in cluster")
-		return fmt.Errorf("no NodePools found in cluster")
+		return nil, fmt.Errorf("no NodePools found in cluster")
 	}
 
 	// Process each NodePool
@@ -144,51 +145,62 @@ func (e *Executor) Shutdown(ctx context.Context, log logr.Logger, spec executor.
 		log.Info("scaling down NodePool", "nodePool", nodePoolName)
 		if err := e.scaleDownNodePool(ctx, log, client, nodePoolName, params, spec.SaveRestoreData); err != nil {
 			log.Error(err, "failed to scale down NodePool", "nodePool", nodePoolName)
-			return fmt.Errorf("scale down NodePool %s: %w", nodePoolName, err)
+			return nil, fmt.Errorf("scale down NodePool %s: %w", nodePoolName, err)
 		}
 	}
 
 	// Wait for all nodes corresponding to deleted NodePools to be removed if configured
+	msg := fmt.Sprintf("scaled down %d Karpenter NodePool(s)", len(targetNodePools))
+
 	if params.AwaitCompletion.Enabled {
 		timeout := params.AwaitCompletion.Timeout
 		if timeout == "" {
 			timeout = DefaultWaitTimeout
 		}
 
+		var timedOut atomic.Int32
 		for _, nodePoolName := range e.waitinglist {
 			e.completionWg.Add(1)
 
 			go func(npName string) {
 				defer e.completionWg.Done()
 				if err := e.waitForNodePoolDeleted(ctx, log, client, npName, timeout); err != nil {
+					timedOut.Add(1)
 					log.Error(err, "failed to wait for NodePool deletion", "nodePool", npName)
 				}
 			}(nodePoolName)
 		}
 
 		e.completionWg.Wait()
+
+		total := len(e.waitinglist)
+		if failed := int(timedOut.Load()); failed > 0 {
+			msg += fmt.Sprintf("; %d of %d NodePool(s) still have nodes after %s timeout", failed, total, timeout)
+		} else {
+			msg += "; all nodes terminated"
+		}
 	}
 
 	log.Info("shutdown completed", "nodePoolCount", len(targetNodePools))
 
-	return nil
+	return &executor.Result{Message: msg}, nil
 }
 
 // WakeUp restores Karpenter NodePools from hibernation.
-func (e *Executor) WakeUp(ctx context.Context, log logr.Logger, spec executor.Spec, restore executor.RestoreData) error {
+func (e *Executor) WakeUp(ctx context.Context, log logr.Logger, spec executor.Spec, restore executor.RestoreData) (*executor.Result, error) {
 	log = log.WithName("karpenter").WithValues("target", spec.TargetName, "targetType", spec.TargetType)
 	log.Info("executor starting wakeup")
 
 	if len(restore.Data) == 0 {
 		log.Info("no restore data available, wakeup operation is no-op")
-		return nil
+		return &executor.Result{Message: "wakeup completed for Karpenter (no restore data)"}, nil
 	}
 
 	// Parse parameters
 	var params executorparams.KarpenterParameters
 	if len(spec.Parameters) > 0 {
 		if err := json.Unmarshal(spec.Parameters, &params); err != nil {
-			return fmt.Errorf("parse parameters: %w", err)
+			return nil, fmt.Errorf("parse parameters: %w", err)
 		}
 	}
 
@@ -197,14 +209,14 @@ func (e *Executor) WakeUp(ctx context.Context, log logr.Logger, spec executor.Sp
 	// Build clients using injected factory
 	client, err := e.clientFactory(ctx, &spec)
 	if err != nil {
-		return fmt.Errorf("build kubernetes client: %w", err)
+		return nil, fmt.Errorf("build kubernetes client: %w", err)
 	}
 
 	// Restore each NodePool
 	for nodePoolName, stateBytes := range restore.Data {
 		var state NodePoolState
 		if err := json.Unmarshal(stateBytes, &state); err != nil {
-			return fmt.Errorf("unmarshal NodePool state %s: %w", nodePoolName, err)
+			return nil, fmt.Errorf("unmarshal NodePool state %s: %w", nodePoolName, err)
 		}
 
 		log.Info("restoring NodePool",
@@ -213,22 +225,27 @@ func (e *Executor) WakeUp(ctx context.Context, log logr.Logger, spec executor.Sp
 			"hasLabels", len(state.Labels) > 0,
 		)
 		if err := e.restoreNodePool(ctx, log, client, nodePoolName, state, params); err != nil {
-			return fmt.Errorf("restore NodePool %s: %w", nodePoolName, err)
+			return nil, fmt.Errorf("restore NodePool %s: %w", nodePoolName, err)
 		}
 	}
 
 	// Wait for all restored NodePools to be ready if configured
+	msg := fmt.Sprintf("restored %d Karpenter NodePool(s)", len(restore.Data))
+
 	if params.AwaitCompletion.Enabled {
 		timeout := params.AwaitCompletion.Timeout
 		if timeout == "" {
 			timeout = DefaultWaitTimeout
 		}
+
+		var timedOut atomic.Int32
 		for _, nodePoolName := range e.waitinglist {
 			e.completionWg.Add(1)
 			go func(npName string) {
 				defer e.completionWg.Done()
 
 				if err := e.waitForNodePoolReady(ctx, log, client, npName, timeout); err != nil {
+					timedOut.Add(1)
 					log.Error(err, "failed to wait for NodePool ready", "nodePool", npName)
 				}
 			}(nodePoolName)
@@ -236,10 +253,17 @@ func (e *Executor) WakeUp(ctx context.Context, log logr.Logger, spec executor.Sp
 		}
 
 		e.completionWg.Wait()
+
+		total := len(e.waitinglist)
+		if failed := int(timedOut.Load()); failed > 0 {
+			msg += fmt.Sprintf("; %d of %d NodePool(s) not yet ready after %s timeout", failed, total, timeout)
+		} else {
+			msg += "; all NodePools ready"
+		}
 	}
 
 	log.Info("wakeup completed", "nodePoolCount", len(restore.Data))
-	return nil
+	return &executor.Result{Message: msg}, nil
 }
 
 // listAllNodePools discovers all Karpenter NodePools in the cluster.
