@@ -42,6 +42,12 @@ func (p *ConsolePrinter) PrintObj(obj interface{}, w io.Writer) error {
 		return p.printRestoreDetail(v, w)
 	case *RestoreResourcesOutput:
 		return p.printRestoreResources(v, w)
+	case *NotifListOutput:
+		return p.printNotifList(v, w)
+	case *NotifDescribeOutput:
+		return p.printNotifDescribe(v, w)
+	case *NotifSendDryRunOutput:
+		return p.printNotifSendDryRun(v, w)
 	default:
 		return fmt.Errorf("no human-readable printer registered for %T", obj)
 	}
@@ -437,4 +443,156 @@ func (p *ConsolePrinter) printRestoreDetail(out *RestoreDetailOutput, w io.Write
 
 	tw.line("  %s", string(stateJSON))
 	return tw.flush()
+}
+
+// printNotifList renders the tabular notification list for `kubectl-hibernator notification list`.
+func (p *ConsolePrinter) printNotifList(out *NotifListOutput, w io.Writer) error {
+	tw := newTextWriter(w)
+	tw.header("Name", "Namespace", "Events", "Sinks", "Watched Plans", "Last Delivery", "Age")
+
+	for _, item := range out.Items {
+		notif := item.Notification
+
+		events := make([]string, len(notif.Spec.OnEvents))
+		for i, e := range notif.Spec.OnEvents {
+			events[i] = string(e)
+		}
+
+		sinkCount := fmt.Sprintf("%d", len(notif.Spec.Sinks))
+		planCount := fmt.Sprintf("%d", len(notif.Status.WatchedPlans))
+
+		lastDelivery := "-"
+		if notif.Status.LastDeliveryTime != nil {
+			lastDelivery = HumanDuration(time.Since(notif.Status.LastDeliveryTime.Time)) + " ago"
+		}
+
+		age := FormatAge(time.Since(notif.CreationTimestamp.Time))
+
+		tw.row(notif.Name, notif.Namespace, strings.Join(events, ","), sinkCount, planCount, lastDelivery, age)
+	}
+
+	return tw.flush()
+}
+
+// printNotifDescribe renders detailed notification information for `kubectl-hibernator notification describe`.
+func (p *ConsolePrinter) printNotifDescribe(out *NotifDescribeOutput, w io.Writer) error {
+	notif := out.Notification
+	tw := newTextWriter(w)
+
+	tw.line("Name:       %s", notif.Name)
+	tw.line("Namespace:  %s", notif.Namespace)
+	tw.line("Created:    %s", notif.CreationTimestamp.Format("2006-01-02 15:04:05"))
+
+	if len(notif.Labels) > 0 {
+		tw.line("Labels:")
+		for k, v := range notif.Labels {
+			tw.line("  %s: %s", k, v)
+		}
+	}
+	tw.newline()
+
+	// Selector
+	tw.line("Selector:")
+	if len(notif.Spec.Selector.MatchLabels) > 0 {
+		for k, v := range notif.Spec.Selector.MatchLabels {
+			tw.line("  %s: %s", k, v)
+		}
+	}
+	if len(notif.Spec.Selector.MatchExpressions) > 0 {
+		for _, expr := range notif.Spec.Selector.MatchExpressions {
+			tw.line("  %s %s %v", expr.Key, expr.Operator, expr.Values)
+		}
+	}
+	tw.newline()
+
+	// Events
+	tw.line("Events:")
+	for _, e := range notif.Spec.OnEvents {
+		tw.line("  - %s", e)
+	}
+	tw.newline()
+
+	// Sinks
+	tw.line("Sinks:")
+	for i, s := range notif.Spec.Sinks {
+		tw.line("  [%d] %s (%s)", i, s.Name, s.Type)
+		tw.line("      Secret: %s", formatObjectKeyRef(s.SecretRef))
+		if s.TemplateRef != nil {
+			tw.line("      Template: %s", formatObjectKeyRef(*s.TemplateRef))
+		}
+	}
+	tw.newline()
+
+	// Plan match result
+	if out.PlanMatch != nil {
+		icon := "[NO]"
+		if out.PlanMatch.Matches {
+			icon = "[OK]"
+		}
+		tw.line("Plan Match: %s %s", icon, out.PlanMatch.PlanName)
+		tw.newline()
+	}
+
+	// Status
+	tw.line("Status:")
+	if len(notif.Status.WatchedPlans) > 0 {
+		tw.line("  Watched Plans:")
+		for _, p := range notif.Status.WatchedPlans {
+			ns := p.Namespace
+			if ns == "" {
+				ns = notif.Namespace
+			}
+			tw.line("    - %s/%s", ns, p.Name)
+		}
+	} else {
+		tw.line("  Watched Plans: (none)")
+	}
+
+	if notif.Status.LastDeliveryTime != nil {
+		tw.line("  Last Delivery: %s (%s ago)", notif.Status.LastDeliveryTime.Format(time.RFC3339), HumanDuration(time.Since(notif.Status.LastDeliveryTime.Time)))
+	}
+	if notif.Status.LastFailureTime != nil {
+		tw.line("  Last Failure:  %s (%s ago)", notif.Status.LastFailureTime.Format(time.RFC3339), HumanDuration(time.Since(notif.Status.LastFailureTime.Time)))
+	}
+
+	if len(notif.Status.SinkStatuses) > 0 {
+		tw.line("  Recent Deliveries:")
+		for _, ss := range notif.Status.SinkStatuses {
+			status := "[FAIL]"
+			if ss.Success {
+				status = "[OK]"
+			}
+			tw.line("    %s %s at %s", status, ss.Name, ss.TransitionTimestamp.Format(time.RFC3339))
+			if ss.Message != "" {
+				tw.line("        %s", ss.Message)
+			}
+		}
+	}
+
+	return tw.flush()
+}
+
+// printNotifSendDryRun renders the dry-run send output for `kubectl-hibernator notification send --dry-run`.
+func (p *ConsolePrinter) printNotifSendDryRun(out *NotifSendDryRunOutput, w io.Writer) error {
+	tw := newTextWriter(w)
+
+	tw.line("Dry Run — notification NOT sent")
+	tw.newline()
+	tw.line("Sink:    %s (%s)", out.SinkName, out.SinkType)
+	tw.line("Event:   %s", out.Event)
+	tw.newline()
+	tw.line("Rendered Message:")
+	tw.line("---")
+	tw.line("%s", out.Rendered)
+	tw.line("---")
+
+	return tw.flush()
+}
+
+// formatObjectKeyRef formats an ObjectKeyReference as "name[key]" or just "name".
+func formatObjectKeyRef(ref hibernatorv1alpha1.ObjectKeyReference) string {
+	if ref.Key != nil {
+		return fmt.Sprintf("%s[%s]", ref.Name, *ref.Key)
+	}
+	return ref.Name
 }

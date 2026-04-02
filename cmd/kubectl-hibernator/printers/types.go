@@ -199,6 +199,112 @@ type RestorePointData struct {
 	CreatedAt     string `json:"createdAt,omitempty"`
 }
 
+// --- Notification types ---
+
+// NotifListItem represents a single HibernateNotification in the list output.
+type NotifListItem struct {
+	Notification hibernatorv1alpha1.HibernateNotification `json:"notification"`
+}
+
+// NotifListOutput is a wrapper for printing notification list.
+type NotifListOutput struct {
+	Items []NotifListItem `json:"items"`
+}
+
+// NotifDescribeOutput is a wrapper for printing notification details.
+type NotifDescribeOutput struct {
+	Notification hibernatorv1alpha1.HibernateNotification
+	PlanMatch    *NotifPlanMatch
+}
+
+// NotifPlanMatch indicates whether a notification matches a specific plan.
+type NotifPlanMatch struct {
+	PlanName string
+	Matches  bool
+}
+
+// NotifSendDryRunOutput is a wrapper for printing dry-run send results.
+type NotifSendDryRunOutput struct {
+	SinkName string
+	SinkType string
+	Event    string
+	Rendered string
+}
+
+// NotifListItemJSON represents a single notification in JSON list output.
+type NotifListItemJSON struct {
+	Name         string   `json:"name"`
+	Namespace    string   `json:"namespace"`
+	Events       []string `json:"events"`
+	Sinks        []string `json:"sinks"`
+	WatchedPlans int      `json:"watchedPlans"`
+	LastDelivery string   `json:"lastDelivery,omitempty"`
+	LastFailure  string   `json:"lastFailure,omitempty"`
+	Age          string   `json:"age"`
+}
+
+// NotifListJSON represents the JSON output for notification list.
+type NotifListJSON struct {
+	Items []NotifListItemJSON `json:"items"`
+}
+
+// NotifDescribeJSON represents the JSON output for notification describe.
+type NotifDescribeJSON struct {
+	Name      string              `json:"name"`
+	Namespace string              `json:"namespace"`
+	Created   string              `json:"created"`
+	Labels    map[string]string   `json:"labels,omitempty"`
+	Selector  map[string]string   `json:"selector"`
+	Events    []string            `json:"events"`
+	Sinks     []NotifSinkJSON     `json:"sinks"`
+	Status    NotifStatusJSON     `json:"status"`
+	PlanMatch *NotifPlanMatchJSON `json:"planMatch,omitempty"`
+}
+
+// NotifSinkJSON represents a sink in JSON output.
+type NotifSinkJSON struct {
+	Name        string  `json:"name"`
+	Type        string  `json:"type"`
+	SecretRef   string  `json:"secretRef"`
+	TemplateRef *string `json:"templateRef,omitempty"`
+}
+
+// NotifStatusJSON represents notification status in JSON output.
+type NotifStatusJSON struct {
+	WatchedPlans []NotifWatchedPlanJSON `json:"watchedPlans,omitempty"`
+	LastDelivery string                 `json:"lastDelivery,omitempty"`
+	LastFailure  string                 `json:"lastFailure,omitempty"`
+	SinkStatuses []NotifSinkStatusJSON  `json:"sinkStatuses,omitempty"`
+}
+
+// NotifWatchedPlanJSON represents a watched plan in JSON output.
+type NotifWatchedPlanJSON struct {
+	Name      string `json:"name"`
+	Namespace string `json:"namespace,omitempty"`
+}
+
+// NotifSinkStatusJSON represents a sink delivery status entry in JSON output.
+type NotifSinkStatusJSON struct {
+	Name      string `json:"name"`
+	Success   bool   `json:"success"`
+	Timestamp string `json:"timestamp"`
+	Message   string `json:"message,omitempty"`
+}
+
+// NotifPlanMatchJSON represents plan match result in JSON output.
+type NotifPlanMatchJSON struct {
+	PlanName string `json:"planName"`
+	Matches  bool   `json:"matches"`
+}
+
+// NotifSendDryRunJSON represents the JSON output for dry-run send.
+type NotifSendDryRunJSON struct {
+	SinkName string `json:"sinkName"`
+	SinkType string `json:"sinkType"`
+	Event    string `json:"event"`
+	Rendered string `json:"rendered"`
+}
+
 type RestoreResource struct {
 	ResourceID string `json:"resourceId"`
 	Target     string `json:"target"`

@@ -16,6 +16,7 @@ import (
 	"github.com/ardikabs/hibernator/cmd/kubectl-hibernator/cli/describe"
 	"github.com/ardikabs/hibernator/cmd/kubectl-hibernator/cli/list"
 	"github.com/ardikabs/hibernator/cmd/kubectl-hibernator/cli/logs"
+	"github.com/ardikabs/hibernator/cmd/kubectl-hibernator/cli/notification"
 	"github.com/ardikabs/hibernator/cmd/kubectl-hibernator/cli/override"
 	"github.com/ardikabs/hibernator/cmd/kubectl-hibernator/cli/preview"
 	"github.com/ardikabs/hibernator/cmd/kubectl-hibernator/cli/restart"
@@ -85,6 +86,7 @@ Then use as:
 	cmd.AddCommand(override.NewCommand(opts))
 	cmd.AddCommand(restart.NewCommand(opts))
 	cmd.AddCommand(restore.NewCommand(opts))
+	cmd.AddCommand(notification.NewCommand(opts))
 	cmd.AddCommand(logs.NewCommand(opts))
 
 	return cmd
