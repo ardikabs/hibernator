@@ -68,14 +68,14 @@ func (e *Executor) Validate(spec executor.Spec) error {
 }
 
 // Shutdown simulates hibernation with configurable delay and failure modes.
-func (e *Executor) Shutdown(ctx context.Context, log logr.Logger, spec executor.Spec) error {
+func (e *Executor) Shutdown(ctx context.Context, log logr.Logger, spec executor.Spec) (*executor.Result, error) {
 	log = log.WithName("noop").WithValues("target", spec.TargetName, "targetType", spec.TargetType)
 	log.Info("executor starting shutdown")
 
 	params, err := e.parseParams(spec.Parameters)
 	if err != nil {
 		log.Error(err, "failed to parse parameters")
-		return fmt.Errorf("parse parameters: %w", err)
+		return nil, fmt.Errorf("parse parameters: %w", err)
 	}
 
 	log.Info("parameters parsed and validated",
@@ -95,16 +95,16 @@ func (e *Executor) Shutdown(ctx context.Context, log logr.Logger, spec executor.
 		log.Info("simulating shutdown failure", "failureMode", params.FailureMode)
 
 		if params.FailureMessage != "" {
-			return fmt.Errorf("%s (failureMode=%s)", params.FailureMessage, params.FailureMode)
+			return nil, fmt.Errorf("%s (failureMode=%s)", params.FailureMessage, params.FailureMode)
 		}
 
-		return fmt.Errorf("simulated shutdown failure (failureMode=%s)", params.FailureMode)
+		return nil, fmt.Errorf("simulated shutdown failure (failureMode=%s)", params.FailureMode)
 	}
 
 	select {
 	case <-ctx.Done():
 		log.Info("operation cancelled by context")
-		return ctx.Err()
+		return nil, ctx.Err()
 	case <-time.After(delay):
 		log.Info("work simulation completed")
 	}
@@ -126,17 +126,17 @@ func (e *Executor) Shutdown(ctx context.Context, log logr.Logger, spec executor.
 	}
 
 	log.Info("shutdown completed")
-	return nil
+	return &executor.Result{Message: fmt.Sprintf("noop shutdown completed for target %s", spec.TargetName)}, nil
 }
 
 // WakeUp simulates restoration using saved restore data.
-func (e *Executor) WakeUp(ctx context.Context, log logr.Logger, spec executor.Spec, restore executor.RestoreData) error {
+func (e *Executor) WakeUp(ctx context.Context, log logr.Logger, spec executor.Spec, restore executor.RestoreData) (*executor.Result, error) {
 	log = log.WithName("noop").WithValues("target", spec.TargetName, "targetType", spec.TargetType)
 	log.Info("executor starting wakeup")
 
 	if len(restore.Data) == 0 {
 		log.Info("no restore data available, wakeup operation is no-op")
-		return nil
+		return &executor.Result{Message: fmt.Sprintf("noop wakeup completed for target %s (no restore data)", spec.TargetName)}, nil
 	}
 
 	// Iterate over all operations in restore data (should be single operation for noop)
@@ -144,7 +144,7 @@ func (e *Executor) WakeUp(ctx context.Context, log logr.Logger, spec executor.Sp
 		var state RestoreState
 		if err := json.Unmarshal(stateBytes, &state); err != nil {
 			log.Error(err, "failed to unmarshal restore state", "operationId", id)
-			return fmt.Errorf("unmarshal restore state %s: %w", id, err)
+			return nil, fmt.Errorf("unmarshal restore state %s: %w", id, err)
 		}
 
 		log.Info("restore state loaded",
@@ -166,23 +166,23 @@ func (e *Executor) WakeUp(ctx context.Context, log logr.Logger, spec executor.Sp
 			log.Info("simulating wakeup failure", "failureMode", state.Parameters.FailureMode)
 
 			if state.Parameters.FailureMessage != "" {
-				return fmt.Errorf("%s (failureMode=%s)", state.Parameters.FailureMessage, state.Parameters.FailureMode)
+				return nil, fmt.Errorf("%s (failureMode=%s)", state.Parameters.FailureMessage, state.Parameters.FailureMode)
 			}
 
-			return fmt.Errorf("simulated wakeup failure (failureMode=%s)", state.Parameters.FailureMode)
+			return nil, fmt.Errorf("simulated wakeup failure (failureMode=%s)", state.Parameters.FailureMode)
 		}
 
 		select {
 		case <-ctx.Done():
 			log.Info("operation cancelled by context")
-			return ctx.Err()
+			return nil, ctx.Err()
 		case <-time.After(delay):
 			log.Info("restoration work simulation completed")
 		}
 	}
 
 	log.Info("wakeup completed")
-	return nil
+	return &executor.Result{Message: fmt.Sprintf("noop wakeup completed for target %s", spec.TargetName)}, nil
 }
 
 // parseParams parses and returns parameters with defaults applied.

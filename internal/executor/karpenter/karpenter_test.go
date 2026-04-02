@@ -151,7 +151,7 @@ func TestShutdown_InvalidParameters(t *testing.T) {
 		},
 	}
 
-	err := e.Shutdown(ctx, logr.Discard(), spec)
+	_, err := e.Shutdown(ctx, logr.Discard(), spec)
 	assert.Error(t, err)
 }
 
@@ -175,7 +175,7 @@ func TestShutdown_K8sFactoryError(t *testing.T) {
 		},
 	}
 
-	err := e.Shutdown(ctx, logr.Discard(), spec)
+	_, err := e.Shutdown(ctx, logr.Discard(), spec)
 	assert.Error(t, err)
 	assert.Contains(t, err.Error(), "build kubernetes client")
 }
@@ -202,7 +202,7 @@ func TestWakeUp_InvalidRestoreData(t *testing.T) {
 		},
 	}
 
-	err := e.WakeUp(ctx, logr.Discard(), spec, restore)
+	_, err := e.WakeUp(ctx, logr.Discard(), spec, restore)
 	assert.Error(t, err)
 }
 
@@ -233,7 +233,7 @@ func TestWakeUp_K8sFactoryError(t *testing.T) {
 		},
 	}
 
-	err := e.WakeUp(ctx, logr.Discard(), spec, restore)
+	_, err := e.WakeUp(ctx, logr.Discard(), spec, restore)
 	assert.Error(t, err)
 	assert.Contains(t, err.Error(), "build kubernetes client")
 }
@@ -299,7 +299,7 @@ func TestShutdown_DeletesNodePools(t *testing.T) {
 		},
 	}
 
-	err := e.Shutdown(ctx, logr.Discard(), spec)
+	_, err := e.Shutdown(ctx, logr.Discard(), spec)
 	assert.NoError(t, err)
 }
 
@@ -367,7 +367,7 @@ func TestShutdown_MultipleNodePools(t *testing.T) {
 		},
 	}
 
-	err := e.Shutdown(ctx, logr.Discard(), spec)
+	_, err := e.Shutdown(ctx, logr.Discard(), spec)
 	assert.NoError(t, err)
 }
 
@@ -434,7 +434,7 @@ func TestWakeUp_RestoresNodePools(t *testing.T) {
 		},
 	}
 
-	err := e.WakeUp(ctx, logr.Discard(), spec, restoreData)
+	_, err := e.WakeUp(ctx, logr.Discard(), spec, restoreData)
 	assert.NoError(t, err)
 
 	// Verify NodePool was created in the fake client
@@ -512,7 +512,7 @@ func TestShutdown_AllNodePools(t *testing.T) {
 		},
 	}
 
-	err := e.Shutdown(ctx, logr.Discard(), spec)
+	_, err := e.Shutdown(ctx, logr.Discard(), spec)
 	assert.NoError(t, err)
 }
 
@@ -568,7 +568,7 @@ func TestShutdown_WithoutAwaitCompletion(t *testing.T) {
 		},
 	}
 
-	err := e.Shutdown(ctx, logr.Discard(), spec)
+	_, err := e.Shutdown(ctx, logr.Discard(), spec)
 	assert.NoError(t, err)
 }
 

@@ -78,6 +78,19 @@ type AWSConnectorConfig = awsutil.AWSConnectorConfig
 // K8SConnectorConfig holds Kubernetes connector settings.
 type K8SConnectorConfig = k8sutil.K8SConnectorConfig
 
+// Result holds the outcome of an executor operation.
+type Result struct {
+	// Message is a human-readable summary of what the executor did.
+	// For successful operations, this describes the action taken (e.g., "scaled 3 node groups to zero").
+	// For failed operations, the error message is used instead.
+	Message string
+
+	// ElapsedMs is the wall-clock execution time in milliseconds.
+	// This field is populated by the runner after the executor returns;
+	// executor implementations should leave it at zero.
+	ElapsedMs int64
+}
+
 // Executor is the interface that all executors must implement.
 type Executor interface {
 	// Type returns the executor type identifier.
@@ -88,10 +101,12 @@ type Executor interface {
 
 	// Shutdown performs the hibernation operation.
 	// Restore data should be saved incrementally via spec.SaveRestoreData callback.
-	Shutdown(ctx context.Context, log logr.Logger, spec Spec) error
+	// Returns a Result with a summary message on success.
+	Shutdown(ctx context.Context, log logr.Logger, spec Spec) (*Result, error)
 
 	// WakeUp performs the restore operation using saved restore data.
-	WakeUp(ctx context.Context, log logr.Logger, spec Spec, restore RestoreData) error
+	// Returns a Result with a summary message on success.
+	WakeUp(ctx context.Context, log logr.Logger, spec Spec, restore RestoreData) (*Result, error)
 }
 
 // Registry holds registered executors.

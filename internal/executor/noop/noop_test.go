@@ -155,7 +155,7 @@ func TestExecutor_Shutdown(t *testing.T) {
 				},
 			}
 
-			err = e.Shutdown(ctx, logr.Discard(), spec)
+			_, err = e.Shutdown(ctx, logr.Discard(), spec)
 
 			if tt.wantErr {
 				require.Error(t, err)
@@ -226,7 +226,7 @@ func TestExecutor_WakeUp(t *testing.T) {
 				},
 			}
 
-			err = e.WakeUp(ctx, logr.Discard(), spec, restore)
+			_, err = e.WakeUp(ctx, logr.Discard(), spec, restore)
 
 			if tt.wantErr {
 				require.Error(t, err)
@@ -251,7 +251,7 @@ func TestExecutor_Shutdown_ContextCancellation(t *testing.T) {
 		},
 	}
 
-	err := e.Shutdown(ctx, logr.Discard(), spec)
+	_, err := e.Shutdown(ctx, logr.Discard(), spec)
 	require.Error(t, err)
 	assert.Equal(t, context.Canceled, err)
 }

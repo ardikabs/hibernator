@@ -325,13 +325,16 @@ func (s *state) updateExecutionStatuses(ctx context.Context,
 			for _, cond := range job.Status.Conditions {
 				if cond.Type == batchv1.JobComplete && cond.Status == corev1.ConditionTrue {
 					exec.State = hibernatorv1alpha1.StateCompleted
+					if msg := s.getTerminationMessageFromPod(ctx, &job); msg != "" {
+						exec.Message = msg
+					}
 					exec.FinishedAt = cond.LastTransitionTime.DeepCopy()
 					break
 				}
 
 				if cond.Type == batchv1.JobFailed && cond.Status == corev1.ConditionTrue {
 					exec.State = hibernatorv1alpha1.StateFailed
-					if msg := s.getDetailedErrorFromPod(ctx, &job); msg != "" {
+					if msg := s.getTerminationMessageFromPod(ctx, &job); msg != "" {
 						exec.Message = msg
 					}
 					exec.FinishedAt = cond.LastTransitionTime.DeepCopy()
@@ -403,8 +406,10 @@ func (s *state) updateExecutionStatuses(ctx context.Context,
 	}
 }
 
-// getDetailedErrorFromPod fetches the termination message from the failed pod of a job.
-func (s *state) getDetailedErrorFromPod(ctx context.Context, job *batchv1.Job) string {
+// getTerminationMessageFromPod fetches the termination message from a pod of a job.
+// This captures both error messages (from failed pods) and success messages (from completed pods)
+// written to /dev/termination-log by the runner.
+func (s *state) getTerminationMessageFromPod(ctx context.Context, job *batchv1.Job) string {
 	var podList corev1.PodList
 	if err := s.List(ctx, &podList,
 		client.InNamespace(job.Namespace),

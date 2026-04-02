@@ -12,9 +12,11 @@ import (
 	"os"
 	"time"
 
+	"github.com/go-logr/logr"
 	"github.com/go-logr/zapr"
 	"go.uber.org/zap"
 
+	"github.com/ardikabs/hibernator/internal/executor"
 	"github.com/ardikabs/hibernator/internal/version"
 	"github.com/ardikabs/hibernator/internal/wellknown"
 )
@@ -106,17 +108,37 @@ func Run(cfg *Config) error {
 	}
 	defer r.close()
 
-	if err := r.run(ctx); err != nil {
-		// Write the error message to the termination log path
-		// This allows the controller to read the specific error message from the failed pod
-		if errWrite := os.WriteFile(wellknown.TerminationLogPath, []byte(err.Error()), 0644); errWrite != nil {
-			log.Error(errWrite, "failed to write termination log")
-		}
+	var result *executor.Result
+	defer func() {
+		writeTerminationLog(log, result, err)
+	}()
 
+	result, err = r.run(ctx)
+	if err != nil {
 		log.Error(err, "execution failed")
 		return err
 	}
 
 	log.Info("execution completed successfully")
 	return nil
+}
+
+// writeTerminationLog writes the executor outcome to the Kubernetes termination log.
+// On error it writes the error message; on success it writes the executor result message.
+// This is the single place where the runner writes to /dev/termination-log,
+// allowing the controller to read the outcome from the pod's termination message.
+func writeTerminationLog(log logr.Logger, result *executor.Result, err error) {
+	var msg string
+	switch {
+	case err != nil:
+		msg = err.Error()
+	case result != nil && result.Message != "":
+		msg = result.Message
+	default:
+		msg = "execution completed successfully"
+	}
+
+	if writeErr := os.WriteFile(wellknown.TerminationLogPath, []byte(msg), 0644); writeErr != nil {
+		log.Error(writeErr, "failed to write termination log")
+	}
 }

@@ -124,7 +124,7 @@ func TestShutdown_StopInstance(t *testing.T) {
 		},
 	}
 
-	err := e.Shutdown(ctx, logr.Discard(), spec)
+	_, err := e.Shutdown(ctx, logr.Discard(), spec)
 	assert.NoError(t, err)
 
 	mockRDS.AssertExpectations(t)
@@ -162,7 +162,7 @@ func TestShutdown_StopInstanceAlreadyStopped(t *testing.T) {
 		},
 	}
 
-	err := e.Shutdown(ctx, logr.Discard(), spec)
+	_, err := e.Shutdown(ctx, logr.Discard(), spec)
 	assert.NoError(t, err)
 
 	mockRDS.AssertExpectations(t)
@@ -200,7 +200,7 @@ func TestShutdown_StopCluster(t *testing.T) {
 		},
 	}
 
-	err := e.Shutdown(ctx, logr.Discard(), spec)
+	_, err := e.Shutdown(ctx, logr.Discard(), spec)
 	assert.NoError(t, err)
 
 	mockRDS.AssertExpectations(t)
@@ -237,7 +237,7 @@ func TestShutdown_StopClusterAlreadyStopped(t *testing.T) {
 		},
 	}
 
-	err := e.Shutdown(ctx, logr.Discard(), spec)
+	_, err := e.Shutdown(ctx, logr.Discard(), spec)
 	assert.NoError(t, err)
 
 	mockRDS.AssertExpectations(t)
@@ -277,7 +277,7 @@ func TestWakeUp_StartInstance(t *testing.T) {
 		},
 	}
 
-	err := e.WakeUp(ctx, logr.Discard(), spec, executor.RestoreData{
+	_, err := e.WakeUp(ctx, logr.Discard(), spec, executor.RestoreData{
 		Data: map[string]json.RawMessage{"instance:db-instance-1": instanceState},
 	})
 	assert.NoError(t, err)
@@ -310,7 +310,7 @@ func TestWakeUp_InstanceAlreadyRunning(t *testing.T) {
 		},
 	}
 
-	err := e.WakeUp(ctx, logr.Discard(), spec, executor.RestoreData{
+	_, err := e.WakeUp(ctx, logr.Discard(), spec, executor.RestoreData{
 		Data: map[string]json.RawMessage{"instance:db-instance-1": instanceState},
 	})
 	assert.NoError(t, err)
@@ -352,7 +352,7 @@ func TestWakeUp_StartCluster(t *testing.T) {
 		},
 	}
 
-	err := e.WakeUp(ctx, logr.Discard(), spec, executor.RestoreData{
+	_, err := e.WakeUp(ctx, logr.Discard(), spec, executor.RestoreData{
 		Data: map[string]json.RawMessage{"cluster:cluster-1": clusterState},
 	})
 	assert.NoError(t, err)
@@ -385,7 +385,7 @@ func TestWakeUp_ClusterAlreadyRunning(t *testing.T) {
 		},
 	}
 
-	err := e.WakeUp(ctx, logr.Discard(), spec, executor.RestoreData{
+	_, err := e.WakeUp(ctx, logr.Discard(), spec, executor.RestoreData{
 		Data: map[string]json.RawMessage{"cluster:cluster-1": clusterState},
 	})
 	assert.NoError(t, err)
@@ -413,7 +413,7 @@ func TestWakeUp_InvalidRestoreData(t *testing.T) {
 		},
 	}
 
-	err := e.WakeUp(ctx, logr.Discard(), spec, executor.RestoreData{
+	_, err := e.WakeUp(ctx, logr.Discard(), spec, executor.RestoreData{
 		Data: map[string]json.RawMessage{
 			"invalid": []byte("invalid"),
 		},
@@ -479,7 +479,7 @@ func TestShutdown_DynamicDiscovery_TagsInstances(t *testing.T) {
 		},
 	}
 
-	err := e.Shutdown(ctx, logr.Discard(), spec)
+	_, err := e.Shutdown(ctx, logr.Discard(), spec)
 	assert.NoError(t, err)
 
 	mockRDS.AssertExpectations(t)
@@ -540,7 +540,7 @@ func TestShutdown_DynamicDiscovery_TagsClusters(t *testing.T) {
 		},
 	}
 
-	err := e.Shutdown(ctx, logr.Discard(), spec)
+	_, err := e.Shutdown(ctx, logr.Discard(), spec)
 	assert.NoError(t, err)
 
 	mockRDS.AssertExpectations(t)
@@ -650,7 +650,7 @@ func TestShutdown_DynamicDiscovery_ExcludeTags(t *testing.T) {
 		},
 	}
 
-	err := e.Shutdown(ctx, logr.Discard(), spec)
+	_, err := e.Shutdown(ctx, logr.Discard(), spec)
 	assert.NoError(t, err)
 
 	mockRDS.AssertExpectations(t)
@@ -729,7 +729,7 @@ func TestShutdown_DynamicDiscovery_IncludeAll(t *testing.T) {
 		},
 	}
 
-	err := e.Shutdown(ctx, logr.Discard(), spec)
+	_, err := e.Shutdown(ctx, logr.Discard(), spec)
 	assert.NoError(t, err)
 
 	mockRDS.AssertExpectations(t)
@@ -807,7 +807,7 @@ func TestShutdown_DynamicDiscovery_TagKeyOnly(t *testing.T) {
 		},
 	}
 
-	err := e.Shutdown(ctx, logr.Discard(), spec)
+	_, err := e.Shutdown(ctx, logr.Discard(), spec)
 	assert.NoError(t, err)
 
 	mockRDS.AssertExpectations(t)

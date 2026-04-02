@@ -108,7 +108,8 @@ func (r *runner) close() {
 }
 
 // run executes the hibernation operation.
-func (r *runner) run(ctx context.Context) error {
+// Returns the executor result and any error.
+func (r *runner) run(ctx context.Context) (*executor.Result, error) {
 	cfg := r.cfg
 	log := r.log.WithValues(
 		"operation", cfg.Operation,
@@ -133,7 +134,7 @@ func (r *runner) run(ctx context.Context) error {
 	if !ok {
 		err := fmt.Errorf("executor not found: %s", cfg.TargetType)
 		r.log.Error(err, "failed to get executor")
-		return err
+		return nil, err
 	}
 
 	// Parse target parameters
@@ -141,7 +142,7 @@ func (r *runner) run(ctx context.Context) error {
 	if cfg.TargetParams != "" {
 		if err := json.Unmarshal([]byte(cfg.TargetParams), &params); err != nil {
 			r.log.Error(err, "failed to parse target params")
-			return fmt.Errorf("parse target params: %w", err)
+			return nil, fmt.Errorf("parse target params: %w", err)
 		}
 	}
 
@@ -152,29 +153,29 @@ func (r *runner) run(ctx context.Context) error {
 	spec, flusher, err := r.buildExecutorSpec(ctx, params)
 	if err != nil {
 		r.log.Error(err, "failed to build executor spec")
-		return fmt.Errorf("build executor spec: %w", err)
+		return nil, fmt.Errorf("build executor spec: %w", err)
 	}
 
 	// Validate the spec
 	r.reportProgress(ctx, "validating", 30, "Validating executor spec")
 	if err := exec.Validate(*spec); err != nil {
 		r.log.Error(err, "spec validation failed")
-		return fmt.Errorf("validate spec: %w", err)
+		return nil, fmt.Errorf("validate spec: %w", err)
 	}
 
 	// Report progress: executing
 	r.reportProgress(ctx, "executing", 50, fmt.Sprintf("Executing %s operation", cfg.Operation))
 
 	// Execute the operation
-	durationMs, err := r.executeOperation(ctx, exec, spec, flusher)
+	result, err := r.executeOperation(ctx, exec, spec, flusher)
 
 	// Operation failure: report and return
 	if err != nil {
 		if cfg.Operation == "shutdown" {
 			r.log.Error(err, "shutdown failed")
 		}
-		r.reportCompletion(ctx, false, err.Error(), durationMs)
-		return err
+		r.reportCompletion(ctx, false, err.Error(), result.ElapsedMs)
+		return nil, err
 	}
 
 	// Report progress: finalizing
@@ -196,17 +197,20 @@ func (r *runner) run(ctx context.Context) error {
 
 	// Report completion to controller (status only, no restore data payload)
 	// The controller reads restore data from ConfigMap during wake-up
-	r.reportCompletion(ctx, true, "", durationMs)
+	r.reportCompletion(ctx, true, "", result.ElapsedMs)
 
-	return nil
+	return result, nil
 }
 
 // executeOperation runs the shutdown or wakeup operation.
 // For shutdown operations, returns a flush function to save accumulated restore data.
-func (r *runner) executeOperation(ctx context.Context, exec executor.Executor, spec *executor.Spec, flushFunc func() error) (int64, error) {
+// Returns the executor Result (always non-nil) for the caller to inspect.
+// On error the Result still carries ElapsedMs so callers can report timing.
+func (r *runner) executeOperation(ctx context.Context, exec executor.Executor, spec *executor.Spec, flushFunc func() error) (*executor.Result, error) {
 	startTime := time.Now()
 
 	var operationErr error
+	var executorResult *executor.Result
 
 	switch r.cfg.Operation {
 	case "shutdown":
@@ -223,9 +227,11 @@ func (r *runner) executeOperation(ctx context.Context, exec executor.Executor, s
 			}()
 		}
 
-		err := exec.Shutdown(ctx, r.log, *spec)
+		result, err := exec.Shutdown(ctx, r.log, *spec)
 		if err != nil {
 			operationErr = err
+		} else {
+			executorResult = result
 		}
 	case "wakeup":
 		rd, err := r.loadRestoreData(ctx)
@@ -238,22 +244,32 @@ func (r *runner) executeOperation(ctx context.Context, exec executor.Executor, s
 			r.log.Info("warning: restore data is from non-live source; restore point may be outdated.")
 		}
 
-		operationErr = exec.WakeUp(ctx, r.log, *spec, *rd)
+		result, err := exec.WakeUp(ctx, r.log, *spec, *rd)
+		if err != nil {
+			operationErr = err
+		} else {
+			executorResult = result
+		}
 	default:
 		operationErr = fmt.Errorf("unknown operation: %s", r.cfg.Operation)
 	}
 
 	duration := time.Since(startTime)
-	durationMs := duration.Milliseconds()
+
+	// Always return a non-nil result so callers can read ElapsedMs even on error.
+	if executorResult == nil {
+		executorResult = &executor.Result{}
+	}
+	executorResult.ElapsedMs = duration.Milliseconds()
 
 	if operationErr != nil {
 		r.log.Error(operationErr, "operation failed", "duration", duration)
-		return durationMs, operationErr
+		return executorResult, operationErr
 	}
 
 	r.log.Info("operation completed", "duration", duration)
 
-	return durationMs, nil
+	return executorResult, nil
 }
 
 // buildExecutorSpec constructs the executor spec from connector configuration.
