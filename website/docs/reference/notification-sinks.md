@@ -75,7 +75,7 @@ Delivers messages via the [Telegram Bot API](https://core.telegram.org/bots/api)
 !!! tip "Auto-Escaping Reserved Characters (Telegram)"
     The Telegram Bot API requires certain characters to be escaped depending on the `parse_mode`.
     Hibernator handles this automatically via the `autoEscape` template function.
-    If you write a [custom template](#custom-templates) for Telegram, use `{{ .SomeField | autoEscape }}` on any dynamic value to prevent parse errors.
+    If you write a [custom template](../user-guides/notifications.md#custom-templates) for Telegram, use `{{ .SomeField | autoEscape }}` on any dynamic value to prevent parse errors.
 
 ### Configuration
 
