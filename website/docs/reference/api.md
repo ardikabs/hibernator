@@ -10,11 +10,11 @@ Package v1alpha1 contains API Schema definitions for the hibernator v1alpha1 API
 
 ### Resource Types
 
+- CloudProvider
+- HibernateNotification
 - HibernatePlan
 - K8SCluster
 - ScheduleException
-- CloudProvider
-- HibernateNotification
 
 
 ### AWSAuth
