@@ -36,14 +36,30 @@ The configuration must be in a JSON object stored under `config` key in secret r
 ### Default Template
 
 ```gotpl
-{{ if eq .Event "Failure" -}}
-:red_circle: *Hibernation Failed*
+{{ if eq .Event "Start" -}}
+{{ if eq .Operation "shutdown" -}}
+:arrow_forward: *Hibernation Starting* ({{ len .Targets }} targets)
+{{ else -}}
+:arrow_forward: *Wake-Up Starting* ({{ len .Targets }} targets)
+{{ end -}}
 {{ else if eq .Event "Success" -}}
-:white_check_mark: *Hibernation Succeeded*
-{{ else if eq .Event "Start" -}}
-:arrow_forward: *Execution Starting*
+{{ if eq .Operation "shutdown" -}}
+:white_check_mark: *Hibernation Completed*
+{{ else -}}
+:white_check_mark: *Wake-Up Completed*
+{{ end -}}
+{{ else if eq .Event "Failure" -}}
+{{ if eq .Operation "shutdown" -}}
+:red_circle: *Hibernation Failed*
+{{ else -}}
+:red_circle: *Wake-Up Failed*
+{{ end -}}
 {{ else if eq .Event "Recovery" -}}
-:recycle: *Recovery Triggered*
+{{ if eq .Operation "shutdown" -}}
+:recycle: *Hibernation Retrying* (attempt {{ .RetryCount }})
+{{ else -}}
+:recycle: *Wake-Up Retrying* (attempt {{ .RetryCount }})
+{{ end -}}
 {{ else -}}
 :information_source: *Phase Change*
 {{ end -}}
@@ -98,14 +114,30 @@ The configuration must be in a JSON object stored under `config` key in secret r
 ### Default Template
 
 ```gotpl
-{{ if eq .Event "Failure" -}}
-🔴 <b>Hibernation Failed</b>
+{{ if eq .Event "Start" -}}
+{{ if eq .Operation "shutdown" -}}
+▶️ <b>Hibernation Starting</b> ({{ len .Targets }} targets)
+{{ else -}}
+▶️ <b>Wake-Up Starting</b> ({{ len .Targets }} targets)
+{{ end -}}
 {{ else if eq .Event "Success" -}}
-✅ <b>Hibernation Succeeded</b>
-{{ else if eq .Event "Start" -}}
-▶️ <b>Execution Starting</b>
+{{ if eq .Operation "shutdown" -}}
+✅ <b>Hibernation Completed</b>
+{{ else -}}
+✅ <b>Wake-Up Completed</b>
+{{ end -}}
+{{ else if eq .Event "Failure" -}}
+{{ if eq .Operation "shutdown" -}}
+🔴 <b>Hibernation Failed</b>
+{{ else -}}
+🔴 <b>Wake-Up Failed</b>
+{{ end -}}
 {{ else if eq .Event "Recovery" -}}
-♻️ <b>Recovery Triggered</b>
+{{ if eq .Operation "shutdown" -}}
+♻️ <b>Hibernation Retrying</b> (attempt {{ .RetryCount }})
+{{ else -}}
+♻️ <b>Wake-Up Retrying</b> (attempt {{ .RetryCount }})
+{{ end -}}
 {{ else -}}
 ℹ️ <b>Phase Change</b>
 {{ end -}}

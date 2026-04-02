@@ -61,7 +61,7 @@ type Payload struct {
 	// PreviousPhase is the plan phase before the transition (empty on Start).
 	PreviousPhase string `json:"previousPhase"`
 
-	// Operation is the current operation: "Hibernate" or "WakeUp".
+	// Operation is the current operation: "shutdown" or "wakeup".
 	Operation string `json:"operation"`
 
 	// CycleID is the current execution cycle identifier.

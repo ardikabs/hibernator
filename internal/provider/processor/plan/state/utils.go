@@ -178,7 +178,7 @@ func FindFailedUpstream(plan *hibernatorv1alpha1.HibernatePlan, targetName strin
 }
 
 // BuildOperationSummary creates a summary of the current operation from execution statuses.
-func BuildOperationSummary(clk clock.Clock, plan *hibernatorv1alpha1.HibernatePlan, operation string) *hibernatorv1alpha1.ExecutionOperationSummary {
+func BuildOperationSummary(clk clock.Clock, plan *hibernatorv1alpha1.HibernatePlan, operation hibernatorv1alpha1.PlanOperation) *hibernatorv1alpha1.ExecutionOperationSummary {
 	summary := &hibernatorv1alpha1.ExecutionOperationSummary{
 		Operation: operation,
 		Success:   true,
@@ -228,14 +228,14 @@ func IsOperationComplete(plan *hibernatorv1alpha1.HibernatePlan) bool {
 
 // JobExistsForTarget checks if a non-stale job already exists for a given target/operation/cycleID.
 // Stale runner jobs (LabelStaleRunnerJob) are excluded — their presence does not block new job dispatch.
-func JobExistsForTarget(jobs []batchv1.Job, targetName, operation, cycleID string) bool {
+func JobExistsForTarget(jobs []batchv1.Job, targetName string, operation hibernatorv1alpha1.PlanOperation, cycleID string) bool {
 	for _, job := range jobs {
 		// Skip stale runner jobs marked during retry/recovery.
 		if _, ok := job.Labels[wellknown.LabelStaleRunnerJob]; ok {
 			continue
 		}
 		if job.Labels[wellknown.LabelTarget] == targetName &&
-			job.Labels[wellknown.LabelOperation] == operation &&
+			job.Labels[wellknown.LabelOperation] == string(operation) &&
 			job.Labels[wellknown.LabelCycleID] == cycleID {
 			return true
 		}

@@ -20,6 +20,7 @@ import (
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/utils/ptr"
 
+	hibernatorv1alpha1 "github.com/ardikabs/hibernator/api/v1alpha1"
 	"github.com/ardikabs/hibernator/internal/notification/sink"
 )
 
@@ -35,8 +36,8 @@ func testPayload() sink.Payload {
 		ID:        types.NamespacedName{Namespace: "default", Name: "test-plan"},
 		Event:     "Start",
 		Timestamp: time.Date(2026, 3, 28, 10, 0, 0, 0, time.UTC),
-		Phase:     "Hibernating",
-		Operation: "Hibernate",
+		Phase:     string(hibernatorv1alpha1.PhaseHibernating),
+		Operation: string(hibernatorv1alpha1.OperationHibernate),
 		CycleID:   "abc123",
 		SinkName:  "test-sink",
 		SinkType:  "telegram",

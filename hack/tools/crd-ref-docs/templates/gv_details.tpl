@@ -1,20 +1,19 @@
-{{ define "gvDetails" -}}
+{{- define "gvDetails" -}}
+{{- $gv := . -}}
 
-## {{ .GroupVersionString }}
+## {{ $gv.GroupVersionString }}
 
-{{ .Doc }}
+{{ $gv.Doc }}
 
-{{- if .Kinds }}
-
+{{- if $gv.Kinds  }}
 ### Resource Types
-
-{{ range .Kinds -}}
-- {{ . }}
-{{ end }}
+{{- range $gv.SortedKinds }}
+- {{ $gv.TypeForKind . | markdownRenderTypeLink }}
 {{- end }}
+{{ end }}
 
-{{ range .SortedTypes -}}
+{{ range $gv.SortedTypes }}
 {{ template "type" . }}
-{{ end -}}
+{{ end }}
 
-{{ end -}}
+{{- end -}}

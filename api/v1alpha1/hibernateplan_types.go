@@ -14,10 +14,16 @@ import (
 type ExecutionStrategyType string
 
 const (
+	// StrategySequential executes targets one at a time in the order they are listed in spec.targets.
 	StrategySequential ExecutionStrategyType = "Sequential"
-	StrategyParallel   ExecutionStrategyType = "Parallel"
-	StrategyDAG        ExecutionStrategyType = "DAG"
-	StrategyStaged     ExecutionStrategyType = "Staged"
+	// StrategyParallel executes all targets concurrently, optionally bounded by MaxConcurrency.
+	StrategyParallel ExecutionStrategyType = "Parallel"
+	// StrategyDAG executes targets according to a directed acyclic graph defined by spec.execution.strategy.dependencies.
+	// Targets with no incoming edges run first; downstream targets wait for their dependencies to complete.
+	StrategyDAG ExecutionStrategyType = "DAG"
+	// StrategyStaged executes targets in explicitly defined groups (stages) in order.
+	// Within each stage targets may run sequentially or in parallel depending on stage.parallel.
+	StrategyStaged ExecutionStrategyType = "Staged"
 )
 
 // BehaviorMode defines execution behavior.
@@ -25,7 +31,11 @@ const (
 type BehaviorMode string
 
 const (
-	BehaviorStrict     BehaviorMode = "Strict"
+	// BehaviorStrict halts execution immediately when any target fails.
+	// No further targets (or stages) are started; the plan transitions to Error.
+	BehaviorStrict BehaviorMode = "Strict"
+	// BehaviorBestEffort continues executing remaining targets even if some fail.
+	// Failed targets are recorded in status but do not block others.
 	BehaviorBestEffort BehaviorMode = "BestEffort"
 )
 
@@ -34,23 +44,36 @@ const (
 type PlanPhase string
 
 const (
-	PhasePending     PlanPhase = "Pending"
-	PhaseActive      PlanPhase = "Active"
+	// PhasePending is the initial phase before the plan has been fully initialized by the controller.
+	PhasePending PlanPhase = "Pending"
+	// PhaseActive means the plan is healthy and within an active (non-off-hour) window.
+	// The controller monitors the schedule and will transition to Hibernating when the off-hour window begins.
+	PhaseActive PlanPhase = "Active"
+	// PhaseHibernating means a shutdown operation is in progress.
+	// Runner Jobs are being dispatched to stop the configured targets.
 	PhaseHibernating PlanPhase = "Hibernating"
-	PhaseHibernated  PlanPhase = "Hibernated"
-	PhaseWakingUp    PlanPhase = "WakingUp"
-	PhaseSuspended   PlanPhase = "Suspended"
-	PhaseError       PlanPhase = "Error"
+	// PhaseHibernated means all targets have been successfully shut down.
+	// The plan stays in this phase until the off-hour window ends, then transitions to WakingUp.
+	PhaseHibernated PlanPhase = "Hibernated"
+	// PhaseWakingUp means a wakeup (restore) operation is in progress.
+	// Runner Jobs are being dispatched to restore targets using persisted restore data.
+	PhaseWakingUp PlanPhase = "WakingUp"
+	// PhaseSuspended means the plan has been administratively paused via spec.suspend=true.
+	// No schedule evaluation or execution occurs while suspended.
+	PhaseSuspended PlanPhase = "Suspended"
+	// PhaseError means an execution operation failed and all configured retries have been exhausted.
+	// Manual intervention or the retry-now annotation is required to recover.
+	PhaseError PlanPhase = "Error"
 )
 
 // PlanOperation identifies the type of operation a HibernatePlan is currently executing.
 // Stored in HibernatePlanStatus.CurrentOperation and used as the LabelOperation value on runner Jobs.
-type PlanOperation = string
+// +kubebuilder:validation:Enum=shutdown;wakeup
+type PlanOperation string
 
 const (
 	// OperationHibernate is the operation value for a hibernate (shutdown) cycle.
 	OperationHibernate PlanOperation = "shutdown"
-
 	// OperationWakeUp is the operation value for a wakeup cycle.
 	OperationWakeUp PlanOperation = "wakeup"
 )
@@ -321,7 +344,7 @@ type ExecutionStatus struct {
 // ExecutionOperationSummary summarizes the results of a shutdown or wakeup operation.
 type ExecutionOperationSummary struct {
 	// Operation is the operation type (shutdown or wakeup).
-	Operation string `json:"operation"`
+	Operation PlanOperation `json:"operation"`
 
 	// StartTime is when the operation started.
 	StartTime metav1.Time `json:"startTime"`
@@ -420,7 +443,7 @@ type HibernatePlanStatus struct {
 	// CurrentOperation tracks the current operation type (shutdown or wakeup).
 	// Used to determine which phase to transition to when stages complete.
 	// +optional
-	CurrentOperation string `json:"currentOperation,omitempty"`
+	CurrentOperation PlanOperation `json:"currentOperation,omitempty"`
 
 	// ExecutionHistory records historical execution cycles (max 5).
 	// Each cycle contains shutdown and wakeup operation summaries.

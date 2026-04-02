@@ -755,7 +755,7 @@ var _ = Describe("Execution Strategy E2E", func() {
 				var jl batchv1.JobList
 				_ = k8sClient.List(ctx, &jl, client.InNamespace(testNamespace), client.MatchingLabels{
 					wellknown.LabelPlan:      plan.Name,
-					wellknown.LabelOperation: hibernatorv1alpha1.OperationWakeUp,
+					wellknown.LabelOperation: string(hibernatorv1alpha1.OperationWakeUp),
 					wellknown.LabelTarget:    "sw-target-1",
 				})
 				return len(jl.Items)

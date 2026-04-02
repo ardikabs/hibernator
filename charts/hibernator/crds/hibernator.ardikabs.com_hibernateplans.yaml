@@ -259,6 +259,9 @@ spec:
                 description: |-
                   CurrentOperation tracks the current operation type (shutdown or wakeup).
                   Used to determine which phase to transition to when stages complete.
+                enum:
+                - shutdown
+                - wakeup
                 type: string
               currentStageIndex:
                 description: |-
@@ -342,6 +345,9 @@ spec:
                         operation:
                           description: Operation is the operation type (shutdown or
                             wakeup).
+                          enum:
+                          - shutdown
+                          - wakeup
                           type: string
                         startTime:
                           description: StartTime is when the operation started.
@@ -412,6 +418,9 @@ spec:
                         operation:
                           description: Operation is the operation type (shutdown or
                             wakeup).
+                          enum:
+                          - shutdown
+                          - wakeup
                           type: string
                         startTime:
                           description: StartTime is when the operation started.

@@ -49,13 +49,13 @@ func EventuallyPhase(ctx context.Context, k8sClient client.Client, plan *hiberna
 }
 
 // EventuallyJobCreated waits until a Job with specified labels is created.
-func EventuallyJobCreated(ctx context.Context, k8sClient client.Client, namespace, planName, operation, target string) *batchv1.Job {
+func EventuallyJobCreated(ctx context.Context, k8sClient client.Client, namespace, planName string, operation hibernatorv1alpha1.PlanOperation, target string) *batchv1.Job {
 	var job batchv1.Job
 	Eventually(func() bool {
 		var jobList batchv1.JobList
 		_ = k8sClient.List(ctx, &jobList, client.InNamespace(namespace), client.MatchingLabels{
 			wellknown.LabelPlan:      planName,
-			wellknown.LabelOperation: operation,
+			wellknown.LabelOperation: string(operation),
 			wellknown.LabelTarget:    target,
 		})
 
@@ -79,13 +79,13 @@ func EventuallyJobCreated(ctx context.Context, k8sClient client.Client, namespac
 }
 
 // EventuallyMultiJobsCreated waits until few Jobs with target labels are created.
-func EventuallyMultiJobsCreated(ctx context.Context, k8sClient client.Client, namespace, planName, operation string, targets ...string) []*batchv1.Job {
+func EventuallyMultiJobsCreated(ctx context.Context, k8sClient client.Client, namespace, planName string, operation hibernatorv1alpha1.PlanOperation, targets ...string) []*batchv1.Job {
 	jobs := []*batchv1.Job{}
 	Eventually(func() bool {
 		var jobList batchv1.JobList
 		_ = k8sClient.List(ctx, &jobList, client.InNamespace(namespace), client.MatchingLabels{
 			wellknown.LabelPlan:      planName,
-			wellknown.LabelOperation: operation,
+			wellknown.LabelOperation: string(operation),
 		})
 
 		for _, item := range jobList.Items {

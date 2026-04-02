@@ -136,7 +136,7 @@ func buildPayload(plan *hibernatorv1alpha1.HibernatePlan, event hibernatorv1alph
 		Event:        string(event),
 		Timestamp:    clk(),
 		Phase:        string(plan.Status.Phase),
-		Operation:    plan.Status.CurrentOperation,
+		Operation:    string(plan.Status.CurrentOperation),
 		CycleID:      plan.Status.CurrentCycleID,
 		ErrorMessage: plan.Status.ErrorMessage,
 		RetryCount:   plan.Status.RetryCount,
