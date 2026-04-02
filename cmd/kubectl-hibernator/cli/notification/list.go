@@ -11,8 +11,6 @@ import (
 	"os"
 
 	"github.com/spf13/cobra"
-	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
-	"k8s.io/apimachinery/pkg/labels"
 	"k8s.io/apimachinery/pkg/types"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
@@ -98,14 +96,4 @@ func runList(ctx context.Context, opts *listOptions) error {
 	out := &printers.NotifListOutput{Items: items}
 	d := &printers.Dispatcher{JSON: opts.root.JsonOutput}
 	return d.PrintObj(out, os.Stdout)
-}
-
-// selectorMatchesPlan evaluates whether a notification's label selector matches
-// the given plan labels. This mirrors the controller's runtime matching logic.
-func selectorMatchesPlan(selector metav1.LabelSelector, planLabels map[string]string) bool {
-	sel, err := metav1.LabelSelectorAsSelector(&selector)
-	if err != nil {
-		return false
-	}
-	return sel.Matches(labels.Set(planLabels))
 }

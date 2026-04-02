@@ -243,7 +243,7 @@ func runSendLocal(ctx context.Context, opts *sendOptions) error {
 
 // executeSend is the shared send/dry-run logic for both cluster and local modes.
 func executeSend(ctx context.Context, opts *sendOptions, sinkType, sinkName string, configBytes []byte, customTemplate *string, payload sink.Payload) error {
-	logger := logr.FromSlogHandler(slog.NewJSONHandler(os.Stdout, &slog.HandlerOptions{
+	logger := logr.FromSlogHandler(slog.NewJSONHandler(os.Stderr, &slog.HandlerOptions{
 		Level: slog.LevelDebug,
 	}))
 	tmplEngine := notification.NewTemplateEngine(logger)
@@ -317,7 +317,7 @@ func buildPayloadFromPlanFile(opts *sendOptions, targetSink hibernatorv1alpha1.N
 	if err := yaml.UnmarshalStrict(data, &plan); err != nil {
 		// Fall back to JSON if YAML strict fails
 		if jsonErr := json.Unmarshal(data, &plan); jsonErr != nil {
-			return sink.Payload{}, fmt.Errorf("failed to parse plan file %q: %w", opts.planFile, err)
+			return sink.Payload{}, fmt.Errorf("failed to parse plan file %q (YAML: %v, JSON: %w)", opts.planFile, err, jsonErr)
 		}
 	}
 
@@ -480,6 +480,7 @@ func buildPayload(ctx context.Context, c client.Client, ns string, opts *sendOpt
 	return buildSyntheticPayload(opts, ns, targetSink), nil
 }
 
+// buildPayloadFromPlan loads the plan from the cluster and constructs a sink.Payload from its status.
 func buildPayloadFromPlan(ctx context.Context, c client.Client, ns string, opts *sendOptions, targetSink hibernatorv1alpha1.NotificationSink) (sink.Payload, error) {
 	var plan hibernatorv1alpha1.HibernatePlan
 	if err := c.Get(ctx, types.NamespacedName{Name: opts.planName, Namespace: ns}, &plan); err != nil {
@@ -522,15 +523,16 @@ func buildPayloadFromPlan(ctx context.Context, c client.Client, ns string, opts 
 	}, nil
 }
 
+// buildSyntheticPayload constructs a demo payload with realistic fields for testing and dry-run purposes.
 func buildSyntheticPayload(opts *sendOptions, ns string, targetSink hibernatorv1alpha1.NotificationSink) sink.Payload {
 	phase := opts.phase
 	if phase == "" {
 		phase = defaultPhaseForEvent(opts.event)
 	}
 
-	operation := "Hibernate"
+	operation := string(hibernatorv1alpha1.OperationHibernate)
 	if phase == string(hibernatorv1alpha1.PhaseActive) || phase == string(hibernatorv1alpha1.PhaseWakingUp) {
-		operation = "WakeUp"
+		operation = string(hibernatorv1alpha1.OperationWakeUp)
 	}
 
 	p := sink.Payload{
