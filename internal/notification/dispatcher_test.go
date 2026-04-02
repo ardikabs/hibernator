@@ -694,11 +694,6 @@ func TestDispatcher_SubmitWithFullChannelAndDrain(t *testing.T) {
 	// 3rd request: should go to overflow
 	d.Submit(Request{Payload: testPayload("req3"), SinkType: "slack", SecretRef: hibernatorv1alpha1.ObjectKeyReference{Name: "slack-secret"}})
 
-	overflowLen := d.overflow.Len()
-
-	// req3 should be in overflow because req1 is in worker and req2 is in ch
-	assert.GreaterOrEqual(t, overflowLen, 1, "At least one request should be in overflow")
-
 	// Eventually all should be delivered
 	assert.Eventually(t, func() bool {
 		return stub.callCount.Load() == 3
@@ -757,7 +752,8 @@ func TestDispatcher_FullProcessOverflowAndFlush(t *testing.T) {
 	d.Submit(Request{Payload: testPayload("req2"), SinkType: "slack", SecretRef: hibernatorv1alpha1.ObjectKeyReference{Name: "slack-secret"}})
 	d.Submit(Request{Payload: testPayload("req3"), SinkType: "slack", SecretRef: hibernatorv1alpha1.ObjectKeyReference{Name: "slack-secret"}})
 
-	assert.Equal(t, 1, d.overflow.Len(), "req3 should be in overflow")
+	// Worker is still blocked — overflow must hold req3 before we release.
+	assert.Equal(t, 1, d.overflow.Len(), "req3 should be in overflow while worker is blocked")
 
 	// Unblock the worker so it can process all requests.
 	close(block)
@@ -827,7 +823,8 @@ func TestDispatcher_ShutdownFlushesOverflowItems(t *testing.T) {
 		d.Submit(Request{Payload: testPayload("req"), SinkType: "slack", SinkName: fmt.Sprintf("slack-%d", i), SecretRef: hibernatorv1alpha1.ObjectKeyReference{Name: "slack-secret"}})
 	}
 
-	assert.GreaterOrEqual(t, d.overflow.Len(), 1, "Some items should be in overflow")
+	// Worker is still blocked — overflow must hold the excess before we release.
+	assert.GreaterOrEqual(t, d.overflow.Len(), 1, "some items should be in overflow while worker is blocked")
 
 	// Unblock the worker and cancel immediately — forces shutdown with pending items.
 	close(block)

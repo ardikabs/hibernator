@@ -156,7 +156,7 @@ test-unit: $(COVERAGE_DIR) ## Run unit tests.
 		-cover \
 		-coverprofile=$(COVERAGE_PROFILE) \
 		-covermode=atomic \
-		-v 2>&1
+		-count=1
 
 .PHONY: test-all
 test-all: test test-e2e ## Run all tests (unit + e2e).
@@ -173,7 +173,7 @@ test-pkg: ## Run tests for a specific package. Usage: make test-pkg PKG=./intern
 		exit 1; \
 	fi
 	@echo "$(CYAN)Running tests for $(PKG)...$(RESET)"
-	@$(GOCMD) test $(PKG) -v -race -coverprofile=$(COVERAGE_DIR)/pkg-coverage.out
+	@$(GOCMD) test $(PKG) -v -race -count=1 -coverprofile=$(COVERAGE_DIR)/pkg-coverage.out
 	@$(GOCMD) tool cover -func=$(COVERAGE_DIR)/pkg-coverage.out | tail -1
 
 $(COVERAGE_DIR):

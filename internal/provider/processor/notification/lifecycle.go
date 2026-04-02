@@ -110,10 +110,10 @@ func (p *LifecycleProcessor) upsertPlanRef(log logr.Logger, notifKey types.Names
 		NamespacedName: notifKey,
 		Resource:       notif,
 		Mutator: statusprocessor.MutatorFunc[*hibernatorv1alpha1.HibernateNotification](func(n *hibernatorv1alpha1.HibernateNotification) {
-			_, alreadyPresent := lo.Find(n.Status.WatchedPlans, func(ref hibernatorv1alpha1.PlanReference) bool {
+			_, exists := lo.Find(n.Status.WatchedPlans, func(ref hibernatorv1alpha1.PlanReference) bool {
 				return ref.Name == planName
 			})
-			if !alreadyPresent {
+			if !exists {
 				n.Status.WatchedPlans = append(n.Status.WatchedPlans, hibernatorv1alpha1.PlanReference{Name: planName})
 				sort.Slice(n.Status.WatchedPlans, func(i, j int) bool {
 					return n.Status.WatchedPlans[i].Name < n.Status.WatchedPlans[j].Name

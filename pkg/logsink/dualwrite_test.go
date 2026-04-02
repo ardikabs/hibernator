@@ -10,7 +10,6 @@ import (
 	"errors"
 	"sync"
 	"testing"
-	"time"
 
 	"github.com/go-logr/logr"
 )
@@ -143,13 +142,10 @@ func TestDualWriteSink_Info_DualWrite(t *testing.T) {
 	sender := newMockSender()
 
 	sink := NewDualWriteSink(underlying, sender)
-	defer sink.Stop()
 
 	log := logr.New(sink)
 	log.Info("test message", "key", "value")
-
-	// Wait for async processing
-	time.Sleep(50 * time.Millisecond)
+	sink.Stop()
 
 	// Check underlying sink received the log
 	infoCalls := underlying.getInfoCalls()
@@ -181,14 +177,11 @@ func TestDualWriteSink_Error_DualWrite(t *testing.T) {
 	sender := newMockSender()
 
 	sink := NewDualWriteSink(underlying, sender)
-	defer sink.Stop()
 
 	log := logr.New(sink)
 	testErr := errors.New("test error")
 	log.Error(testErr, "error occurred", "key", "value")
-
-	// Wait for async processing
-	time.Sleep(50 * time.Millisecond)
+	sink.Stop()
 
 	// Check underlying sink received the error
 	errorCalls := underlying.getErrorCalls()
@@ -217,7 +210,6 @@ func TestDualWriteSink_LevelMapping(t *testing.T) {
 	sender := newMockSender()
 
 	sink := NewDualWriteSink(underlying, sender)
-	defer sink.Stop()
 
 	log := logr.New(sink)
 
@@ -226,9 +218,7 @@ func TestDualWriteSink_LevelMapping(t *testing.T) {
 
 	// V(1) should map to DEBUG
 	log.V(1).Info("debug message")
-
-	// Wait for async processing
-	time.Sleep(50 * time.Millisecond)
+	sink.Stop()
 
 	sentLogs := sender.getLogs()
 	if len(sentLogs) != 2 {
@@ -248,7 +238,6 @@ func TestDualWriteSink_LevelFiltering(t *testing.T) {
 	sender := newMockSender()
 
 	sink := NewDualWriteSink(underlying, sender)
-	defer sink.Stop()
 
 	log := logr.New(sink)
 
@@ -260,9 +249,7 @@ func TestDualWriteSink_LevelFiltering(t *testing.T) {
 	if log.V(1).Enabled() {
 		t.Error("expected V(1) to be disabled")
 	}
-
-	// Wait for async processing
-	time.Sleep(50 * time.Millisecond)
+	sink.Stop()
 
 	sentLogs := sender.getLogs()
 	if len(sentLogs) != 1 {
@@ -275,13 +262,10 @@ func TestDualWriteSink_WithValues(t *testing.T) {
 	sender := newMockSender()
 
 	sink := NewDualWriteSink(underlying, sender)
-	defer sink.Stop()
 
 	log := logr.New(sink).WithValues("component", "test")
 	log.Info("with values message")
-
-	// Wait for async processing
-	time.Sleep(50 * time.Millisecond)
+	sink.Stop()
 
 	sentLogs := sender.getLogs()
 	if len(sentLogs) != 1 {
@@ -297,13 +281,10 @@ func TestDualWriteSink_WithName(t *testing.T) {
 	sender := newMockSender()
 
 	sink := NewDualWriteSink(underlying, sender)
-	defer sink.Stop()
 
 	log := logr.New(sink).WithName("mylogger")
 	log.Info("named logger message")
-
-	// Wait for async processing
-	time.Sleep(50 * time.Millisecond)
+	sink.Stop()
 
 	sentLogs := sender.getLogs()
 	if len(sentLogs) != 1 {
@@ -329,8 +310,7 @@ func TestDualWriteSink_ChannelOverflow(t *testing.T) {
 		log.Info("overflow test", "index", i)
 	}
 
-	// Wait for async processing
-	time.Sleep(100 * time.Millisecond)
+	sink.Stop()
 
 	// All logs should reach underlying sink
 	infoCalls := underlying.getInfoCalls()
@@ -358,9 +338,6 @@ func TestDualWriteSink_GracefulShutdown(t *testing.T) {
 	// Stop should drain the channel
 	sink.Stop()
 
-	// Wait a bit to ensure processing is complete
-	time.Sleep(50 * time.Millisecond)
-
 	sentLogs := sender.getLogs()
 	if len(sentLogs) != 1 {
 		t.Errorf("expected 1 sent log after graceful shutdown, got %d", len(sentLogs))
@@ -379,9 +356,7 @@ func TestDualWriteSink_NilSender(t *testing.T) {
 	// Should not panic
 	log.Info("test with nil sender")
 	log.Error(errors.New("test"), "error with nil sender")
-
-	// Wait for async processing
-	time.Sleep(50 * time.Millisecond)
+	sink.Stop()
 
 	// Underlying should still receive logs
 	infoCalls := underlying.getInfoCalls()
