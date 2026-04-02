@@ -16,8 +16,8 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
-	"k8s.io/apimachinery/pkg/types"
 
+	hibernatorv1alpha1 "github.com/ardikabs/hibernator/api/v1alpha1"
 	"github.com/ardikabs/hibernator/internal/notification/sink"
 )
 
@@ -34,11 +34,14 @@ func (r *stubRenderer) Render(ctx context.Context, tmplStr string, payload sink.
 
 func testPayload() sink.Payload {
 	return sink.Payload{
-		ID:        types.NamespacedName{Namespace: "default", Name: "test-plan"},
+		Plan: sink.PlanInfo{
+			Name:      "test-plan",
+			Namespace: "default",
+		},
 		Event:     "Start",
 		Timestamp: time.Date(2026, 3, 28, 10, 0, 0, 0, time.UTC),
-		Phase:     "Hibernating",
-		Operation: "Hibernate",
+		Phase:     string(hibernatorv1alpha1.PhaseHibernating),
+		Operation: string(hibernatorv1alpha1.OperationHibernate),
 		CycleID:   "abc123",
 		SinkName:  "test-sink",
 		SinkType:  "webhook",
@@ -73,7 +76,7 @@ func TestSendWithoutRenderer(t *testing.T) {
 
 	require.NoError(t, err)
 	assert.Equal(t, "application/json", receivedContentType)
-	assert.Equal(t, "test-plan", receivedBody.Context.ID.Name)
+	assert.Equal(t, "test-plan", receivedBody.Context.Plan.Name)
 	assert.Equal(t, "Start", receivedBody.Context.Event)
 	assert.Empty(t, receivedBody.Rendered, "rendered field should be empty when enable_renderer is false")
 }
@@ -227,4 +230,50 @@ func TestSendContextCancellation(t *testing.T) {
 
 	err := s.Send(ctx, testPayload(), sink.SendOptions{Config: cfg})
 	require.Error(t, err)
+}
+
+func TestSendWithConnectorInfo(t *testing.T) {
+	var receivedBody webhookBody
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		body, err := io.ReadAll(r.Body)
+		require.NoError(t, err)
+		require.NoError(t, json.Unmarshal(body, &receivedBody))
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer server.Close()
+
+	cfg, _ := json.Marshal(config{URL: server.URL})
+	s := New(nil, WithHTTPClient(&http.Client{Timeout: 5 * time.Second}))
+
+	p := testPayload()
+	p.Targets = []sink.TargetInfo{
+		{
+			Name:     "eks-prod",
+			Executor: "eks",
+			State:    "Completed",
+			Connector: sink.ConnectorInfo{
+				Kind:        "K8SCluster",
+				Name:        "prod-cluster",
+				Provider:    "aws",
+				AccountID:   "123456789012",
+				Region:      "us-east-1",
+				ClusterName: "prod-eks",
+			},
+		},
+	}
+
+	err := s.Send(context.Background(), p, sink.SendOptions{Config: cfg})
+
+	require.NoError(t, err)
+	require.Len(t, receivedBody.Context.Targets, 1)
+
+	target := receivedBody.Context.Targets[0]
+	assert.Equal(t, "eks-prod", target.Name)
+	assert.Equal(t, "K8SCluster", target.Connector.Kind)
+	assert.Equal(t, "prod-cluster", target.Connector.Name)
+	assert.Equal(t, "aws", target.Connector.Provider)
+	assert.Equal(t, "123456789012", target.Connector.AccountID)
+	assert.Equal(t, "us-east-1", target.Connector.Region)
+	assert.Equal(t, "prod-eks", target.Connector.ClusterName)
 }

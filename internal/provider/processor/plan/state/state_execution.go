@@ -40,7 +40,7 @@ import (
 func (s *state) execute(
 	ctx context.Context,
 	log logr.Logger,
-	operation string,
+	operation hibernatorv1alpha1.PlanOperation,
 	reverse bool,
 	onAdvanceStageCallback func(int),
 	onFinalizeCallback func(context.Context, scheduler.ExecutionPlan),
@@ -129,7 +129,7 @@ func (s *state) executeForStage(
 	plan *hibernatorv1alpha1.HibernatePlan,
 	jobs []batchv1.Job,
 	stage scheduler.ExecutionStage,
-	operation string,
+	operation hibernatorv1alpha1.PlanOperation,
 ) (StateResult, error) {
 	runningCount := CountRunningJobsInStage(jobs, stage)
 	maxConcurrency := stage.MaxConcurrency
@@ -247,7 +247,7 @@ func (s *state) getCurrentCycleJobs(ctx context.Context, plan *hibernatorv1alpha
 		client.MatchingLabels{
 			wellknown.LabelPlan:      plan.Name,
 			wellknown.LabelCycleID:   plan.Status.CurrentCycleID,
-			wellknown.LabelOperation: plan.Status.CurrentOperation,
+			wellknown.LabelOperation: string(plan.Status.CurrentOperation),
 		},
 	); err != nil {
 		return nil, err
@@ -350,10 +350,10 @@ func (s *state) updateExecutionStatuses(ctx context.Context,
 				if exec.State == hibernatorv1alpha1.StateFailed {
 					status = "failed"
 				}
-				metrics.ExecutionTotal.WithLabelValues(s.Key.String(), operation, exec.Executor, status).Inc()
+				metrics.ExecutionTotal.WithLabelValues(s.Key.String(), string(operation), exec.Executor, status).Inc()
 				if exec.StartedAt != nil && exec.FinishedAt != nil {
 					duration := exec.FinishedAt.Sub(exec.StartedAt.Time).Seconds()
-					metrics.ExecutionDuration.WithLabelValues(s.Key.String(), operation, exec.Executor, status).Observe(duration)
+					metrics.ExecutionDuration.WithLabelValues(s.Key.String(), string(operation), exec.Executor, status).Observe(duration)
 				}
 			}
 
@@ -487,7 +487,7 @@ func (s *state) buildExecutionPlan(plan *hibernatorv1alpha1.HibernatePlan, rever
 
 // CreateRunnerJob creates a Kubernetes Job for executing a target.
 func (s *state) createRunnerJob(ctx context.Context, log logr.Logger, clk clock.Clock,
-	plan *hibernatorv1alpha1.HibernatePlan, target *hibernatorv1alpha1.Target, operation string,
+	plan *hibernatorv1alpha1.HibernatePlan, target *hibernatorv1alpha1.Target, operation hibernatorv1alpha1.PlanOperation,
 	controlPlaneEndpoint, runnerImage, runnerServiceAccount string) error {
 
 	ts := fmt.Sprintf("%d", clk.Now().Unix())
@@ -525,7 +525,7 @@ func (s *state) createRunnerJob(ctx context.Context, log logr.Logger, clk clock.
 			Namespace:    plan.Namespace,
 			Labels: map[string]string{
 				wellknown.LabelCycleID:     plan.Status.CurrentCycleID,
-				wellknown.LabelOperation:   operation,
+				wellknown.LabelOperation:   string(operation),
 				wellknown.LabelPlan:        plan.Name,
 				wellknown.LabelExecutionID: executionID,
 				wellknown.LabelExecutor:    target.Type,
@@ -543,7 +543,7 @@ func (s *state) createRunnerJob(ctx context.Context, log logr.Logger, clk clock.
 				ObjectMeta: metav1.ObjectMeta{
 					Labels: map[string]string{
 						wellknown.LabelCycleID:     plan.Status.CurrentCycleID,
-						wellknown.LabelOperation:   operation,
+						wellknown.LabelOperation:   string(operation),
 						wellknown.LabelPlan:        plan.Name,
 						wellknown.LabelExecutionID: executionID,
 						wellknown.LabelExecutor:    target.Type,
@@ -562,7 +562,7 @@ func (s *state) createRunnerJob(ctx context.Context, log logr.Logger, clk clock.
 							Name:  "runner",
 							Image: runnerImage,
 							Args: []string{
-								"--operation", operation,
+								"--operation", string(operation),
 								"--target", target.Name,
 								"--target-type", target.Type,
 								"--plan", plan.Name,

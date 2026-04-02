@@ -75,6 +75,7 @@ func (state *idleState) transitionToHibernating(log logr.Logger) (StateResult, e
 			Target:   t.Name,
 			Executor: t.Type,
 			State:    hibernatorv1alpha1.StatePending,
+			Message:  "Target pending hibernation",
 		}
 	}
 
@@ -86,7 +87,7 @@ func (state *idleState) transitionToHibernating(log logr.Logger) (StateResult, e
 			// PreHook sees pre-mutation state — override with target values.
 			payload := buildPayload(p, hibernatorv1alpha1.EventStart, state.Clock.Now)
 			payload.Phase = string(hibernatorv1alpha1.PhaseHibernating)
-			payload.Operation = hibernatorv1alpha1.OperationHibernate
+			payload.Operation = string(hibernatorv1alpha1.OperationHibernate)
 			payload.CycleID = cycleID
 			return payload
 		}),
@@ -117,6 +118,7 @@ func (state *idleState) transitionToWakingUp(log logr.Logger) (StateResult, erro
 			Target:   t.Name,
 			Executor: t.Type,
 			State:    hibernatorv1alpha1.StatePending,
+			Message:  "Target pending wakeup",
 		}
 	}
 
@@ -128,7 +130,7 @@ func (state *idleState) transitionToWakingUp(log logr.Logger) (StateResult, erro
 			// PreHook sees pre-mutation state — override with target values.
 			payload := buildPayload(p, hibernatorv1alpha1.EventStart, state.Clock.Now)
 			payload.Phase = string(hibernatorv1alpha1.PhaseWakingUp)
-			payload.Operation = hibernatorv1alpha1.OperationWakeUp
+			payload.Operation = string(hibernatorv1alpha1.OperationWakeUp)
 			return payload
 		}),
 		Mutator: statusprocessor.MutatorFunc[*hibernatorv1alpha1.HibernatePlan](func(p *hibernatorv1alpha1.HibernatePlan) {

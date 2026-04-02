@@ -344,10 +344,10 @@ func TestIsOperationComplete_Empty_True(t *testing.T) {
 // JobExistsForTarget
 // ---------------------------------------------------------------------------
 
-func makeTestJob(target, operation, cycleID string, stale bool) batchv1.Job {
+func makeTestJob(target string, operation hibernatorv1alpha1.PlanOperation, cycleID string, stale bool) batchv1.Job {
 	labels := map[string]string{
 		wellknown.LabelTarget:    target,
-		wellknown.LabelOperation: operation,
+		wellknown.LabelOperation: string(operation),
 		wellknown.LabelCycleID:   cycleID,
 	}
 	if stale {

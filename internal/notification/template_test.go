@@ -12,18 +12,21 @@ import (
 
 	"github.com/go-logr/logr"
 	"github.com/stretchr/testify/assert"
-	"github.com/stretchr/testify/require"
-	"k8s.io/apimachinery/pkg/types"
+
+	hibernatorv1alpha1 "github.com/ardikabs/hibernator/api/v1alpha1"
 )
 
 func testSinkPayload(event string) Payload {
 	return Payload{
-		ID:        types.NamespacedName{Namespace: "default", Name: "test-plan"},
-		Labels:    map[string]string{"env": "staging"},
+		Plan: PlanInfo{
+			Name:      "test-plan",
+			Namespace: "default",
+			Labels:    map[string]string{"env": "staging"},
+		},
 		Event:     event,
 		Timestamp: time.Date(2026, 3, 28, 10, 0, 0, 0, time.UTC),
-		Phase:     "Hibernating",
-		Operation: "Hibernate",
+		Phase:     string(hibernatorv1alpha1.PhaseHibernating),
+		Operation: string(hibernatorv1alpha1.OperationHibernate),
 		CycleID:   "abc123",
 		SinkName:  "test-sink",
 		SinkType:  "slack",
@@ -75,7 +78,7 @@ func TestRendererRenderInvalidTemplateFallsBack(t *testing.T) {
 
 	// Falls back to plain text.
 	assert.Contains(t, msg, "[Start]")
-	assert.Contains(t, msg, "Hibernate")
+	assert.Contains(t, msg, hibernatorv1alpha1.OperationHibernate)
 	assert.Contains(t, msg, "test-plan")
 }
 
@@ -104,14 +107,19 @@ func TestRendererRenderWithError(t *testing.T) {
 	assert.Equal(t, "Error: connection refused (retry 3)", msg)
 }
 
-func TestPayloadToContext(t *testing.T) {
+func TestPayloadTemplateAccess(t *testing.T) {
+	engine := NewTemplateEngine(logr.Discard())
+
 	p := Payload{
-		ID:            types.NamespacedName{Namespace: "prod", Name: "plan-a"},
-		Labels:        map[string]string{"env": "prod"},
-		Event:         "Failure",
-		Phase:         "Error",
-		PreviousPhase: "Hibernating",
-		Operation:     "Hibernate",
+		Plan: PlanInfo{
+			Name:      "plan-a",
+			Namespace: "prod",
+			Labels:    map[string]string{"env": "prod"},
+		},
+		Event:         string(hibernatorv1alpha1.EventFailure),
+		Phase:         string(hibernatorv1alpha1.PhaseError),
+		PreviousPhase: string(hibernatorv1alpha1.PhaseHibernating),
+		Operation:     string(hibernatorv1alpha1.OperationHibernate),
 		CycleID:       "c1",
 		ErrorMessage:  "timeout",
 		RetryCount:    2,
@@ -122,31 +130,19 @@ func TestPayloadToContext(t *testing.T) {
 		},
 	}
 
-	nc := payloadToContext(p)
+	tmpl := `{{ .Plan.Name }} {{ .Plan.Namespace }} {{ .Phase }} {{ .Operation }}`
+	msg := engine.Render(context.Background(), tmpl, p)
 
-	assert.Equal(t, "plan-a", nc.Plan.Name)
-	assert.Equal(t, "prod", nc.Plan.Namespace)
-	assert.Equal(t, map[string]string{"env": "prod"}, nc.Plan.Labels)
-	assert.Equal(t, "Failure", nc.Event)
-	assert.Equal(t, "Error", nc.Phase)
-	assert.Equal(t, "Hibernating", nc.PreviousPhase)
-	assert.Equal(t, "Hibernate", nc.Operation)
-	assert.Equal(t, "c1", nc.CycleID)
-	assert.Equal(t, "timeout", nc.ErrorMessage)
-	assert.Equal(t, int32(2), nc.RetryCount)
-	assert.Equal(t, "slack-alerts", nc.SinkName)
-	assert.Equal(t, "slack", nc.SinkType)
-	require.Len(t, nc.Targets, 1)
-	assert.Equal(t, "db", nc.Targets[0].Name)
+	assert.Equal(t, "plan-a prod Error shutdown", msg)
 }
 
 func TestPlainFallback(t *testing.T) {
 	engine := NewTemplateEngine(logr.Discard())
 
-	nc := NotificationContext{
-		Event:        "Failure",
-		Phase:        "Error",
-		Operation:    "Hibernate",
+	p := Payload{
+		Event:        string(hibernatorv1alpha1.EventFailure),
+		Phase:        string(hibernatorv1alpha1.PhaseError),
+		Operation:    string(hibernatorv1alpha1.OperationHibernate),
 		ErrorMessage: "something broke",
 		Plan: PlanInfo{
 			Name:      "critical-plan",
@@ -154,26 +150,80 @@ func TestPlainFallback(t *testing.T) {
 		},
 	}
 
-	msg := engine.plainFallback(nc)
+	msg := engine.plainFallback(p)
 
-	assert.Equal(t, "[Failure] Hibernate — prod/critical-plan | Phase: Error | Error: something broke", msg)
+	assert.Equal(t, "[Failure] shutdown — prod/critical-plan | Phase: Error | Error: something broke", msg)
 }
 
 func TestPlainFallbackMinimal(t *testing.T) {
 	engine := NewTemplateEngine(logr.Discard())
 
-	nc := NotificationContext{
-		Event:     "Start",
-		Operation: "WakeUp",
+	p := Payload{
+		Event:     string(hibernatorv1alpha1.EventStart),
+		Operation: string(hibernatorv1alpha1.OperationWakeUp),
 		Plan: PlanInfo{
 			Name:      "plan-a",
 			Namespace: "ns",
 		},
 	}
 
-	msg := engine.plainFallback(nc)
+	msg := engine.plainFallback(p)
 
-	assert.Equal(t, "[Start] WakeUp — ns/plan-a", msg)
+	assert.Equal(t, "[Start] wakeup — ns/plan-a", msg)
+}
+
+func TestRendererRenderWithConnectorInfo(t *testing.T) {
+	engine := NewTemplateEngine(logr.Discard())
+
+	p := testSinkPayload("Success")
+	p.Targets = []TargetInfo{
+		{
+			Name:     "eks-prod",
+			Executor: "eks",
+			State:    "Completed",
+			Connector: ConnectorInfo{
+				Kind:        "K8SCluster",
+				Name:        "prod-cluster",
+				Provider:    "aws",
+				AccountID:   "123456789012",
+				Region:      "us-east-1",
+				ClusterName: "prod-eks",
+			},
+		},
+		{
+			Name:     "rds-main",
+			Executor: "rds",
+			State:    "Completed",
+			Connector: ConnectorInfo{
+				Kind:      "CloudProvider",
+				Name:      "aws-prod",
+				Provider:  "aws",
+				AccountID: "123456789012",
+				Region:    "us-west-2",
+			},
+		},
+	}
+
+	tmpl := `{{ range .Targets }}{{ .Name }}={{ .Connector.AccountID }}/{{ .Connector.Region }}{{ if .Connector.ClusterName }}({{ .Connector.ClusterName }}){{ end }} {{ end }}`
+	msg := engine.Render(context.Background(), tmpl, p)
+
+	assert.Contains(t, msg, "eks-prod=123456789012/us-east-1(prod-eks)")
+	assert.Contains(t, msg, "rds-main=123456789012/us-west-2")
+	assert.NotContains(t, msg, "rds-main=123456789012/us-west-2(")
+}
+
+func TestRendererRenderWithEmptyConnectorInfo(t *testing.T) {
+	engine := NewTemplateEngine(logr.Discard())
+
+	p := testSinkPayload("Success")
+	p.Targets = []TargetInfo{
+		{Name: "noop-target", Executor: "noop", State: "Completed"},
+	}
+
+	tmpl := `{{ range .Targets }}{{ .Name }}{{ if .Connector.AccountID }}:{{ .Connector.AccountID }}{{ end }}{{ end }}`
+	msg := engine.Render(context.Background(), tmpl, p)
+
+	assert.Equal(t, "noop-target", msg)
 }
 
 func TestNewTemplateEngineDoesNotPanic(t *testing.T) {

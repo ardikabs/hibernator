@@ -9,10 +9,8 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"html"
 	"net/http"
 	"strconv"
-	"text/template"
 
 	"github.com/go-telegram/bot"
 	"github.com/go-telegram/bot/models"
@@ -92,13 +90,7 @@ func (s *Sink) Send(ctx context.Context, payload sink.Payload, opts sink.SendOpt
 
 	tmpl := ptr.Deref(opts.CustomTemplate, DefaultTemplate)
 	parseMode := ptr.Deref(cfg.ParseMode, string(models.ParseModeHTML))
-	renderOpts := []sink.RenderOption{
-		sink.WithExtraFuncs(template.FuncMap{
-			"autoEscape": autoEscape(parseMode),
-		}),
-	}
-
-	content := s.renderer.Render(ctx, tmpl, payload, renderOpts...)
+	content := s.renderer.Render(ctx, tmpl, payload)
 	botOpts := []bot.Option{
 		bot.WithHTTPClient(0, s.client),
 		bot.WithSkipGetMe(),
@@ -131,14 +123,4 @@ func (s *Sink) Send(ctx context.Context, payload sink.Payload, opts sink.SendOpt
 	}
 
 	return nil
-}
-
-// autoEscape returns a function that applies the appropriate escaping based on the parse mode.
-func autoEscape(mode string) func(string) string {
-	switch models.ParseMode(mode) {
-	case models.ParseModeMarkdownV1, models.ParseModeMarkdown:
-		return bot.EscapeMarkdown
-	default:
-		return html.EscapeString
-	}
 }

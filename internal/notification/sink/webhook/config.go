@@ -8,8 +8,6 @@ package webhook
 import (
 	"time"
 
-	"k8s.io/apimachinery/pkg/types"
-
 	"github.com/ardikabs/hibernator/internal/notification/sink"
 )
 
@@ -41,10 +39,8 @@ type webhookBody struct {
 // for webhook JSON payloads. It mirrors sink.Payload with explicit JSON
 // tags on all nested types for clean, predictable serialization.
 type webhookContext struct {
-	// ID represents the identifier of the associated object.
-	ID types.NamespacedName `json:"id"`
-	// Labels are the labels of the associated object.
-	Labels map[string]string `json:"labels,omitempty"`
+	// Plan carries plan metadata.
+	Plan webhookPlanInfo `json:"plan"`
 	// Event is the hook point that triggered this notification (e.g., "Start", "Failure").
 	Event string `json:"event"`
 	// Timestamp is when the event occurred.
@@ -69,6 +65,18 @@ type webhookContext struct {
 	SinkType string `json:"sinkType"`
 }
 
+// webhookPlanInfo is the DTO representation of plan metadata for webhook JSON payloads.
+type webhookPlanInfo struct {
+	// Name is the plan name.
+	Name string `json:"name"`
+	// Namespace is the Kubernetes namespace.
+	Namespace string `json:"namespace"`
+	// Labels are the plan labels.
+	Labels map[string]string `json:"labels,omitempty"`
+	// Annotations are the plan annotations.
+	Annotations map[string]string `json:"annotations,omitempty"`
+}
+
 // webhookTargetInfo is the DTO representation of a target's execution state
 // for webhook JSON payloads. It mirrors sink.TargetInfo with explicit JSON tags.
 type webhookTargetInfo struct {
@@ -80,6 +88,27 @@ type webhookTargetInfo struct {
 	State string `json:"state"`
 	// Message provides details for the target's execution state.
 	Message string `json:"message,omitempty"`
+	// Connector carries resolved connector metadata.
+	Connector webhookConnectorInfo `json:"connector,omitempty"`
+}
+
+// webhookConnectorInfo is the DTO representation of connector metadata
+// for webhook JSON payloads.
+type webhookConnectorInfo struct {
+	// Kind is the connector type: "CloudProvider" or "K8SCluster".
+	Kind string `json:"kind,omitempty"`
+	// Name is the connector resource name.
+	Name string `json:"name,omitempty"`
+	// Provider is the cloud provider type (e.g., "aws", "gcp").
+	Provider string `json:"provider,omitempty"`
+	// AccountID is the cloud account identifier, it is relevant for AWS cloud provider.
+	AccountID string `json:"accountId,omitempty"`
+	// ProjectID is the cloud project identifier, it is relevant for GCP cloud provider.
+	ProjectID string `json:"projectId,omitempty"`
+	// Region is the cloud region.
+	Region string `json:"region,omitempty"`
+	// ClusterName is the Kubernetes cluster name.
+	ClusterName string `json:"clusterName,omitempty"`
 }
 
 // toWebhookContext converts a sink.Payload to the webhook-specific DTO.
@@ -91,11 +120,24 @@ func toWebhookContext(p sink.Payload) webhookContext {
 			Executor: t.Executor,
 			State:    t.State,
 			Message:  t.Message,
+			Connector: webhookConnectorInfo{
+				Kind:        t.Connector.Kind,
+				Name:        t.Connector.Name,
+				Provider:    t.Connector.Provider,
+				AccountID:   t.Connector.AccountID,
+				ProjectID:   t.Connector.ProjectID,
+				Region:      t.Connector.Region,
+				ClusterName: t.Connector.ClusterName,
+			},
 		}
 	}
 	return webhookContext{
-		ID:            p.ID,
-		Labels:        p.Labels,
+		Plan: webhookPlanInfo{
+			Name:        p.Plan.Name,
+			Namespace:   p.Plan.Namespace,
+			Labels:      p.Plan.Labels,
+			Annotations: p.Plan.Annotations,
+		},
 		Event:         p.Event,
 		Timestamp:     p.Timestamp,
 		Phase:         p.Phase,

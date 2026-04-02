@@ -45,10 +45,12 @@ var sinkTypes = []struct {
 		Dir:         "telegram",
 		DisplayName: "Telegram",
 		Description: "Delivers messages via the [Telegram Bot API](https://core.telegram.org/bots/api).\n\n" +
-			"!!! tip \"Auto-Escaping Reserved Characters (Telegram)\"\n" +
+			"!!! tip \"Escaping Reserved Characters (Telegram)\"\n" +
 			"    The Telegram Bot API requires certain characters to be escaped depending on the `parse_mode`.\n" +
-			"    Hibernator handles this automatically via the `autoEscape` template function.\n" +
-			"    If you write a [custom template](../user-guides/notifications.md#custom-templates) for Telegram, use `{{ .SomeField | autoEscape }}` on any dynamic value to prevent parse errors.",
+			"    Two helper functions are available in all templates:\n\n" +
+			"    - **`escapeHTML`** — use when `parse_mode` is `HTML` (the default). Escapes `<`, `>`, `&`, and `\"`.\n" +
+			"    - **`escapeMarkdown`** — use when `parse_mode` is `MarkdownV2`. Escapes `_`, `*`, `[`, `]`, `(`, `)`, `~`, `` ` ``, `>`, `#`, `+`, `-`, `=`, `|`, `{`, `}`, `.`, `!`.\n\n" +
+			"    Always pipe dynamic values through the appropriate escape function in custom Telegram templates, otherwise Telegram will reject the message.",
 	},
 	{
 		Dir:         "webhook",

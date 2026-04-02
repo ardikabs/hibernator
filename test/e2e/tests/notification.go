@@ -155,8 +155,8 @@ var _ = Describe("Notification E2E", func() {
 		Expect(startHibernate.Payload.Event).To(Equal("Start"))
 		Expect(startHibernate.Payload.Phase).To(Equal("Hibernating"))
 		Expect(startHibernate.Payload.Operation).To(Equal("shutdown"))
-		Expect(startHibernate.Payload.ID.Name).To(Equal(plan.Name))
-		Expect(startHibernate.Payload.ID.Namespace).To(Equal(testNamespace))
+		Expect(startHibernate.Payload.Plan.Name).To(Equal(plan.Name))
+		Expect(startHibernate.Payload.Plan.Namespace).To(Equal(testNamespace))
 
 		By("Simulating hibernation Job success")
 		hibernationJob := testutil.EventuallyJobCreated(ctx, k8sClient, testNamespace, plan.Name,

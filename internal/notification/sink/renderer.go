@@ -7,7 +7,7 @@ package sink
 
 import (
 	"context"
-	"text/template"
+	"time"
 )
 
 // RenderOption configures how a single Render call behaves. Sinks use options
@@ -17,9 +17,18 @@ type RenderOption func(*RenderConfig)
 
 // RenderConfig collects option values for a single Render call.
 type RenderConfig struct {
-	// ExtraFuncs are additional template functions merged into the base func
-	// map for this render call only. They do not persist across calls.
-	ExtraFuncs template.FuncMap
+	// Timeout overrides the default per-call render timeout. Zero means use
+	// the engine default.
+	Timeout time.Duration
+
+	// Fallback, when non-nil, is returned verbatim whenever template parsing
+	// or execution fails, instead of the engine's plain-text fallback.
+	Fallback func(p Payload) string
+
+	// MissingKey controls the template engine's behaviour when a key is
+	// missing from the data context. Valid values: "default", "zero",
+	// "error". Empty string leaves the engine default ("default") in place.
+	MissingKey string
 }
 
 // NewRenderConfig applies the given options and returns the resulting config.
@@ -31,19 +40,23 @@ func NewRenderConfig(opts ...RenderOption) RenderConfig {
 	return cfg
 }
 
-// WithExtraFuncs returns a RenderOption that merges the given template functions
-// into the func map for a single render call. This lets sinks inject
-// context-specific helpers (e.g., Telegram injects htmlSafe only when
-// parse_mode is HTML) without polluting the global function namespace.
-func WithExtraFuncs(funcs template.FuncMap) RenderOption {
-	return func(c *RenderConfig) {
-		if c.ExtraFuncs == nil {
-			c.ExtraFuncs = make(template.FuncMap, len(funcs))
-		}
-		for k, v := range funcs {
-			c.ExtraFuncs[k] = v
-		}
-	}
+// WithTimeout overrides the per-call render timeout. Use this when a sink
+// needs more (or less) time than the engine's default budget.
+func WithTimeout(d time.Duration) RenderOption {
+	return func(c *RenderConfig) { c.Timeout = d }
+}
+
+// WithFallback sets a fixed string that is returned when template parsing or
+// execution fails, replacing the engine's default plain-text fallback.
+func WithFallback(fn func(p Payload) string) RenderOption {
+	return func(c *RenderConfig) { c.Fallback = fn }
+}
+
+// WithMissingKeyError configures the template engine to return an error
+// (and therefore fall back to the fallback message) when the template
+// references a key that is absent from the data context.
+func WithMissingKeyError() RenderOption {
+	return func(c *RenderConfig) { c.MissingKey = "error" }
 }
 
 // Renderer abstracts the template rendering capability provided by the notification

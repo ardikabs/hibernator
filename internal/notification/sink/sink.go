@@ -13,15 +13,18 @@ import (
 	"fmt"
 	"sync"
 	"time"
-
-	"k8s.io/apimachinery/pkg/types"
 )
 
 // PlanInfo carries plan metadata inside the Payload.
 type PlanInfo struct {
-	Name      string
-	Namespace string
-	Labels    map[string]string
+	Name        string
+	Namespace   string
+	Labels      map[string]string
+	Annotations map[string]string
+}
+
+func (p PlanInfo) String() string {
+	return fmt.Sprintf("%s/%s", p.Namespace, p.Name)
 }
 
 // TargetInfo holds execution state for a single target.
@@ -37,17 +40,52 @@ type TargetInfo struct {
 
 	// Message provides details for the target's execution state.
 	Message string
+
+	// Connector carries resolved metadata from the target's CloudProvider or
+	// K8SCluster reference. Template authors access fields like
+	// {{ .Connector.AccountID }} or {{ .Connector.ClusterName }}.
+	Connector ConnectorInfo
+}
+
+// ConnectorInfo carries resolved connector metadata for template rendering.
+// Fields are populated based on the connector kind — unused fields remain
+// zero-valued. Template authors can use any combination of fields without
+// branching on Kind.
+type ConnectorInfo struct {
+	// Kind is the connector type: "CloudProvider" or "K8SCluster".
+	Kind string
+
+	// Name is the connector resource name.
+	Name string
+
+	// Provider is the cloud provider type (e.g., "aws", "gcp").
+	Provider string
+
+	// AccountID is the cloud account identifier, it is relevant for AWS cloud provider.
+	AccountID string
+
+	// ProjectID is the cloud project identifier, it is relevant for GCP cloud provider.
+	ProjectID string
+
+	// Region is the cloud region (e.g., "us-east-1", "us-central1").
+	Region string
+
+	// ClusterName is the Kubernetes cluster name (populated for K8SCluster
+	// connectors that reference EKS/GKE).
+	ClusterName string
 }
 
 // Payload carries structured notification event data to a Sink.
 // Well-established sinks (Slack, Telegram) render this into a formatted message;
 // generic sinks (webhook) can forward it as raw JSON.
+//
+// The Plan field carries metadata derived from the actual HibernatePlan resource
+// (including status). The remaining top-level fields act as a snapshot of the
+// event — they may duplicate Plan values but reflect the exact state at the
+// moment of notification dispatch.
 type Payload struct {
-	// ID represents the identifier of the associated object.
-	ID types.NamespacedName `json:"id"`
-
-	// Labels are the labels of the associated object.
-	Labels map[string]string `json:"labels"`
+	// Plan carries plan metadata (name, namespace, labels, status fields).
+	Plan PlanInfo `json:"plan"`
 
 	// Event is the hook point that triggered this notification (e.g., "Start", "Failure").
 	Event string `json:"event"`
@@ -61,7 +99,7 @@ type Payload struct {
 	// PreviousPhase is the plan phase before the transition (empty on Start).
 	PreviousPhase string `json:"previousPhase"`
 
-	// Operation is the current operation: "Hibernate" or "WakeUp".
+	// Operation is the current operation: "shutdown" or "wakeup".
 	Operation string `json:"operation"`
 
 	// CycleID is the current execution cycle identifier.

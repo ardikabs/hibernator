@@ -241,6 +241,7 @@ The following fields are available in templates:
 | `.Plan.Name` | string | HibernatePlan name |
 | `.Plan.Namespace` | string | HibernatePlan namespace |
 | `.Plan.Labels` | map | HibernatePlan labels |
+| `.Plan.Annotations` | map | HibernatePlan annotations |
 | `.CycleID` | string | Current execution cycle ID |
 | `.Targets` | list | Per-target execution state (see below) |
 | `.ErrorMessage` | string | Error details (Failure/Recovery only) |
@@ -256,6 +257,13 @@ The following fields are available in templates:
 | `.Executor` | Executor type (e.g., `rds`, `eks`) |
 | `.State` | Execution state (`Completed`, `Failed`) |
 | `.ErrorMessage` | Error details for failed targets |
+| `.Connector.Kind` | Connector type: `CloudProvider` or `K8SCluster` |
+| `.Connector.Name` | Connector resource name |
+| `.Connector.Provider` | Cloud provider (e.g., `aws`, `gcp`) |
+| `.Connector.AccountID` | Cloud account ID (e.g., AWS Account ID) |
+| `.Connector.ProjectID` | Cloud project ID (e.g., GCP Project ID) |
+| `.Connector.Region` | Cloud region (e.g., `us-east-1`) |
+| `.Connector.ClusterName` | Kubernetes cluster name (EKS/GKE) |
 
 Templates support [Sprig template functions](https://masterminds.github.io/sprig/) — the same function library used by Helm — including `date`, `upper`, `lower`, `default`, `toJson`, and many more.
 
@@ -295,7 +303,7 @@ The notification dispatcher exposes Prometheus metrics for delivery success, err
 #### Telegram Troubleshooting
 - **Bot Permissions**: Ensure the bot has been added to the chat/channel and has "Post Messages" permissions.
 - **Wrong Chat ID**: Verify the `chat_id`. Private chats usually have positive IDs, while groups and channels have negative IDs starting with `-100`.
-- **Parse Mode Errors**: If a message contains reserved characters that aren't properly escaped (e.g., `_` or `*` in MarkdownV2), Telegram will reject the message. Always use the `autoEscape` function in custom templates.
+- **Parse Mode Errors**: If a message contains reserved characters that aren't properly escaped (e.g., `_` or `*` in MarkdownV2), Telegram will reject the message. Use `escapeHTML` (for HTML parse mode) or `escapeMarkdown` (for MarkdownV2 parse mode) in custom templates.
 - **Bot Token Revoked**: Verify the `token` is valid by calling `https://api.telegram.org/bot<TOKEN>/getMe`.
 
 #### Webhook Troubleshooting

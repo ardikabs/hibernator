@@ -181,7 +181,7 @@ var _ = Describe("Error Recovery E2E", func() {
 		var jobList batchv1.JobList
 		Expect(k8sClient.List(ctx, &jobList, client.InNamespace(testNamespace), client.MatchingLabels{
 			wellknown.LabelPlan:      plan.Name,
-			wellknown.LabelOperation: plan.Status.CurrentOperation,
+			wellknown.LabelOperation: string(plan.Status.CurrentOperation),
 			wellknown.LabelCycleID:   plan.Status.CurrentCycleID,
 		})).Should(Succeed())
 		Expect(jobList.Items).To(HaveLen(3), "total number of jobs after include retry-now should be 3")

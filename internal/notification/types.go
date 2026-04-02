@@ -72,6 +72,9 @@ type TargetInfo = sink.TargetInfo
 // PlanInfo carries plan metadata for the template context.
 type PlanInfo = sink.PlanInfo
 
+// ConnectorInfo carries resolved connector metadata for template rendering.
+type ConnectorInfo = sink.ConnectorInfo
+
 // Overflow is a concurrency-safe, unbounded spillover queue.
 //
 // It is designed as a companion to a bounded channel: when the channel is full,

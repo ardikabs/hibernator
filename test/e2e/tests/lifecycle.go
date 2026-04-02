@@ -314,7 +314,7 @@ var _ = Describe("Lifecycle E2E", func() {
 			var jl batchv1.JobList
 			_ = k8sClient.List(ctx, &jl, client.InNamespace(testNamespace), client.MatchingLabels{
 				wellknown.LabelPlan:      plan.Name,
-				wellknown.LabelOperation: hibernatorv1alpha1.OperationHibernate,
+				wellknown.LabelOperation: string(hibernatorv1alpha1.OperationHibernate),
 				wellknown.LabelTarget:    "database",
 			})
 			active := 0
