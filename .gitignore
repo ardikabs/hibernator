@@ -88,3 +88,6 @@ charts/*/Chart.lock
 *.tfstate.*
 .terraform/
 .terraform.lock.hcl
+
+# Miscellaneous
+gen-*

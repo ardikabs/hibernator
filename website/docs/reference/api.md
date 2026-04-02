@@ -10,11 +10,11 @@ Package v1alpha1 contains API Schema definitions for the hibernator v1alpha1 API
 
 ### Resource Types
 
-- CloudProvider
-- HibernateNotification
 - HibernatePlan
 - K8SCluster
 - ScheduleException
+- CloudProvider
+- HibernateNotification
 
 
 ### AWSAuth
@@ -245,8 +245,11 @@ HibernateNotificationStatus defines the observed state of HibernateNotification.
 
 | Field | Type | Description | Validation |
 | ----- | ---- | ----------- | ---------- |
-| `matchedPlans` | _integer_ | MatchedPlans is the count of HibernatePlans currently matching the selector. | [Optional: {}] |
-| `message` | _string_ | Message provides diagnostic information. | [Optional: {}] |
+| `watchedPlans` | _[PlanReference](#planreference) array_ | WatchedPlans is the list of HibernatePlan references currently matching the selector. | [Optional: {}] |
+| `lastDeliveryTime` | _[Time](https://kubernetes.io/docs/reference/generated/kubernetes-api/v1.33/#time-v1-meta)_ | LastDeliveryTime is the timestamp of the most recent successful notification delivery<br />across all sinks. Nil if no successful delivery has occurred. | [Optional: {}] |
+| `lastFailureTime` | _[Time](https://kubernetes.io/docs/reference/generated/kubernetes-api/v1.33/#time-v1-meta)_ | LastFailureTime is the timestamp of the most recent failed notification delivery<br />across all sinks. Nil if no failure has occurred. | [Optional: {}] |
+| `sinkStatuses` | _[NotificationSinkStatus](#notificationsinkstatus) array_ | SinkStatuses is a history log of per-sink delivery attempts, ordered newest-first.<br />The controller retains at most 20 entries; older entries are evicted when the cap is reached. | [Optional: {}] |
+| `observedGeneration` | _integer_ | ObservedGeneration is the most recent .metadata.generation observed by the controller. | [Optional: {}] |
 
 ### HibernatePlan
 
@@ -362,6 +365,17 @@ the CRD footprint and keeps sensitive data out of the resource spec.
 | `type` | _[NotificationSinkType](#notificationsinktype)_ | Type is the sink provider type. | [Enum: [slack telegram webhook] Required: {}] |
 | `secretRef` | _[ObjectKeyReference](#objectkeyreference)_ | SecretRef is the name of the Secret containing the sink configuration.<br />The Secret must contain a key named "config" whose value is a JSON object<br />with all sink-specific settings (endpoint URL, credentials, options).<br />Slack config example:   \{"webhook_url": "https://hooks.slack.com/services/..."\}<br />Telegram config example: \{"token": "bot123:ABC", "chat_id": "-100123", "parse_mode": "MarkdownV2"\}<br />Webhook config example:  \{"url": "https://example.com/hook", "headers": \{"Authorization": "Bearer ..."\}\} | [Required: {}] |
 | `templateRef` | _[ObjectKeyReference](#objectkeyreference)_ | TemplateRef references a ConfigMap key containing a Go template for message formatting.<br />If omitted, a built-in default template is used for the sink type. | [Optional: {}] |
+
+### NotificationSinkStatus
+
+NotificationSinkStatus records the outcome of a single notification delivery attempt.
+
+| Field | Type | Description | Validation |
+| ----- | ---- | ----------- | ---------- |
+| `name` | _string_ | Name is the sink name as defined in spec.sinks[].name. | [] |
+| `success` | _boolean_ | Success indicates whether this delivery attempt succeeded. | [] |
+| `transitionTimestamp` | _[Time](https://kubernetes.io/docs/reference/generated/kubernetes-api/v1.33/#time-v1-meta)_ | TransitionTimestamp is when the delivery attempt completed. | [] |
+| `message` | _string_ | Message is a human-readable description of the delivery outcome.<br />On success: "Successfully sent notification for <sink-name>"<br />On failure: the error string from the sink provider. | [Optional: {}] |
 
 ### NotificationSinkType
 

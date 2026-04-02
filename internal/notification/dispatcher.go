@@ -106,6 +106,10 @@ type Dispatcher struct {
 	dispatchTimeout time.Duration
 	maxOverflowSize int
 
+	// deliveryCallback is called after each dispatch attempt to report success/failure.
+	// Nil means no delivery tracking.
+	deliveryCallback DeliveryCallback
+
 	// requestCh is the primary buffered channel between Submit and workers.
 	// It is NEVER closed — workers exit via the allFlushed signal instead,
 	// which avoids send-on-closed-channel panics from concurrent Submit calls.
@@ -447,12 +451,28 @@ func (d *Dispatcher) dispatch(ctx context.Context, req Request) {
 		log.Error(err, "failed to send notification")
 		metrics.NotificationErrorsTotal.WithLabelValues(req.SinkType, req.Payload.Event).Inc()
 		metrics.NotificationLatency.WithLabelValues(req.SinkType).Observe(time.Since(start).Seconds())
+		d.reportDelivery(req, false, err)
 		return
 	}
 
 	log.Info("notification sent successfully")
 	metrics.NotificationSentTotal.WithLabelValues(req.SinkType, req.Payload.Event).Inc()
 	metrics.NotificationLatency.WithLabelValues(req.SinkType).Observe(time.Since(start).Seconds())
+	d.reportDelivery(req, true, nil)
+}
+
+// reportDelivery invokes the delivery callback if configured.
+func (d *Dispatcher) reportDelivery(req Request, success bool, err error) {
+	if d.deliveryCallback == nil {
+		return
+	}
+	d.deliveryCallback(DeliveryResult{
+		NotificationRef: req.NotificationRef,
+		SinkName:        req.SinkName,
+		Timestamp:       time.Now(),
+		Success:         success,
+		Error:           err,
+	})
 }
 
 // resolveCustomTemplate loads a Go template string from a ConfigMap.

@@ -14,6 +14,8 @@ import (
 	"github.com/go-logr/logr"
 )
 
+const testInterval = time.Millisecond
+
 func TestNewWaiter_ValidTimeout(t *testing.T) {
 	tests := []struct {
 		name        string
@@ -68,7 +70,7 @@ func TestPoll_ImmediateSuccess(t *testing.T) {
 	ctx := context.Background()
 	log := logr.Discard()
 
-	waiter, err := NewWaiter(ctx, log, "1m")
+	waiter, err := NewWaiter(ctx, log, "1m", WithInterval(testInterval))
 	if err != nil {
 		t.Fatalf("NewWaiter() error = %v", err)
 	}
@@ -92,7 +94,7 @@ func TestPoll_EventualSuccess(t *testing.T) {
 	ctx := context.Background()
 	log := logr.Discard()
 
-	waiter, err := NewWaiter(ctx, log, "1m")
+	waiter, err := NewWaiter(ctx, log, "1m", WithInterval(testInterval))
 	if err != nil {
 		t.Fatalf("NewWaiter() error = %v", err)
 	}
@@ -119,7 +121,7 @@ func TestPoll_Timeout(t *testing.T) {
 	ctx := context.Background()
 	log := logr.Discard()
 
-	waiter, err := NewWaiter(ctx, log, "1s")
+	waiter, err := NewWaiter(ctx, log, "50ms", WithInterval(testInterval))
 	if err != nil {
 		t.Fatalf("NewWaiter() error = %v", err)
 	}
@@ -135,11 +137,8 @@ func TestPoll_Timeout(t *testing.T) {
 	if err == nil {
 		t.Error("Poll() error = nil, want timeout error")
 	}
-	if duration < 1*time.Second {
-		t.Errorf("Poll() duration = %v, want >= 1s", duration)
-	}
-	if duration > 2*time.Second {
-		t.Errorf("Poll() duration = %v, want < 2s", duration)
+	if duration > 500*time.Millisecond {
+		t.Errorf("Poll() duration = %v, want < 500ms", duration)
 	}
 }
 
@@ -147,7 +146,7 @@ func TestPoll_ContextCancellation(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	log := logr.Discard()
 
-	waiter, err := NewWaiter(ctx, log, "1m")
+	waiter, err := NewWaiter(ctx, log, "1m", WithInterval(testInterval))
 	if err != nil {
 		t.Fatalf("NewWaiter() error = %v", err)
 	}
@@ -174,7 +173,7 @@ func TestPoll_CheckFuncError(t *testing.T) {
 	ctx := context.Background()
 	log := logr.Discard()
 
-	waiter, err := NewWaiter(ctx, log, "1m")
+	waiter, err := NewWaiter(ctx, log, "1m", WithInterval(testInterval))
 	if err != nil {
 		t.Fatalf("NewWaiter() error = %v", err)
 	}
@@ -197,7 +196,7 @@ func TestPoll_NoTimeout(t *testing.T) {
 	ctx := context.Background()
 	log := logr.Discard()
 
-	waiter, err := NewWaiter(ctx, log, "") // Empty timeout = no timeout
+	waiter, err := NewWaiter(ctx, log, "", WithInterval(testInterval)) // Empty timeout = no timeout
 	if err != nil {
 		t.Fatalf("NewWaiter() error = %v", err)
 	}

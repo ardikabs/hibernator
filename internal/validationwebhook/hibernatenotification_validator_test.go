@@ -38,13 +38,13 @@ func TestHibernateNotificationValidator_UniqueSinkNames(t *testing.T) {
 
 	notif := newTestNotification(
 		hibernatorv1alpha1.NotificationSink{
-			Name: "slack-prod",
-			Type: hibernatorv1alpha1.SinkSlack,
+			Name:      "slack-prod",
+			Type:      hibernatorv1alpha1.SinkSlack,
 			SecretRef: hibernatorv1alpha1.ObjectKeyReference{Name: "slack-secret"},
 		},
 		hibernatorv1alpha1.NotificationSink{
-			Name: "telegram-prod",
-			Type: hibernatorv1alpha1.SinkTelegram,
+			Name:      "telegram-prod",
+			Type:      hibernatorv1alpha1.SinkTelegram,
 			SecretRef: hibernatorv1alpha1.ObjectKeyReference{Name: "tg-secret"},
 		},
 	)
@@ -58,13 +58,13 @@ func TestHibernateNotificationValidator_DuplicateSinkNames(t *testing.T) {
 
 	notif := newTestNotification(
 		hibernatorv1alpha1.NotificationSink{
-			Name: "my-sink",
-			Type: hibernatorv1alpha1.SinkSlack,
+			Name:      "my-sink",
+			Type:      hibernatorv1alpha1.SinkSlack,
 			SecretRef: hibernatorv1alpha1.ObjectKeyReference{Name: "s1"},
 		},
 		hibernatorv1alpha1.NotificationSink{
-			Name: "my-sink",
-			Type: hibernatorv1alpha1.SinkTelegram,
+			Name:      "my-sink",
+			Type:      hibernatorv1alpha1.SinkTelegram,
 			SecretRef: hibernatorv1alpha1.ObjectKeyReference{Name: "s2"},
 		},
 	)
@@ -80,23 +80,23 @@ func TestHibernateNotificationValidator_MultipleDuplicates(t *testing.T) {
 
 	notif := newTestNotification(
 		hibernatorv1alpha1.NotificationSink{
-			Name: "dup",
-			Type: hibernatorv1alpha1.SinkSlack,
+			Name:      "dup",
+			Type:      hibernatorv1alpha1.SinkSlack,
 			SecretRef: hibernatorv1alpha1.ObjectKeyReference{Name: "s1"},
 		},
 		hibernatorv1alpha1.NotificationSink{
-			Name: "unique",
-			Type: hibernatorv1alpha1.SinkTelegram,
+			Name:      "unique",
+			Type:      hibernatorv1alpha1.SinkTelegram,
 			SecretRef: hibernatorv1alpha1.ObjectKeyReference{Name: "s2"},
 		},
 		hibernatorv1alpha1.NotificationSink{
-			Name: "dup",
-			Type: hibernatorv1alpha1.SinkWebhook,
+			Name:      "dup",
+			Type:      hibernatorv1alpha1.SinkWebhook,
 			SecretRef: hibernatorv1alpha1.ObjectKeyReference{Name: "s3"},
 		},
 		hibernatorv1alpha1.NotificationSink{
-			Name: "dup",
-			Type: hibernatorv1alpha1.SinkSlack,
+			Name:      "dup",
+			Type:      hibernatorv1alpha1.SinkSlack,
 			SecretRef: hibernatorv1alpha1.ObjectKeyReference{Name: "s4"},
 		},
 	)
@@ -111,20 +111,20 @@ func TestHibernateNotificationValidator_Update(t *testing.T) {
 
 	old := newTestNotification(
 		hibernatorv1alpha1.NotificationSink{
-			Name: "a",
-			Type: hibernatorv1alpha1.SinkSlack,
+			Name:      "a",
+			Type:      hibernatorv1alpha1.SinkSlack,
 			SecretRef: hibernatorv1alpha1.ObjectKeyReference{Name: "s1"},
 		},
 	)
 	new := newTestNotification(
 		hibernatorv1alpha1.NotificationSink{
-			Name: "a",
-			Type: hibernatorv1alpha1.SinkSlack,
+			Name:      "a",
+			Type:      hibernatorv1alpha1.SinkSlack,
 			SecretRef: hibernatorv1alpha1.ObjectKeyReference{Name: "s1"},
 		},
 		hibernatorv1alpha1.NotificationSink{
-			Name: "a",
-			Type: hibernatorv1alpha1.SinkTelegram,
+			Name:      "a",
+			Type:      hibernatorv1alpha1.SinkTelegram,
 			SecretRef: hibernatorv1alpha1.ObjectKeyReference{Name: "s2"},
 		},
 	)
@@ -146,8 +146,8 @@ func TestHibernateNotificationValidator_SingleSink(t *testing.T) {
 
 	notif := newTestNotification(
 		hibernatorv1alpha1.NotificationSink{
-			Name: "only-one",
-			Type: hibernatorv1alpha1.SinkSlack,
+			Name:      "only-one",
+			Type:      hibernatorv1alpha1.SinkSlack,
 			SecretRef: hibernatorv1alpha1.ObjectKeyReference{Name: "secret"},
 		},
 	)

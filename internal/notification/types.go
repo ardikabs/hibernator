@@ -12,7 +12,30 @@ import (
 
 	hibernatorv1alpha1 "github.com/ardikabs/hibernator/api/v1alpha1"
 	"github.com/ardikabs/hibernator/internal/notification/sink"
+	"k8s.io/apimachinery/pkg/types"
 )
+
+// DeliveryResult reports the outcome of a single notification dispatch.
+type DeliveryResult struct {
+	// NotificationRef identifies the HibernateNotification.
+	NotificationRef types.NamespacedName
+
+	// SinkName is the sink that was dispatched to.
+	SinkName string
+
+	// Timestamp is when the dispatch completed.
+	Timestamp time.Time
+
+	// Success is true when the notification was delivered without error.
+	Success bool
+
+	// Error is the dispatch error, if any. Nil when Success is true.
+	Error error
+}
+
+// DeliveryCallback is invoked after each dispatch attempt to report delivery
+// results back to the lifecycle processor for status tracking.
+type DeliveryCallback func(result DeliveryResult)
 
 // Request represents a single notification request submitted
 // by a hook closure. It contains all data needed by the dispatcher to resolve
@@ -34,6 +57,10 @@ type Request struct {
 	// TemplateRef optionally references a ConfigMap key for custom templates.
 	// Nil means use the default template.
 	TemplateRef *hibernatorv1alpha1.ObjectKeyReference
+
+	// NotificationRef identifies the HibernateNotification that owns this request.
+	// Used by the delivery callback to update per-sink status.
+	NotificationRef types.NamespacedName
 }
 
 // Payload carries the notification event data passed to sinks for dispatch.
