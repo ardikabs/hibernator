@@ -14,6 +14,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"sync"
+	"sync/atomic"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/service/eks"
@@ -184,24 +185,35 @@ func (e *Executor) Shutdown(ctx context.Context, log logr.Logger, spec executor.
 	}
 
 	// Wait for all node groups to complete scaling down if configured
+	msg := fmt.Sprintf("scaled %d node group(s) to zero in EKS cluster %s", len(targetNodeGroups), clusterName)
+
 	if params.AwaitCompletion.Enabled {
 		timeout := params.AwaitCompletion.Timeout
 		if timeout == "" {
 			timeout = DefaultWaitTimeout
 		}
 
+		var timedOut atomic.Int32
 		for _, ngName := range e.waitinglist {
 			e.wg.Add(1)
 
 			go func(nodegroup string) {
 				defer e.wg.Done()
 				if err := e.waitForNodesDeleted(ctx, log, k8sClient, clusterName, nodegroup, timeout); err != nil {
-					log.Error(err, "error while waiting for nodes to be deleted", "nodeGroup", ngName)
+					timedOut.Add(1)
+					log.Error(err, "error while waiting for nodes to be deleted", "nodeGroup", nodegroup)
 				}
 			}(ngName)
 		}
 
 		e.wg.Wait()
+
+		total := len(e.waitinglist)
+		if failed := int(timedOut.Load()); failed > 0 {
+			msg += fmt.Sprintf("; %d of %d node group(s) still have nodes after %s timeout", failed, total, timeout)
+		} else {
+			msg += "; all nodes terminated"
+		}
 	}
 
 	log.Info("shutdown completed",
@@ -209,7 +221,7 @@ func (e *Executor) Shutdown(ctx context.Context, log logr.Logger, spec executor.
 		"nodeGroupCount", len(targetNodeGroups),
 	)
 
-	return &executor.Result{Message: fmt.Sprintf("scaled %d node group(s) to zero in EKS cluster %s", len(targetNodeGroups), clusterName)}, nil
+	return &executor.Result{Message: msg}, nil
 }
 
 // WakeUp restores EKS Managed Node Groups to their original scaling configuration.
@@ -266,31 +278,42 @@ func (e *Executor) WakeUp(ctx context.Context, log logr.Logger, spec executor.Sp
 	}
 
 	// Wait for all node groups to become active if configured
+	msg := fmt.Sprintf("restored %d node group(s) in EKS cluster %s", len(restore.Data), clusterName)
+
 	if params.AwaitCompletion.Enabled {
 		timeout := params.AwaitCompletion.Timeout
 		if timeout == "" {
 			timeout = DefaultWaitTimeout
 		}
 
+		var timedOut atomic.Int32
 		for _, ngName := range e.waitinglist {
 			e.wg.Add(1)
 
 			go func(nodegroup string) {
 				defer e.wg.Done()
 				if err := e.waitForNodeGroupActive(ctx, log, eksClient, clusterName, nodegroup, timeout); err != nil {
-					log.Error(err, "error while waiting for node group to become active", "nodeGroup", ngName)
+					timedOut.Add(1)
+					log.Error(err, "error while waiting for node group to become active", "nodeGroup", nodegroup)
 				}
 			}(ngName)
 		}
 
 		e.wg.Wait()
+
+		total := len(e.waitinglist)
+		if failed := int(timedOut.Load()); failed > 0 {
+			msg += fmt.Sprintf("; %d of %d node group(s) not yet active after %s timeout", failed, total, timeout)
+		} else {
+			msg += "; all node groups active"
+		}
 	}
 
 	log.Info("wakeup completed",
 		"clusterName", clusterName,
 		"nodeGroupCount", len(restore.Data),
 	)
-	return &executor.Result{Message: fmt.Sprintf("restored %d node group(s) in EKS cluster %s", len(restore.Data), clusterName)}, nil
+	return &executor.Result{Message: msg}, nil
 }
 
 func (e *Executor) parseParams(raw json.RawMessage) (Parameters, error) {

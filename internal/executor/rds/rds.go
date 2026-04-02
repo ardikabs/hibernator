@@ -13,6 +13,7 @@ import (
 	"fmt"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
@@ -233,17 +234,22 @@ func (e *Executor) Shutdown(ctx context.Context, log logr.Logger, spec executor.
 	}
 
 	// Wait for all stopping operations to complete if configured
+	msg := fmt.Sprintf("stopped %d RDS instance(s) and %d cluster(s)", len(instances), len(clusters))
+
 	if params.AwaitCompletion.Enabled {
 		timeout := params.AwaitCompletion.Timeout
 		if timeout == "" {
 			timeout = DefaultWaitTimeout
 		}
 
+		var timedOut atomic.Int32
+
 		for _, inst := range e.waitinglistForInstances {
 			e.completionWg.Add(1)
 			go func(id string) {
 				defer e.completionWg.Done()
 				if err := e.waitForInstanceStopped(ctx, log, client, id, timeout); err != nil {
+					timedOut.Add(1)
 					log.Error(err, "failed to wait for RDS instance stopped", "instanceId", id)
 				}
 			}(inst)
@@ -254,13 +260,20 @@ func (e *Executor) Shutdown(ctx context.Context, log logr.Logger, spec executor.
 			go func(id string) {
 				defer e.completionWg.Done()
 				if err := e.waitForClusterStopped(ctx, log, client, id, timeout); err != nil {
+					timedOut.Add(1)
 					log.Error(err, "failed to wait for Aurora cluster stopped", "clusterId", id)
 				}
 			}(cluster)
-
 		}
 
 		e.completionWg.Wait()
+
+		total := len(e.waitinglistForInstances) + len(e.waitinglistForClusters)
+		if failed := int(timedOut.Load()); failed > 0 {
+			msg += fmt.Sprintf("; %d of %d resource(s) not yet stopped after %s timeout", failed, total, timeout)
+		} else {
+			msg += "; all resources confirmed stopped"
+		}
 	}
 
 	log.Info("shutdown completed",
@@ -268,7 +281,7 @@ func (e *Executor) Shutdown(ctx context.Context, log logr.Logger, spec executor.
 		"totalClusters", len(clusters),
 	)
 
-	return &executor.Result{Message: fmt.Sprintf("stopped %d RDS instance(s) and %d cluster(s)", len(instances), len(clusters))}, nil
+	return &executor.Result{Message: msg}, nil
 }
 
 // WakeUp starts RDS instances/clusters.
@@ -343,16 +356,22 @@ func (e *Executor) WakeUp(ctx context.Context, log logr.Logger, spec executor.Sp
 		}
 	}
 
+	msg := fmt.Sprintf("started %d RDS resource(s)", len(restore.Data))
+
 	if params.AwaitCompletion.Enabled {
 		timeout := params.AwaitCompletion.Timeout
 		if timeout == "" {
 			timeout = DefaultWaitTimeout
 		}
+
+		var timedOut atomic.Int32
+
 		for _, inst := range e.waitinglistForInstances {
 			e.completionWg.Add(1)
 			go func(id string) {
 				defer e.completionWg.Done()
 				if err := e.waitForInstanceAvailable(ctx, log, client, id, timeout); err != nil {
+					timedOut.Add(1)
 					log.Error(err, "failed to wait for RDS instance available", "instanceId", id)
 				}
 			}(inst)
@@ -363,16 +382,24 @@ func (e *Executor) WakeUp(ctx context.Context, log logr.Logger, spec executor.Sp
 			go func(id string) {
 				defer e.completionWg.Done()
 				if err := e.waitForClusterAvailable(ctx, log, client, id, timeout); err != nil {
+					timedOut.Add(1)
 					log.Error(err, "failed to wait for RDS cluster available", "clusterId", id)
 				}
 			}(clust)
 		}
 
 		e.completionWg.Wait()
+
+		total := len(e.waitinglistForInstances) + len(e.waitinglistForClusters)
+		if failed := int(timedOut.Load()); failed > 0 {
+			msg += fmt.Sprintf("; %d of %d resource(s) not yet available after %s timeout", failed, total, timeout)
+		} else {
+			msg += "; all resources confirmed available"
+		}
 	}
 
 	log.Info("wakeup completed", "resourceCount", len(restore.Data))
-	return &executor.Result{Message: fmt.Sprintf("started %d RDS resource(s)", len(restore.Data))}, nil
+	return &executor.Result{Message: msg}, nil
 }
 
 func (e *Executor) parseParams(raw json.RawMessage) (Parameters, error) {

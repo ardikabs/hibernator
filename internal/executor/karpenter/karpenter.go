@@ -10,6 +10,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"sync"
+	"sync/atomic"
 
 	"github.com/go-logr/logr"
 
@@ -149,29 +150,40 @@ func (e *Executor) Shutdown(ctx context.Context, log logr.Logger, spec executor.
 	}
 
 	// Wait for all nodes corresponding to deleted NodePools to be removed if configured
+	msg := fmt.Sprintf("scaled down %d Karpenter NodePool(s)", len(targetNodePools))
+
 	if params.AwaitCompletion.Enabled {
 		timeout := params.AwaitCompletion.Timeout
 		if timeout == "" {
 			timeout = DefaultWaitTimeout
 		}
 
+		var timedOut atomic.Int32
 		for _, nodePoolName := range e.waitinglist {
 			e.completionWg.Add(1)
 
 			go func(npName string) {
 				defer e.completionWg.Done()
 				if err := e.waitForNodePoolDeleted(ctx, log, client, npName, timeout); err != nil {
+					timedOut.Add(1)
 					log.Error(err, "failed to wait for NodePool deletion", "nodePool", npName)
 				}
 			}(nodePoolName)
 		}
 
 		e.completionWg.Wait()
+
+		total := len(e.waitinglist)
+		if failed := int(timedOut.Load()); failed > 0 {
+			msg += fmt.Sprintf("; %d of %d NodePool(s) still have nodes after %s timeout", failed, total, timeout)
+		} else {
+			msg += "; all nodes terminated"
+		}
 	}
 
 	log.Info("shutdown completed", "nodePoolCount", len(targetNodePools))
 
-	return &executor.Result{Message: fmt.Sprintf("scaled down %d Karpenter NodePool(s)", len(targetNodePools))}, nil
+	return &executor.Result{Message: msg}, nil
 }
 
 // WakeUp restores Karpenter NodePools from hibernation.
@@ -218,17 +230,22 @@ func (e *Executor) WakeUp(ctx context.Context, log logr.Logger, spec executor.Sp
 	}
 
 	// Wait for all restored NodePools to be ready if configured
+	msg := fmt.Sprintf("restored %d Karpenter NodePool(s)", len(restore.Data))
+
 	if params.AwaitCompletion.Enabled {
 		timeout := params.AwaitCompletion.Timeout
 		if timeout == "" {
 			timeout = DefaultWaitTimeout
 		}
+
+		var timedOut atomic.Int32
 		for _, nodePoolName := range e.waitinglist {
 			e.completionWg.Add(1)
 			go func(npName string) {
 				defer e.completionWg.Done()
 
 				if err := e.waitForNodePoolReady(ctx, log, client, npName, timeout); err != nil {
+					timedOut.Add(1)
 					log.Error(err, "failed to wait for NodePool ready", "nodePool", npName)
 				}
 			}(nodePoolName)
@@ -236,10 +253,17 @@ func (e *Executor) WakeUp(ctx context.Context, log logr.Logger, spec executor.Sp
 		}
 
 		e.completionWg.Wait()
+
+		total := len(e.waitinglist)
+		if failed := int(timedOut.Load()); failed > 0 {
+			msg += fmt.Sprintf("; %d of %d NodePool(s) not yet ready after %s timeout", failed, total, timeout)
+		} else {
+			msg += "; all NodePools ready"
+		}
 	}
 
 	log.Info("wakeup completed", "nodePoolCount", len(restore.Data))
-	return &executor.Result{Message: fmt.Sprintf("restored %d Karpenter NodePool(s)", len(restore.Data))}, nil
+	return &executor.Result{Message: msg}, nil
 }
 
 // listAllNodePools discovers all Karpenter NodePools in the cluster.

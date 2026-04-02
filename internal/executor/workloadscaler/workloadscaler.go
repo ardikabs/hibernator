@@ -11,6 +11,7 @@ import (
 	"fmt"
 	"strings"
 	"sync"
+	"sync/atomic"
 
 	"github.com/go-logr/logr"
 
@@ -189,17 +190,21 @@ func (e *Executor) Shutdown(ctx context.Context, log logr.Logger, spec executor.
 	}
 
 	// Wait for all workloads to scale if configured
+	msg := fmt.Sprintf("scaled %d workload(s) to zero across %d namespace(s)", totalWorkloadscaled, len(targetNamespaces))
+
 	if params.AwaitCompletion.Enabled {
 		timeout := params.AwaitCompletion.Timeout
 		if timeout == "" {
 			timeout = DefaultWaitTimeout
 		}
 
+		var timedOut atomic.Int32
 		for _, state := range e.waitinglist {
 			e.completionWg.Add(1)
 			go func(state WorkloadState) {
 				defer e.completionWg.Done()
 				if err := e.waitForReplicasScaled(ctx, log, client, state.GetGVR(), state.Namespace, state.Name, 0, timeout); err != nil {
+					timedOut.Add(1)
 					log.Error(err, "wait for workload to scale", "workload", state.String())
 				}
 
@@ -207,11 +212,18 @@ func (e *Executor) Shutdown(ctx context.Context, log logr.Logger, spec executor.
 		}
 
 		e.completionWg.Wait()
+
+		total := len(e.waitinglist)
+		if failed := int(timedOut.Load()); failed > 0 {
+			msg += fmt.Sprintf("; %d of %d workload(s) not yet at zero replicas after %s timeout", failed, total, timeout)
+		} else {
+			msg += "; all workloads confirmed at zero replicas"
+		}
 	}
 
 	log.Info("shutdown completed", "numberOfWorkloadsScaled", totalWorkloadscaled)
 
-	return &executor.Result{Message: fmt.Sprintf("scaled %d workload(s) to zero across %d namespace(s)", totalWorkloadscaled, len(targetNamespaces))}, nil
+	return &executor.Result{Message: msg}, nil
 }
 
 // WakeUp restores all workloads to their previous replica counts.
@@ -254,17 +266,21 @@ func (e *Executor) WakeUp(ctx context.Context, log logr.Logger, spec executor.Sp
 	}
 
 	// Wait for all workloads to scale if configured
+	msg := fmt.Sprintf("restored %d workload(s)", len(restore.Data))
+
 	if params.AwaitCompletion.Enabled {
 		timeout := params.AwaitCompletion.Timeout
 		if timeout == "" {
 			timeout = DefaultWaitTimeout
 		}
 
+		var timedOut atomic.Int32
 		for _, state := range e.waitinglist {
 			e.completionWg.Add(1)
 			go func(state WorkloadState) {
 				defer e.completionWg.Done()
 				if err := e.waitForReplicasScaled(ctx, log, client, state.GetGVR(), state.Namespace, state.Name, int64(state.Replicas), timeout); err != nil {
+					timedOut.Add(1)
 					log.Error(err, "wait for workload to scale", "workload", state.String())
 				}
 
@@ -272,11 +288,18 @@ func (e *Executor) WakeUp(ctx context.Context, log logr.Logger, spec executor.Sp
 		}
 
 		e.completionWg.Wait()
+
+		total := len(e.waitinglist)
+		if failed := int(timedOut.Load()); failed > 0 {
+			msg += fmt.Sprintf("; %d of %d workload(s) not yet at desired replicas after %s timeout", failed, total, timeout)
+		} else {
+			msg += "; all workloads confirmed at desired replicas"
+		}
 	}
 
 	log.Info("wakeup completed", "workloadCount", len(restore.Data))
 
-	return &executor.Result{Message: fmt.Sprintf("restored %d workload(s)", len(restore.Data))}, nil
+	return &executor.Result{Message: msg}, nil
 }
 
 // discoverNamespaces returns the list of target namespaces based on the selector.

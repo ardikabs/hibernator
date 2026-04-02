@@ -169,6 +169,8 @@ func (e *Executor) Shutdown(ctx context.Context, log logr.Logger, spec executor.
 	}
 
 	// Stop running instances
+	msg := fmt.Sprintf("stopped %d of %d EC2 instance(s)", len(instancesToStop), len(instances))
+
 	if len(instancesToStop) > 0 {
 		log.Info("stopping running instances", "count", len(instancesToStop))
 		_, err = client.StopInstances(ctx, &ec2.StopInstancesInput{
@@ -187,7 +189,10 @@ func (e *Executor) Shutdown(ctx context.Context, log logr.Logger, spec executor.
 				timeout = DefaultWaitTimeout
 			}
 			if err := e.waitForInstancesStopped(ctx, log, client, instancesToStop, timeout); err != nil {
-				return nil, fmt.Errorf("wait for instances stopped: %w", err)
+				log.Error(err, "timeout waiting for instances to stop")
+				msg += fmt.Sprintf("; not all instances confirmed stopped after %s timeout", timeout)
+			} else {
+				msg += "; all instances confirmed stopped"
 			}
 		}
 	} else {
@@ -200,7 +205,7 @@ func (e *Executor) Shutdown(ctx context.Context, log logr.Logger, spec executor.
 		"isLive", hasRunningInstances,
 	)
 
-	return &executor.Result{Message: fmt.Sprintf("stopped %d of %d EC2 instance(s)", len(instancesToStop), len(instances))}, nil
+	return &executor.Result{Message: msg}, nil
 }
 
 // WakeUp starts previously running EC2 instances.
@@ -247,6 +252,8 @@ func (e *Executor) WakeUp(ctx context.Context, log logr.Logger, spec executor.Sp
 		}
 	}
 
+	msg := fmt.Sprintf("started %d EC2 instance(s)", len(instancesToStart))
+
 	if len(instancesToStart) > 0 {
 		log.Info("starting instances", "count", len(instancesToStart))
 		_, err = client.StartInstances(ctx, &ec2.StartInstancesInput{
@@ -265,7 +272,10 @@ func (e *Executor) WakeUp(ctx context.Context, log logr.Logger, spec executor.Sp
 				timeout = DefaultWaitTimeout
 			}
 			if err := e.waitForInstancesRunning(ctx, log, client, instancesToStart, timeout); err != nil {
-				return nil, fmt.Errorf("wait for instances running: %w", err)
+				log.Error(err, "timeout waiting for instances to start")
+				msg += fmt.Sprintf("; not all instances confirmed running after %s timeout", timeout)
+			} else {
+				msg += "; all instances confirmed running"
 			}
 		}
 	} else {
@@ -274,7 +284,7 @@ func (e *Executor) WakeUp(ctx context.Context, log logr.Logger, spec executor.Sp
 
 	log.Info("wakeup completed", "instanceCount", len(instancesToStart))
 
-	return &executor.Result{Message: fmt.Sprintf("started %d EC2 instance(s)", len(instancesToStart))}, nil
+	return &executor.Result{Message: msg}, nil
 }
 
 // waitForInstancesStopped waits for all instances to reach stopped state.
