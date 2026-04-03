@@ -7,6 +7,7 @@ package state
 
 import (
 	"context"
+	"errors"
 	"fmt"
 
 	hibernatorv1alpha1 "github.com/ardikabs/hibernator/api/v1alpha1"
@@ -47,6 +48,33 @@ func (state *wakingUpState) Handle(ctx context.Context) (StateResult, error) {
 	)
 }
 
+// OnError overrides the base state.OnError to persist partial execution history
+// before transitioning to PhaseError. When the error is a PlanError and at least
+// one target has progressed past Pending, a partial WakeupExecution summary is
+// written to ExecutionHistory so that operators can inspect what ran before the
+// failure. The base OnError is always called to handle the PhaseError transition.
+func (state *wakingUpState) OnError(ctx context.Context, err error) StateResult {
+	var pe *PlanError
+	if errors.As(err, &pe) {
+		plan := state.plan()
+		if hasExecutionProgress(plan) {
+			summary := BuildOperationSummary(state.Clock, plan, hibernatorv1alpha1.OperationWakeUp)
+			currentCycleID := plan.Status.CurrentCycleID
+
+			state.Statuses.PlanStatuses.Send(statusprocessor.Update[*hibernatorv1alpha1.HibernatePlan]{
+				NamespacedName: state.Key,
+				Resource:       plan,
+				Mutator: statusprocessor.MutatorFunc[*hibernatorv1alpha1.HibernatePlan](func(p *hibernatorv1alpha1.HibernatePlan) {
+					cycleIdx := findOrAppendCycle(&p.Status, currentCycleID)
+					p.Status.ExecutionHistory[cycleIdx].WakeupExecution = summary
+					pruneCycleHistory(&p.Status)
+				}),
+			})
+		}
+	}
+	return state.state.OnError(ctx, err)
+}
+
 func (state *wakingUpState) finalize(ctx context.Context, log logr.Logger, _ scheduler.ExecutionPlan) {
 	plan := state.plan()
 
@@ -69,9 +97,7 @@ func (state *wakingUpState) finalize(ctx context.Context, log logr.Logger, _ sch
 			p.Status.LastTransitionTime = ptr.To(metav1.NewTime(state.Clock.Now()))
 
 			cycleIdx := findOrAppendCycle(&p.Status, currentCycleID)
-			if p.Status.ExecutionHistory[cycleIdx].WakeupExecution == nil {
-				p.Status.ExecutionHistory[cycleIdx].WakeupExecution = summary
-			}
+			p.Status.ExecutionHistory[cycleIdx].WakeupExecution = summary
 			pruneCycleHistory(&p.Status)
 
 			p.Status.RetryCount = 0
