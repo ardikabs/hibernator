@@ -44,6 +44,12 @@ func (p *JSONPrinter) PrintObj(obj interface{}, w io.Writer) error {
 		output = p.restoreDetailToJSON(v)
 	case *RestoreResourcesOutput:
 		output = p.restoreResourcesToJSON(v)
+	case *NotifListOutput:
+		output = p.notifListToJSON(v)
+	case *NotifDescribeOutput:
+		output = p.notifDescribeToJSON(v)
+	case *NotifSendDryRunOutput:
+		output = p.notifSendDryRunToJSON(v)
 	default:
 		output = obj
 	}
@@ -180,13 +186,60 @@ func (p *JSONPrinter) buildStatusJSON(plan hibernatorv1alpha1.HibernatePlan) Pla
 	}
 
 	for _, exc := range plan.Status.ExceptionReferences {
-		status.ExceptionReferences = append(status.ExceptionReferences, ExceptionReferenceJSON{
+		ref := ExceptionReferenceJSON{
 			Name:       exc.Name,
+			Type:       string(exc.Type),
+			ValidFrom:  exc.ValidFrom.Format(time.RFC3339),
 			ValidUntil: exc.ValidUntil.Format(time.RFC3339),
-		})
+			State:      string(exc.State),
+		}
+		if exc.AppliedAt != nil {
+			ref.AppliedAt = exc.AppliedAt.Format(time.RFC3339)
+		}
+		status.ExceptionReferences = append(status.ExceptionReferences, ref)
+	}
+
+	for _, cycle := range plan.Status.ExecutionHistory {
+		c := ExecutionCycleJSON{CycleID: cycle.CycleID}
+		if cycle.ShutdownExecution != nil {
+			c.ShutdownExecution = p.operationSummaryToJSON(cycle.ShutdownExecution)
+		}
+		if cycle.WakeupExecution != nil {
+			c.WakeupExecution = p.operationSummaryToJSON(cycle.WakeupExecution)
+		}
+		status.ExecutionHistory = append(status.ExecutionHistory, c)
 	}
 
 	return status
+}
+
+func (p *JSONPrinter) operationSummaryToJSON(op *hibernatorv1alpha1.ExecutionOperationSummary) *ExecutionOperationSummaryJSON {
+	s := &ExecutionOperationSummaryJSON{
+		Operation:    string(op.Operation),
+		StartTime:    op.StartTime.Format(time.RFC3339),
+		Success:      op.Success,
+		ErrorMessage: op.ErrorMessage,
+	}
+	if op.EndTime != nil {
+		s.EndTime = op.EndTime.Format(time.RFC3339)
+	}
+	for _, tr := range op.TargetResults {
+		r := TargetExecutionResultJSON{
+			Target:      tr.Target,
+			State:       string(tr.State),
+			Attempts:    tr.Attempts,
+			ExecutionID: tr.ExecutionID,
+			Message:     tr.Message,
+		}
+		if tr.StartedAt != nil {
+			r.StartedAt = tr.StartedAt.Format(time.RFC3339)
+		}
+		if tr.FinishedAt != nil {
+			r.FinishedAt = tr.FinishedAt.Format(time.RFC3339)
+		}
+		s.TargetResults = append(s.TargetResults, r)
+	}
+	return s
 }
 
 func (p *JSONPrinter) planListToJSON(out *PlanListOutput) PlanListJSON {
@@ -234,10 +287,17 @@ func (p *JSONPrinter) scheduleToJSON(out *ScheduleOutput) (ScheduleJSON, error) 
 	}
 
 	for _, exc := range out.Exceptions {
-		result.Exceptions = append(result.Exceptions, ExceptionReferenceJSON{
+		ref := ExceptionReferenceJSON{
 			Name:       exc.Name,
+			Type:       string(exc.Type),
+			ValidFrom:  exc.ValidFrom.Format(time.RFC3339),
 			ValidUntil: exc.ValidUntil.Format(time.RFC3339),
-		})
+			State:      string(exc.State),
+		}
+		if exc.AppliedAt != nil {
+			ref.AppliedAt = exc.AppliedAt.Format(time.RFC3339)
+		}
+		result.Exceptions = append(result.Exceptions, ref)
 	}
 
 	return result, nil
@@ -300,4 +360,123 @@ func (p *JSONPrinter) restoreResourcesToJSON(out *RestoreResourcesOutput) Restor
 	}
 
 	return result
+}
+
+func (p *JSONPrinter) notifListToJSON(out *NotifListOutput) NotifListJSON {
+	result := NotifListJSON{
+		Items: make([]NotifListItemJSON, len(out.Items)),
+	}
+
+	for i, item := range out.Items {
+		notif := item.Notification
+
+		events := make([]string, len(notif.Spec.OnEvents))
+		for j, e := range notif.Spec.OnEvents {
+			events[j] = string(e)
+		}
+
+		sinks := make([]string, len(notif.Spec.Sinks))
+		for j, s := range notif.Spec.Sinks {
+			sinks[j] = s.Name
+		}
+
+		entry := NotifListItemJSON{
+			Name:         notif.Name,
+			Namespace:    notif.Namespace,
+			Events:       events,
+			Sinks:        sinks,
+			WatchedPlans: len(notif.Status.WatchedPlans),
+			Age:          FormatAge(time.Since(notif.CreationTimestamp.Time)),
+		}
+
+		if notif.Status.LastDeliveryTime != nil {
+			entry.LastDelivery = notif.Status.LastDeliveryTime.Format(time.RFC3339)
+		}
+		if notif.Status.LastFailureTime != nil {
+			entry.LastFailure = notif.Status.LastFailureTime.Format(time.RFC3339)
+		}
+
+		result.Items[i] = entry
+	}
+
+	return result
+}
+
+func (p *JSONPrinter) notifDescribeToJSON(out *NotifDescribeOutput) NotifDescribeJSON {
+	notif := out.Notification
+
+	events := make([]string, len(notif.Spec.OnEvents))
+	for i, e := range notif.Spec.OnEvents {
+		events[i] = string(e)
+	}
+
+	sinks := make([]NotifSinkJSON, len(notif.Spec.Sinks))
+	for i, s := range notif.Spec.Sinks {
+		sj := NotifSinkJSON{
+			Name:      s.Name,
+			Type:      string(s.Type),
+			SecretRef: s.SecretRef.Name,
+		}
+		if s.TemplateRef != nil {
+			sj.TemplateRef = &s.TemplateRef.Name
+		}
+		sinks[i] = sj
+	}
+
+	watchedPlans := make([]NotifWatchedPlanJSON, len(notif.Status.WatchedPlans))
+	for i, pr := range notif.Status.WatchedPlans {
+		watchedPlans[i] = NotifWatchedPlanJSON{
+			Name:      pr.Name,
+			Namespace: pr.Namespace,
+		}
+	}
+
+	sinkStatuses := make([]NotifSinkStatusJSON, len(notif.Status.SinkStatuses))
+	for i, ss := range notif.Status.SinkStatuses {
+		sinkStatuses[i] = NotifSinkStatusJSON{
+			Name:      ss.Name,
+			Success:   ss.Success,
+			Timestamp: ss.TransitionTimestamp.Format(time.RFC3339),
+			Message:   ss.Message,
+		}
+	}
+
+	result := NotifDescribeJSON{
+		Name:      notif.Name,
+		Namespace: notif.Namespace,
+		Created:   notif.CreationTimestamp.Format(time.RFC3339),
+		Labels:    notif.Labels,
+		Selector:  notif.Spec.Selector.MatchLabels,
+		Events:    events,
+		Sinks:     sinks,
+		Status: NotifStatusJSON{
+			WatchedPlans: watchedPlans,
+			SinkStatuses: sinkStatuses,
+		},
+	}
+
+	if notif.Status.LastDeliveryTime != nil {
+		result.Status.LastDelivery = notif.Status.LastDeliveryTime.Format(time.RFC3339)
+	}
+	if notif.Status.LastFailureTime != nil {
+		result.Status.LastFailure = notif.Status.LastFailureTime.Format(time.RFC3339)
+	}
+
+	if out.PlanMatch != nil {
+		result.PlanMatch = &NotifPlanMatchJSON{
+			PlanName: out.PlanMatch.PlanName,
+			Matches:  out.PlanMatch.Matches,
+		}
+	}
+
+	return result
+}
+
+func (p *JSONPrinter) notifSendDryRunToJSON(out *NotifSendDryRunOutput) NotifSendDryRunJSON {
+	return NotifSendDryRunJSON{
+		SinkName: out.SinkName,
+		SinkType: out.SinkType,
+		Event:    out.Event,
+		Rendered: out.Rendered,
+	}
 }

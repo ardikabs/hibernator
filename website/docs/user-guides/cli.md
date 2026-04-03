@@ -310,6 +310,102 @@ kubectl hibernator restore drop my-plan --target eks-cluster --resource-id ng-ma
 
 ---
 
+### `notification`
+
+Manage and test `HibernateNotification` resources.
+
+**Aliases:** `notif`
+
+#### `notification list`
+
+List all `HibernateNotification` resources with their subscribed events, sink count, watched plans, and last delivery status.
+
+**Aliases:** `ls`
+
+```bash
+kubectl hibernator notification list
+kubectl hibernator notification list -A
+kubectl hibernator notification list -n production
+kubectl hibernator notification list --plan my-plan
+kubectl hibernator notification list --json
+```
+
+| Flag | Description |
+|------|-------------|
+| `-A, --all-namespaces` | List notifications from all namespaces. |
+| `--plan` | Filter notifications whose selector matches this HibernatePlan's labels. |
+
+---
+
+#### `notification describe`
+
+Display comprehensive details about a `HibernateNotification`, including its label selector, subscribed events, sink configurations (type, secret reference, template reference), and delivery status history.
+
+```bash
+kubectl hibernator notification describe my-notification
+kubectl hibernator notification describe my-notification -n production
+kubectl hibernator notification describe my-notification --plan my-plan
+kubectl hibernator notification describe my-notification --json
+```
+
+| Flag | Description |
+|------|-------------|
+| `--plan` | Check whether this notification's selector matches the given HibernatePlan's labels. |
+
+---
+
+#### `notification send`
+
+Send a test notification by resolving the sink configuration, rendering the template, and delivering the message. This command runs locally — it calls the sink endpoint directly without involving the controller.
+
+**Aliases:** `trigger`
+
+```bash
+# Send a test notification (auto-selects sink when only one is configured)
+kubectl hibernator notification send my-notification --event Success
+
+# Send to a specific sink
+kubectl hibernator notification send my-notification --event Start --sink slack-alerts
+
+# Dry-run: render message without sending
+kubectl hibernator notification send my-notification --event Failure --dry-run
+
+# Populate payload from a real plan's current status
+kubectl hibernator notification send my-notification --event Success --plan my-plan
+
+# Use a local config file instead of reading from the cluster Secret
+kubectl hibernator notification send my-notification --event Start --config-file ./slack-config.json
+
+# Use a local Go template file instead of the cluster ConfigMap
+kubectl hibernator notification send my-notification --event Success --template-file ./custom.gotpl
+
+# Local mode: no cluster access needed
+kubectl hibernator notification send --event Success --sink-type slack --config-file ./slack-config.json
+
+# Local mode with a plan YAML from disk
+kubectl hibernator notification send --event Failure --sink-type telegram --config-file ./telegram.json --plan-file ./my-plan.yaml
+
+# Override phase in synthetic payload
+kubectl hibernator notification send my-notification --event Start --phase Hibernating
+```
+
+| Flag | Short | Description |
+|------|-------|-------------|
+| `--event` | `-e` | Event type to simulate. **Required.** One of: `Start`, `Success`, `Failure`, `Recovery`, `PhaseChange`. |
+| `--sink` | | Sink name to send to. Auto-selected if only one sink is configured. |
+| `--sink-type` | | Sink type for local mode: `slack`, `telegram`, or `webhook`. Requires `--config-file`. |
+| `--plan` | `-p` | Populate payload from this HibernatePlan's current cluster status. Mutually exclusive with `--plan-file`. |
+| `--plan-file` | `-f` | Local YAML file of a HibernatePlan to populate payload from. Mutually exclusive with `--plan`. |
+| `--config-file` | `-c` | Local JSON file for sink config (bypasses reading from the cluster Secret). |
+| `--template-file` | `-t` | Local Go template file (overrides the cluster ConfigMap template). |
+| `--dry-run` | | Render the message but do not send it. Prints the rendered output. |
+| `--phase` | | Phase to use in the synthetic payload. Defaults to a phase inferred from the event. |
+
+!!! tip "Local mode"
+    When `--sink-type` and `--config-file` are both provided, the command runs fully locally without any Kubernetes API access. The `notification-name` argument is optional in this mode. Combine with `--plan-file` to test against a real plan definition from disk.
+
+---
+
 ### `version`
 
 Print the CLI plugin version.
