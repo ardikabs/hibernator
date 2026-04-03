@@ -224,6 +224,9 @@ var _ = Describe("Execution History E2E", func() {
 			WithExecutionStrategy(hibernatorv1alpha1.ExecutionStrategy{
 				Type: hibernatorv1alpha1.StrategySequential,
 			}).
+			WithBehavior(hibernatorv1alpha1.Behavior{
+				Retries: ptr.To[int32](1),
+			}).
 			WithTarget(hibernatorv1alpha1.Target{
 				Name: "database",
 				Type: "noop",
@@ -269,6 +272,7 @@ var _ = Describe("Execution History E2E", func() {
 			if len(plan.Status.ExecutionHistory) == 0 {
 				return false
 			}
+
 			return plan.Status.ExecutionHistory[0].ShutdownExecution != nil &&
 				plan.Status.ExecutionHistory[0].ShutdownExecution.Success
 		}, testutil.DefaultTimeout, testutil.DefaultInterval).Should(BeTrue(),

@@ -269,8 +269,16 @@ spec:
                   Reset to 0 when starting new hibernation/wakeup cycle.
                 type: integer
               errorMessage:
-                description: ErrorMessage provides details about the error that caused
-                  PhaseError.
+                description: |-
+                  ErrorMessage provides details about the error that caused PhaseError.
+
+                  This field is persistent within a cycle (shutdown + wakeup pair): it is set
+                  when the plan enters PhaseError, replaced if a subsequent retry produces a
+                  different error, and only cleared when a new cycle begins. Consequently, a
+                  plan that recovered via retry may still carry the ErrorMessage from the
+                  earlier failure until the next cycle starts. A non-empty ErrorMessage on a
+                  completed operation indicates that the operation succeeded after a recovery
+                  attempt.
                 type: string
               exceptionReferences:
                 description: |-
@@ -376,6 +384,10 @@ spec:
                                 description: FinishedAt is when execution finished.
                                 format: date-time
                                 type: string
+                              message:
+                                description: Message provides details about the execution
+                                  outcome.
+                                type: string
                               startedAt:
                                 description: StartedAt is when execution started.
                                 format: date-time
@@ -448,6 +460,10 @@ spec:
                               finishedAt:
                                 description: FinishedAt is when execution finished.
                                 format: date-time
+                                type: string
+                              message:
+                                description: Message provides details about the execution
+                                  outcome.
                                 type: string
                               startedAt:
                                 description: StartedAt is when execution started.

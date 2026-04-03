@@ -429,6 +429,14 @@ type HibernatePlanStatus struct {
 	LastRetryTime *metav1.Time `json:"lastRetryTime,omitempty"`
 
 	// ErrorMessage provides details about the error that caused PhaseError.
+	//
+	// This field is persistent within a cycle (shutdown + wakeup pair): it is set
+	// when the plan enters PhaseError, replaced if a subsequent retry produces a
+	// different error, and only cleared when a new cycle begins. Consequently, a
+	// plan that recovered via retry may still carry the ErrorMessage from the
+	// earlier failure until the next cycle starts. A non-empty ErrorMessage on a
+	// completed operation indicates that the operation succeeded after a recovery
+	// attempt.
 	// +optional
 	ErrorMessage string `json:"errorMessage,omitempty"`
 

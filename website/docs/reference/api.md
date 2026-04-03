@@ -552,7 +552,7 @@ _Appears in:_
 | `observedGeneration` _integer_ | ObservedGeneration is the last observed generation. |  |  |
 | `retryCount` _integer_ | RetryCount tracks the number of retry attempts for error recovery. |  | Optional: \{\} <br /> |
 | `lastRetryTime` _[Time](https://kubernetes.io/docs/reference/generated/kubernetes-api/v1.33/#time-v1-meta)_ | LastRetryTime is when the last retry attempt was made. |  | Optional: \{\} <br /> |
-| `errorMessage` _string_ | ErrorMessage provides details about the error that caused PhaseError. |  | Optional: \{\} <br /> |
+| `errorMessage` _string_ | ErrorMessage provides details about the error that caused PhaseError.<br />This field is persistent within a cycle (shutdown + wakeup pair): it is set<br />when the plan enters PhaseError, replaced if a subsequent retry produces a<br />different error, and only cleared when a new cycle begins. Consequently, a<br />plan that recovered via retry may still carry the ErrorMessage from the<br />earlier failure until the next cycle starts. A non-empty ErrorMessage on a<br />completed operation indicates that the operation succeeded after a recovery<br />attempt. |  | Optional: \{\} <br /> |
 | `exceptionReferences` _[ExceptionReference](#exceptionreference) array_ | ExceptionReferences is the history of schedule exceptions for this plan.<br />Maximum 10 entries, ordered by: active state first (most relevant), then by ValidFrom descending (most recent first).<br />Oldest entries are pruned when limit is exceeded. |  | Optional: \{\} <br /> |
 | `currentStageIndex` _integer_ | CurrentStageIndex tracks which stage is currently executing (0-based).<br />Reset to 0 when starting new hibernation/wakeup cycle. |  | Optional: \{\} <br /> |
 | `currentOperation` _[PlanOperation](#planoperation)_ | CurrentOperation tracks the current operation type (shutdown or wakeup).<br />Used to determine which phase to transition to when stages complete. |  | Enum: [shutdown wakeup] <br />Optional: \{\} <br /> |
@@ -1064,5 +1064,6 @@ _Appears in:_
 | `executionId` _string_ | ExecutionID is the unique identifier for this target execution. |  | Optional: \{\} <br /> |
 | `startedAt` _[Time](https://kubernetes.io/docs/reference/generated/kubernetes-api/v1.33/#time-v1-meta)_ | StartedAt is when execution started. |  | Optional: \{\} <br /> |
 | `finishedAt` _[Time](https://kubernetes.io/docs/reference/generated/kubernetes-api/v1.33/#time-v1-meta)_ | FinishedAt is when execution finished. |  | Optional: \{\} <br /> |
+| `message` _string_ | Message provides details about the execution outcome. |  | Optional: \{\} <br /> |
 
 
