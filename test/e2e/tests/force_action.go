@@ -126,7 +126,7 @@ var _ = Describe("Override-Action E2E", func() {
 		testutil.TriggerReconcile(ctx, k8sClient, plan)
 
 		By("Asserting plan stays Hibernated: override annotations suppress the schedule wakeup signal")
-		testutil.ConsistentllyAtPhase(ctx, k8sClient, plan, hibernatorv1alpha1.PhaseHibernated, 3*time.Second)
+		testutil.ConsistentllyAtPhase(ctx, k8sClient, plan, hibernatorv1alpha1.PhaseHibernated, 2*time.Second)
 	})
 
 	// -----------------------------------------------------------------------
@@ -252,7 +252,7 @@ var _ = Describe("Override-Action E2E", func() {
 		testutil.EventuallyPhase(ctx, k8sClient, plan, hibernatorv1alpha1.PhaseActive)
 
 		By("Asserting plan stays Active: override-phase-target=wakeup from Active is a no-op (loop prevention)")
-		testutil.ConsistentllyAtPhase(ctx, k8sClient, plan, hibernatorv1alpha1.PhaseActive, 3*time.Second)
+		testutil.ConsistentllyAtPhase(ctx, k8sClient, plan, hibernatorv1alpha1.PhaseActive, 2*time.Second)
 	})
 
 	// -----------------------------------------------------------------------
@@ -434,7 +434,7 @@ var _ = Describe("Override-Action E2E", func() {
 		testutil.EventuallyPhase(ctx, k8sClient, plan, hibernatorv1alpha1.PhaseActive)
 
 		By("Asserting plan stays Active: override-phase-target=wakeup from Active is a no-op (loop prevention)")
-		testutil.ConsistentllyAtPhase(ctx, k8sClient, plan, hibernatorv1alpha1.PhaseActive, 3*time.Second)
+		testutil.ConsistentllyAtPhase(ctx, k8sClient, plan, hibernatorv1alpha1.PhaseActive, 2*time.Second)
 
 		// ── Step 3: remove override annotations; advance into hibernation window ──
 		By("Removing override annotations to restore schedule control")

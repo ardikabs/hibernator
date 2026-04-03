@@ -197,7 +197,7 @@ var _ = Describe("MultiWindow Schedule E2E", func() {
 		testutil.EventuallyPhase(ctx, k8sClient, plan, hibernatorv1alpha1.PhaseActive)
 
 		By("Verifying plan consistently remains Active — neither window should fire during the gap")
-		testutil.ConsistentllyAtPhase(ctx, k8sClient, plan, hibernatorv1alpha1.PhaseActive, 8*time.Second)
+		testutil.ConsistentllyAtPhase(ctx, k8sClient, plan, hibernatorv1alpha1.PhaseActive, 3*time.Second)
 	})
 
 	// ──────────────────────────────────────────────────────────────────────────

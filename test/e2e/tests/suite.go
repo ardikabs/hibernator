@@ -136,6 +136,14 @@ var _ = BeforeSuite(func() {
 	Eventually(mgr.GetCache().WaitForCacheSync(ctx), time.Second*10).Should(BeTrue())
 })
 
+// Global BeforeEach resets shared mutable state so that every spec — regardless of
+// which Describe block it belongs to — starts with a clean slate. This is critical
+// for Ginkgo multi-process parallelism (--procs=N) where spec ordering is
+// non-deterministic within each process.
+var _ = BeforeEach(func() {
+	fakeNotifSink.Reset()
+})
+
 var _ = AfterSuite(func() {
 	By("tearing down the test environment")
 	if cancel != nil {

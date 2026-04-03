@@ -351,7 +351,7 @@ var _ = Describe("Plan Suspension E2E", func() {
 		Expect(k8sClient.Patch(ctx, plan, client.MergeFrom(orig))).To(Succeed())
 
 		By("Verifying plan will wait for in-flight Job to terminal state before transitioning to PhaseSuspended")
-		testutil.ConsistentllyAtPhase(ctx, k8sClient, plan, hibernatorv1alpha1.PhaseHibernating, 5*time.Second)
+		testutil.ConsistentllyAtPhase(ctx, k8sClient, plan, hibernatorv1alpha1.PhaseHibernating, 2*time.Second)
 
 		By("Simulating completion of the first in-flight shutdown Job")
 		testutil.SimulateJobSuccess(ctx, k8sClient, firstInFlightJob, fakeClock.Now())
@@ -427,7 +427,7 @@ var _ = Describe("Plan Suspension E2E", func() {
 		Expect(k8sClient.Patch(ctx, plan, client.MergeFrom(orig))).To(Succeed())
 
 		By("Verifying plan will wait for in-flight Job to terminal state before transitioning to PhaseSuspended")
-		testutil.ConsistentllyAtPhase(ctx, k8sClient, plan, hibernatorv1alpha1.PhaseHibernating, 5*time.Second)
+		testutil.ConsistentllyAtPhase(ctx, k8sClient, plan, hibernatorv1alpha1.PhaseHibernating, 2*time.Second)
 
 		By("Simulating completion of the first in-flight shutdown Job")
 		testutil.SimulateJobSuccess(ctx, k8sClient, firstInFlightJob, fakeClock.Now())

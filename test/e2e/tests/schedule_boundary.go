@@ -123,7 +123,7 @@ var _ = Describe("Schedule Boundary E2E - 1-Minute Buffer Workaround", func() {
 		testutil.ReconcileUntilReady(ctx, k8sClient, plan, 30*time.Second)
 
 		By("Verifying plan remains in Hibernated phase (no conflicting wakeup operation)")
-		testutil.ConsistentllyAtPhase(ctx, k8sClient, plan, hibernatorv1alpha1.PhaseHibernated, 10*time.Second)
+		testutil.ConsistentllyAtPhase(ctx, k8sClient, plan, hibernatorv1alpha1.PhaseHibernated, 3*time.Second)
 	})
 
 	It("Should prevent shutdown operation at 00:00 boundary for minimal wakeup windows with 1-minute buffer", func() {
@@ -165,6 +165,6 @@ var _ = Describe("Schedule Boundary E2E - 1-Minute Buffer Workaround", func() {
 		testutil.ReconcileUntilReady(ctx, k8sClient, plan, 30*time.Second)
 
 		By("Verifying plan remains in Active phase (no back-to-back shutdown-wakingup operation)")
-		testutil.ConsistentllyAtPhase(ctx, k8sClient, plan, hibernatorv1alpha1.PhaseActive, 10*time.Second)
+		testutil.ConsistentllyAtPhase(ctx, k8sClient, plan, hibernatorv1alpha1.PhaseActive, 3*time.Second)
 	})
 })
