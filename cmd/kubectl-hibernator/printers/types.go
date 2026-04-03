@@ -140,6 +140,7 @@ type PlanStatusJSON struct {
 	RetryCount          int32                    `json:"retryCount,omitempty"`
 	LastRetryTime       string                   `json:"lastRetryTime,omitempty"`
 	Executions          []ExecutionStatusJSON    `json:"executions,omitempty"`
+	ExecutionHistory    []ExecutionCycleJSON     `json:"executionHistory,omitempty"`
 	ExceptionReferences []ExceptionReferenceJSON `json:"exceptionReferences,omitempty"`
 }
 
@@ -180,7 +181,39 @@ type RestoreResourceJSON struct {
 
 type ExceptionReferenceJSON struct {
 	Name       string `json:"name"`
+	Type       string `json:"type"`
+	ValidFrom  string `json:"validFrom"`
 	ValidUntil string `json:"validUntil"`
+	State      string `json:"state"`
+	AppliedAt  string `json:"appliedAt,omitempty"`
+}
+
+// ExecutionCycleJSON represents a single hibernation cycle in the execution history.
+type ExecutionCycleJSON struct {
+	CycleID           string                        `json:"cycleId"`
+	ShutdownExecution *ExecutionOperationSummaryJSON `json:"shutdownExecution,omitempty"`
+	WakeupExecution   *ExecutionOperationSummaryJSON `json:"wakeupExecution,omitempty"`
+}
+
+// ExecutionOperationSummaryJSON represents a shutdown or wakeup operation summary.
+type ExecutionOperationSummaryJSON struct {
+	Operation    string                      `json:"operation"`
+	StartTime    string                      `json:"startTime"`
+	EndTime      string                      `json:"endTime,omitempty"`
+	Success      bool                        `json:"success"`
+	ErrorMessage string                      `json:"errorMessage,omitempty"`
+	TargetResults []TargetExecutionResultJSON `json:"targetResults,omitempty"`
+}
+
+// TargetExecutionResultJSON represents the result of a single target execution.
+type TargetExecutionResultJSON struct {
+	Target      string `json:"target"`
+	State       string `json:"state"`
+	Attempts    int32  `json:"attempts"`
+	ExecutionID string `json:"executionId,omitempty"`
+	StartedAt   string `json:"startedAt,omitempty"`
+	FinishedAt  string `json:"finishedAt,omitempty"`
+	Message     string `json:"message,omitempty"`
 }
 
 type RestoreShowJSONOutput struct {

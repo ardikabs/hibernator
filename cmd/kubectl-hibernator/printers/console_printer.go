@@ -16,6 +16,9 @@ import (
 	"github.com/ardikabs/hibernator/internal/restore"
 	"github.com/ardikabs/hibernator/internal/scheduler"
 	"github.com/ardikabs/hibernator/internal/wellknown"
+	"github.com/samber/lo"
+	"golang.org/x/text/cases"
+	"golang.org/x/text/language"
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/utils/ptr"
 )
@@ -187,33 +190,37 @@ func (p *ConsolePrinter) printStatus(out *StatusOutput, w io.Writer) error {
 	if len(plan.Status.Executions) > 0 {
 		tw.line("  Target Executions:")
 		for _, exec := range plan.Status.Executions {
-			tw.text("  %s %-30s  %s", StateIcon(exec.State), exec.Target, exec.State)
-			if exec.Attempts > 0 {
-				tw.text("  (attempts: %d)", exec.Attempts)
-			}
-			tw.newline()
+			tw.row("  ",
+				StateIcon(exec.State),
+				exec.Target,
+				exec.State,
+				lo.Ternary(exec.Attempts > 0, fmt.Sprintf("(attempts: %d)", exec.Attempts), ""),
+			)
 
 			if exec.Message != "" {
-				tw.line("    Message:  %s", exec.Message)
+				tw.row("  ", "  ", "Message:", exec.Message)
 			}
 			if exec.StartedAt != nil {
-				tw.line("    Started:  %s", exec.StartedAt.Format(time.RFC3339))
+				tw.row("  ", "  ", "Started:", exec.StartedAt.Format(time.RFC3339))
 			}
 			if exec.FinishedAt != nil {
-				tw.line("    Finished: %s", exec.FinishedAt.Format(time.RFC3339))
+				tw.row("  ", "  ", "Finished:", exec.FinishedAt.Format(time.RFC3339))
 			}
 		}
 	}
 
+	tw.newline()
+
 	if len(plan.Status.ExecutionHistory) > 1 {
 		last := plan.Status.ExecutionHistory[len(plan.Status.ExecutionHistory)-2]
-		tw.line("\n  Last Cycle: %s", last.CycleID)
+		// tw.line("\n  Last Cycle: %s", last.CycleID)
+		tw.row("", "Last Cycle:", last.CycleID)
 
 		if last.ShutdownExecution != nil {
-			p.printOperationSummary(tw, "    Shutdown", last.ShutdownExecution)
+			p.printOperationSummary(tw, last.ShutdownExecution)
 		}
 		if last.WakeupExecution != nil {
-			p.printOperationSummary(tw, "    Wakeup", last.WakeupExecution)
+			p.printOperationSummary(tw, last.WakeupExecution)
 		}
 	}
 
@@ -233,19 +240,25 @@ func (p *ConsolePrinter) printStatus(out *StatusOutput, w io.Writer) error {
 }
 
 // printOperationSummary renders a single shutdown/wakeup cycle summary line; called internally by printStatus.
-func (p *ConsolePrinter) printOperationSummary(tw *textWriter, prefix string, op *hibernatorv1alpha1.ExecutionOperationSummary) {
-	successStr := "failed"
+func (p *ConsolePrinter) printOperationSummary(tw *textWriter, op *hibernatorv1alpha1.ExecutionOperationSummary) {
+	successStr := "Failed"
 	if op.Success {
-		successStr = "success"
+		successStr = "Succeeded"
 	}
-	tw.text("%s: %s (started: %s", prefix, successStr, op.StartTime.Format(time.RFC3339))
+
+	toTitle := cases.Title(language.English, cases.Compact)
+
+	tw.text("    %s: %s (StartedAt: %s", toTitle.String(string(op.Operation)), successStr, op.StartTime.Format(time.RFC3339))
 	if op.EndTime != nil {
-		tw.text(", ended: %s", op.EndTime.Format(time.RFC3339))
+		tw.text(", FinishedAt: %s", op.EndTime.Format(time.RFC3339))
+	}
+	if op.ErrorMessage != "" {
+		tw.text(", Error: %s", op.ErrorMessage)
 	}
 	tw.line(")")
 
-	if op.ErrorMessage != "" {
-		tw.line("%s  Error: %s", prefix, op.ErrorMessage)
+	for _, target := range op.TargetResults {
+		tw.row("  ", "  ", StateIcon(target.State), fmt.Sprintf("%s:", target.Target), lo.Ternary(target.Message != "", target.Message, "N/A"))
 	}
 }
 

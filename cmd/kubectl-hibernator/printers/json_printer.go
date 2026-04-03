@@ -186,13 +186,60 @@ func (p *JSONPrinter) buildStatusJSON(plan hibernatorv1alpha1.HibernatePlan) Pla
 	}
 
 	for _, exc := range plan.Status.ExceptionReferences {
-		status.ExceptionReferences = append(status.ExceptionReferences, ExceptionReferenceJSON{
+		ref := ExceptionReferenceJSON{
 			Name:       exc.Name,
+			Type:       string(exc.Type),
+			ValidFrom:  exc.ValidFrom.Format(time.RFC3339),
 			ValidUntil: exc.ValidUntil.Format(time.RFC3339),
-		})
+			State:      string(exc.State),
+		}
+		if exc.AppliedAt != nil {
+			ref.AppliedAt = exc.AppliedAt.Format(time.RFC3339)
+		}
+		status.ExceptionReferences = append(status.ExceptionReferences, ref)
+	}
+
+	for _, cycle := range plan.Status.ExecutionHistory {
+		c := ExecutionCycleJSON{CycleID: cycle.CycleID}
+		if cycle.ShutdownExecution != nil {
+			c.ShutdownExecution = p.operationSummaryToJSON(cycle.ShutdownExecution)
+		}
+		if cycle.WakeupExecution != nil {
+			c.WakeupExecution = p.operationSummaryToJSON(cycle.WakeupExecution)
+		}
+		status.ExecutionHistory = append(status.ExecutionHistory, c)
 	}
 
 	return status
+}
+
+func (p *JSONPrinter) operationSummaryToJSON(op *hibernatorv1alpha1.ExecutionOperationSummary) *ExecutionOperationSummaryJSON {
+	s := &ExecutionOperationSummaryJSON{
+		Operation:    string(op.Operation),
+		StartTime:    op.StartTime.Format(time.RFC3339),
+		Success:      op.Success,
+		ErrorMessage: op.ErrorMessage,
+	}
+	if op.EndTime != nil {
+		s.EndTime = op.EndTime.Format(time.RFC3339)
+	}
+	for _, tr := range op.TargetResults {
+		r := TargetExecutionResultJSON{
+			Target:      tr.Target,
+			State:       string(tr.State),
+			Attempts:    tr.Attempts,
+			ExecutionID: tr.ExecutionID,
+			Message:     tr.Message,
+		}
+		if tr.StartedAt != nil {
+			r.StartedAt = tr.StartedAt.Format(time.RFC3339)
+		}
+		if tr.FinishedAt != nil {
+			r.FinishedAt = tr.FinishedAt.Format(time.RFC3339)
+		}
+		s.TargetResults = append(s.TargetResults, r)
+	}
+	return s
 }
 
 func (p *JSONPrinter) planListToJSON(out *PlanListOutput) PlanListJSON {
@@ -240,10 +287,17 @@ func (p *JSONPrinter) scheduleToJSON(out *ScheduleOutput) (ScheduleJSON, error) 
 	}
 
 	for _, exc := range out.Exceptions {
-		result.Exceptions = append(result.Exceptions, ExceptionReferenceJSON{
+		ref := ExceptionReferenceJSON{
 			Name:       exc.Name,
+			Type:       string(exc.Type),
+			ValidFrom:  exc.ValidFrom.Format(time.RFC3339),
 			ValidUntil: exc.ValidUntil.Format(time.RFC3339),
-		})
+			State:      string(exc.State),
+		}
+		if exc.AppliedAt != nil {
+			ref.AppliedAt = exc.AppliedAt.Format(time.RFC3339)
+		}
+		result.Exceptions = append(result.Exceptions, ref)
 	}
 
 	return result, nil
