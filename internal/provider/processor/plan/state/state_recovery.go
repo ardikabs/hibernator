@@ -147,7 +147,7 @@ func (state *recoveryState) handleRetry(ctx context.Context, log logr.Logger, la
 				for i, exec := range p.Status.Executions {
 					if exec.Target == targetName && exec.State == hibernatorv1alpha1.StateFailed {
 						p.Status.Executions[i].State = hibernatorv1alpha1.StatePending
-						p.Status.Executions[i].Message = "State reset for retry (on error recovery)"
+						p.Status.Executions[i].Message = "Execution state reset for retry after failure"
 					}
 				}
 			}
