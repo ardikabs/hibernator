@@ -10,6 +10,7 @@ import (
 	"strings"
 
 	"github.com/go-logr/logr"
+	"github.com/samber/lo"
 	"github.com/samber/lo/mutable"
 	batchv1 "k8s.io/api/batch/v1"
 	corev1 "k8s.io/api/core/v1"
@@ -180,9 +181,10 @@ func FindFailedUpstream(plan *hibernatorv1alpha1.HibernatePlan, targetName strin
 // BuildOperationSummary creates a summary of the current operation from execution statuses.
 func BuildOperationSummary(clk clock.Clock, plan *hibernatorv1alpha1.HibernatePlan, operation hibernatorv1alpha1.PlanOperation) *hibernatorv1alpha1.ExecutionOperationSummary {
 	summary := &hibernatorv1alpha1.ExecutionOperationSummary{
-		Operation: operation,
-		Success:   true,
-		StartTime: metav1.NewTime(clk.Now()),
+		Operation:    operation,
+		Success:      true,
+		StartTime:    metav1.NewTime(clk.Now()),
+		ErrorMessage: plan.Status.ErrorMessage,
 	}
 
 	for _, exec := range plan.Status.Executions {
@@ -203,12 +205,13 @@ func BuildOperationSummary(clk clock.Clock, plan *hibernatorv1alpha1.HibernatePl
 		}
 
 		summary.TargetResults = append(summary.TargetResults, hibernatorv1alpha1.TargetExecutionResult{
+			ExecutionID: strings.TrimPrefix(exec.LogsRef, wellknown.ExecutionIDLogPrefix),
 			Target:      exec.Target,
 			State:       exec.State,
 			Attempts:    exec.Attempts,
-			ExecutionID: strings.TrimPrefix(exec.LogsRef, wellknown.ExecutionIDLogPrefix),
 			StartedAt:   exec.StartedAt,
 			FinishedAt:  exec.FinishedAt,
+			Message:     exec.Message,
 		})
 	}
 	return summary
@@ -216,36 +219,40 @@ func BuildOperationSummary(clk clock.Clock, plan *hibernatorv1alpha1.HibernatePl
 
 // IsOperationComplete checks if all targets in an operation have reached terminal state.
 func IsOperationComplete(plan *hibernatorv1alpha1.HibernatePlan) bool {
-	for _, exec := range plan.Status.Executions {
-		if exec.State != hibernatorv1alpha1.StateCompleted &&
-			exec.State != hibernatorv1alpha1.StateFailed &&
-			exec.State != hibernatorv1alpha1.StateAborted {
-			return false
-		}
-	}
-	return true
+	return lo.EveryBy(plan.Status.Executions, func(exec hibernatorv1alpha1.ExecutionStatus) bool {
+		return exec.State == hibernatorv1alpha1.StateCompleted ||
+			exec.State == hibernatorv1alpha1.StateFailed ||
+			exec.State == hibernatorv1alpha1.StateAborted
+	})
+}
+
+// hasExecutionProgress returns true if at least one execution has moved past
+// StatePending. Used as a guardrail to avoid writing empty execution history
+// entries when the plan errors before any target actually ran (e.g.,
+// buildExecutionPlan failure).
+func hasExecutionProgress(plan *hibernatorv1alpha1.HibernatePlan) bool {
+	return lo.SomeBy(plan.Status.Executions, func(exec hibernatorv1alpha1.ExecutionStatus) bool {
+		return exec.State != hibernatorv1alpha1.StatePending
+	})
 }
 
 // JobExistsForTarget checks if a non-stale job already exists for a given target/operation/cycleID.
 // Stale runner jobs (LabelStaleRunnerJob) are excluded — their presence does not block new job dispatch.
 func JobExistsForTarget(jobs []batchv1.Job, targetName string, operation hibernatorv1alpha1.PlanOperation, cycleID string) bool {
-	for _, job := range jobs {
+	return lo.SomeBy(jobs, func(job batchv1.Job) bool {
 		// Skip stale runner jobs marked during retry/recovery.
 		if _, ok := job.Labels[wellknown.LabelStaleRunnerJob]; ok {
-			continue
+			return false
 		}
-		if job.Labels[wellknown.LabelTarget] == targetName &&
+		return job.Labels[wellknown.LabelTarget] == targetName &&
 			job.Labels[wellknown.LabelOperation] == string(operation) &&
-			job.Labels[wellknown.LabelCycleID] == cycleID {
-			return true
-		}
-	}
-	return false
+			job.Labels[wellknown.LabelCycleID] == cycleID
+	})
 }
 
 // FilterJobsForStage returns jobs that match targets in the given stage.
 func FilterJobsForStage(jobs []batchv1.Job, stage scheduler.ExecutionStage) []batchv1.Job {
-	targetSet := make(map[string]bool, len(stage.Targets))
+	targetSet := make(map[string]bool)
 	for _, t := range stage.Targets {
 		targetSet[t] = true
 	}
@@ -265,10 +272,11 @@ func FilterJobsForStage(jobs []batchv1.Job, stage scheduler.ExecutionStage) []ba
 
 // findOrAppendCycle looks for the given cycleID in the plan status history and returns its index
 func findOrAppendCycle(st *hibernatorv1alpha1.HibernatePlanStatus, cycleID string) int {
-	for i, c := range st.ExecutionHistory {
-		if c.CycleID == cycleID {
-			return i
-		}
+	_, idx, found := lo.FindIndexOf(st.ExecutionHistory, func(c hibernatorv1alpha1.ExecutionCycle) bool {
+		return c.CycleID == cycleID
+	})
+	if found {
+		return idx
 	}
 	st.ExecutionHistory = append(st.ExecutionHistory, hibernatorv1alpha1.ExecutionCycle{CycleID: cycleID})
 	return len(st.ExecutionHistory) - 1
@@ -297,17 +305,15 @@ type executionSnapshot struct {
 // snapshotExecutionStates creates a map of target name to execution snapshot
 // for the given list of execution statuses.
 func snapshotExecutionStates(execs []hibernatorv1alpha1.ExecutionStatus) map[string]executionSnapshot {
-	m := make(map[string]executionSnapshot, len(execs))
-	for _, e := range execs {
-		m[e.Target] = executionSnapshot{
+	return lo.Associate(execs, func(e hibernatorv1alpha1.ExecutionStatus) (string, executionSnapshot) {
+		return e.Target, executionSnapshot{
 			State:    e.State,
 			Attempts: e.Attempts,
 			Message:  e.Message,
 			JobRef:   e.JobRef,
 			LogsRef:  e.LogsRef,
 		}
-	}
-	return m
+	})
 }
 
 // executionStatesEqual compares the previous execution snapshots with the current

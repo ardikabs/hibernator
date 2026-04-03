@@ -382,6 +382,9 @@ type TargetExecutionResult struct {
 	// FinishedAt is when execution finished.
 	// +optional
 	FinishedAt *metav1.Time `json:"finishedAt,omitempty"`
+	// Message provides details about the execution outcome.
+	// +optional
+	Message string `json:"message,omitempty"`
 }
 
 // ExecutionCycle groups a shutdown and corresponding wakeup operation.

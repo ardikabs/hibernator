@@ -341,6 +341,39 @@ func TestIsOperationComplete_Empty_True(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
+// hasExecutionProgress
+// ---------------------------------------------------------------------------
+
+func TestHasExecutionProgress_WithProgress_True(t *testing.T) {
+	plan := &hibernatorv1alpha1.HibernatePlan{
+		Status: hibernatorv1alpha1.HibernatePlanStatus{
+			Executions: []hibernatorv1alpha1.ExecutionStatus{
+				{Target: "a", State: hibernatorv1alpha1.StatePending},
+				{Target: "b", State: hibernatorv1alpha1.StateFailed},
+			},
+		},
+	}
+	assert.True(t, hasExecutionProgress(plan))
+}
+
+func TestHasExecutionProgress_AllPending_False(t *testing.T) {
+	plan := &hibernatorv1alpha1.HibernatePlan{
+		Status: hibernatorv1alpha1.HibernatePlanStatus{
+			Executions: []hibernatorv1alpha1.ExecutionStatus{
+				{Target: "a", State: hibernatorv1alpha1.StatePending},
+				{Target: "b", State: hibernatorv1alpha1.StatePending},
+			},
+		},
+	}
+	assert.False(t, hasExecutionProgress(plan))
+}
+
+func TestHasExecutionProgress_Empty_False(t *testing.T) {
+	plan := &hibernatorv1alpha1.HibernatePlan{}
+	assert.False(t, hasExecutionProgress(plan))
+}
+
+// ---------------------------------------------------------------------------
 // JobExistsForTarget
 // ---------------------------------------------------------------------------
 
