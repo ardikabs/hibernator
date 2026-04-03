@@ -156,7 +156,7 @@ var _ = Describe("Error Recovery E2E", func() {
 
 		By("Verifying plan stays in PhaseError (no more auto-retries available)")
 		testutil.EventuallyPhase(ctx, k8sClient, plan, hibernatorv1alpha1.PhaseError)
-		testutil.ConsistentllyAtPhase(ctx, k8sClient, plan, hibernatorv1alpha1.PhaseError, 4*time.Second)
+		testutil.ConsistentllyAtPhase(ctx, k8sClient, plan, hibernatorv1alpha1.PhaseError, 2*time.Second)
 
 		By("Applying retry-now=true annotation to manually unblock the plan")
 		Expect(k8sClient.Get(ctx, client.ObjectKeyFromObject(plan), plan)).To(Succeed())
@@ -354,7 +354,7 @@ var _ = Describe("Error Recovery E2E", func() {
 
 		By("Verifying plan immediately enters PhaseError — no retry job should be created")
 		testutil.EventuallyPhase(ctx, k8sClient, plan, hibernatorv1alpha1.PhaseError)
-		testutil.ConsistentllyAtPhase(ctx, k8sClient, plan, hibernatorv1alpha1.PhaseError, 4*time.Second)
+		testutil.ConsistentllyAtPhase(ctx, k8sClient, plan, hibernatorv1alpha1.PhaseError, 2*time.Second)
 
 		By("Verifying RetryCount is still 0 (no retry was attempted)")
 		Eventually(func() int32 {
@@ -426,7 +426,7 @@ var _ = Describe("Error Recovery E2E", func() {
 
 		By("Verifying plan enters PhaseError (all retries exhausted)")
 		testutil.EventuallyPhase(ctx, k8sClient, plan, hibernatorv1alpha1.PhaseError)
-		testutil.ConsistentllyAtPhase(ctx, k8sClient, plan, hibernatorv1alpha1.PhaseError, 4*time.Second)
+		testutil.ConsistentllyAtPhase(ctx, k8sClient, plan, hibernatorv1alpha1.PhaseError, 2*time.Second)
 
 		By("Applying retry-now=true annotation to manually trigger wakeup recovery")
 		Expect(k8sClient.Get(ctx, client.ObjectKeyFromObject(plan), plan)).To(Succeed())

@@ -31,6 +31,7 @@ DOCS_DIR   := website
 # Tool binaries
 CONTROLLER_GEN ?= $(GOBIN)/controller-gen
 ENVTEST ?= $(GOBIN)/setup-envtest
+GINKGO ?= $(GOBIN)/ginkgo
 MOCKERY ?= $(GOBIN)/mockery
 PROTOC_GEN_GO ?= $(GOBIN)/protoc-gen-go
 PROTOC_GEN_GO_GRPC ?= $(GOBIN)/protoc-gen-go-grpc
@@ -161,10 +162,17 @@ test-unit: $(COVERAGE_DIR) ## Run unit tests.
 .PHONY: test-all
 test-all: test test-e2e ## Run all tests (unit + e2e).
 
-.PHONY: test-e2e
-test-e2e: envtest ## Run E2E tests.
+.PHONY: test-e2e-local
+test-e2e-local: envtest ## Run E2E tests in local process via `go test`. Note: this does not support parallel execution via Ginkgo multi-process.
 	@echo "$(CYAN)Running E2E tests...$(RESET)"
 	$(GOCMD) test ./test/e2e/... -v -tags=e2e -ginkgo.v
+
+E2E_PROCS ?= 4
+
+.PHONY: test-e2e
+test-e2e: envtest ginkgo ## Run E2E tests in parallel via Ginkgo multi-process.
+	@echo "$(CYAN)Running E2E tests (procs=$(E2E_PROCS))...$(RESET)"
+	@KUBEBUILDER_ASSETS=$$($(ENVTEST) use -p path 2>/dev/null) $(GINKGO) --procs=$(E2E_PROCS) --tags=e2e -v ./test/e2e/...
 
 .PHONY: test-pkg
 test-pkg: ## Run tests for a specific package. Usage: make test-pkg PKG=./internal/scheduler/...
@@ -333,8 +341,15 @@ crd-ref-docs: ## Download crd-ref-docs locally if necessary.
 		go install github.com/elastic/crd-ref-docs@v0.3.0; \
 	}
 
+.PHONY: ginkgo
+ginkgo: ## Download ginkgo CLI locally if necessary.
+	@test -s $(GINKGO) || { \
+		echo "$(CYAN)Installing ginkgo CLI...$(RESET)"; \
+		go install github.com/onsi/ginkgo/v2/ginkgo@v2.27.2; \
+	}
+
 .PHONY: tools
-tools: controller-gen envtest mockery protoc-gen-go protoc-gen-go-grpc crd-ref-docs ## Install all required tools.
+tools: controller-gen envtest ginkgo mockery protoc-gen-go protoc-gen-go-grpc crd-ref-docs ## Install all required tools.
 
 # ============================================================================
 ##@ Documentation

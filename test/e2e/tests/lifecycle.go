@@ -324,6 +324,6 @@ var _ = Describe("Lifecycle E2E", func() {
 				}
 			}
 			return active
-		}, 4*time.Second, 500*time.Millisecond).Should(Equal(1), "only one active Job should exist despite multiple reconcile triggers")
+		}, 2*time.Second, 500*time.Millisecond).Should(Equal(1), "only one active Job should exist despite multiple reconcile triggers")
 	})
 })

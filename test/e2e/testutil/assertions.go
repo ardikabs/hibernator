@@ -22,8 +22,8 @@ import (
 )
 
 const (
-	DefaultTimeout  = 20 * time.Second
-	DefaultInterval = 250 * time.Millisecond
+	DefaultTimeout  = 10 * time.Second
+	DefaultInterval = 200 * time.Millisecond
 )
 
 // ConsistentllyAtPhase asserts that the HibernatePlan remains at the expected phase for the specified duration.

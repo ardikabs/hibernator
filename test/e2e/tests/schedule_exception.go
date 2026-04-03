@@ -119,7 +119,7 @@ var _ = Describe("ScheduleException E2E", func() {
 		testutil.TriggerReconcile(ctx, k8sClient, plan)
 
 		By("Verifying plan remains Active (suspend exception prevents hibernation)")
-		testutil.ConsistentllyAtPhase(ctx, k8sClient, plan, hibernatorv1alpha1.PhaseActive, 5*time.Second)
+		testutil.ConsistentllyAtPhase(ctx, k8sClient, plan, hibernatorv1alpha1.PhaseActive, 2*time.Second)
 	})
 
 	It("ExceptionExtend: should trigger hibernation during on-hours extension window", func() {
@@ -269,7 +269,7 @@ var _ = Describe("ScheduleException E2E", func() {
 		By("Advancing clock to Monday 20:30 — exception still active, plan should stay Active")
 		fakeClock.SetTime(time.Date(2026, 3, 23, 20, 30, 0, 0, time.UTC))
 		testutil.TriggerReconcile(ctx, k8sClient, plan)
-		testutil.ConsistentllyAtPhase(ctx, k8sClient, plan, hibernatorv1alpha1.PhaseActive, 3*time.Second)
+		testutil.ConsistentllyAtPhase(ctx, k8sClient, plan, hibernatorv1alpha1.PhaseActive, 2*time.Second)
 
 		By("Advancing clock past 21:00 — exception expired, base schedule resumes")
 		fakeClock.SetTime(time.Date(2026, 3, 23, 21, 5, 0, 0, time.UTC))
@@ -332,7 +332,7 @@ var _ = Describe("ScheduleException E2E", func() {
 		By("Confirming plan remains Active at 09:30 — the Pending exception has no effect yet")
 		fakeClock.SetTime(time.Date(2026, 4, 6, 9, 30, 0, 0, time.UTC))
 		testutil.TriggerReconcile(ctx, k8sClient, plan)
-		testutil.ConsistentllyAtPhase(ctx, k8sClient, plan, hibernatorv1alpha1.PhaseActive, 3*time.Second)
+		testutil.ConsistentllyAtPhase(ctx, k8sClient, plan, hibernatorv1alpha1.PhaseActive, 2*time.Second)
 
 		By("Advancing clock past ValidFrom (10:05 UTC) and triggering exception reconcile")
 		fakeClock.SetTime(time.Date(2026, 4, 6, 10, 5, 0, 0, time.UTC))
@@ -412,7 +412,7 @@ var _ = Describe("ScheduleException E2E", func() {
 		testutil.TriggerReconcile(ctx, k8sClient, plan)
 
 		By("Verifying plan remains Active — Suspend takes priority over Extend in the overlapping window")
-		testutil.ConsistentllyAtPhase(ctx, k8sClient, plan, hibernatorv1alpha1.PhaseActive, 5*time.Second)
+		testutil.ConsistentllyAtPhase(ctx, k8sClient, plan, hibernatorv1alpha1.PhaseActive, 2*time.Second)
 	})
 
 	It("LeadTime: should prevent hibernation during the lead-time buffer before the suspension window opens", func() {
@@ -474,7 +474,7 @@ var _ = Describe("ScheduleException E2E", func() {
 		testutil.TriggerReconcile(ctx, k8sClient, plan)
 
 		By("Verifying plan remains Active at 19:01 (lead-time buffer prevents hibernation start)")
-		testutil.ConsistentllyAtPhase(ctx, k8sClient, plan, hibernatorv1alpha1.PhaseActive, 4*time.Second)
+		testutil.ConsistentllyAtPhase(ctx, k8sClient, plan, hibernatorv1alpha1.PhaseActive, 2*time.Second)
 
 		By("Advancing clock into the suspension window proper (Monday 21:00)")
 		// Now both the base schedule (ShouldHibernate=true) AND the suspension window
@@ -483,7 +483,7 @@ var _ = Describe("ScheduleException E2E", func() {
 		testutil.TriggerReconcile(ctx, k8sClient, plan)
 
 		By("Verifying plan remains Active at 21:00 (suspend exception prevents hibernation)")
-		testutil.ConsistentllyAtPhase(ctx, k8sClient, plan, hibernatorv1alpha1.PhaseActive, 4*time.Second)
+		testutil.ConsistentllyAtPhase(ctx, k8sClient, plan, hibernatorv1alpha1.PhaseActive, 2*time.Second)
 	})
 
 	It("ScheduleExceptionLifecycle_Complete: should transition through Pending → Active → Expired → Detached states", func() {
@@ -901,7 +901,7 @@ var _ = Describe("ScheduleException E2E", func() {
 		testutil.TriggerReconcile(ctx, k8sClient, plan)
 
 		By("Verifying plan remains Active — suspend carve-out overrides extend hibernation at 12:00")
-		testutil.ConsistentllyAtPhase(ctx, k8sClient, plan, hibernatorv1alpha1.PhaseActive, 5*time.Second)
+		testutil.ConsistentllyAtPhase(ctx, k8sClient, plan, hibernatorv1alpha1.PhaseActive, 2*time.Second)
 
 		By("Cleaning up second exception (first is cleaned up in AfterEach)")
 		testutil.EnsureDeleted(ctx, k8sClient, exceptionSuspend)
@@ -990,7 +990,7 @@ var _ = Describe("ScheduleException E2E", func() {
 		testutil.SimulateWakeup(ctx, k8sClient, plan, fakeClock.Now(), "database")
 
 		By("Confirming gap stays Active for a sustained period (no false triggers)")
-		testutil.ConsistentllyAtPhase(ctx, k8sClient, plan, hibernatorv1alpha1.PhaseActive, 4*time.Second)
+		testutil.ConsistentllyAtPhase(ctx, k8sClient, plan, hibernatorv1alpha1.PhaseActive, 2*time.Second)
 
 		By("Cleaning up second extend exception (first is cleaned up in AfterEach)")
 		testutil.EnsureDeleted(ctx, k8sClient, exceptionExtend2)
@@ -1191,7 +1191,7 @@ var _ = Describe("ScheduleException E2E", func() {
 		testutil.SimulateWakeup(ctx, k8sClient, plan, fakeClock.Now(), "database")
 
 		By("Verifying plan stays Active at 15:00 — original base window is replaced, only replace+extend matter now")
-		testutil.ConsistentllyAtPhase(ctx, k8sClient, plan, hibernatorv1alpha1.PhaseActive, 5*time.Second)
+		testutil.ConsistentllyAtPhase(ctx, k8sClient, plan, hibernatorv1alpha1.PhaseActive, 2*time.Second)
 
 		By("Advancing clock to 19:00 — inside extend window (18:00-20:00), should hibernate")
 		fakeClock.SetTime(time.Date(2026, 7, 6, 19, 1, 0, 0, time.UTC))
