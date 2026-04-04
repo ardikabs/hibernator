@@ -324,6 +324,7 @@ If custom templates produce unexpected output:
 ### Rate Limiting
 
 External services (Slack, Telegram) enforce rate limits. The notification system uses a retryable HTTP client with up to 3 retries and exponential backoff (500ms–5s). If you see persistent errors, consider:
+
 - Reducing the number of subscribed events (e.g., drop `PhaseChange`).
 - Consolidating sinks to reduce total request volume.
 - Using a single webhook endpoint that fans out internally.
