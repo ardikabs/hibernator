@@ -320,6 +320,7 @@ func (s *state) updateExecutionStatuses(ctx context.Context,
 
 			if job.Status.Active > 0 {
 				exec.State = hibernatorv1alpha1.StateRunning
+				exec.Message = fmt.Sprintf("A %s operation is already in progress", plan.Status.CurrentOperation)
 			}
 
 			for _, cond := range job.Status.Conditions {
