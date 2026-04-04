@@ -210,6 +210,9 @@ func (s *state) executeForStage(
 // This is used during DAG BestEffort execution to skip targets whose upstream
 // dependencies have failed, while allowing independent branches to proceed.
 func (s *state) pruneTarget(plan *hibernatorv1alpha1.HibernatePlan, targetName, message string) {
+	// Snapshot before mutation so the PostHook can detect the transition.
+	prevSnapshot := snapshotExecutionStates(plan.Status.Executions)
+
 	for i := range plan.Status.Executions {
 		if plan.Status.Executions[i].Target == targetName {
 			plan.Status.Executions[i].State = hibernatorv1alpha1.StateAborted
@@ -230,6 +233,7 @@ func (s *state) pruneTarget(plan *hibernatorv1alpha1.HibernatePlan, targetName, 
 				}
 			}
 		}),
+		PostHook: s.executionProgressPostHook(prevSnapshot),
 	})
 }
 
@@ -403,6 +407,7 @@ func (s *state) updateExecutionStatuses(ctx context.Context,
 			Mutator: statusprocessor.MutatorFunc[*hibernatorv1alpha1.HibernatePlan](func(p *hibernatorv1alpha1.HibernatePlan) {
 				p.Status.Executions = executions
 			}),
+			PostHook: s.executionProgressPostHook(prevSnapshot),
 		})
 	}
 }

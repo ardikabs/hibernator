@@ -61,6 +61,7 @@ spec:
                   - Failure
                   - Recovery
                   - PhaseChange
+                  - ExecutionProgress
                   type: string
                 minItems: 1
                 type: array

@@ -105,6 +105,27 @@ func EventuallyMultiJobsCreated(ctx context.Context, k8sClient client.Client, na
 	return jobs
 }
 
+// SimulateJobRunning updates the Job status to running.
+func SimulateJobRunning(ctx context.Context, k8sClient client.Client, job *batchv1.Job, completionTime time.Time) {
+	Expect(k8sClient.Get(ctx, client.ObjectKeyFromObject(job), job)).To(Succeed())
+
+	patch := client.MergeFrom(job.DeepCopy())
+	job.Status.Active = 1
+	if job.Status.StartTime == nil {
+		job.Status.StartTime = &metav1.Time{Time: completionTime.Add(-5 * time.Minute)}
+	}
+	Expect(k8sClient.Status().Patch(ctx, job, patch)).To(Succeed())
+
+	// Verify status is actually updated in the API server
+	Eventually(func() bool {
+		var j batchv1.Job
+		if err := k8sClient.Get(ctx, client.ObjectKeyFromObject(job), &j); err != nil {
+			return false
+		}
+		return j.Status.Active > 0
+	}, DefaultTimeout, DefaultInterval).Should(BeTrueBecause("Job status should be reflected in API server"))
+}
+
 // SimulateJobSuccess updates the Job status to successful.
 func SimulateJobSuccess(ctx context.Context, k8sClient client.Client, job *batchv1.Job, completionTime time.Time) {
 	Expect(k8sClient.Get(ctx, client.ObjectKeyFromObject(job), job)).To(Succeed())

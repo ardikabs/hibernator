@@ -12,7 +12,6 @@ import (
 	"net/http"
 
 	slackapi "github.com/slack-go/slack"
-	"k8s.io/utils/ptr"
 
 	"github.com/ardikabs/hibernator/internal/notification/sink"
 )
@@ -69,8 +68,12 @@ func (s *Sink) Send(ctx context.Context, payload sink.Payload, opts sink.SendOpt
 		return fmt.Errorf("slack sink config: webhook_url is required")
 	}
 
-	tmpl := ptr.Deref(opts.CustomTemplate, DefaultTemplate)
-	content := s.renderer.Render(ctx, tmpl, payload)
+	var renderOpts []sink.RenderOption
+	if opts.CustomTemplate != nil {
+		renderOpts = append(renderOpts, sink.WithCustomTemplate(opts.CustomTemplate))
+	}
+
+	content := s.renderer.Render(ctx, payload, renderOpts...)
 	msg := &slackapi.WebhookMessage{Text: content}
 
 	if err := slackapi.PostWebhookCustomHTTPContext(ctx, cfg.WebhookURL, s.client, msg); err != nil {

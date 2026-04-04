@@ -23,7 +23,7 @@ const (
 )
 
 // NotificationEvent defines the hook point that triggers a notification.
-// +kubebuilder:validation:Enum=Start;Success;Failure;Recovery;PhaseChange
+// +kubebuilder:validation:Enum=Start;Success;Failure;Recovery;PhaseChange;ExecutionProgress
 type NotificationEvent string
 
 const (
@@ -38,6 +38,10 @@ const (
 	EventRecovery NotificationEvent = "Recovery"
 	// EventPhaseChange fires on every phase transition (PostHook). Noisy — for audit trails.
 	EventPhaseChange NotificationEvent = "PhaseChange"
+	// EventExecutionProgress fires when an individual target's execution state changes
+	// (e.g., Pending→Running, Running→Completed/Failed). Only fires on actual state
+	// transitions, not on every poll tick.
+	EventExecutionProgress NotificationEvent = "ExecutionProgress"
 )
 
 // ObjectKeyReference is a reference to a specific key in a namespaced object.

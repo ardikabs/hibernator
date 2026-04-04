@@ -469,7 +469,7 @@ _Appears in:_
 | Field | Description | Default | Validation |
 | --- | --- | --- | --- |
 | `selector` _[LabelSelector](https://kubernetes.io/docs/reference/generated/kubernetes-api/v1.33/#labelselector-v1-meta)_ | Selector selects HibernatePlans by label.<br />The notification applies to all plans in the same namespace matching this selector. |  | Required: \{\} <br /> |
-| `onEvents` _[NotificationEvent](#notificationevent) array_ | OnEvents specifies which hook points trigger this notification. |  | Enum: [Start Success Failure Recovery PhaseChange] <br />MinItems: 1 <br />Required: \{\} <br /> |
+| `onEvents` _[NotificationEvent](#notificationevent) array_ | OnEvents specifies which hook points trigger this notification. |  | Enum: [Start Success Failure Recovery PhaseChange ExecutionProgress] <br />MinItems: 1 <br />Required: \{\} <br /> |
 | `sinks` _[NotificationSink](#notificationsink) array_ | Sinks defines the notification destinations. |  | MinItems: 1 <br />Required: \{\} <br /> |
 
 
@@ -677,7 +677,7 @@ _Underlying type:_ _string_
 NotificationEvent defines the hook point that triggers a notification.
 
 _Validation:_
-- Enum: [Start Success Failure Recovery PhaseChange]
+- Enum: [Start Success Failure Recovery PhaseChange ExecutionProgress]
 
 _Appears in:_
 - [HibernateNotificationSpec](#hibernatenotificationspec)
@@ -689,6 +689,7 @@ _Appears in:_
 | `Failure` | EventFailure fires when retries exhausted and plan enters permanent Error state<br />(PostHook on Error transition, gated by retryCount >= behavior.retries).<br /> |
 | `Recovery` | EventRecovery fires each time the recovery system retries from Error (PreHook).<br /> |
 | `PhaseChange` | EventPhaseChange fires on every phase transition (PostHook). Noisy — for audit trails.<br /> |
+| `ExecutionProgress` | EventExecutionProgress fires when an individual target's execution state changes<br />(e.g., Pending→Running, Running→Completed/Failed). Only fires on actual state<br />transitions, not on every poll tick.<br /> |
 
 
 #### NotificationSink

@@ -5,9 +5,9 @@ Licensed under the Apache License, Version 2.0.
 
 // gen-sink-docs generates a Markdown reference page for notification sinks by
 // scanning the Go source files in internal/notification/sink/{type}/config.go.
-// It extracts the config struct fields (json tags, types, doc comments) and the
-// DefaultTemplate variable from each sink sub-package, then renders a unified
-// Notification Sink Reference page.
+// It extracts the config struct fields (json tags, types, doc comments) from each
+// sink sub-package and loads the DefaultTemplate from the centralized templates package,
+// then renders a unified Notification Sink Reference page.
 package main
 
 import (
@@ -21,6 +21,9 @@ import (
 	"regexp"
 	"sort"
 	"strings"
+
+	"github.com/ardikabs/hibernator/internal/notification/sink"
+	"github.com/samber/lo"
 )
 
 const (
@@ -164,9 +167,10 @@ func parseSink(root, dir, displayName, description string, extras []extraSection
 
 	for _, f := range localFiles {
 		extractSinkType(f, &info)
-		extractDefaultTemplate(f, &info)
 		extractConfigFields(f, &info)
 	}
+
+	info.DefaultTemplate = string(lo.Must(sink.TemplateFS.ReadFile(info.Type + "/" + "default.gotmpl")))
 
 	// Parse the parent sink package for cross-package type resolution
 	// (e.g., sink.Payload referenced by webhookBody).
@@ -376,29 +380,6 @@ func extractSinkType(f *ast.File, info *sinkInfo) {
 				if name.Name == "SinkType" && i < len(vs.Values) {
 					if lit, ok := vs.Values[i].(*ast.BasicLit); ok {
 						info.Type = strings.Trim(lit.Value, `"`)
-					}
-				}
-			}
-		}
-	}
-}
-
-// extractDefaultTemplate finds the DefaultTemplate variable value.
-func extractDefaultTemplate(f *ast.File, info *sinkInfo) {
-	for _, decl := range f.Decls {
-		genDecl, ok := decl.(*ast.GenDecl)
-		if !ok || genDecl.Tok != token.VAR {
-			continue
-		}
-		for _, spec := range genDecl.Specs {
-			vs, ok := spec.(*ast.ValueSpec)
-			if !ok {
-				continue
-			}
-			for i, name := range vs.Names {
-				if name.Name == "DefaultTemplate" && i < len(vs.Values) {
-					if lit, ok := vs.Values[i].(*ast.BasicLit); ok {
-						info.DefaultTemplate = unquoteBacktick(lit.Value)
 					}
 				}
 			}
@@ -637,13 +618,6 @@ func jsonPlaceholderForType(goType, jsonTag string) string {
 	default:
 		return fmt.Sprintf("\"<%s>\"", jsonTag)
 	}
-}
-
-func unquoteBacktick(s string) string {
-	if len(s) >= 2 && s[0] == '`' && s[len(s)-1] == '`' {
-		return s[1 : len(s)-1]
-	}
-	return s
 }
 
 func exprToString(expr ast.Expr) string {

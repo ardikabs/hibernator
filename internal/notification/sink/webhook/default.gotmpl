@@ -1,0 +1,1 @@
+[{{ .Event }}] {{ .Operation }} — {{ .Plan.Namespace }}/{{ .Plan.Name }} | Phase: {{ .Phase }}{{ if .TargetExecution }} | Target: {{ .TargetExecution.Name }} ({{ .TargetExecution.Executor }}) → {{ .TargetExecution.State }}{{ end }}{{ if .ErrorMessage }} | Error: {{ .ErrorMessage }}{{ end }}

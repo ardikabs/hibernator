@@ -72,11 +72,11 @@ func (s *Sink) Send(ctx context.Context, payload sink.Payload, opts sink.SendOpt
 	}
 
 	if cfg.EnableRenderer && s.renderer != nil {
-		tmpl := DefaultTemplate
+		var renderOpts []sink.RenderOption
 		if opts.CustomTemplate != nil {
-			tmpl = *opts.CustomTemplate
+			renderOpts = append(renderOpts, sink.WithCustomTemplate(opts.CustomTemplate))
 		}
-		body.Rendered = s.renderer.Render(ctx, tmpl, payload)
+		body.Rendered = s.renderer.Render(ctx, payload, renderOpts...)
 	}
 
 	jsonBody, err := json.Marshal(body)

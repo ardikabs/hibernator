@@ -53,6 +53,7 @@ Notifications fire at well-defined points in the hibernation lifecycle. Each hoo
 | `Failure` | When retries exhausted (permanent error) | **PostHook** on `Error` transition, gated by `retryCount >= behavior.retries` | Fires only when all automatic recovery attempts have been exhausted and the plan enters a permanent `Error` state. This is an escalation signal — someone needs to look at this NOW. |
 | `PhaseChange` | On every phase transition | **PostHook** on any status write where phase changed | Fires on every `phaseBefore != phaseAfter`. Noisy — intended for audit trails and debugging. |
 | `Recovery` | When recovery retry is triggered | **PreHook** on retry transition from `Error` | Early warning signal — fires each time the recovery system retries. Frequency correlates with retry attempts. Pairs with `Failure` as the escalation counterpart: Recovery warns, Failure escalates. |
+| `ExecutionProgress` | When a target's execution state changes | **PostHook** on status write where any target state changed | Fires when an individual target transitions state (e.g., Pending→Running, Running→Completed). Only fires on actual state transitions, not on every poll tick. Payload includes `TargetExecution` with the specific target that changed. |
 
 **Hook integration with the status processor:**
 
@@ -196,7 +197,7 @@ The template receives a consistent `NotificationContext` struct:
 ```go
 type NotificationContext struct {
     // Event metadata
-    Event         string    // "Start", "Success", "Failure", "Recovery", "PhaseChange"
+    Event         string    // "Start", "Success", "Failure", "Recovery", "PhaseChange", "ExecutionProgress"
     Timestamp     time.Time
     Phase         string    // Current phase after transition
     PreviousPhase string    // Phase before transition (empty on Start)
@@ -208,6 +209,10 @@ type NotificationContext struct {
 
     // Execution details (available on Success/Failure)
     Targets       []TargetInfo    // Per-target execution state
+
+    // Target-level progress (ExecutionProgress only)
+    TargetExecution *TargetInfo   // The specific target whose state just changed (nil for plan-level events)
+
     ErrorMessage  string          // Error details (Failure/Recovery only)
     RetryCount    int32           // Current retry attempt (Recovery only)
 
@@ -307,8 +312,33 @@ The notification payload passed to the template engine and to raw webhook sinks:
       "state": "Completed"
     }
   ],
+  "targetExecution": null,
   "errorMessage": "1 of 2 targets failed",
   "retryCount": 3
+}
+```
+
+For `ExecutionProgress` events, the `targetExecution` field is populated with the specific target whose state changed:
+
+```json
+{
+  "event": "ExecutionProgress",
+  "timestamp": "2026-02-16T10:00:30Z",
+  "phase": "Hibernating",
+  "previousPhase": "",
+  "operation": "Hibernate",
+  "plan": {
+    "name": "backend-db-hibernation",
+    "namespace": "prod"
+  },
+  "cycleId": "a1b2c3d4",
+  "targets": [],
+  "targetExecution": {
+    "name": "prod-rds",
+    "executor": "rds",
+    "state": "Running"
+  },
+  "retryCount": 0
 }
 ```
 

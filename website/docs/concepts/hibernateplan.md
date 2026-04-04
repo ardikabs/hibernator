@@ -162,6 +162,39 @@ targets:
 | `ec2` | EC2 instances | CloudProvider |
 | `workloadscaler` | Kubernetes workloads | K8SCluster |
 
+## Notifications
+
+Hibernator can deliver real-time notifications when lifecycle events occur — execution starting, success, failure, recovery, and individual target progress.
+
+Notifications are **not configured inside a `HibernatePlan`**. Instead, they are declared in a separate `HibernateNotification` custom resource and matched to plans using **label selectors**, the same pattern used by `ScheduleException`. A single `HibernateNotification` can target multiple plans, and a plan can match multiple notification resources simultaneously.
+
+```yaml
+apiVersion: hibernator.ardikabs.com/v1alpha1
+kind: HibernateNotification
+metadata:
+  name: prod-alerts
+  namespace: hibernator-system
+spec:
+  selector:
+    matchLabels:
+      env: production   # matches any HibernatePlan with this label
+  onEvents:
+    - Start
+    - Success
+    - Failure
+  sinks:
+    - name: slack-team
+      type: slack
+      secretRef:
+        name: slack-webhook
+```
+
+The notification dispatcher runs asynchronously and never blocks or slows down the hibernation reconciliation loop.
+
+Supported sink types: `slack`, `telegram`, `webhook`.
+
+See [User Guide: Notifications](../user-guides/notifications.md) for full configuration, custom templates, and advanced options.
+
 ## Suspension
 
 Temporarily disable a plan without deleting it:
@@ -178,3 +211,4 @@ Set back to `false` to resume.
 - [API Reference: HibernatePlan](../reference/api.md#hibernateplan) — Full field documentation
 - [User Guide: Hibernation Lifecycle](../user-guides/hibernation-lifecycle.md) — Step-by-step operations
 - [User Guide: Execution Strategies](../user-guides/execution-strategies.md) — Strategy deep dive
+- [User Guide: Notifications](../user-guides/notifications.md) — Sink configuration, events, and custom templates

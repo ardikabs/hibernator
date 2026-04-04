@@ -17,9 +17,14 @@ import (
 
 // PlanInfo carries plan metadata inside the Payload.
 type PlanInfo struct {
-	Name        string
-	Namespace   string
-	Labels      map[string]string
+	// Name represents the unique identifier of the plan.
+	Name string
+	// Namespace defines the scope, environment, or isolation boundary
+	// where the plan belongs.
+	Namespace string
+	// Labels represents the HibernatePlan's labels, which are key-value pairs.
+	Labels map[string]string
+	// Annotations represents the HibernatePlan's annotations, which are key-value pairs.
 	Annotations map[string]string
 }
 
@@ -108,6 +113,11 @@ type Payload struct {
 	// Targets holds per-target execution state (available on Success/Failure).
 	Targets []TargetInfo `json:"targets"`
 
+	// TargetExecution holds the individual target whose execution state just
+	// changed. Populated only for ExecutionProgress events; nil for plan-level
+	// events (Start, Success, Failure, Recovery, PhaseChange).
+	TargetExecution *TargetInfo `json:"targetExecution,omitempty"`
+
 	// ErrorMessage provides error details (Failure/Recovery only).
 	ErrorMessage string `json:"errorMessage"`
 
@@ -151,10 +161,10 @@ type SendOptions struct {
 	// Each sink implementation defines and parses its own JSON schema from these bytes.
 	Config []byte
 
-	// CustomTemplate optionally references a user-provided Go template string
-	// loaded from a ConfigMap. When set, sinks that support template rendering
-	// should prefer this over their built-in default template.
-	CustomTemplate *string
+	// CustomTemplate optionally references a user-provided Go template loaded
+	// from a ConfigMap. When set, sinks should pass it to Renderer via
+	// WithCustomTemplate so the engine uses it instead of the built-in default.
+	CustomTemplate *CustomTemplate
 }
 
 // Registry holds registered notification sinks.
