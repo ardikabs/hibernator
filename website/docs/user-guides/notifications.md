@@ -117,9 +117,10 @@ The `Matched` column shows how many plans currently match the label selector.
 | **Failure** | When retries are exhausted and plan enters Error phase | Alert on-call team |
 | **Recovery** | Each time a retry attempt starts from Error | Track recovery progress |
 | **PhaseChange** | On every phase transition | Audit trail (can be noisy) |
+| **ExecutionProgress** | When an individual target's execution state changes (e.g., Pending→Running) | Track per-target progress in real time |
 
 !!! tip "Choosing Events"
-    For most use cases, subscribing to `Start`, `Success`, and `Failure` provides good coverage. Add `Recovery` if you want visibility into retry attempts. Use `PhaseChange` only for audit logging — it fires on every transition and can generate significant volume.
+    For most use cases, subscribing to `Start`, `Success`, and `Failure` provides good coverage. Add `Recovery` if you want visibility into retry attempts. Add `ExecutionProgress` to track individual target state transitions (e.g., when a runner Job starts or completes). Use `PhaseChange` only for audit logging — it fires on every transition and can generate significant volume.
 
 ## Sink Configuration Reference
 
@@ -233,7 +234,7 @@ The following fields are available in templates:
 
 | Field | Type | Description |
 |-------|------|-------------|
-| `.Event` | string | `Start`, `Success`, `Failure`, `Recovery`, or `PhaseChange` |
+| `.Event` | string | `Start`, `Success`, `Failure`, `Recovery`, `PhaseChange`, or `ExecutionProgress` |
 | `.Timestamp` | time.Time | When the event occurred |
 | `.Phase` | string | Current plan phase (e.g., `Hibernating`, `Hibernated`, `Error`) |
 | `.PreviousPhase` | string | Phase before the transition (empty on Start) |
@@ -243,13 +244,14 @@ The following fields are available in templates:
 | `.Plan.Labels` | map | HibernatePlan labels |
 | `.Plan.Annotations` | map | HibernatePlan annotations |
 | `.CycleID` | string | Current execution cycle ID |
-| `.Targets` | list | Per-target execution state (see below) |
+| `.Targets` | list (**Target**) | Per-target execution state (see below) |
+| `.TargetExecution` | **Target** or nil | The specific target whose state just changed (`ExecutionProgress` only; nil for other events) |
 | `.ErrorMessage` | string | Error details (Failure/Recovery only) |
 | `.RetryCount` | int | Current retry attempt number |
 | `.SinkName` | string | Name of the sink being dispatched to |
 | `.SinkType` | string | Sink type (`slack`, `telegram`) |
 
-**Target fields** (iterate with `{{ range .Targets }}`):
+**Target** details:
 
 | Field | Description |
 |-------|-------------|

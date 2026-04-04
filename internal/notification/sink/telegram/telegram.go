@@ -88,9 +88,13 @@ func (s *Sink) Send(ctx context.Context, payload sink.Payload, opts sink.SendOpt
 		return fmt.Errorf("telegram sink config: chat_id is required")
 	}
 
-	tmpl := ptr.Deref(opts.CustomTemplate, DefaultTemplate)
+	var renderOpts []sink.RenderOption
+	if opts.CustomTemplate != nil {
+		renderOpts = append(renderOpts, sink.WithCustomTemplate(opts.CustomTemplate))
+	}
+
 	parseMode := ptr.Deref(cfg.ParseMode, string(models.ParseModeHTML))
-	content := s.renderer.Render(ctx, tmpl, payload)
+	content := s.renderer.Render(ctx, payload, renderOpts...)
 	botOpts := []bot.Option{
 		bot.WithHTTPClient(0, s.client),
 		bot.WithSkipGetMe(),

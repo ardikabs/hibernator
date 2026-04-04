@@ -26,7 +26,7 @@ import (
 // stubRenderer implements sink.Renderer for tests.
 type stubRenderer struct{}
 
-func (r *stubRenderer) Render(_ context.Context, _ string, _ sink.Payload, _ ...sink.RenderOption) string {
+func (r *stubRenderer) Render(_ context.Context, _ sink.Payload, _ ...sink.RenderOption) string {
 	return "rendered-content"
 }
 

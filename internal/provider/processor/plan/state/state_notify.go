@@ -235,3 +235,43 @@ func enrichConnectorInfo(ctx context.Context, reader client.Reader, namespace st
 		}
 	}
 }
+
+// executionProgressPostHook returns a PostHook that dispatches ExecutionProgress
+// notifications for every target whose execution state changed between
+// prevSnapshot and the written plan. Returns nil when no dispatcher or
+// notifications exist, so callers can unconditionally assign it.
+//
+// The PostHook compares prevSnapshot (captured before mutation) against the
+// written object's Executions to identify targets that transitioned state.
+// For each changed target a separate notification is dispatched with
+// TargetExecution pointing to that specific target.
+func (s *state) executionProgressPostHook(
+	prevSnapshot map[string]executionSnapshot,
+) func(context.Context, *hibernatorv1alpha1.HibernatePlan) error {
+	if s.Notifier == nil {
+		return nil
+	}
+	notifications := s.PlanCtx.Notifications
+	if len(notifications) == 0 {
+		return nil
+	}
+
+	return func(ctx context.Context, plan *hibernatorv1alpha1.HibernatePlan) error {
+		payload := buildPayload(plan, hibernatorv1alpha1.EventExecutionProgress, s.Clock.Now)
+		enrichConnectorInfo(ctx, s.APIReader, plan.Namespace, payload.Targets)
+
+		for _, target := range payload.Targets {
+			prev, ok := prevSnapshot[target.Name]
+			if ok && prev.State == hibernatorv1alpha1.ExecutionState(target.State) {
+				continue
+			}
+
+			payload.TargetExecution = &target
+			for i := range notifications {
+				submitForNotification(ctx, s.Notifier, &notifications[i], hibernatorv1alpha1.EventExecutionProgress, payload)
+			}
+		}
+
+		return nil
+	}
+}

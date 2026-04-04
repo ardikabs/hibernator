@@ -399,18 +399,19 @@ func (d *Dispatcher) dispatch(ctx context.Context, req Request) {
 
 	// Build the sink payload from the notification request.
 	sinkPayload := Payload{
-		Plan:          req.Payload.Plan,
-		Event:         req.Payload.Event,
-		Timestamp:     req.Payload.Timestamp,
-		Phase:         req.Payload.Phase,
-		PreviousPhase: req.Payload.PreviousPhase,
-		Operation:     req.Payload.Operation,
-		CycleID:       req.Payload.CycleID,
-		ErrorMessage:  req.Payload.ErrorMessage,
-		RetryCount:    req.Payload.RetryCount,
-		SinkName:      req.SinkName,
-		SinkType:      req.SinkType,
-		Targets:       req.Payload.Targets,
+		Plan:            req.Payload.Plan,
+		Event:           req.Payload.Event,
+		Timestamp:       req.Payload.Timestamp,
+		Phase:           req.Payload.Phase,
+		PreviousPhase:   req.Payload.PreviousPhase,
+		Operation:       req.Payload.Operation,
+		CycleID:         req.Payload.CycleID,
+		ErrorMessage:    req.Payload.ErrorMessage,
+		RetryCount:      req.Payload.RetryCount,
+		SinkName:        req.SinkName,
+		SinkType:        req.SinkType,
+		Targets:         req.Payload.Targets,
+		TargetExecution: req.Payload.TargetExecution,
 	}
 	if len(req.Payload.Targets) > 0 {
 		sinkPayload.Targets = make([]TargetInfo, len(req.Payload.Targets))
@@ -420,7 +421,7 @@ func (d *Dispatcher) dispatch(ctx context.Context, req Request) {
 	}
 
 	// Resolve optional custom template from ConfigMap.
-	var customTmpl *string
+	var customTmpl *sink.CustomTemplate
 	if req.TemplateRef != nil {
 		tmplStr, tmplErr := d.resolveCustomTemplate(ctx, req.Payload.Plan.Namespace, *req.TemplateRef)
 		if tmplErr != nil {
@@ -428,7 +429,13 @@ func (d *Dispatcher) dispatch(ctx context.Context, req Request) {
 				"configMap", req.TemplateRef.Name,
 				"key", req.TemplateRef.Key)
 		} else {
-			customTmpl = &tmplStr
+			customTmpl = &sink.CustomTemplate{
+				Content: tmplStr,
+				Key: types.NamespacedName{
+					Namespace: req.Payload.Plan.Namespace,
+					Name:      req.TemplateRef.Name,
+				},
+			}
 		}
 	}
 

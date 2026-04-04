@@ -16,18 +16,19 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"k8s.io/apimachinery/pkg/types"
 
 	hibernatorv1alpha1 "github.com/ardikabs/hibernator/api/v1alpha1"
 	"github.com/ardikabs/hibernator/internal/notification/sink"
 )
 
 type stubRenderer struct {
-	renderFunc func(ctx context.Context, tmplStr string, payload sink.Payload, opts ...sink.RenderOption) string
+	renderFunc func(ctx context.Context, payload sink.Payload, opts ...sink.RenderOption) string
 }
 
-func (r *stubRenderer) Render(ctx context.Context, tmplStr string, payload sink.Payload, opts ...sink.RenderOption) string {
+func (r *stubRenderer) Render(ctx context.Context, payload sink.Payload, opts ...sink.RenderOption) string {
 	if r.renderFunc != nil {
-		return r.renderFunc(ctx, tmplStr, payload, opts...)
+		return r.renderFunc(ctx, payload, opts...)
 	}
 	return "rendered-content"
 }
@@ -103,11 +104,11 @@ func TestSendWithRendererEnabled(t *testing.T) {
 }
 
 func TestSendWithRendererEnabledAndCustomTemplate(t *testing.T) {
-	var receivedTmpl string
+	var receivedOpts []sink.RenderOption
 
 	renderer := &stubRenderer{
-		renderFunc: func(_ context.Context, tmplStr string, _ sink.Payload, _ ...sink.RenderOption) string {
-			receivedTmpl = tmplStr
+		renderFunc: func(_ context.Context, _ sink.Payload, opts ...sink.RenderOption) string {
+			receivedOpts = opts
 			return "custom-rendered"
 		},
 	}
@@ -122,16 +123,19 @@ func TestSendWithRendererEnabledAndCustomTemplate(t *testing.T) {
 	defer server.Close()
 
 	cfg, _ := json.Marshal(config{URL: server.URL, EnableRenderer: true})
-	customTmpl := "{{ .Plan.Name }} custom"
+	ct := &sink.CustomTemplate{
+		Content: "{{ .Plan.Name }} custom",
+		Key:     types.NamespacedName{Namespace: "default", Name: "custom-tmpl"},
+	}
 	s := New(renderer, WithHTTPClient(&http.Client{Timeout: 5 * time.Second}))
 
 	err := s.Send(context.Background(), testPayload(), sink.SendOptions{
 		Config:         cfg,
-		CustomTemplate: &customTmpl,
+		CustomTemplate: ct,
 	})
 
 	require.NoError(t, err)
-	assert.Equal(t, "{{ .Plan.Name }} custom", receivedTmpl)
+	assert.Len(t, receivedOpts, 1, "should pass WithCustomTemplate option")
 	assert.Equal(t, "custom-rendered", receivedBody.Rendered)
 }
 
@@ -276,4 +280,70 @@ func TestSendWithConnectorInfo(t *testing.T) {
 	assert.Equal(t, "123456789012", target.Connector.AccountID)
 	assert.Equal(t, "us-east-1", target.Connector.Region)
 	assert.Equal(t, "prod-eks", target.Connector.ClusterName)
+}
+
+func TestSendWithTargetExecution(t *testing.T) {
+	var receivedBody webhookBody
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		body, err := io.ReadAll(r.Body)
+		require.NoError(t, err)
+		require.NoError(t, json.Unmarshal(body, &receivedBody))
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer server.Close()
+
+	cfg, _ := json.Marshal(config{URL: server.URL})
+	s := New(nil, WithHTTPClient(&http.Client{Timeout: 5 * time.Second}))
+
+	p := testPayload()
+	p.Event = "ExecutionProgress"
+	te := sink.TargetInfo{
+		Name:     "rds-main",
+		Executor: "rds",
+		State:    "Running",
+		Message:  "job active",
+		Connector: sink.ConnectorInfo{
+			Kind:      "CloudProvider",
+			Name:      "aws-prod",
+			Provider:  "aws",
+			AccountID: "111222333444",
+			Region:    "eu-west-1",
+		},
+	}
+	p.TargetExecution = &te
+
+	err := s.Send(context.Background(), p, sink.SendOptions{Config: cfg})
+	require.NoError(t, err)
+
+	require.NotNil(t, receivedBody.Context.TargetExecution)
+	assert.Equal(t, "rds-main", receivedBody.Context.TargetExecution.Name)
+	assert.Equal(t, "rds", receivedBody.Context.TargetExecution.Executor)
+	assert.Equal(t, "Running", receivedBody.Context.TargetExecution.State)
+	assert.Equal(t, "job active", receivedBody.Context.TargetExecution.Message)
+	assert.Equal(t, "CloudProvider", receivedBody.Context.TargetExecution.Connector.Kind)
+	assert.Equal(t, "aws-prod", receivedBody.Context.TargetExecution.Connector.Name)
+	assert.Equal(t, "111222333444", receivedBody.Context.TargetExecution.Connector.AccountID)
+}
+
+func TestSendWithoutTargetExecution_OmitsField(t *testing.T) {
+	var receivedBody webhookBody
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		body, err := io.ReadAll(r.Body)
+		require.NoError(t, err)
+		require.NoError(t, json.Unmarshal(body, &receivedBody))
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer server.Close()
+
+	cfg, _ := json.Marshal(config{URL: server.URL})
+	s := New(nil, WithHTTPClient(&http.Client{Timeout: 5 * time.Second}))
+
+	p := testPayload()
+	p.TargetExecution = nil
+
+	err := s.Send(context.Background(), p, sink.SendOptions{Config: cfg})
+	require.NoError(t, err)
+	assert.Nil(t, receivedBody.Context.TargetExecution)
 }

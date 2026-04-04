@@ -11,10 +11,6 @@ import (
 	"github.com/ardikabs/hibernator/internal/notification/sink"
 )
 
-// DefaultTemplate is the built-in Go template for webhook notifications.
-// It produces a concise one-line summary suitable for generic integrations.
-var DefaultTemplate = `[{{ .Event }}] {{ .Operation }} — {{ .Plan.Namespace }}/{{ .Plan.Name }} | Phase: {{ .Phase }}{{ if .ErrorMessage }} | Error: {{ .ErrorMessage }}{{ end }}`
-
 // config is the expected JSON schema for the Secret's "config" key.
 type config struct {
 	// URL is the endpoint to POST notifications to.
@@ -55,6 +51,9 @@ type webhookContext struct {
 	CycleID string `json:"cycleId"`
 	// Targets holds per-target execution state (available on Success/Failure).
 	Targets []webhookTargetInfo `json:"targets,omitempty"`
+	// TargetExecution holds the individual target whose execution state just
+	// changed. Populated only for ExecutionProgress events.
+	TargetExecution *webhookTargetInfo `json:"targetExecution,omitempty"`
 	// ErrorMessage provides error details (Failure/Recovery only).
 	ErrorMessage string `json:"errorMessage,omitempty"`
 	// RetryCount is the current retry attempt number (Recovery/Failure only).
@@ -115,21 +114,12 @@ type webhookConnectorInfo struct {
 func toWebhookContext(p sink.Payload) webhookContext {
 	targets := make([]webhookTargetInfo, len(p.Targets))
 	for i, t := range p.Targets {
-		targets[i] = webhookTargetInfo{
-			Name:     t.Name,
-			Executor: t.Executor,
-			State:    t.State,
-			Message:  t.Message,
-			Connector: webhookConnectorInfo{
-				Kind:        t.Connector.Kind,
-				Name:        t.Connector.Name,
-				Provider:    t.Connector.Provider,
-				AccountID:   t.Connector.AccountID,
-				ProjectID:   t.Connector.ProjectID,
-				Region:      t.Connector.Region,
-				ClusterName: t.Connector.ClusterName,
-			},
-		}
+		targets[i] = toWebhookTargetInfo(t)
+	}
+	var targetExec *webhookTargetInfo
+	if p.TargetExecution != nil {
+		te := toWebhookTargetInfo(*p.TargetExecution)
+		targetExec = &te
 	}
 	return webhookContext{
 		Plan: webhookPlanInfo{
@@ -138,16 +128,36 @@ func toWebhookContext(p sink.Payload) webhookContext {
 			Labels:      p.Plan.Labels,
 			Annotations: p.Plan.Annotations,
 		},
-		Event:         p.Event,
-		Timestamp:     p.Timestamp,
-		Phase:         p.Phase,
-		PreviousPhase: p.PreviousPhase,
-		Operation:     p.Operation,
-		CycleID:       p.CycleID,
-		Targets:       targets,
-		ErrorMessage:  p.ErrorMessage,
-		RetryCount:    p.RetryCount,
-		SinkName:      p.SinkName,
-		SinkType:      p.SinkType,
+		Event:           p.Event,
+		Timestamp:       p.Timestamp,
+		Phase:           p.Phase,
+		PreviousPhase:   p.PreviousPhase,
+		Operation:       p.Operation,
+		CycleID:         p.CycleID,
+		Targets:         targets,
+		TargetExecution: targetExec,
+		ErrorMessage:    p.ErrorMessage,
+		RetryCount:      p.RetryCount,
+		SinkName:        p.SinkName,
+		SinkType:        p.SinkType,
+	}
+}
+
+// toWebhookTargetInfo converts a sink.TargetInfo to the webhook-specific DTO.
+func toWebhookTargetInfo(t sink.TargetInfo) webhookTargetInfo {
+	return webhookTargetInfo{
+		Name:     t.Name,
+		Executor: t.Executor,
+		State:    t.State,
+		Message:  t.Message,
+		Connector: webhookConnectorInfo{
+			Kind:        t.Connector.Kind,
+			Name:        t.Connector.Name,
+			Provider:    t.Connector.Provider,
+			AccountID:   t.Connector.AccountID,
+			ProjectID:   t.Connector.ProjectID,
+			Region:      t.Connector.Region,
+			ClusterName: t.Connector.ClusterName,
+		},
 	}
 }

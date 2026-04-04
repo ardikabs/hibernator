@@ -24,8 +24,8 @@ import (
 // stubRenderer implements sink.Renderer for tests.
 type stubRenderer struct{}
 
-func (r *stubRenderer) Render(_ context.Context, tmplStr string, _ sink.Payload, _ ...sink.RenderOption) string {
-	return "rendered:" + tmplStr[:10]
+func (r *stubRenderer) Render(_ context.Context, p sink.Payload, _ ...sink.RenderOption) string {
+	return "rendered:" + p.SinkType
 }
 
 func testPayload() sink.Payload {

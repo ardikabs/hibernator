@@ -60,6 +60,10 @@ The configuration must be in a JSON object stored under `config` key in secret r
 {{ else -}}
 :recycle: *Wake-Up Retrying* (attempt {{ .RetryCount }})
 {{ end -}}
+{{ else if eq .Event "ExecutionProgress" -}}
+{{ if .TargetExecution -}}
+:gear: *Target Progress:* {{ .TargetExecution.Name }} ({{ .TargetExecution.Executor }}) → `{{ .TargetExecution.State }}`{{ if .TargetExecution.Message }} — {{ .TargetExecution.Message }}{{ end }}
+{{ end -}}
 {{ else -}}
 :information_source: *Phase Change*
 {{ end -}}
@@ -142,6 +146,10 @@ The configuration must be in a JSON object stored under `config` key in secret r
 {{ else -}}
 ♻️ <b>Wake-Up Retrying</b> (attempt {{ .RetryCount }})
 {{ end -}}
+{{ else if eq .Event "ExecutionProgress" -}}
+{{ if .TargetExecution -}}
+⚙️ <b>Target Progress:</b> {{ .TargetExecution.Name | escapeHTML }} ({{ .TargetExecution.Executor | escapeHTML }}) → <code>{{ .TargetExecution.State | escapeHTML }}</code>{{ if .TargetExecution.Message }} — {{ .TargetExecution.Message | escapeHTML }}{{ end }}
+{{ end -}}
 {{ else -}}
 ℹ️ <b>Phase Change</b>
 {{ end -}}
@@ -195,7 +203,7 @@ The configuration must be in a JSON object stored under `config` key in secret r
 ### Default Template
 
 ```gotpl
-[{{ .Event }}] {{ .Operation }} — {{ .Plan.Namespace }}/{{ .Plan.Name }} | Phase: {{ .Phase }}{{ if .ErrorMessage }} | Error: {{ .ErrorMessage }}{{ end }}
+[{{ .Event }}] {{ .Operation }} — {{ .Plan.Namespace }}/{{ .Plan.Name }} | Phase: {{ .Phase }}{{ if .TargetExecution }} | Target: {{ .TargetExecution.Name }} ({{ .TargetExecution.Executor }}) → {{ .TargetExecution.State }}{{ end }}{{ if .ErrorMessage }} | Error: {{ .ErrorMessage }}{{ end }}
 ```
 
 ### Payload
@@ -232,6 +240,21 @@ The configuration must be in a JSON object stored under `config` key in secret r
         }
       }
     ],
+    "targetExecution": {
+      "name": "<name>",
+      "executor": "<executor>",
+      "state": "<state>",
+      "message": "<message>",
+      "connector": {
+        "kind": "<kind>",
+        "name": "<name>",
+        "provider": "<provider>",
+        "accountId": "<accountId>",
+        "projectId": "<projectId>",
+        "region": "<region>",
+        "clusterName": "<clusterName>"
+      }
+    },
     "errorMessage": "<errorMessage>",
     "retryCount": 0,
     "sinkName": "<sinkName>",
@@ -268,6 +291,19 @@ The configuration must be in a JSON object stored under `config` key in secret r
 | `context.targets[].connector.projectId` | `string` | ProjectID is the cloud project identifier, it is relevant for GCP cloud provider. |
 | `context.targets[].connector.region` | `string` | Region is the cloud region. |
 | `context.targets[].connector.clusterName` | `string` | ClusterName is the Kubernetes cluster name. |
+| `context.targetExecution` | `object` | TargetExecution holds the individual target whose execution state just changed. Populated only for ExecutionProgress events. |
+| `context.targetExecution.name` | `string` | Name is the target name. |
+| `context.targetExecution.executor` | `string` | Executor is the executor type (e.g., "rds", "eks"). |
+| `context.targetExecution.state` | `string` | State is the execution state (e.g., "Completed", "Failed"). |
+| `context.targetExecution.message` | `string` | Message provides details for the target's execution state. |
+| `context.targetExecution.connector` | `object` | Connector carries resolved connector metadata. |
+| `context.targetExecution.connector.kind` | `string` | Kind is the connector type: "CloudProvider" or "K8SCluster". |
+| `context.targetExecution.connector.name` | `string` | Name is the connector resource name. |
+| `context.targetExecution.connector.provider` | `string` | Provider is the cloud provider type (e.g., "aws", "gcp"). |
+| `context.targetExecution.connector.accountId` | `string` | AccountID is the cloud account identifier, it is relevant for AWS cloud provider. |
+| `context.targetExecution.connector.projectId` | `string` | ProjectID is the cloud project identifier, it is relevant for GCP cloud provider. |
+| `context.targetExecution.connector.region` | `string` | Region is the cloud region. |
+| `context.targetExecution.connector.clusterName` | `string` | ClusterName is the Kubernetes cluster name. |
 | `context.errorMessage` | `string` | ErrorMessage provides error details (Failure/Recovery only). |
 | `context.retryCount` | `int32` | RetryCount is the current retry attempt number (Recovery/Failure only). |
 | `context.sinkName` | `string` | SinkName is the human-readable name of the sink being dispatched to. |

@@ -181,13 +181,22 @@ func runSend(ctx context.Context, opts *sendOptions, notifName string) error {
 		return err
 	}
 
+	// Build custom template struct if resolved.
+	var ct *sink.CustomTemplate
+	if customTemplate != nil {
+		ct = &sink.CustomTemplate{
+			Content: *customTemplate,
+			Key:     types.NamespacedName{Namespace: ns, Name: targetSink.TemplateRef.Name},
+		}
+	}
+
 	// Build payload
 	payload, err := buildPayload(ctx, c, ns, opts, targetSink)
 	if err != nil {
 		return err
 	}
 
-	return executeSend(ctx, opts, string(targetSink.Type), targetSink.Name, configBytes, customTemplate, payload)
+	return executeSend(ctx, opts, string(targetSink.Type), targetSink.Name, configBytes, ct, payload)
 }
 
 // runSendLocal handles fully local mode (no cluster access).
@@ -207,14 +216,16 @@ func runSendLocal(ctx context.Context, opts *sendOptions) error {
 	}
 
 	// Read optional template file
-	var customTemplate *string
+	var ct *sink.CustomTemplate
 	if opts.templateFile != "" {
 		data, err := os.ReadFile(opts.templateFile)
 		if err != nil {
 			return fmt.Errorf("failed to read template file %q: %w", opts.templateFile, err)
 		}
-		s := string(data)
-		customTemplate = &s
+		ct = &sink.CustomTemplate{
+			Content: string(data),
+			Key:     types.NamespacedName{Name: opts.templateFile, Namespace: "local"},
+		}
 	}
 
 	// Build a synthetic NotificationSink for payload construction
@@ -238,11 +249,11 @@ func runSendLocal(ctx context.Context, opts *sendOptions) error {
 		payload = buildSyntheticPayload(opts, ns, localSink)
 	}
 
-	return executeSend(ctx, opts, opts.sinkType, localSink.Name, configBytes, customTemplate, payload)
+	return executeSend(ctx, opts, opts.sinkType, localSink.Name, configBytes, ct, payload)
 }
 
 // executeSend is the shared send/dry-run logic for both cluster and local modes.
-func executeSend(ctx context.Context, opts *sendOptions, sinkType, sinkName string, configBytes []byte, customTemplate *string, payload sink.Payload) error {
+func executeSend(ctx context.Context, opts *sendOptions, sinkType, sinkName string, configBytes []byte, customTemplate *sink.CustomTemplate, payload sink.Payload) error {
 	logger := logr.FromSlogHandler(slog.NewJSONHandler(os.Stderr, &slog.HandlerOptions{
 		Level: slog.LevelDebug,
 	}))
@@ -260,8 +271,11 @@ func executeSend(ctx context.Context, opts *sendOptions, sinkType, sinkName stri
 	out := output.FromContext(ctx)
 
 	if opts.dryRun {
-		templateStr := resolveTemplateString(sendOpts.CustomTemplate, sinkType)
-		rendered := tmplEngine.Render(ctx, templateStr, payload)
+		var renderOpts []sink.RenderOption
+		if customTemplate != nil {
+			renderOpts = append(renderOpts, sink.WithCustomTemplate(customTemplate))
+		}
+		rendered := tmplEngine.Render(ctx, payload, renderOpts...)
 
 		dryRunOutput := &printers.NotifSendDryRunOutput{
 			SinkName: sinkName,
@@ -643,22 +657,5 @@ func createSinkInstance(sinkType string, renderer sink.Renderer) (sink.Sink, err
 		return webhooksink.New(renderer), nil
 	default:
 		return nil, fmt.Errorf("unsupported sink type %q", sinkType)
-	}
-}
-
-// resolveTemplateString returns the custom template or the sink's default template marker.
-// When custom is nil, we pass an empty-ish value so the sink uses its built-in default.
-func resolveTemplateString(custom *string, sinkType string) string {
-	if custom != nil {
-		return *custom
-	}
-	// Use the sink's built-in default template via the actual constant
-	switch hibernatorv1alpha1.NotificationSinkType(sinkType) {
-	case hibernatorv1alpha1.SinkSlack:
-		return slacksink.DefaultTemplate
-	case hibernatorv1alpha1.SinkTelegram:
-		return telegramsink.DefaultTemplate
-	default:
-		return "[{{ .Event }}] {{ .Operation }} — {{ .Plan.Namespace }}/{{ .Plan.Name }} | Phase: {{ .Phase }}"
 	}
 }

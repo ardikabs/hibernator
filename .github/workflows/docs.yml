@@ -28,9 +28,20 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.25'
+          cache: true
+
       - uses: actions/setup-python@v5
         with:
           python-version: '3.12'
+
+      - name: Generate auto-rendered docs reference
+        run: make generate
+
+      - name: Check for git diff in website directory
+        run: git diff --exit-code website/
 
       - name: Install dependencies
         run: pip install -r website/requirements.txt
