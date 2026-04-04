@@ -82,6 +82,20 @@ type NotificationSink struct {
 	TemplateRef *ObjectKeyReference `json:"templateRef,omitempty"`
 }
 
+// NotificationState defines the lifecycle state of a HibernateNotification.
+// +kubebuilder:validation:Enum=Bound;Detached
+type NotificationState string
+
+const (
+	// NotificationStateBound indicates the notification is attached to at least one HibernatePlan.
+	// The notification has a finalizer to ensure graceful cleanup on deletion.
+	NotificationStateBound NotificationState = "Bound"
+
+	// NotificationStateDetached indicates no HibernatePlan references this notification.
+	// The finalizer is removed so the notification can be freely deleted.
+	NotificationStateDetached NotificationState = "Detached"
+)
+
 // HibernateNotificationSpec defines the desired state of HibernateNotification.
 type HibernateNotificationSpec struct {
 	// Selector selects HibernatePlans by label.
@@ -102,6 +116,13 @@ type HibernateNotificationSpec struct {
 
 // HibernateNotificationStatus defines the observed state of HibernateNotification.
 type HibernateNotificationStatus struct {
+	// State is the lifecycle state of this notification: Bound or Detached.
+	// Bound means at least one HibernatePlan matches the selector.
+	// Detached means no HibernatePlan matches; the notification can be freely deleted.
+	// +optional
+	// +kubebuilder:default=Detached
+	State NotificationState `json:"state,omitempty"`
+
 	// WatchedPlans is the list of HibernatePlan references currently matching the selector.
 	// +optional
 	WatchedPlans []PlanReference `json:"watchedPlans,omitempty"`
@@ -150,12 +171,9 @@ type NotificationSinkStatus struct {
 // +kubebuilder:object:root=true
 // +kubebuilder:subresource:status
 // +kubebuilder:resource:scope=Namespaced,shortName=hnotif
-// +kubebuilder:printcolumn:name="Plans",type=integer,JSONPath=`.status.watchedPlans`,description="Number of watched HibernatePlans"
-// +kubebuilder:printcolumn:name="Sinks",type=integer,JSONPath=`.spec.sinks`,description="Number of configured sinks"
-// +kubebuilder:printcolumn:name="Last Delivery",type=date,JSONPath=`.status.lastDeliveryTime`,description="Last successful delivery time"
-// +kubebuilder:printcolumn:name="Last Failure",type=date,JSONPath=`.status.lastFailureTime`,description="Last failure time"
+// +kubebuilder:printcolumn:name="State",type=string,JSONPath=`.status.state`,description="Lifecycle state (Bound/Detached)"
 // +kubebuilder:printcolumn:name="Age",type=date,JSONPath=`.metadata.creationTimestamp`
-
+//
 // HibernateNotification is the Schema for the hibernatenotifications API.
 type HibernateNotification struct {
 	metav1.TypeMeta   `json:",inline"`

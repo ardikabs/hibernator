@@ -134,6 +134,81 @@ func TestHibernateNotificationValidator_Update(t *testing.T) {
 	assert.Contains(t, err.Error(), "duplicate sink name")
 }
 
+func TestHibernateNotificationValidator_Selector(t *testing.T) {
+	v := NewHibernateNotificationValidator(logr.Discard())
+
+	tests := []struct {
+		name     string
+		selector metav1.LabelSelector
+		wantErr  bool
+		errMsg   string
+	}{
+		{
+			name: "valid matchLabels",
+			selector: metav1.LabelSelector{
+				MatchLabels: map[string]string{"app": "test", "env": "prod"},
+			},
+		},
+		{
+			name: "valid matchExpressions In",
+			selector: metav1.LabelSelector{
+				MatchExpressions: []metav1.LabelSelectorRequirement{
+					{Key: "app", Operator: metav1.LabelSelectorOpIn, Values: []string{"foo", "bar"}},
+				},
+			},
+		},
+		{
+			name: "valid matchExpressions Exists",
+			selector: metav1.LabelSelector{
+				MatchExpressions: []metav1.LabelSelectorRequirement{
+					{Key: "app", Operator: metav1.LabelSelectorOpExists},
+				},
+			},
+		},
+		{
+			name:    "invalid matchExpressions In with no values",
+			wantErr: true,
+			errMsg:  "spec.selector",
+			selector: metav1.LabelSelector{
+				MatchExpressions: []metav1.LabelSelectorRequirement{
+					{Key: "app", Operator: metav1.LabelSelectorOpIn, Values: []string{}},
+				},
+			},
+		},
+		{
+			name:    "invalid matchExpressions Exists with values",
+			wantErr: true,
+			errMsg:  "spec.selector",
+			selector: metav1.LabelSelector{
+				MatchExpressions: []metav1.LabelSelectorRequirement{
+					{Key: "app", Operator: metav1.LabelSelectorOpExists, Values: []string{"foo"}},
+				},
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			notif := newTestNotification(
+				hibernatorv1alpha1.NotificationSink{
+					Name:      "s",
+					Type:      hibernatorv1alpha1.SinkSlack,
+					SecretRef: hibernatorv1alpha1.ObjectKeyReference{Name: "sec"},
+				},
+			)
+			notif.Spec.Selector = tt.selector
+
+			_, err := v.ValidateCreate(context.Background(), notif)
+			if tt.wantErr {
+				require.Error(t, err)
+				assert.Contains(t, err.Error(), tt.errMsg)
+			} else {
+				require.NoError(t, err)
+			}
+		})
+	}
+}
+
 func TestHibernateNotificationValidator_DeleteAlwaysAllowed(t *testing.T) {
 	v := NewHibernateNotificationValidator(logr.Discard())
 

@@ -6,23 +6,29 @@ Licensed under the Apache License, Version 2.0.
 package notification
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"testing"
 	"time"
 
 	"github.com/go-logr/logr"
+	"github.com/samber/lo"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"github.com/telepresenceio/watchable"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/types"
 	clocktesting "k8s.io/utils/clock/testing"
 	"sigs.k8s.io/controller-runtime/pkg/client"
+	"sigs.k8s.io/controller-runtime/pkg/client/fake"
 
 	hibernatorv1alpha1 "github.com/ardikabs/hibernator/api/v1alpha1"
 	"github.com/ardikabs/hibernator/internal/message"
 	"github.com/ardikabs/hibernator/internal/notification"
 	statusprocessor "github.com/ardikabs/hibernator/internal/provider/processor/status"
+	"github.com/ardikabs/hibernator/internal/wellknown"
 )
 
 // captureUpdater implements Updater[T] for testing. It applies the mutator
@@ -45,10 +51,24 @@ func (u *captureUpdater[T]) Send(upd statusprocessor.Update[T]) {
 func (u *captureUpdater[T]) Len() int                            { return len(u.ch) }
 func (u *captureUpdater[T]) C() <-chan statusprocessor.Update[T] { return u.ch }
 
-func newTestProcessor(t *testing.T) (*LifecycleProcessor, *captureUpdater[*hibernatorv1alpha1.HibernateNotification]) {
+func newNotificationScheme() *runtime.Scheme {
+	s := runtime.NewScheme()
+	_ = hibernatorv1alpha1.AddToScheme(s)
+	return s
+}
+
+func newTestProcessor(t *testing.T, objs ...client.Object) (*LifecycleProcessor, *captureUpdater[*hibernatorv1alpha1.HibernateNotification]) {
 	t.Helper()
+	scheme := newNotificationScheme()
+	c := fake.NewClientBuilder().
+		WithScheme(scheme).
+		WithStatusSubresource(&hibernatorv1alpha1.HibernateNotification{}).
+		WithObjects(objs...).
+		Build()
+
 	notifUpdater := newCaptureUpdater[*hibernatorv1alpha1.HibernateNotification](64)
 	p := &LifecycleProcessor{
+		Client:    c,
 		Clock:     clocktesting.NewFakeClock(time.Now()),
 		Log:       logr.Discard(),
 		Resources: &message.ControllerResources{},
@@ -92,13 +112,14 @@ func TestUpsertPlanRef_AddsNewPlan(t *testing.T) {
 	notif := baseNotification("my-notif", "slack-prod")
 	notifKey := types.NamespacedName{Name: "my-notif", Namespace: "default"}
 	planKey := types.NamespacedName{Name: "plan-a", Namespace: "default"}
-
-	p.upsertPlanRef(logr.Discard(), notifKey, notif, planKey)
+	bindingKey := lo.Must(message.NewNotificationBindingKey(notifKey, planKey))
+	p.upsertPlanRef(logr.Discard(), bindingKey, notif)
 
 	require.Equal(t, 1, updater.Len())
 	upd := <-updater.C()
 	assert.Equal(t, []hibernatorv1alpha1.PlanReference{{Name: "plan-a"}}, upd.Resource.Status.WatchedPlans)
 	assert.Equal(t, int64(1), upd.Resource.Status.ObservedGeneration)
+	assert.Equal(t, hibernatorv1alpha1.NotificationStateBound, upd.Resource.Status.State)
 }
 
 func TestUpsertPlanRef_MultiplePlans(t *testing.T) {
@@ -106,13 +127,18 @@ func TestUpsertPlanRef_MultiplePlans(t *testing.T) {
 
 	notif := baseNotification("my-notif", "slack-prod")
 	notifKey := types.NamespacedName{Name: "my-notif", Namespace: "default"}
+	planKey := types.NamespacedName{Name: "plan-a", Namespace: "default"}
+	bindingKey := lo.Must(message.NewNotificationBindingKey(notifKey, planKey))
 
-	p.upsertPlanRef(logr.Discard(), notifKey, notif, types.NamespacedName{Name: "plan-b", Namespace: "default"})
+	p.upsertPlanRef(logr.Discard(), bindingKey, notif)
 	require.Equal(t, 1, updater.Len())
 	upd := <-updater.C()
-	assert.Equal(t, []hibernatorv1alpha1.PlanReference{{Name: "plan-b"}}, upd.Resource.Status.WatchedPlans)
+	assert.Equal(t, []hibernatorv1alpha1.PlanReference{{Name: "plan-a"}}, upd.Resource.Status.WatchedPlans)
 
-	p.upsertPlanRef(logr.Discard(), notifKey, notif, types.NamespacedName{Name: "plan-a", Namespace: "default"})
+	planKey2 := types.NamespacedName{Name: "plan-b", Namespace: "default"}
+	bindingKey2 := lo.Must(message.NewNotificationBindingKey(notifKey, planKey2))
+
+	p.upsertPlanRef(logr.Discard(), bindingKey2, notif)
 	require.Equal(t, 1, updater.Len())
 	upd = <-updater.C()
 	assert.Equal(t, []hibernatorv1alpha1.PlanReference{{Name: "plan-a"}, {Name: "plan-b"}}, upd.Resource.Status.WatchedPlans)
@@ -124,9 +150,12 @@ func TestUpsertPlanRef_SkipsWhenAlreadyTracked(t *testing.T) {
 	notif := baseNotification("my-notif", "slack-prod")
 	notif.Status.WatchedPlans = []hibernatorv1alpha1.PlanReference{{Name: "plan-a"}}
 	notif.Status.ObservedGeneration = 1
+	notif.Status.State = hibernatorv1alpha1.NotificationStateBound
 	notifKey := types.NamespacedName{Name: "my-notif", Namespace: "default"}
+	planKey := types.NamespacedName{Name: "plan-a", Namespace: "default"}
+	bindingKey := lo.Must(message.NewNotificationBindingKey(notifKey, planKey))
 
-	p.upsertPlanRef(logr.Discard(), notifKey, notif, types.NamespacedName{Name: "plan-a", Namespace: "default"})
+	p.upsertPlanRef(logr.Discard(), bindingKey, notif)
 
 	assert.Equal(t, 0, updater.Len(), "should skip when plan already tracked and generation unchanged")
 }
@@ -138,8 +167,10 @@ func TestUpsertPlanRef_UpdatesWhenGenerationChanged(t *testing.T) {
 	notif.Status.WatchedPlans = []hibernatorv1alpha1.PlanReference{{Name: "plan-a"}}
 	notif.Status.ObservedGeneration = 0
 	notifKey := types.NamespacedName{Name: "my-notif", Namespace: "default"}
+	planKey := types.NamespacedName{Name: "plan-a", Namespace: "default"}
+	bindingKey := lo.Must(message.NewNotificationBindingKey(notifKey, planKey))
 
-	p.upsertPlanRef(logr.Discard(), notifKey, notif, types.NamespacedName{Name: "plan-a", Namespace: "default"})
+	p.upsertPlanRef(logr.Discard(), bindingKey, notif)
 
 	require.Equal(t, 1, updater.Len(), "should update when generation changed")
 	upd := <-updater.C()
@@ -301,32 +332,339 @@ func TestHandleDeliveryResult_CapsAtMaxHistory(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
-// syncWatchedPlans
+// handleBinding
 // ---------------------------------------------------------------------------
 
-func TestSyncWatchedPlans_NilContext(t *testing.T) {
+func TestHandleBinding_MatchedBinding_UpsertsWatchedPlan(t *testing.T) {
+	notif := baseNotification("my-notif", "slack-prod")
+	p, updater := newTestProcessor(t, notif.DeepCopy())
+
+	planKey := types.NamespacedName{Name: "plan-a", Namespace: "default"}
+
+	p.handleBinding(context.Background(), logr.Discard(), watchable.Update[message.NotificationBindingKey, *message.NotificationContext]{
+		Key: lo.Must(message.NewNotificationBindingKey(client.ObjectKeyFromObject(notif), planKey)),
+		Value: &message.NotificationContext{
+			Notification: notif,
+			PlanKey:      planKey,
+			Matches:      true,
+		},
+	})
+
+	require.Equal(t, 1, updater.Len())
+	upd := <-updater.C()
+	assert.Equal(t, []hibernatorv1alpha1.PlanReference{{Name: "plan-a"}}, upd.Resource.Status.WatchedPlans)
+}
+
+func TestHandleBinding_UnmatchedBinding_RemovesWatchedPlan(t *testing.T) {
 	p, updater := newTestProcessor(t)
 
-	p.syncWatchedPlans(nil, logr.Discard(), types.NamespacedName{Name: "plan", Namespace: "default"}, nil, nil)
+	notif := baseNotification("my-notif", "slack-prod")
+	notif.Status.WatchedPlans = []hibernatorv1alpha1.PlanReference{{Name: "plan-a"}}
+	notif.Status.State = hibernatorv1alpha1.NotificationStateBound
+	planKey := types.NamespacedName{Name: "plan-a", Namespace: "default"}
+
+	p.handleBinding(context.Background(), logr.Discard(), watchable.Update[message.NotificationBindingKey, *message.NotificationContext]{
+		Key: lo.Must(message.NewNotificationBindingKey(client.ObjectKeyFromObject(notif), planKey)),
+		Value: &message.NotificationContext{
+			Notification: notif,
+			PlanKey:      planKey,
+			Matches:      false,
+		},
+	})
+
+	require.Equal(t, 1, updater.Len())
+	upd := <-updater.C()
+	assert.Empty(t, upd.Resource.Status.WatchedPlans)
+	assert.Equal(t, hibernatorv1alpha1.NotificationStateDetached, upd.Resource.Status.State, "state should be Detached when watchedPlans becomes empty")
+}
+
+func TestHandleBinding_UnmatchedBinding_SkipsWhenNotTracked(t *testing.T) {
+	p, updater := newTestProcessor(t)
+
+	notif := baseNotification("my-notif", "slack-prod")
+	// No watchedPlans — plan-a was never tracked.
+	planKey := types.NamespacedName{Name: "plan-a", Namespace: "default"}
+
+	p.handleBinding(context.Background(), logr.Discard(), watchable.Update[message.NotificationBindingKey, *message.NotificationContext]{
+		Key: lo.Must(message.NewNotificationBindingKey(client.ObjectKeyFromObject(notif), planKey)),
+		Value: &message.NotificationContext{
+			Notification: notif,
+			PlanKey:      planKey,
+			Matches:      false,
+		},
+	})
+
+	assert.Equal(t, 0, updater.Len(), "should skip removal when plan is not tracked")
+}
+
+func TestHandleBinding_DeleteEvent_RemovesWatchedPlan(t *testing.T) {
+	p, updater := newTestProcessor(t)
+
+	notif := baseNotification("my-notif", "slack-prod")
+	notif.Status.WatchedPlans = []hibernatorv1alpha1.PlanReference{{Name: "plan-a"}, {Name: "other-plan"}}
+	planKey := types.NamespacedName{Name: "plan-a", Namespace: "default"}
+	notifKey := types.NamespacedName{Name: "my-notif", Namespace: "default"}
+	bindingKey := lo.Must(message.NewNotificationBindingKey(notifKey, planKey))
+
+	// Delete events are handled by Start() which calls removePlanRef directly.
+	p.removePlanRef(context.Background(), logr.Discard(), bindingKey, notif)
+
+	require.Equal(t, 1, updater.Len())
+	upd := <-updater.C()
+	assert.Equal(t, []hibernatorv1alpha1.PlanReference{{Name: "other-plan"}}, upd.Resource.Status.WatchedPlans)
+}
+
+func TestHandleBinding_DeleteEvent_NilValue_Skips(t *testing.T) {
+	p, updater := newTestProcessor(t)
+
+	p.handleBinding(context.Background(), logr.Discard(), watchable.Update[message.NotificationBindingKey, *message.NotificationContext]{
+		Key:    lo.Must(message.NewNotificationBindingKey(types.NamespacedName{Namespace: "default", Name: "my-notif"}, types.NamespacedName{Namespace: "default", Name: "plan-a"})),
+		Delete: true,
+		Value:  nil,
+	})
 
 	assert.Equal(t, 0, updater.Len())
 }
 
-func TestSyncWatchedPlans_SyncsAllNotifications(t *testing.T) {
+func TestHandleBinding_NilContext_Skips(t *testing.T) {
 	p, updater := newTestProcessor(t)
 
-	planCtx := &message.PlanContext{
-		Plan: &hibernatorv1alpha1.HibernatePlan{
-			ObjectMeta: metav1.ObjectMeta{Name: "my-plan", Namespace: "default"},
-		},
-		Notifications: []hibernatorv1alpha1.HibernateNotification{
-			*baseNotification("notif-1", "slack"),
-			*baseNotification("notif-2", "telegram"),
-		},
-	}
+	p.handleBinding(context.Background(), logr.Discard(), watchable.Update[message.NotificationBindingKey, *message.NotificationContext]{
+		Key:   lo.Must(message.NewNotificationBindingKey(types.NamespacedName{Namespace: "default", Name: "my-notif"}, types.NamespacedName{Namespace: "default", Name: "plan-a"})),
+		Value: nil,
+	})
 
-	planKey := types.NamespacedName{Name: "my-plan", Namespace: "default"}
-	p.syncWatchedPlans(nil, logr.Discard(), planKey, planCtx, nil)
+	assert.Equal(t, 0, updater.Len())
+}
 
-	assert.Equal(t, 2, updater.Len(), "should queue updates for both notifications")
+// ---------------------------------------------------------------------------
+// ensureFinalizer
+// ---------------------------------------------------------------------------
+
+func TestEnsureFinalizer_AddsFinalizerWhenMissing(t *testing.T) {
+	notif := baseNotification("my-notif", "slack-prod")
+	p, _ := newTestProcessor(t, notif.DeepCopy())
+
+	ctx := context.Background()
+	notifKey := types.NamespacedName{Name: "my-notif", Namespace: "default"}
+
+	p.ensureFinalizer(ctx, logr.Discard(), notifKey)
+
+	// Verify finalizer was added by re-fetching from the fake client.
+	got := new(hibernatorv1alpha1.HibernateNotification)
+	require.NoError(t, p.Get(ctx, notifKey, got))
+	assert.Contains(t, got.Finalizers, wellknown.NotificationFinalizerName)
+}
+
+func TestEnsureFinalizer_SkipsWhenAlreadyPresent(t *testing.T) {
+	notif := baseNotification("my-notif", "slack-prod")
+	notif.Finalizers = []string{wellknown.NotificationFinalizerName}
+	p, _ := newTestProcessor(t, notif.DeepCopy())
+
+	ctx := context.Background()
+	notifKey := types.NamespacedName{Name: "my-notif", Namespace: "default"}
+
+	p.ensureFinalizer(ctx, logr.Discard(), notifKey)
+
+	got := new(hibernatorv1alpha1.HibernateNotification)
+	require.NoError(t, p.Get(ctx, notifKey, got))
+	assert.Equal(t, []string{wellknown.NotificationFinalizerName}, got.Finalizers)
+}
+
+// ---------------------------------------------------------------------------
+// handleNotificationDeletion
+// ---------------------------------------------------------------------------
+
+func TestHandleNotificationDeletion_ClearsWatchedPlansAndRemovesFinalizer(t *testing.T) {
+	now := metav1.Now()
+	notif := baseNotification("my-notif", "slack-prod")
+	notif.Finalizers = []string{wellknown.NotificationFinalizerName}
+	notif.DeletionTimestamp = &now
+	notif.Status.WatchedPlans = []hibernatorv1alpha1.PlanReference{{Name: "plan-a"}, {Name: "plan-b"}}
+
+	p, updater := newTestProcessor(t, notif.DeepCopy())
+
+	ctx := context.Background()
+	notifKey := types.NamespacedName{Name: "my-notif", Namespace: "default"}
+
+	p.handleNotificationDeletion(ctx, logr.Discard(), notifKey)
+
+	// Verify watchedPlans clear was queued.
+	require.Equal(t, 1, updater.Len())
+	upd := <-updater.C()
+	assert.Nil(t, upd.Resource.Status.WatchedPlans)
+
+	// After removing the finalizer, the fake client deletes the object
+	// (DeletionTimestamp + no finalizers → gone). Verify it's actually gone,
+	// confirming the finalizer was removed and GC proceeded.
+	got := new(hibernatorv1alpha1.HibernateNotification)
+	err := p.Get(ctx, notifKey, got)
+	assert.True(t, client.IgnoreNotFound(err) == nil, "notification should be gone after finalizer removal")
+}
+
+func TestHandleNotificationDeletion_AlreadyGone(t *testing.T) {
+	// Notification doesn't exist — should not panic or produce errors.
+	p, updater := newTestProcessor(t)
+
+	ctx := context.Background()
+	notifKey := types.NamespacedName{Name: "gone-notif", Namespace: "default"}
+
+	p.handleNotificationDeletion(ctx, logr.Discard(), notifKey)
+
+	assert.Equal(t, 0, updater.Len())
+}
+
+func TestHandleNotificationDeletion_NoFinalizer(t *testing.T) {
+	now := metav1.Now()
+	notif := baseNotification("my-notif", "slack-prod")
+	notif.DeletionTimestamp = &now
+	// A different finalizer so the fake client accepts DeletionTimestamp.
+	notif.Finalizers = []string{"some-other-controller/finalizer"}
+	notif.Status.WatchedPlans = []hibernatorv1alpha1.PlanReference{{Name: "plan-a"}}
+
+	p, updater := newTestProcessor(t, notif.DeepCopy())
+
+	ctx := context.Background()
+	notifKey := types.NamespacedName{Name: "my-notif", Namespace: "default"}
+
+	p.handleNotificationDeletion(ctx, logr.Discard(), notifKey)
+
+	// WatchedPlans clear should still be queued.
+	require.Equal(t, 1, updater.Len())
+	upd := <-updater.C()
+	assert.Nil(t, upd.Resource.Status.WatchedPlans)
+
+	// Our finalizer wasn't present so the other controller's finalizer remains.
+	got := new(hibernatorv1alpha1.HibernateNotification)
+	require.NoError(t, p.Get(ctx, notifKey, got))
+	assert.Equal(t, []string{"some-other-controller/finalizer"}, got.Finalizers)
+}
+
+func TestHandleBinding_DeletionTimestamp_TriggersNotificationDeletion(t *testing.T) {
+	now := metav1.Now()
+	notif := baseNotification("my-notif", "slack-prod")
+	notif.Finalizers = []string{wellknown.NotificationFinalizerName}
+	notif.DeletionTimestamp = &now
+	notif.Status.WatchedPlans = []hibernatorv1alpha1.PlanReference{{Name: "plan-a"}}
+
+	p, updater := newTestProcessor(t, notif.DeepCopy())
+
+	planKey := types.NamespacedName{Name: "plan-a", Namespace: "default"}
+
+	p.handleBinding(context.Background(), logr.Discard(), watchable.Update[message.NotificationBindingKey, *message.NotificationContext]{
+		Key: lo.Must(message.NewNotificationBindingKey(client.ObjectKeyFromObject(notif), planKey)),
+		Value: &message.NotificationContext{
+			Notification: notif,
+			PlanKey:      planKey,
+			Matches:      true,
+		},
+	})
+
+	// Should clear watchedPlans and remove finalizer instead of upserting.
+	require.Equal(t, 1, updater.Len())
+	upd := <-updater.C()
+	assert.Nil(t, upd.Resource.Status.WatchedPlans)
+	assert.Equal(t, hibernatorv1alpha1.NotificationStateDetached, upd.Resource.Status.State)
+
+	// After removing the finalizer, the fake client deletes the object
+	// (DeletionTimestamp + no finalizers → gone).
+	got := new(hibernatorv1alpha1.HibernateNotification)
+	err := p.Get(context.Background(), types.NamespacedName{Name: "my-notif", Namespace: "default"}, got)
+	assert.True(t, client.IgnoreNotFound(err) == nil, "notification should be gone after finalizer removal")
+}
+
+// ---------------------------------------------------------------------------
+// State transitions: Bound → Detached → Bound
+// ---------------------------------------------------------------------------
+
+func TestRemovePlanRef_LastPlan_TransitionsToDetachedAndRemovesFinalizer(t *testing.T) {
+	notif := baseNotification("my-notif", "slack-prod")
+	notif.Finalizers = []string{wellknown.NotificationFinalizerName}
+	notif.Status.WatchedPlans = []hibernatorv1alpha1.PlanReference{{Name: "plan-a"}}
+	notif.Status.State = hibernatorv1alpha1.NotificationStateBound
+
+	p, updater := newTestProcessor(t, notif.DeepCopy())
+
+	ctx := context.Background()
+	notifKey := types.NamespacedName{Name: "my-notif", Namespace: "default"}
+	planKey := types.NamespacedName{Name: "plan-a", Namespace: "default"}
+	bindingKey := lo.Must(message.NewNotificationBindingKey(notifKey, planKey))
+	p.removePlanRef(ctx, logr.Discard(), bindingKey, notif)
+
+	// Status update: Detached + empty watchedPlans.
+	require.Equal(t, 1, updater.Len())
+	upd := <-updater.C()
+	assert.Empty(t, upd.Resource.Status.WatchedPlans)
+	assert.Equal(t, hibernatorv1alpha1.NotificationStateDetached, upd.Resource.Status.State)
+
+	// Finalizer should have been removed.
+	got := new(hibernatorv1alpha1.HibernateNotification)
+	require.NoError(t, p.Get(ctx, notifKey, got))
+	assert.NotContains(t, got.Finalizers, wellknown.NotificationFinalizerName)
+}
+
+func TestRemovePlanRef_NotLastPlan_StaysBound(t *testing.T) {
+	notif := baseNotification("my-notif", "slack-prod")
+	notif.Finalizers = []string{wellknown.NotificationFinalizerName}
+	notif.Status.WatchedPlans = []hibernatorv1alpha1.PlanReference{{Name: "plan-a"}, {Name: "plan-b"}}
+	notif.Status.State = hibernatorv1alpha1.NotificationStateBound
+
+	p, updater := newTestProcessor(t, notif.DeepCopy())
+
+	ctx := context.Background()
+	notifKey := types.NamespacedName{Name: "my-notif", Namespace: "default"}
+	planKey := types.NamespacedName{Name: "plan-a", Namespace: "default"}
+	bindingKey := lo.Must(message.NewNotificationBindingKey(notifKey, planKey))
+
+	p.removePlanRef(ctx, logr.Discard(), bindingKey, notif)
+
+	// Status update: plan-b remains.
+	require.Equal(t, 1, updater.Len())
+	upd := <-updater.C()
+	assert.Equal(t, []hibernatorv1alpha1.PlanReference{{Name: "plan-b"}}, upd.Resource.Status.WatchedPlans)
+	// State not changed by the mutator (plan-b still exists).
+
+	// Finalizer should still be present.
+	got := new(hibernatorv1alpha1.HibernateNotification)
+	require.NoError(t, p.Get(ctx, notifKey, got))
+	assert.Contains(t, got.Finalizers, wellknown.NotificationFinalizerName)
+}
+
+func TestRemoveFinalizer_RemovesWhenPresent(t *testing.T) {
+	notif := baseNotification("my-notif", "slack-prod")
+	notif.Finalizers = []string{wellknown.NotificationFinalizerName}
+
+	p, _ := newTestProcessor(t, notif.DeepCopy())
+
+	ctx := context.Background()
+	notifKey := types.NamespacedName{Name: "my-notif", Namespace: "default"}
+
+	p.removeFinalizer(ctx, logr.Discard(), notifKey)
+
+	got := new(hibernatorv1alpha1.HibernateNotification)
+	require.NoError(t, p.Get(ctx, notifKey, got))
+	assert.NotContains(t, got.Finalizers, wellknown.NotificationFinalizerName)
+}
+
+func TestRemoveFinalizer_SkipsWhenAbsent(t *testing.T) {
+	notif := baseNotification("my-notif", "slack-prod")
+	// No finalizer set.
+
+	p, _ := newTestProcessor(t, notif.DeepCopy())
+
+	ctx := context.Background()
+	notifKey := types.NamespacedName{Name: "my-notif", Namespace: "default"}
+
+	p.removeFinalizer(ctx, logr.Discard(), notifKey)
+
+	got := new(hibernatorv1alpha1.HibernateNotification)
+	require.NoError(t, p.Get(ctx, notifKey, got))
+	assert.Empty(t, got.Finalizers)
+}
+
+func TestRemoveFinalizer_NotFoundIsNoop(t *testing.T) {
+	p, _ := newTestProcessor(t)
+
+	// Should not panic when the notification doesn't exist.
+	p.removeFinalizer(context.Background(), logr.Discard(), types.NamespacedName{Name: "gone", Namespace: "default"})
 }

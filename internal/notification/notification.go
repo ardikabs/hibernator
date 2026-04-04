@@ -100,7 +100,7 @@ func WithDeliveryCallback(cb DeliveryCallback) Option {
 //
 // This is the single public entry point that hides all notification internals
 // from the setup/wiring layer.
-func New(log logr.Logger, c client.Client, opts ...Option) Instance {
+func New(log logr.Logger, cl client.Reader, opts ...Option) Instance {
 	cfg := &config{}
 	for _, o := range opts {
 		o(cfg)
@@ -120,11 +120,9 @@ func New(log logr.Logger, c client.Client, opts ...Option) Instance {
 		registry.Register(s)
 	}
 
-	log = log.WithName("notification")
-
 	dispatcher := NewDispatcher(
 		log.WithName("dispatcher"),
-		c,
+		cl,
 		registry,
 		cfg.dispatcherConfig,
 	)
