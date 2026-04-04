@@ -98,7 +98,7 @@ func Setup(mgr ctrl.Manager, clk clock.Clock, opts ProviderOptions) error {
 		mgr.GetClient(),
 		mgr.GetAPIReader())
 
-	notificationStatusProcessor := statusprocessor.NewUpdateProcessor[*hibernatorv1alpha1.HibernateNotification](
+	notifStatusProcessor := statusprocessor.NewUpdateProcessor[*hibernatorv1alpha1.HibernateNotification](
 		opts.Logger.WithName("processor").WithName("notification-status"),
 		mgr.GetClient(),
 		mgr.GetAPIReader())
@@ -106,25 +106,8 @@ func Setup(mgr ctrl.Manager, clk clock.Clock, opts ProviderOptions) error {
 	statuses := &statusprocessor.ControllerStatuses{
 		PlanStatuses:         planStatusProcessor.Writer(),
 		ExceptionStatuses:    exceptionStatusProcessor.Writer(),
-		NotificationStatuses: notificationStatusProcessor.Writer(),
+		NotificationStatuses: notifStatusProcessor.Writer(),
 	}
-
-	// --- Notification Lifecycle ---
-	notifLifecycle := &notificationprocessor.LifecycleProcessor{
-		Clock:     clk,
-		Log:       opts.Logger.WithName("processor").WithName("notification"),
-		Resources: resources,
-		Statuses:  statuses,
-	}
-
-	// --- Notification Dispatcher ---
-	notifInstance := notification.New(
-		opts.Logger.WithName("notification"),
-		mgr.GetClient(),
-		append(opts.NotificationOptions,
-			notification.WithDeliveryCallback(notifLifecycle.HandleDeliveryResult),
-		)...,
-	)
 
 	// --- Providers (K8s reconciler → watchable map) ---
 	provider := &PlanReconciler{
@@ -148,6 +131,22 @@ func Setup(mgr ctrl.Manager, clk clock.Clock, opts ProviderOptions) error {
 
 	// --- Processors (watchable map → status updates) ---
 	// Registered as Runnables via mgr.Add() — started when the manager starts.
+
+	// --- Notification Lifecycle Processor---
+	notifLifecycleProcessor := &notificationprocessor.LifecycleProcessor{
+		Client:    mgr.GetClient(),
+		Clock:     clk,
+		Log:       opts.Logger.WithName("processor").WithName("notification"),
+		Resources: resources,
+		Statuses:  statuses,
+	}
+
+	// --- Notification Dispatcher ---
+	notifInstance := notification.New(
+		opts.Logger.WithName("processor").WithName("notification"),
+		mgr.GetAPIReader(),
+		append(opts.NotificationOptions, notification.WithDeliveryCallback(notifLifecycleProcessor.HandleDeliveryResult))...,
+	)
 
 	processors := []struct {
 		name     string
@@ -200,11 +199,11 @@ func Setup(mgr ctrl.Manager, clk clock.Clock, opts ProviderOptions) error {
 		},
 		{
 			name:     "notification.lifecycle",
-			runnable: notifLifecycle,
+			runnable: notifLifecycleProcessor,
 		},
 		{
 			name:     "notification.status",
-			runnable: notificationStatusProcessor,
+			runnable: notifStatusProcessor,
 		},
 		{
 			name:     "notification.dispatcher",

@@ -9,6 +9,7 @@ import (
 	"context"
 	"fmt"
 
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/util/validation/field"
 	"sigs.k8s.io/controller-runtime/pkg/webhook/admission"
@@ -60,12 +61,25 @@ func (v *HibernateNotificationValidator) ValidateDelete(_ context.Context, _ run
 func (v *HibernateNotificationValidator) validate(notif *hibernatorv1alpha1.HibernateNotification) (admission.Warnings, error) {
 	var allErrs field.ErrorList
 
+	allErrs = append(allErrs, v.validateSelector(notif)...)
 	allErrs = append(allErrs, v.validateSinkNameUniqueness(notif)...)
 
 	if len(allErrs) > 0 {
 		return nil, allErrs.ToAggregate()
 	}
 	return nil, nil
+}
+
+// validateSelector ensures spec.selector is a valid Kubernetes label selector.
+func (v *HibernateNotificationValidator) validateSelector(notif *hibernatorv1alpha1.HibernateNotification) field.ErrorList {
+	var errs field.ErrorList
+	selectorPath := field.NewPath("spec", "selector")
+
+	if _, err := metav1.LabelSelectorAsSelector(&notif.Spec.Selector); err != nil {
+		errs = append(errs, field.Invalid(selectorPath, notif.Spec.Selector, err.Error()))
+	}
+
+	return errs
 }
 
 // validateSinkNameUniqueness ensures that all sink names within a notification are unique.

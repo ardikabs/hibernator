@@ -74,6 +74,11 @@ type PlanReconciler struct {
 	// detects a meaningful change and re-delivers the context to subscribers even when
 	// no HibernatePlan field has changed.
 	DependencyNonces dependencyNonceMap
+
+	// NotificationBindings tracks the set of NotificationResources binding keys that
+	// each plan has written, allowing cleanup of stale entries when a notification
+	// disappears from the namespace or when a plan is deleted.
+	NotificationBindings notificationBindingTracker
 }
 
 // +kubebuilder:rbac:groups=hibernator.ardikabs.com,resources=hibernatenotifications,verbs=get;list;watch;create;update;patch;delete
@@ -102,9 +107,11 @@ func (r *PlanReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.
 	plan := new(hibernatorv1alpha1.HibernatePlan)
 	if err := r.Get(ctx, key, plan); err != nil {
 		if apierrors.IsNotFound(err) {
-			// Plan deleted — remove from watchable map and clean up the dependency nonce.
+			// Plan deleted — remove from watchable map, clean up dependency nonce,
+			// and delete all notification bindings for this plan.
 			r.Resources.PlanResources.Delete(key)
 			r.DependencyNonces.Delete(key)
+			r.deleteNotificationBindings(key)
 			return ctrl.Result{}, nil
 		}
 		return ctrl.Result{}, err
@@ -121,8 +128,9 @@ func (r *PlanReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.
 		log.Error(err, "failed to fetch all exceptions")
 	}
 
-	// Fetch matching HibernateNotifications via label selector.
-	notifications, err := r.fetchAllNotifications(ctx, plan)
+	// Fetch matching HibernateNotifications via label selector and publish
+	// notification bindings to NotificationResources.
+	notifications, err := r.fetchAndPublishNotifications(ctx, plan, key)
 	if err != nil {
 		log.Error(err, "failed to fetch notifications")
 	}
@@ -180,9 +188,11 @@ func (r *PlanReconciler) fetchAllExceptions(ctx context.Context, plan *hibernato
 	return exceptionList.Items, nil
 }
 
-// fetchAllNotifications retrieves all HibernateNotifications in the plan's namespace
-// whose label selector matches the plan's labels.
-func (r *PlanReconciler) fetchAllNotifications(ctx context.Context, plan *hibernatorv1alpha1.HibernatePlan) ([]hibernatorv1alpha1.HibernateNotification, error) {
+// fetchAndPublishNotifications retrieves all HibernateNotifications in the plan's
+// namespace, publishes a NotificationContext binding for each one (matched or not)
+// to NotificationResources, cleans up stale bindings from the previous reconcile,
+// and returns only the matched notifications for inclusion in PlanContext.
+func (r *PlanReconciler) fetchAndPublishNotifications(ctx context.Context, plan *hibernatorv1alpha1.HibernatePlan, planKey types.NamespacedName) ([]hibernatorv1alpha1.HibernateNotification, error) {
 	var notifList hibernatorv1alpha1.HibernateNotificationList
 	if err := r.List(ctx, &notifList, client.InNamespace(plan.Namespace)); err != nil {
 		return nil, err
@@ -190,7 +200,12 @@ func (r *PlanReconciler) fetchAllNotifications(ctx context.Context, plan *hibern
 
 	planLabels := labels.Set(plan.Labels)
 	var matched []hibernatorv1alpha1.HibernateNotification
-	for _, notif := range notifList.Items {
+	currentKeys := make(map[message.NotificationBindingKey]struct{}, len(notifList.Items))
+
+	for i := range notifList.Items {
+		notif := &notifList.Items[i]
+		matches := false
+
 		selector, err := metav1.LabelSelectorAsSelector(&notif.Spec.Selector)
 		if err != nil {
 			// Skip notifications with invalid selectors — validation webhook
@@ -198,11 +213,37 @@ func (r *PlanReconciler) fetchAllNotifications(ctx context.Context, plan *hibern
 			continue
 		}
 		if selector.Matches(planLabels) {
-			matched = append(matched, notif)
+			matches = true
+			matched = append(matched, *notif)
 		}
+
+		bindingKey, err := message.NewNotificationBindingKey(client.ObjectKeyFromObject(notif), client.ObjectKeyFromObject(plan))
+		if err != nil {
+			return nil, err
+		}
+		currentKeys[bindingKey] = struct{}{}
+		r.Resources.NotificationResources.Store(bindingKey, &message.NotificationContext{
+			Notification: notif,
+			PlanKey:      planKey,
+			PlanLabels:   plan.Labels,
+			Matches:      matches,
+		})
 	}
 
+	// Clean up stale bindings from the previous reconcile (e.g., notification deleted
+	// from the namespace since last reconcile).
+	r.NotificationBindings.Reconcile(planKey, currentKeys, func(staleKey message.NotificationBindingKey) {
+		r.Resources.NotificationResources.Delete(staleKey)
+	})
+
 	return matched, nil
+}
+
+// deleteNotificationBindings removes all notification bindings for a deleted plan.
+func (r *PlanReconciler) deleteNotificationBindings(planKey types.NamespacedName) {
+	r.NotificationBindings.DeletePlan(planKey, func(bindingKey message.NotificationBindingKey) {
+		r.Resources.NotificationResources.Delete(bindingKey)
+	})
 }
 
 // evaluateSchedule checks if we should be in hibernation based on schedule and active exceptions.
@@ -358,7 +399,11 @@ func (r *PlanReconciler) findPlansForException(ctx context.Context, obj client.O
 }
 
 // findPlansForNotification returns reconcile requests for all HibernatePlans in the same namespace
-// whose labels match the notification's selector.
+// whose labels match the notification's selector. When a notification changes, matching plans
+// are reconciled, which causes the provider to re-evaluate and publish updated notification
+// bindings to NotificationResources. The lifecycle processor reacts to those binding changes.
+// However, if no plans match the notification then all plans in the namespace are reconciled to ensure
+// stale bindings are cleaned up and the lifecycle processor can remove the notification finalizer.
 func (r *PlanReconciler) findPlansForNotification(ctx context.Context, obj client.Object) []reconcile.Request {
 	notif, ok := obj.(*hibernatorv1alpha1.HibernateNotification)
 	if !ok {
@@ -371,24 +416,26 @@ func (r *PlanReconciler) findPlansForNotification(ctx context.Context, obj clien
 	}
 
 	var planList hibernatorv1alpha1.HibernatePlanList
-	if err := r.List(ctx, &planList,
-		client.InNamespace(notif.Namespace),
-		client.MatchingLabelsSelector{Selector: selector},
-	); err != nil {
+	if err := r.List(ctx, &planList, client.InNamespace(notif.Namespace)); err != nil {
 		r.Log.Error(err, "failed to list plans for notification", "notification", client.ObjectKeyFromObject(notif))
 		return nil
 	}
 
-	requests := make([]reconcile.Request, len(planList.Items))
-	for i, plan := range planList.Items {
-		requests[i] = reconcile.Request{
-			NamespacedName: types.NamespacedName{
-				Name:      plan.Name,
-				Namespace: plan.Namespace,
-			},
+	var (
+		matchedPlans   []reconcile.Request
+		unMatchedPlans []reconcile.Request
+	)
+
+	for _, plan := range planList.Items {
+		planLabels := labels.Set(plan.Labels)
+		if selector.Matches(planLabels) {
+			matchedPlans = append(matchedPlans, reconcile.Request{NamespacedName: client.ObjectKeyFromObject(&plan)})
+			continue
 		}
+
+		unMatchedPlans = append(unMatchedPlans, reconcile.Request{NamespacedName: client.ObjectKeyFromObject(&plan)})
 	}
-	return requests
+	return lo.Ternary(len(matchedPlans) == 0, unMatchedPlans, matchedPlans)
 }
 
 // onJobTerminalUpdate is the predicate UpdateFunc for owned Jobs. It detects the
@@ -460,6 +507,18 @@ func (r *PlanReconciler) SetupWithManager(mgr ctrl.Manager, workers int) error {
 		GenericFunc: func(_ event.GenericEvent) bool { return false },
 	}
 
+	// notificationDeletionPredicate passes through updates where DeletionTimestamp
+	// transitions from zero to non-zero. This ensures plan reconciles fire so the
+	// lifecycle processor can clean up watchedPlans and remove the notification finalizer.
+	notificationDeletionPredicate := predicate.Funcs{
+		UpdateFunc: func(e event.UpdateEvent) bool {
+			if e.ObjectOld == nil || e.ObjectNew == nil {
+				return false
+			}
+			return e.ObjectOld.GetDeletionTimestamp().IsZero() && !e.ObjectNew.GetDeletionTimestamp().IsZero()
+		},
+	}
+
 	// jobTerminalPredicate triggers provider reconciliation only when an owned Job
 	// first reaches a terminal state.  We detect this via the monotonically
 	// increasing Succeeded/Failed counters rather than the Active counter, because
@@ -483,6 +542,7 @@ func (r *PlanReconciler) SetupWithManager(mgr ctrl.Manager, workers int) error {
 			predicate.Or(
 				predicate.GenerationChangedPredicate{},
 				predicate.AnnotationChangedPredicate{},
+				predicate.LabelChangedPredicate{},
 			),
 		)).
 		Owns(&batchv1.Job{}, builder.WithPredicates(jobTerminalPredicate)).
@@ -494,14 +554,22 @@ func (r *PlanReconciler) SetupWithManager(mgr ctrl.Manager, workers int) error {
 			// schedule evaluation uses ValidFrom/ValidUntil directly. Suppressing
 			// scheduleexception status writes eliminates the scheduleexception.LifecycleProcessor
 			// status-write → reconcile loop.
-			builder.WithPredicates(predicate.GenerationChangedPredicate{}),
+			builder.WithPredicates(predicate.Or(
+				predicate.GenerationChangedPredicate{},
+				predicate.AnnotationChangedPredicate{},
+			)),
 		).
 		Watches(
 			&hibernatorv1alpha1.HibernateNotification{},
 			handler.EnqueueRequestsFromMapFunc(r.findPlansForNotification),
-			// Only Spec changes matter — selector or sink changes affect which plans
-			// receive notifications. Status writes are excluded.
-			builder.WithPredicates(predicate.GenerationChangedPredicate{}),
+			// Spec/annotation changes affect which plans receive notifications.
+			// DeletionTimestamp transitions trigger plan reconciles so the lifecycle
+			// processor can clean up watchedPlans and remove the notification finalizer.
+			builder.WithPredicates(predicate.Or(
+				predicate.GenerationChangedPredicate{},
+				predicate.AnnotationChangedPredicate{},
+				notificationDeletionPredicate,
+			)),
 		).
 		WatchesRawSource(source.Channel(r.EnqueueCh, &handler.EnqueueRequestForObject{})).
 		WithOptions(controller.Options{

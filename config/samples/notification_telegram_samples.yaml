@@ -1,0 +1,121 @@
+# Telegram Notification Sample
+#
+# This sample demonstrates how to configure a HibernateNotification resource
+# that sends Telegram messages when a HibernatePlan's lifecycle events occur.
+#
+# Prerequisites:
+#   1. Create a Telegram bot via @BotFather: https://core.telegram.org/bots#botfather
+#   2. Obtain the bot token (format: <id>:<hash>, e.g. "123456789:AABBccDDee...")
+#   3. Obtain the target chat ID:
+#      - For a group/channel: add the bot, send a message, then call
+#        https://api.telegram.org/bot<TOKEN>/getUpdates to find the chat_id
+#      - For a private chat: start a conversation with the bot and call getUpdates
+#      - Channel usernames can also be used (e.g. "@myalertchannel")
+#
+# Steps to deploy:
+#   1. kubectl apply -f notification_telegram_samples.yaml
+#   2. Verify the notification resource is watching plans:
+#      kubectl get hnotif -n hibernator-system telegram-alerts
+---
+# Secret holding the Telegram bot credentials and configuration.
+# The "config" key must be valid JSON matching the Telegram sink schema.
+apiVersion: v1
+kind: Secret
+metadata:
+  name: telegram-bot-credentials
+  namespace: hibernator-system
+type: Opaque
+stringData:
+  config: |
+    {
+      "token": "123456789:AABBccDDeeFFggHHiiJJkkLLmmNNoopp",
+      "chat_id": "-1001234567890",
+      "parse_mode": "HTML"
+    }
+---
+# (Optional) Custom message template stored in a ConfigMap.
+# If omitted the built-in Telegram HTML template is used — see
+# internal/notification/sink/telegram/config.go for the default.
+#
+# The template receives a RenderPayload with fields:
+#   .Event         — Start | Success | Failure | Recovery | PhaseChange
+#   .Operation     — shutdown | wakeup
+#   .Plan.Name     — HibernatePlan name
+#   .Plan.Namespace
+#   .Phase         — current phase
+#   .PreviousPhase — previous phase (may be empty)
+#   .ErrorMessage  — error detail on failure (may be empty)
+#   .RetryCount    — retry attempt number
+#   .Timestamp     — time.Time of the event
+#   .Targets[]     — list of target execution results
+#     .Name        — target name
+#     .Executor    — executor type (eks, rds, ec2, …)
+#     .State       — execution state
+#     .Connector.AccountID, .Connector.Region, .Connector.ClusterName
+#
+# Available template functions: escapeHTML, default, date, len
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: telegram-custom-template
+  namespace: hibernator-system
+data:
+  template.gotpl: |
+    {{ if eq .Event "Start" -}}
+    ▶️ <b>{{ if eq .Operation "shutdown" }}Hibernation Starting{{ else }}Wake-Up Starting{{ end }}</b>
+    {{- else if eq .Event "Success" -}}
+    ✅ <b>{{ if eq .Operation "shutdown" }}Hibernation Completed{{ else }}Wake-Up Completed{{ end }}</b>
+    {{- else if eq .Event "Failure" -}}
+    🔴 <b>{{ if eq .Operation "shutdown" }}Hibernation Failed{{ else }}Wake-Up Failed{{ end }}</b>
+    {{- else if eq .Event "Recovery" -}}
+    ♻️ <b>Retrying</b> (attempt {{ .RetryCount }})
+    {{- else -}}
+    ℹ️ <b>Phase Change</b>
+    {{- end }}
+    <b>Plan:</b> {{ .Plan.Name | escapeHTML }} / {{ .Plan.Namespace | escapeHTML }}
+    <b>Phase:</b> {{ .Phase | escapeHTML }}
+    {{- if .ErrorMessage }}
+    <b>Error:</b> {{ .ErrorMessage | escapeHTML }}
+    {{- end }}
+    <b>Time:</b> {{ .Timestamp | date "2006-01-02 15:04:05 MST" }}
+---
+# HibernateNotification — wires plans to the Telegram sink.
+#
+# selector: targets all HibernatePlans labelled env=production in the same namespace.
+# onEvents: notifies on Start, Success, and Failure only (omitting PhaseChange to reduce noise).
+apiVersion: hibernator.ardikabs.com/v1alpha1
+kind: HibernateNotification
+metadata:
+  name: telegram-alerts
+  namespace: hibernator-system
+spec:
+  # Select which HibernatePlans this notification applies to.
+  # Use matchLabels / matchExpressions as with any LabelSelector.
+  # To target ALL plans in the namespace use an empty selector: {}
+  selector:
+    matchLabels:
+      env: production
+
+  # Lifecycle events that trigger a notification.
+  # Options: Start | Success | Failure | Recovery | PhaseChange
+  onEvents:
+    - Start
+    - Success
+    - Failure
+    - Recovery
+
+  sinks:
+    - name: telegram-ops
+      type: telegram
+      # Reference the Secret created above.
+      secretRef:
+        name: telegram-bot-credentials
+        # key defaults to "config" — only set this if you use a custom key name.
+        # key: config
+
+      # Reference the custom template ConfigMap (optional).
+      # Remove this block to fall back to the built-in default template.
+      templateRef:
+        name: telegram-custom-template
+        # key defaults to "template.gotpl"
+        # key: template.gotpl

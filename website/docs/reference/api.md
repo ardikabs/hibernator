@@ -486,6 +486,7 @@ _Appears in:_
 
 | Field | Description | Default | Validation |
 | --- | --- | --- | --- |
+| `state` _[NotificationState](#notificationstate)_ | State is the lifecycle state of this notification: Bound or Detached.<br />Bound means at least one HibernatePlan matches the selector.<br />Detached means no HibernatePlan matches; the notification can be freely deleted. | Detached | Enum: [Bound Detached] <br />Optional: \{\} <br /> |
 | `watchedPlans` _[PlanReference](#planreference) array_ | WatchedPlans is the list of HibernatePlan references currently matching the selector. |  | Optional: \{\} <br /> |
 | `lastDeliveryTime` _[Time](https://kubernetes.io/docs/reference/generated/kubernetes-api/v1.33/#time-v1-meta)_ | LastDeliveryTime is the timestamp of the most recent successful notification delivery<br />across all sinks. Nil if no successful delivery has occurred. |  | Optional: \{\} <br /> |
 | `lastFailureTime` _[Time](https://kubernetes.io/docs/reference/generated/kubernetes-api/v1.33/#time-v1-meta)_ | LastFailureTime is the timestamp of the most recent failed notification delivery<br />across all sinks. Nil if no failure has occurred. |  | Optional: \{\} <br /> |
@@ -748,6 +749,24 @@ _Appears in:_
 | `slack` | SinkSlack sends notifications via Slack Incoming Webhook URL.<br /> |
 | `telegram` | SinkTelegram sends notifications via Telegram Bot API.<br /> |
 | `webhook` | SinkWebhook sends notifications via generic HTTP POST webhook.<br /> |
+
+
+#### NotificationState
+
+_Underlying type:_ _string_
+
+NotificationState defines the lifecycle state of a HibernateNotification.
+
+_Validation:_
+- Enum: [Bound Detached]
+
+_Appears in:_
+- [HibernateNotificationStatus](#hibernatenotificationstatus)
+
+| Field | Description |
+| --- | --- |
+| `Bound` | NotificationStateBound indicates the notification is attached to at least one HibernatePlan.<br />The notification has a finalizer to ensure graceful cleanup on deletion.<br /> |
+| `Detached` | NotificationStateDetached indicates no HibernatePlan references this notification.<br />The finalizer is removed so the notification can be freely deleted.<br /> |
 
 
 #### ObjectKeyReference

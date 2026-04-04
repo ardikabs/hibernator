@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/go-logr/logr"
+	"github.com/samber/lo"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	batchv1 "k8s.io/api/batch/v1"
@@ -356,10 +357,10 @@ func TestFindPlansForException_NonExceptionObject_ReturnsNil(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
-// PlanReconciler.fetchAllNotifications
+// PlanReconciler.fetchAndPublishNotifications
 // ---------------------------------------------------------------------------
 
-func TestFetchAllNotifications_MatchingSelector_ReturnsNotifications(t *testing.T) {
+func TestFetchAndPublishNotifications_MatchingSelector_PublishesBinding(t *testing.T) {
 	clk := clocktesting.NewFakeClock(time.Now())
 	plan := simplePlan("my-plan", "default")
 	plan.Labels = map[string]string{"env": "prod", "team": "infra"}
@@ -372,22 +373,28 @@ func TestFetchAllNotifications_MatchingSelector_ReturnsNotifications(t *testing.
 			},
 			OnEvents: []hibernatorv1alpha1.NotificationEvent{hibernatorv1alpha1.EventStart},
 			Sinks: []hibernatorv1alpha1.NotificationSink{
-				{
-					Name: "slack", Type: hibernatorv1alpha1.SinkSlack,
-					SecretRef: hibernatorv1alpha1.ObjectKeyReference{Name: "sink-config"},
-				},
+				{Name: "slack", Type: hibernatorv1alpha1.SinkSlack, SecretRef: hibernatorv1alpha1.ObjectKeyReference{Name: "sink-config"}},
 			},
 		},
 	}
-	r, _ := newPlanReconciler(clk, plan, notif)
+	r, resources := newPlanReconciler(clk, plan, notif)
 
-	result, err := r.fetchAllNotifications(context.Background(), plan)
+	planKey := types.NamespacedName{Name: "my-plan", Namespace: "default"}
+	matched, err := r.fetchAndPublishNotifications(context.Background(), plan, planKey)
 	require.NoError(t, err)
-	assert.Len(t, result, 1)
-	assert.Equal(t, "notif-1", result[0].Name)
+	require.Len(t, matched, 1)
+	assert.Equal(t, "notif-1", matched[0].Name)
+
+	// Verify binding was published to NotificationResources.
+	bindingKey := lo.Must(message.NewNotificationBindingKey(client.ObjectKeyFromObject(notif), planKey))
+	nc, ok := resources.NotificationResources.Load(bindingKey)
+	require.True(t, ok)
+	assert.True(t, nc.Matches)
+	assert.Equal(t, planKey, nc.PlanKey)
+	assert.Equal(t, "notif-1", nc.Notification.Name)
 }
 
-func TestFetchAllNotifications_NonMatchingSelector_ReturnsEmpty(t *testing.T) {
+func TestFetchAndPublishNotifications_NonMatchingSelector_PublishesUnmatchedBinding(t *testing.T) {
 	clk := clocktesting.NewFakeClock(time.Now())
 	plan := simplePlan("my-plan", "default")
 	plan.Labels = map[string]string{"env": "staging"}
@@ -404,14 +411,22 @@ func TestFetchAllNotifications_NonMatchingSelector_ReturnsEmpty(t *testing.T) {
 			},
 		},
 	}
-	r, _ := newPlanReconciler(clk, plan, notif)
+	r, resources := newPlanReconciler(clk, plan, notif)
 
-	result, err := r.fetchAllNotifications(context.Background(), plan)
+	planKey := types.NamespacedName{Name: "my-plan", Namespace: "default"}
+	matched, err := r.fetchAndPublishNotifications(context.Background(), plan, planKey)
 	require.NoError(t, err)
-	assert.Empty(t, result)
+	assert.Empty(t, matched)
+
+	// Binding should still be published with Matches=false.
+	bindingKey := lo.Must(message.NewNotificationBindingKey(client.ObjectKeyFromObject(notif), planKey))
+
+	nc, ok := resources.NotificationResources.Load(bindingKey)
+	require.True(t, ok)
+	assert.False(t, nc.Matches)
 }
 
-func TestFetchAllNotifications_DifferentNamespace_NotReturned(t *testing.T) {
+func TestFetchAndPublishNotifications_DifferentNamespace_NothingPublished(t *testing.T) {
 	clk := clocktesting.NewFakeClock(time.Now())
 	plan := simplePlan("my-plan", "default")
 	plan.Labels = map[string]string{"env": "prod"}
@@ -428,14 +443,18 @@ func TestFetchAllNotifications_DifferentNamespace_NotReturned(t *testing.T) {
 			},
 		},
 	}
-	r, _ := newPlanReconciler(clk, plan, notif)
+	r, resources := newPlanReconciler(clk, plan, notif)
 
-	result, err := r.fetchAllNotifications(context.Background(), plan)
+	planKey := types.NamespacedName{Name: "my-plan", Namespace: "default"}
+	matched, err := r.fetchAndPublishNotifications(context.Background(), plan, planKey)
 	require.NoError(t, err)
-	assert.Empty(t, result)
+	assert.Empty(t, matched)
+
+	// No binding should exist since notification is in a different namespace.
+	assert.Empty(t, resources.NotificationResources.Len())
 }
 
-func TestFetchAllNotifications_MultipleNotifications_FiltersCorrectly(t *testing.T) {
+func TestFetchAndPublishNotifications_MultipleNotifications_PartitionsCorrectly(t *testing.T) {
 	clk := clocktesting.NewFakeClock(time.Now())
 	plan := simplePlan("my-plan", "default")
 	plan.Labels = map[string]string{"env": "prod", "team": "infra"}
@@ -464,15 +483,27 @@ func TestFetchAllNotifications_MultipleNotifications_FiltersCorrectly(t *testing
 			},
 		},
 	}
-	r, _ := newPlanReconciler(clk, plan, matching, nonmatching)
+	r, resources := newPlanReconciler(clk, plan, matching, nonmatching)
 
-	result, err := r.fetchAllNotifications(context.Background(), plan)
+	planKey := types.NamespacedName{Name: "my-plan", Namespace: "default"}
+	matched, err := r.fetchAndPublishNotifications(context.Background(), plan, planKey)
 	require.NoError(t, err)
-	require.Len(t, result, 1)
-	assert.Equal(t, "notif-match", result[0].Name)
+	require.Len(t, matched, 1)
+	assert.Equal(t, "notif-match", matched[0].Name)
+
+	// Both bindings should exist in NotificationResources.
+	bindingKey1 := lo.Must(message.NewNotificationBindingKey(client.ObjectKeyFromObject(matching), planKey))
+	ncMatch, ok := resources.NotificationResources.Load(bindingKey1)
+	require.True(t, ok)
+	assert.True(t, ncMatch.Matches)
+
+	bindingKey2 := lo.Must(message.NewNotificationBindingKey(client.ObjectKeyFromObject(nonmatching), planKey))
+	ncNoMatch, ok := resources.NotificationResources.Load(bindingKey2)
+	require.True(t, ok)
+	assert.False(t, ncNoMatch.Matches)
 }
 
-func TestFetchAllNotifications_EmptySelector_MatchesAllPlans(t *testing.T) {
+func TestFetchAndPublishNotifications_EmptySelector_MatchesAllPlans(t *testing.T) {
 	clk := clocktesting.NewFakeClock(time.Now())
 	plan := simplePlan("my-plan", "default")
 	plan.Labels = map[string]string{"env": "prod"}
@@ -480,40 +511,89 @@ func TestFetchAllNotifications_EmptySelector_MatchesAllPlans(t *testing.T) {
 	notif := &hibernatorv1alpha1.HibernateNotification{
 		ObjectMeta: metav1.ObjectMeta{Name: "notif-all", Namespace: "default"},
 		Spec: hibernatorv1alpha1.HibernateNotificationSpec{
-			Selector: metav1.LabelSelector{}, // empty selector = match all
+			Selector: metav1.LabelSelector{},
 			OnEvents: []hibernatorv1alpha1.NotificationEvent{hibernatorv1alpha1.EventPhaseChange},
 			Sinks: []hibernatorv1alpha1.NotificationSink{
 				{Name: "slack", Type: hibernatorv1alpha1.SinkSlack, SecretRef: hibernatorv1alpha1.ObjectKeyReference{Name: "sink-config"}},
 			},
 		},
 	}
-	r, _ := newPlanReconciler(clk, plan, notif)
+	r, resources := newPlanReconciler(clk, plan, notif)
 
-	result, err := r.fetchAllNotifications(context.Background(), plan)
+	planKey := types.NamespacedName{Name: "my-plan", Namespace: "default"}
+	matched, err := r.fetchAndPublishNotifications(context.Background(), plan, planKey)
 	require.NoError(t, err)
-	assert.Len(t, result, 1)
+	assert.Len(t, matched, 1)
+
+	bindingKey := lo.Must(message.NewNotificationBindingKey(client.ObjectKeyFromObject(notif), planKey))
+	nc, ok := resources.NotificationResources.Load(bindingKey)
+	require.True(t, ok)
+	assert.True(t, nc.Matches)
 }
 
-func TestFetchAllNotifications_PlanWithNoLabels_MatchesEmptySelector(t *testing.T) {
+func TestFetchAndPublishNotifications_PlanWithNoLabels_MatchesEmptySelector(t *testing.T) {
 	clk := clocktesting.NewFakeClock(time.Now())
 	plan := simplePlan("my-plan", "default")
-	// No labels on plan
 
 	notif := &hibernatorv1alpha1.HibernateNotification{
 		ObjectMeta: metav1.ObjectMeta{Name: "notif-all", Namespace: "default"},
 		Spec: hibernatorv1alpha1.HibernateNotificationSpec{
-			Selector: metav1.LabelSelector{}, // empty selector = match all
+			Selector: metav1.LabelSelector{},
 			OnEvents: []hibernatorv1alpha1.NotificationEvent{hibernatorv1alpha1.EventStart},
 			Sinks: []hibernatorv1alpha1.NotificationSink{
 				{Name: "slack", Type: hibernatorv1alpha1.SinkSlack, SecretRef: hibernatorv1alpha1.ObjectKeyReference{Name: "sink-config"}},
 			},
 		},
 	}
-	r, _ := newPlanReconciler(clk, plan, notif)
+	r, resources := newPlanReconciler(clk, plan, notif)
 
-	result, err := r.fetchAllNotifications(context.Background(), plan)
+	planKey := types.NamespacedName{Name: "my-plan", Namespace: "default"}
+	matched, err := r.fetchAndPublishNotifications(context.Background(), plan, planKey)
 	require.NoError(t, err)
-	assert.Len(t, result, 1)
+	assert.Len(t, matched, 1)
+
+	bindingKey := lo.Must(message.NewNotificationBindingKey(client.ObjectKeyFromObject(notif), planKey))
+	nc, ok := resources.NotificationResources.Load(bindingKey)
+	require.True(t, ok)
+	assert.True(t, nc.Matches)
+}
+
+func TestFetchAndPublishNotifications_CleansUpStaleBindings(t *testing.T) {
+	clk := clocktesting.NewFakeClock(time.Now())
+	plan := simplePlan("my-plan", "default")
+	plan.Labels = map[string]string{"env": "prod"}
+
+	notif := &hibernatorv1alpha1.HibernateNotification{
+		ObjectMeta: metav1.ObjectMeta{Name: "notif-1", Namespace: "default"},
+		Spec: hibernatorv1alpha1.HibernateNotificationSpec{
+			Selector: metav1.LabelSelector{
+				MatchLabels: map[string]string{"env": "prod"},
+			},
+			OnEvents: []hibernatorv1alpha1.NotificationEvent{hibernatorv1alpha1.EventStart},
+			Sinks: []hibernatorv1alpha1.NotificationSink{
+				{Name: "slack", Type: hibernatorv1alpha1.SinkSlack, SecretRef: hibernatorv1alpha1.ObjectKeyReference{Name: "sink-config"}},
+			},
+		},
+	}
+	r, resources := newPlanReconciler(clk, plan, notif)
+
+	planKey := types.NamespacedName{Name: "my-plan", Namespace: "default"}
+
+	// First reconcile — binding exists.
+	_, err := r.fetchAndPublishNotifications(context.Background(), plan, planKey)
+	require.NoError(t, err)
+	bindingKey := lo.Must(message.NewNotificationBindingKey(client.ObjectKeyFromObject(notif), planKey))
+	_, ok := resources.NotificationResources.Load(bindingKey)
+	require.True(t, ok)
+
+	// Simulate notification deletion: delete from the fake client.
+	require.NoError(t, r.Delete(context.Background(), notif))
+
+	// Second reconcile — stale binding should be deleted.
+	_, err = r.fetchAndPublishNotifications(context.Background(), plan, planKey)
+	require.NoError(t, err)
+	_, ok = resources.NotificationResources.Load(bindingKey)
+	assert.False(t, ok, "stale binding should have been deleted")
 }
 
 // ---------------------------------------------------------------------------

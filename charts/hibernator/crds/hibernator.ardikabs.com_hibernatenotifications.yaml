@@ -17,22 +17,10 @@ spec:
   scope: Namespaced
   versions:
   - additionalPrinterColumns:
-    - description: Number of watched HibernatePlans
-      jsonPath: .status.watchedPlans
-      name: Plans
-      type: integer
-    - description: Number of configured sinks
-      jsonPath: .spec.sinks
-      name: Sinks
-      type: integer
-    - description: Last successful delivery time
-      jsonPath: .status.lastDeliveryTime
-      name: Last Delivery
-      type: date
-    - description: Last failure time
-      jsonPath: .status.lastFailureTime
-      name: Last Failure
-      type: date
+    - description: Lifecycle state (Bound/Detached)
+      jsonPath: .status.state
+      name: State
+      type: string
     - jsonPath: .metadata.creationTimestamp
       name: Age
       type: date
@@ -246,6 +234,16 @@ spec:
                   - transitionTimestamp
                   type: object
                 type: array
+              state:
+                default: Detached
+                description: |-
+                  State is the lifecycle state of this notification: Bound or Detached.
+                  Bound means at least one HibernatePlan matches the selector.
+                  Detached means no HibernatePlan matches; the notification can be freely deleted.
+                enum:
+                - Bound
+                - Detached
+                type: string
               watchedPlans:
                 description: WatchedPlans is the list of HibernatePlan references
                   currently matching the selector.

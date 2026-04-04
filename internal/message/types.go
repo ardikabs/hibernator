@@ -6,20 +6,72 @@ Licensed under the Apache License, Version 2.0.
 package message
 
 import (
+	"fmt"
 	"time"
 
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
+	"sigs.k8s.io/controller-runtime/pkg/client"
 
 	"github.com/telepresenceio/watchable"
 
 	hibernatorv1alpha1 "github.com/ardikabs/hibernator/api/v1alpha1"
 )
 
+// NotificationBindingKey is a composite key encoding a (notification, plan) pair.
+// Format: "{namespace}/{notification-name}/{plan-name}".
+// Each plan reconcile owns its own set of binding keys, preserving single-writer
+// discipline on the watchable.Map.
+type NotificationBindingKey struct {
+	Namespace        string
+	NotificationName string
+	PlanName         string
+}
+
+// NewNotificationBindingKey constructs a NotificationBindingKey from component parts.
+func NewNotificationBindingKey(notif, plan client.ObjectKey) (NotificationBindingKey, error) {
+	if notif.Namespace != plan.Namespace {
+		return NotificationBindingKey{}, fmt.Errorf("notification and plan must be in the same namespace: %s != %s", notif.Namespace, plan.Namespace)
+	}
+
+	return NotificationBindingKey{
+		Namespace:        notif.Namespace,
+		NotificationName: notif.Name,
+		PlanName:         plan.Name,
+	}, nil
+}
+
+// String returns the general purpose string representation
+func (k NotificationBindingKey) String() string {
+	return k.Namespace + "/" + k.NotificationName + "/" + k.PlanName
+}
+
+// GetNotificationKey returns a namespaced name for the HibernateNotification
+func (k NotificationBindingKey) GetNotificationKey() types.NamespacedName {
+	return types.NamespacedName{
+		Namespace: k.Namespace,
+		Name:      k.NotificationName,
+	}
+}
+
+// GetNotificationKey returns a namespaced name for the HibernatePlan
+func (k NotificationBindingKey) GetPlanKey() types.NamespacedName {
+	return types.NamespacedName{
+		Namespace: k.Namespace,
+		Name:      k.PlanName,
+	}
+}
+
 // ControllerResources contains the watchable maps for provider-to-processor communication.
 // Providers write to these maps; processors subscribe and react to changes.
 type ControllerResources struct {
 	// PlanResources holds enriched PlanContext for each HibernatePlan.
 	PlanResources watchable.Map[types.NamespacedName, *PlanContext]
+
+	// NotificationResources holds per-(notification, plan) bindings written by the
+	// provider during each plan reconcile. The lifecycle processor subscribes to
+	// these bindings to maintain watchedPlans status.
+	NotificationResources watchable.Map[NotificationBindingKey, *NotificationContext]
 }
 
 // PlanContext contains all data needed by processors to make decisions for a single HibernatePlan.
@@ -230,4 +282,120 @@ type ScheduleEvaluation struct {
 	// it only changes when the underlying schedule or exception windows change.
 	// Consumers compute time-until-event locally: time.Until(NextEvent).
 	NextEvent time.Time
+}
+
+// NotificationContext represents a single (notification, plan) binding stored in
+// NotificationResources. Each plan reconcile writes one binding per notification
+// it discovers in the namespace. The Matches field indicates whether the plan's
+// current labels satisfy the notification's selector.
+//
+// Equality is based on the notification's selector, the plan's labels, and
+// the Matches flag — so a label or selector change produces a new watchable
+// event even when the notification's ResourceVersion hasn't changed.
+type NotificationContext struct {
+	// Notification is the full HibernateNotification resource.
+	Notification *hibernatorv1alpha1.HibernateNotification
+
+	// PlanKey identifies the HibernatePlan this binding relates to.
+	PlanKey types.NamespacedName
+
+	// PlanLabels is the plan's current label set at the time of binding.
+	PlanLabels map[string]string
+
+	// Matches is true when the plan's labels satisfy the notification's selector.
+	Matches bool
+}
+
+// Equal checks whether two NotificationContext values are semantically equal.
+// It compares the notification's selector, the plan's labels, and the Matches flag.
+func (nc *NotificationContext) Equal(other *NotificationContext) bool {
+	if nc == other {
+		return true
+	}
+	if nc == nil || other == nil {
+		return false
+	}
+	if nc.Matches != other.Matches {
+		return false
+	}
+	if nc.PlanKey != other.PlanKey {
+		return false
+	}
+	// Compare plan labels.
+	if len(nc.PlanLabels) != len(other.PlanLabels) {
+		return false
+	}
+	for k, v := range nc.PlanLabels {
+		if other.PlanLabels[k] != v {
+			return false
+		}
+	}
+	// Compare notification selector (the field that determines matching).
+	if nc.Notification == nil || other.Notification == nil {
+		return (nc.Notification == nil) == (other.Notification == nil)
+	}
+
+	if !selectorEqual(&nc.Notification.Spec.Selector, &other.Notification.Spec.Selector) {
+		return false
+	}
+
+	return notificationsEqual(nc.Notification, other.Notification)
+}
+
+// DeepCopy creates a deep copy of NotificationContext.
+func (nc *NotificationContext) DeepCopy() *NotificationContext {
+	if nc == nil {
+		return nil
+	}
+	result := &NotificationContext{
+		PlanKey: nc.PlanKey,
+		Matches: nc.Matches,
+	}
+	if nc.Notification != nil {
+		result.Notification = nc.Notification.DeepCopy()
+	}
+	if nc.PlanLabels != nil {
+		result.PlanLabels = make(map[string]string, len(nc.PlanLabels))
+		for k, v := range nc.PlanLabels {
+			result.PlanLabels[k] = v
+		}
+	}
+	return result
+}
+
+// selectorEqual compares two LabelSelectors for structural equality.
+func selectorEqual(a, b *metav1.LabelSelector) bool {
+	if a == b {
+		return true
+	}
+	if a == nil || b == nil {
+		return false
+	}
+	if len(a.MatchLabels) != len(b.MatchLabels) {
+		return false
+	}
+	for k, v := range a.MatchLabels {
+		if b.MatchLabels[k] != v {
+			return false
+		}
+	}
+	if len(a.MatchExpressions) != len(b.MatchExpressions) {
+		return false
+	}
+	for i := range a.MatchExpressions {
+		ae := a.MatchExpressions[i]
+		be := b.MatchExpressions[i]
+		if ae.Key != be.Key || ae.Operator != be.Operator {
+			return false
+		}
+		if len(ae.Values) != len(be.Values) {
+			return false
+		}
+		for j := range ae.Values {
+			if ae.Values[j] != be.Values[j] {
+				return false
+			}
+		}
+	}
+	return true
 }

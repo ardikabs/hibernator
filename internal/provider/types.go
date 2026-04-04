@@ -10,6 +10,7 @@ import (
 	"sync/atomic"
 
 	hibernatorv1alpha1 "github.com/ardikabs/hibernator/api/v1alpha1"
+	"github.com/ardikabs/hibernator/internal/message"
 	"github.com/ardikabs/hibernator/internal/metrics"
 	"github.com/go-logr/logr"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -60,6 +61,49 @@ func (dn *dependencyNonceMap) Set(key types.NamespacedName, n int64) {
 // Should be called when a plan is deleted to prevent unbounded memory growth.
 func (dn *dependencyNonceMap) Delete(key types.NamespacedName) {
 	dn.m.Delete(key)
+}
+
+// notificationBindingTracker tracks which NotificationResources binding keys have
+// been written by each plan. This is needed because watchable.Map has no Range or
+// LoadAll operation, so we must remember keys ourselves in order to delete stale
+// entries when a notification disappears or a plan is deleted.
+type notificationBindingTracker struct {
+	mu sync.Mutex
+	m  map[types.NamespacedName]map[message.NotificationBindingKey]struct{}
+}
+
+// Reconcile updates the set of binding keys for a plan. It calls deleteFn for any
+// key from the previous reconcile that is absent from currentKeys (stale binding).
+func (t *notificationBindingTracker) Reconcile(planKey types.NamespacedName, currentKeys map[message.NotificationBindingKey]struct{}, deleteFn func(message.NotificationBindingKey)) {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+
+	if t.m == nil {
+		t.m = make(map[types.NamespacedName]map[message.NotificationBindingKey]struct{})
+	}
+
+	prev := t.m[planKey]
+	for key := range prev {
+		if _, ok := currentKeys[key]; !ok {
+			deleteFn(key)
+		}
+	}
+	t.m[planKey] = currentKeys
+}
+
+// DeletePlan removes all binding keys for a deleted plan, calling deleteFn for each.
+func (t *notificationBindingTracker) DeletePlan(planKey types.NamespacedName, deleteFn func(message.NotificationBindingKey)) {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+
+	if t.m == nil {
+		return
+	}
+
+	for key := range t.m[planKey] {
+		deleteFn(key)
+	}
+	delete(t.m, planKey)
 }
 
 // channelEnqueuer implements message.PlanEnqueuer by sending GenericEvents to a channel
