@@ -104,6 +104,11 @@ func (state *lifecycleState) handle(ctx context.Context, log logr.Logger, plan *
 			}),
 		})
 
+		// TODO: PrepareRestorePoint failure is treated as non-fatal
+		// because a missing ConfigMap is auto-created during shutdown. However, if
+		// permissions are wrong this silently swallows a real issue. Consider surfacing
+		// this as a status condition or event once the error classification system is
+		// extended to cover infrastructure-setup errors.
 		if err := state.RestoreManager.PrepareRestorePoint(ctx, plan.Namespace, plan.Name); err != nil {
 			log.Error(err, "failed to prepare restore point (non-fatal)")
 		}

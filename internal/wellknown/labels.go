@@ -2,6 +2,8 @@ package wellknown
 
 const (
 	// LabelPlan is the label key for the plan name.
+	// NOTE: Same key as AnnotationPlan — intentional. Both carry the plan name on
+	// the same object (labels for selectors, annotations for metadata).
 	LabelPlan = "hibernator.ardikabs.com/plan"
 
 	// LabelTarget is the label key for the target name.

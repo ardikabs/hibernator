@@ -6,7 +6,6 @@ Licensed under the Apache License, Version 2.0.
 package state
 
 import (
-	"fmt"
 	"strings"
 
 	"github.com/go-logr/logr"
@@ -14,7 +13,6 @@ import (
 	"github.com/samber/lo/mutable"
 	batchv1 "k8s.io/api/batch/v1"
 	corev1 "k8s.io/api/core/v1"
-	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/utils/clock"
 
 	hibernatorv1alpha1 "github.com/ardikabs/hibernator/api/v1alpha1"
@@ -148,8 +146,6 @@ func FindExecutionStatus(plan *hibernatorv1alpha1.HibernatePlan, targetType, tar
 		if plan.Status.Executions[i].Target == targetName &&
 			plan.Status.Executions[i].Executor == targetType {
 			return &plan.Status.Executions[i]
-		} else if plan.Status.Executions[i].Target == fmt.Sprintf("%s/%s", targetType, targetName) {
-			return &plan.Status.Executions[i]
 		}
 	}
 	return nil
@@ -183,7 +179,6 @@ func BuildOperationSummary(clk clock.Clock, plan *hibernatorv1alpha1.HibernatePl
 	summary := &hibernatorv1alpha1.ExecutionOperationSummary{
 		Operation:    operation,
 		Success:      true,
-		StartTime:    metav1.NewTime(clk.Now()),
 		ErrorMessage: plan.Status.ErrorMessage,
 	}
 

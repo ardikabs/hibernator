@@ -137,7 +137,7 @@ func (state *recoveryState) handleRetry(ctx context.Context, log logr.Logger, la
 				lastErr = fmt.Errorf("unknown error (no error message in status)")
 			}
 
-			if ok := recovery.RecordRetryAttemptOnStatus(&p.Status, state.Clock, lastErr); !ok {
+			if ok := recovery.RecordRetryAttempt(p, state.Clock, lastErr); !ok {
 				log.V(1).Info("retry attempt not recorded", "error", lastErr)
 				return
 			}

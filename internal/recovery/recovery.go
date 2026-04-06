@@ -223,34 +223,6 @@ func RecordRetryAttempt(plan *hibernatorv1alpha1.HibernatePlan, clk clock.Clock,
 	return true
 }
 
-func RecordRetryAttemptOnStatus(status *hibernatorv1alpha1.HibernatePlanStatus, clk clock.Clock, err error) bool {
-	now := clk.Now()
-
-	// Idempotency guard: if LastRetryTime was set very recently (within 5s),
-	// this is likely a duplicate call from the same reconciliation attempt.
-	// Skip incrementing to prevent inflating the retry count.
-	if status.LastRetryTime != nil {
-		elapsed := now.Sub(status.LastRetryTime.Time)
-		if elapsed < 5*time.Second {
-			if err != nil {
-				status.ErrorMessage = err.Error()
-			}
-			return false
-		}
-	}
-
-	status.RetryCount++
-	status.LastRetryTime = ptr.To(metav1.NewTime(now))
-
-	if err != nil {
-		status.ErrorMessage = err.Error()
-	} else {
-		status.ErrorMessage = "unknown error"
-	}
-
-	return true
-}
-
 // ResetRetryState clears retry tracking when transitioning out of error state.
 func ResetRetryState(plan *hibernatorv1alpha1.HibernatePlan) {
 	plan.Status.RetryCount = 0

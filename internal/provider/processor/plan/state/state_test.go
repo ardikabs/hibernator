@@ -52,11 +52,13 @@ func newHandlerFakeClient(objs ...client.Object) client.Client {
 // buildTestConfig constructs a Config wired to the supplied fake client.
 func buildTestConfig(c client.Client) *Config {
 	return &Config{
-		Log:       logr.Discard(),
-		Client:    c,
-		APIReader: c,
-		Clock:     clocktesting.NewFakeClock(time.Now()),
-		Scheme:    newHandlerScheme(),
+		Log: logr.Discard(),
+		Infrastructure: Infrastructure{
+			Client:    c,
+			APIReader: c,
+			Clock:     clocktesting.NewFakeClock(time.Now()),
+			Scheme:    newHandlerScheme(),
+		},
 		Planner:   scheduler.NewPlanner(),
 		Resources: new(message.ControllerResources),
 		Statuses: &statusprocessor.ControllerStatuses{
@@ -64,8 +66,10 @@ func buildTestConfig(c client.Client) *Config {
 			ExceptionStatuses: newCaptureUpdater[*hibernatorv1alpha1.ScheduleException](16),
 		},
 		RestoreManager: restore.NewManager(c),
-		OnJobMissing:   func(target string) bool { return false },
-		OnJobFound:     func(target string) {},
+		Callbacks: StateCallbacks{
+			OnJobMissing: func(target string) bool { return false },
+			OnJobFound:   func(target string) {},
+		},
 	}
 }
 

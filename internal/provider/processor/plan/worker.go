@@ -10,10 +10,8 @@ import (
 	"time"
 
 	"github.com/go-logr/logr"
-	k8sutil "k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/utils/clock"
-	"sigs.k8s.io/controller-runtime/pkg/client"
 
 	hibernatorv1alpha1 "github.com/ardikabs/hibernator/api/v1alpha1"
 	"github.com/ardikabs/hibernator/internal/message"
@@ -57,29 +55,27 @@ const (
 // subsequent timer-driven handle() calls always see the latest in-memory state without
 // waiting for a K8s roundtrip or a watchable re-delivery.
 type Worker struct {
-	key types.NamespacedName
+	// Infrastructure dependencies — grouped by concern.
+	state.Infrastructure
+	state.ExecutorInfra
+
 	log logr.Logger
 
-	// Infrastructure dependencies — same union as Coordinator.
-	client.Client
-	APIReader            client.Reader
-	Clock                clock.Clock
-	Scheme               *k8sutil.Scheme
-	Planner              *scheduler.Planner
-	Resources            *message.ControllerResources
-	Statuses             *statusprocessor.ControllerStatuses
-	RestoreManager       *restore.Manager
-	Notifier             notification.Notifier
-	ControlPlaneEndpoint string
-	RunnerImage          string
-	RunnerServiceAccount string
-
+	// key is the identifier for the corresponding plan.
+	// It is primarily used for metrics and logging.
+	// This value is immutable and is not affected by object renames.
+	key types.NamespacedName
 	// cachedCtx is the most-recent PlanContext delivered by the Coordinator.
 	// Mutated in-place for optimistic local updates.
 	cachedCtx *message.PlanContext
-
 	// Inbound context slot from the Coordinator — latest-wins delivery.
 	slot keyedworker.Slot[*message.PlanContext]
+
+	Planner        *scheduler.Planner
+	RestoreManager *restore.Manager
+	Resources      *message.ControllerResources
+	Statuses       *statusprocessor.ControllerStatuses
+	Notifier       notification.Notifier
 
 	// Timers — nil means inactive.
 	requeueTimer  clock.Timer
@@ -147,21 +143,18 @@ func (s *Worker) run(ctx context.Context) {
 // every handle() call so handlers are fully stateless with respect to the worker.
 func (s *Worker) buildConfig() *state.Config {
 	return &state.Config{
-		Log:                  s.log,
-		Client:               s.Client,
-		APIReader:            s.APIReader,
-		Clock:                s.Clock,
-		Scheme:               s.Scheme,
-		Planner:              s.Planner,
-		Resources:            s.Resources,
-		Statuses:             s.Statuses,
-		RestoreManager:       s.RestoreManager,
-		Notifier:             s.Notifier,
-		ControlPlaneEndpoint: s.ControlPlaneEndpoint,
-		RunnerImage:          s.RunnerImage,
-		RunnerServiceAccount: s.RunnerServiceAccount,
-		OnJobMissing:         s.trackConsecutiveJobMiss,
-		OnJobFound:           s.resetConsecutiveJobMiss,
+		Log:            s.log,
+		Infrastructure: s.Infrastructure,
+		ExecutorInfra:  s.ExecutorInfra,
+		Callbacks: state.StateCallbacks{
+			OnJobMissing: s.trackConsecutiveJobMiss,
+			OnJobFound:   s.resetConsecutiveJobMiss,
+		},
+		Planner:        s.Planner,
+		RestoreManager: s.RestoreManager,
+		Notifier:       s.Notifier,
+		Resources:      s.Resources,
+		Statuses:       s.Statuses,
 	}
 }
 

@@ -494,6 +494,7 @@ var _ = Describe("ScheduleException E2E", func() {
 		// 2. Clock advances past ValidFrom → Active state
 		// 3. Clock advances past ValidUntil → Expired state
 		// 4. Plan deletion (exception without ownerref) → Detached state
+		// 5. Plan re-created (detached exception with relevant plan reference) → transition to time-bound state (Active if within ValidFrom-ValidUntil, otherwise Pending or Expired)
 		baseTime := time.Date(2026, 5, 5, 8, 0, 0, 0, time.UTC) // Monday 08:00 UTC
 		fakeClock.SetTime(baseTime)
 
@@ -595,6 +596,13 @@ var _ = Describe("ScheduleException E2E", func() {
 		exception = &hibernatorv1alpha1.ScheduleException{}
 		Expect(k8sClient.Get(ctx, key, exception)).To(Succeed())
 		Expect(exception.Status.State).To(Equal(hibernatorv1alpha1.ExceptionStateDetached))
+
+		By("Re-applying relevant plan (detached exception with relevant plan reference, should transition to time-bound state)")
+		plan.ResourceVersion = ""
+		Expect(k8sClient.Create(ctx, plan)).To(Succeed())
+		exception = &hibernatorv1alpha1.ScheduleException{}
+		Expect(k8sClient.Get(ctx, key, exception)).To(Succeed())
+		testutil.EventuallyExceptionState(ctx, k8sClient, exception, hibernatorv1alpha1.ExceptionStateExpired)
 	})
 
 	It("ScheduleExceptionLifecycle_PendingActiveExpiredDetached: detailed state transitions with status validation", func() {

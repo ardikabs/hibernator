@@ -48,7 +48,6 @@ type Options struct {
 	MetricsAddr             string
 	ProbeAddr               string
 	EnableLeaderElection    bool
-	LegacyReconciler        bool
 	RunnerImage             string
 	ControlPlaneEndpoint    string
 	RunnerServiceAccount    string

@@ -67,7 +67,7 @@ _Appears in:_
 | Field | Description | Default | Validation |
 | --- | --- | --- | --- |
 | `mode` _[BehaviorMode](#behaviormode)_ | Mode determines how failures are handled. | Strict | Enum: [Strict BestEffort] <br /> |
-| `failFast` _boolean_ | FailFast stops execution on first failure. | true |  |
+| `failFast` _boolean_ | FailFast stops execution on first failure.<br />Strict mode already implies fail-fast behavior.<br />Deprecated: FailFast is deprecated and will be removed in a future release. Use Mode=Strict for fail-fast behavior. | true |  |
 | `retries` _integer_ | Retries is the maximum number of retry attempts for failed operations. | 3 | Maximum: 10 <br />Minimum: 0 <br />Optional: \{\} <br /> |
 
 
