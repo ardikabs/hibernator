@@ -19,6 +19,7 @@ import (
 	"k8s.io/utils/clock"
 
 	"github.com/ardikabs/hibernator/internal/message"
+	"github.com/ardikabs/hibernator/internal/provider/processor/plan/state"
 	"github.com/ardikabs/hibernator/pkg/keyedworker"
 )
 
@@ -28,8 +29,10 @@ import (
 
 func newTestCoordinator(clk clock.Clock) *Coordinator {
 	return &Coordinator{
+		Infrastructure: state.Infrastructure{
+			Clock: clk,
+		},
 		Log:      logr.Discard(),
-		Clock:    clk,
 		Statuses: newTestStatuses(),
 	}
 }

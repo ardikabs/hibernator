@@ -517,6 +517,175 @@ func TestHandlePlanDelete_MixedOwnership(t *testing.T) {
 // updateExceptionReferences
 // ---------------------------------------------------------------------------
 
+// ---------------------------------------------------------------------------
+// Re-attachment: Plan exists → deleted (Detached) → re-created (re-attached)
+// ---------------------------------------------------------------------------
+
+func TestReattachment_DetachedExceptionTransitionsOnPlanRecreate(t *testing.T) {
+	// This test verifies the full re-attachment lifecycle:
+	// 1. Exception is Active while plan exists
+	// 2. Plan is deleted → exception becomes Detached
+	// 3. Plan is re-created → exception re-attaches and returns to the correct
+	//    time-based state (Pending, Active, or Expired)
+
+	now := time.Date(2026, 6, 15, 12, 0, 0, 0, time.UTC)
+	fakeClock := clocktesting.NewFakeClock(now)
+
+	// Three exceptions with different time windows to verify all re-attachment targets.
+	// No Finalizers here — transitionToDetached's Patch call to remove the finalizer
+	// would overwrite the in-memory Status via the fake client response, corrupting
+	// the captureUpdater assertion. The finalizerless path still exercises the
+	// Detached status transition which is what we care about.
+
+	// (a) Active window: started 1h ago, ends in 2h
+	excActive := baseScheduleException("exc-active", "my-plan")
+	excActive.Spec.Type = "suspend"
+	excActive.Spec.ValidFrom = metav1.Time{Time: now.Add(-1 * time.Hour)}
+	excActive.Spec.ValidUntil = metav1.Time{Time: now.Add(2 * time.Hour)}
+	excActive.Labels = map[string]string{wellknown.LabelPlan: "my-plan"}
+	excActive.Status.State = hibernatorv1alpha1.ExceptionStateActive
+
+	// (b) Pending window: starts in 3h, ends in 6h
+	excPending := baseScheduleException("exc-pending", "my-plan")
+	excPending.Spec.Type = "extend"
+	excPending.Spec.ValidFrom = metav1.Time{Time: now.Add(3 * time.Hour)}
+	excPending.Spec.ValidUntil = metav1.Time{Time: now.Add(6 * time.Hour)}
+	excPending.Labels = map[string]string{wellknown.LabelPlan: "my-plan"}
+	excPending.Status.State = hibernatorv1alpha1.ExceptionStatePending
+
+	// (c) Expired window: ended 1h ago
+	excExpired := baseScheduleException("exc-expired", "my-plan")
+	excExpired.Spec.Type = "suspend"
+	excExpired.Spec.ValidFrom = metav1.Time{Time: now.Add(-5 * time.Hour)}
+	excExpired.Spec.ValidUntil = metav1.Time{Time: now.Add(-1 * time.Hour)}
+	excExpired.Labels = map[string]string{wellknown.LabelPlan: "my-plan"}
+	excExpired.Status.State = hibernatorv1alpha1.ExceptionStateExpired
+
+	p, statuses := newTestProcessor(t, excActive, excPending, excExpired)
+	p.Clock = fakeClock
+
+	planKey := types.NamespacedName{Name: "my-plan", Namespace: "default"}
+	errChan := make(chan error, 16)
+
+	// ── Step 1: Delete plan → all exceptions become Detached ──
+	p.handlePlanDelete(context.Background(), logr.Discard(), planKey, errChan)
+
+	select {
+	case err := <-errChan:
+		t.Fatalf("unexpected error during plan delete: %v", err)
+	default:
+	}
+
+	excUpdater := statuses.ExceptionStatuses.(*captureUpdater[*hibernatorv1alpha1.ScheduleException])
+	require.Equal(t, 3, excUpdater.Len(), "all three exceptions should transition to Detached")
+
+	detachedExceptions := make(map[string]*hibernatorv1alpha1.ScheduleException)
+	for range 3 {
+		upd := <-excUpdater.C()
+		assert.Equal(t, hibernatorv1alpha1.ExceptionStateDetached, upd.Resource.Status.State,
+			"exception %s should be Detached", upd.NamespacedName.Name)
+		assert.NotNil(t, upd.Resource.Status.DetachedAt, "DetachedAt should be set")
+		detachedExceptions[upd.NamespacedName.Name] = upd.Resource
+	}
+
+	// ── Step 2: Re-create plan → simulate handlePlanUpdate with exceptions ──
+	// Build the PlanContext as if the reconciler rediscovered the exceptions.
+	// The exceptions now have Detached state — handleExceptionUpdate should
+	// compute the correct time-based state and transition them.
+	plan := &hibernatorv1alpha1.HibernatePlan{
+		ObjectMeta: metav1.ObjectMeta{Name: "my-plan", Namespace: "default"},
+	}
+
+	// Use the detached copies to simulate what the reconciler would see.
+	excActiveDetached := detachedExceptions["exc-active"]
+	excPendingDetached := detachedExceptions["exc-pending"]
+	excExpiredDetached := detachedExceptions["exc-expired"]
+
+	planCtx := &message.PlanContext{
+		Plan: plan,
+		Exceptions: []hibernatorv1alpha1.ScheduleException{
+			*excActiveDetached,
+			*excPendingDetached,
+			*excExpiredDetached,
+		},
+	}
+
+	p.handlePlanUpdate(context.Background(), logr.Discard(), planKey, planCtx, errChan)
+
+	select {
+	case err := <-errChan:
+		t.Fatalf("unexpected error during plan re-creation: %v", err)
+	default:
+	}
+
+	// Collect exception status updates from the re-attachment.
+	// 3 transitions (Detached→Active, Detached→Pending, Detached→Expired) + 1 plan status update for refs.
+	reattached := make(map[string]hibernatorv1alpha1.ExceptionState)
+	reattachedResources := make(map[string]*hibernatorv1alpha1.ScheduleException)
+	for excUpdater.Len() > 0 {
+		upd := <-excUpdater.C()
+		reattached[upd.NamespacedName.Name] = upd.Resource.Status.State
+		reattachedResources[upd.NamespacedName.Name] = upd.Resource
+	}
+
+	// Verify each exception returned to its correct time-based state.
+	assert.Equal(t, hibernatorv1alpha1.ExceptionStateActive, reattached["exc-active"],
+		"exc-active should re-attach as Active (within time window)")
+	assert.Equal(t, hibernatorv1alpha1.ExceptionStatePending, reattached["exc-pending"],
+		"exc-pending should re-attach as Pending (future time window)")
+	assert.Equal(t, hibernatorv1alpha1.ExceptionStateExpired, reattached["exc-expired"],
+		"exc-expired should re-attach as Expired (past time window)")
+
+	// Verify DetachedAt is cleared for re-attached exceptions.
+	assert.Nil(t, reattachedResources["exc-active"].Status.DetachedAt,
+		"DetachedAt should be nil after re-attachment to Active")
+	assert.Nil(t, reattachedResources["exc-pending"].Status.DetachedAt,
+		"DetachedAt should be nil after re-attachment to Pending")
+	assert.Nil(t, reattachedResources["exc-expired"].Status.DetachedAt,
+		"DetachedAt should be nil after re-attachment to Expired")
+}
+
+func TestReattachment_AlreadyCorrectState_NoRedundantTransition(t *testing.T) {
+	// Verify that if a previously-detached exception happens to be in the correct
+	// time-based state already is not the case — Detached is never equal to a
+	// time-based state, so computeDesiredState always triggers a transition.
+	now := time.Date(2026, 6, 15, 12, 0, 0, 0, time.UTC)
+	fakeClock := clocktesting.NewFakeClock(now)
+
+	exc := baseScheduleException("exc-reattach", "my-plan")
+	exc.Spec.Type = "suspend"
+	exc.Spec.ValidFrom = metav1.Time{Time: now.Add(-1 * time.Hour)}
+	exc.Spec.ValidUntil = metav1.Time{Time: now.Add(2 * time.Hour)}
+	exc.Labels = map[string]string{wellknown.LabelPlan: "my-plan"}
+	exc.Finalizers = []string{wellknown.ExceptionFinalizerName}
+	// Simulate a Detached exception (plan was previously deleted)
+	exc.Status.State = hibernatorv1alpha1.ExceptionStateDetached
+	exc.Status.DetachedAt = &metav1.Time{Time: now.Add(-30 * time.Minute)}
+
+	p, statuses := newTestProcessor(t, exc)
+	p.Clock = fakeClock
+
+	key := types.NamespacedName{Name: "exc-reattach", Namespace: "default"}
+	errChan := make(chan error, 4)
+
+	// Simulate plan update that includes this detached exception.
+	p.handleExceptionUpdate(context.Background(), logr.Discard(), key, exc, errChan)
+
+	select {
+	case err := <-errChan:
+		t.Fatalf("unexpected error: %v", err)
+	default:
+	}
+
+	excUpdater := statuses.ExceptionStatuses.(*captureUpdater[*hibernatorv1alpha1.ScheduleException])
+	require.Equal(t, 1, excUpdater.Len(), "should queue exactly one transition from Detached to Active")
+
+	upd := <-excUpdater.C()
+	assert.Equal(t, hibernatorv1alpha1.ExceptionStateActive, upd.Resource.Status.State)
+	assert.NotNil(t, upd.Resource.Status.AppliedAt, "AppliedAt should be set for Active state")
+	assert.Nil(t, upd.Resource.Status.DetachedAt, "DetachedAt should be cleared")
+}
+
 func TestUpdateExceptionReferences_BuildsSortedRefs(t *testing.T) {
 	now := time.Date(2026, 1, 10, 12, 0, 0, 0, time.UTC)
 	plan := &hibernatorv1alpha1.HibernatePlan{

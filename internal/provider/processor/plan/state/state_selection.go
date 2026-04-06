@@ -65,8 +65,6 @@ func selectHandler(s *state) Handler {
 	default:
 		return nil
 	}
-	// Wrap the phase-specific handler with the observation pipeline.
-	// return wrapWithObservations(s, handler)
 }
 
 // selectIdleHandler resolves the concrete Handler for Active and Hibernated phases,

@@ -188,11 +188,16 @@ func (s *ExecutionServiceServer) EmitLog(ctx context.Context, entry *streamingv1
 		kvs = append(kvs, "metadataError", err.Error())
 	}
 
-	// Emit log at appropriate level
+	// Emit log at appropriate level.
+	// NOTE: We deliberately avoid log.Error() for runner-forwarded ERROR entries
+	// because it adds controller-side stack traces that are irrelevant — the error
+	// context (cause, target, executor) is already present in the runner's fields.
+	// Instead, the runner-reported level is preserved as a structured field for
+	// log-pipeline filtering (e.g. runner_level=ERROR).
+	kvs = append(kvs, "runner_level", entry.Level)
+
 	switch entry.Level {
-	case "ERROR":
-		log.Info(entry.Message, kvs...)
-	case "WARN", "INFO":
+	case "ERROR", "WARN", "INFO":
 		log.Info(entry.Message, kvs...)
 	default:
 		log.V(1).Info(entry.Message, kvs...)

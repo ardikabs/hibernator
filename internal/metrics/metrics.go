@@ -115,6 +115,12 @@ var (
 	// status-writer goroutine. Labels: type (HibernatePlan | ScheduleException),
 	// key (namespace/name). Drops to 0 after the idle-TTL grace period expires
 	// and auto-removal reclaims the entry.
+	//
+	// TODO: The "key" label has unbounded cardinality (one
+	// unique series per namespace/name). For clusters with many plans this can
+	// cause Prometheus memory pressure. Consider removing "key" and relying on
+	// the aggregate count per "type", or switching to a label-free gauge that
+	// reads Pool.Len() on scrape.
 	StatusWriterActiveGauge = factory.NewGaugeVec(
 		prometheus.GaugeOpts{
 			Name: "hibernator_status_writer_active_objects",

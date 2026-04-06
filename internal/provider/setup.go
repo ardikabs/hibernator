@@ -21,6 +21,7 @@ import (
 	"github.com/ardikabs/hibernator/internal/notification"
 	notificationprocessor "github.com/ardikabs/hibernator/internal/provider/processor/notification"
 	planprocessor "github.com/ardikabs/hibernator/internal/provider/processor/plan"
+	"github.com/ardikabs/hibernator/internal/provider/processor/plan/state"
 	requeueprocessor "github.com/ardikabs/hibernator/internal/provider/processor/requeue"
 	scheduleexceptionprocessor "github.com/ardikabs/hibernator/internal/provider/processor/scheduleexception"
 	statusprocessor "github.com/ardikabs/hibernator/internal/provider/processor/status"
@@ -155,19 +156,23 @@ func Setup(mgr ctrl.Manager, clk clock.Clock, opts ProviderOptions) error {
 		{
 			name: "hibernateplan.coordinator",
 			runnable: &planprocessor.Coordinator{
-				Client:               mgr.GetClient(),
-				APIReader:            mgr.GetAPIReader(),
-				Clock:                clk,
-				Log:                  opts.Logger.WithName("processor").WithName("plan"),
-				Scheme:               mgr.GetScheme(),
-				Planner:              planner,
-				Resources:            resources,
-				Statuses:             statuses,
-				RestoreManager:       restoreMgr,
-				Notifier:             notifInstance.Notifier,
-				ControlPlaneEndpoint: opts.ControlPlaneEndpoint,
-				RunnerImage:          opts.RunnerImage,
-				RunnerServiceAccount: opts.RunnerServiceAccount,
+				Infrastructure: state.Infrastructure{
+					Client:    mgr.GetClient(),
+					APIReader: mgr.GetAPIReader(),
+					Scheme:    mgr.GetScheme(),
+					Clock:     clk,
+				},
+				ExecutorInfra: state.ExecutorInfra{
+					ControlPlaneEndpoint: opts.ControlPlaneEndpoint,
+					RunnerImage:          opts.RunnerImage,
+					RunnerServiceAccount: opts.RunnerServiceAccount,
+				},
+				Log:            opts.Logger.WithName("processor").WithName("plan"),
+				Planner:        planner,
+				Resources:      resources,
+				Statuses:       statuses,
+				RestoreManager: restoreMgr,
+				Notifier:       notifInstance.Notifier,
 			},
 		},
 		{

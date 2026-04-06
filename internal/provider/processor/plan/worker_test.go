@@ -19,6 +19,7 @@ import (
 	"k8s.io/utils/clock"
 
 	"github.com/ardikabs/hibernator/internal/message"
+	"github.com/ardikabs/hibernator/internal/provider/processor/plan/state"
 	"github.com/ardikabs/hibernator/pkg/keyedworker"
 )
 
@@ -28,7 +29,9 @@ import (
 
 func newTestWorker(clk clock.Clock) *Worker {
 	return &Worker{
-		Clock:    clk,
+		Infrastructure: state.Infrastructure{
+			Clock: clk,
+		},
 		key:      types.NamespacedName{Name: "p", Namespace: "default"},
 		log:      logr.Discard(),
 		slot:     keyedworker.LatestWinsSlot[*message.PlanContext]()(),

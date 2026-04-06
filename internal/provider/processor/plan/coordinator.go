@@ -14,16 +14,14 @@ import (
 	"context"
 
 	"github.com/go-logr/logr"
-	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/types"
-	"k8s.io/utils/clock"
-	"sigs.k8s.io/controller-runtime/pkg/client"
 
 	"github.com/telepresenceio/watchable"
 
 	"github.com/ardikabs/hibernator/internal/message"
 	"github.com/ardikabs/hibernator/internal/metrics"
 	"github.com/ardikabs/hibernator/internal/notification"
+	"github.com/ardikabs/hibernator/internal/provider/processor/plan/state"
 	statusprocessor "github.com/ardikabs/hibernator/internal/provider/processor/status"
 	"github.com/ardikabs/hibernator/internal/restore"
 	"github.com/ardikabs/hibernator/internal/scheduler"
@@ -37,20 +35,17 @@ import (
 //
 // It implements manager.Runnable and can be registered with mgr.Add().
 type Coordinator struct {
-	// Infrastructure dependencies.
-	Client               client.Client
-	APIReader            client.Reader
-	Clock                clock.Clock
-	Log                  logr.Logger
-	Scheme               *runtime.Scheme
-	Planner              *scheduler.Planner
-	Resources            *message.ControllerResources
-	Statuses             *statusprocessor.ControllerStatuses
-	RestoreManager       *restore.Manager
-	Notifier             notification.Notifier
-	ControlPlaneEndpoint string
-	RunnerImage          string
-	RunnerServiceAccount string
+	// Infrastructure dependencies — grouped by concern.
+	state.Infrastructure
+	state.ExecutorInfra
+
+	Log logr.Logger
+
+	Planner        *scheduler.Planner
+	RestoreManager *restore.Manager
+	Resources      *message.ControllerResources
+	Statuses       *statusprocessor.ControllerStatuses
+	Notifier       notification.Notifier
 }
 
 // NeedLeaderElection returns true — all plan execution operations require leader election.
@@ -95,21 +90,16 @@ func (e *Coordinator) Start(ctx context.Context) error {
 // The Pool calls this once per new entry and owns the resulting goroutine's lifecycle.
 func (e *Coordinator) workerFactory(key types.NamespacedName, slot keyedworker.Slot[*message.PlanContext]) func(context.Context) {
 	w := &Worker{
-		key:                  key,
-		log:                  e.Log.WithName("worker"),
-		Client:               e.Client,
-		APIReader:            e.APIReader,
-		Clock:                e.Clock,
-		Scheme:               e.Scheme,
-		Planner:              e.Planner,
-		Resources:            e.Resources,
-		Statuses:             e.Statuses,
-		RestoreManager:       e.RestoreManager,
-		Notifier:             e.Notifier,
-		ControlPlaneEndpoint: e.ControlPlaneEndpoint,
-		RunnerImage:          e.RunnerImage,
-		RunnerServiceAccount: e.RunnerServiceAccount,
-		slot:                 slot,
+		key:            key,
+		log:            e.Log.WithName("worker"),
+		Infrastructure: e.Infrastructure,
+		ExecutorInfra:  e.ExecutorInfra,
+		Planner:        e.Planner,
+		Resources:      e.Resources,
+		Statuses:       e.Statuses,
+		RestoreManager: e.RestoreManager,
+		Notifier:       e.Notifier,
+		slot:           slot,
 	}
 	return w.run
 }

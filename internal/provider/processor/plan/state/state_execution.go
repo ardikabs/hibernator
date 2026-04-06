@@ -190,7 +190,7 @@ func (s *state) executeForStage(
 		log.Info("dispatching job for target", "target", targetName, "operation", operation)
 		if err := s.createRunnerJob(ctx, log,
 			s.Clock, plan, target, operation,
-			s.ControlPlaneEndpoint, s.RunnerImage, s.RunnerServiceAccount); err != nil {
+			s.ExecutorInfra); err != nil {
 
 			log.Error(err, "failed to create runner job", "target", targetName)
 			metrics.JobFailuresTotal.WithLabelValues(s.Key.String(), targetName).Inc()
@@ -314,8 +314,8 @@ func (s *state) updateExecutionStatuses(ctx context.Context,
 				"active", job.Status.Active)
 
 			// Job reappeared — reset consecutive-miss counter.
-			if s.OnJobFound != nil {
-				s.OnJobFound(exec.Target)
+			if s.Callbacks.OnJobFound != nil {
+				s.Callbacks.OnJobFound(exec.Target)
 			}
 
 			if exec.StartedAt == nil && job.Status.StartTime != nil {
@@ -381,7 +381,7 @@ func (s *state) updateExecutionStatuses(ctx context.Context,
 				// Job missing while still in-flight — track consecutive misses.
 				// Once the threshold is reached the target is reset to StatePending so
 				// executeStageTargets will re-dispatch a replacement runner Job.
-				if s.OnJobMissing != nil && s.OnJobMissing(exec.Target) {
+				if s.Callbacks.OnJobMissing != nil && s.Callbacks.OnJobMissing(exec.Target) {
 					exec.State = hibernatorv1alpha1.StatePending
 					log.Info("consecutive job-miss threshold reached, resetting target to pending for re-dispatch", "target", exec.Target)
 				} else {
@@ -493,8 +493,10 @@ func (s *state) buildExecutionPlan(plan *hibernatorv1alpha1.HibernatePlan, rever
 
 // CreateRunnerJob creates a Kubernetes Job for executing a target.
 func (s *state) createRunnerJob(ctx context.Context, log logr.Logger, clk clock.Clock,
-	plan *hibernatorv1alpha1.HibernatePlan, target *hibernatorv1alpha1.Target, operation hibernatorv1alpha1.PlanOperation,
-	controlPlaneEndpoint, runnerImage, runnerServiceAccount string) error {
+	plan *hibernatorv1alpha1.HibernatePlan,
+	target *hibernatorv1alpha1.Target,
+	operation hibernatorv1alpha1.PlanOperation,
+	infra ExecutorInfra) error {
 
 	ts := fmt.Sprintf("%d", clk.Now().Unix())
 	baseID := fmt.Sprintf("%s-%s", plan.Name, target.Name)
@@ -510,11 +512,11 @@ func (s *state) createRunnerJob(ctx context.Context, log logr.Logger, clk clock.
 	ttlSeconds := int32(wellknown.DefaultJobTTLSeconds)
 	tokenExpiration := int64(wellknown.StreamTokenExpirationSeconds)
 
-	if runnerServiceAccount == "" {
-		runnerServiceAccount = "hibernator-runner"
+	if infra.RunnerServiceAccount == "" {
+		infra.RunnerServiceAccount = "hibernator-runner"
 	}
-	if runnerImage == "" {
-		runnerImage = wellknown.RunnerImage
+	if infra.RunnerImage == "" {
+		infra.RunnerImage = wellknown.RunnerImage
 	}
 
 	connectorNamespace := target.ConnectorRef.Namespace
@@ -562,11 +564,11 @@ func (s *state) createRunnerJob(ctx context.Context, log logr.Logger, clk clock.
 				},
 				Spec: corev1.PodSpec{
 					RestartPolicy:      corev1.RestartPolicyNever,
-					ServiceAccountName: runnerServiceAccount,
+					ServiceAccountName: infra.RunnerServiceAccount,
 					Containers: []corev1.Container{
 						{
 							Name:  "runner",
-							Image: runnerImage,
+							Image: infra.RunnerImage,
 							Args: []string{
 								"--operation", string(operation),
 								"--target", target.Name,
@@ -576,11 +578,11 @@ func (s *state) createRunnerJob(ctx context.Context, log logr.Logger, clk clock.
 							Env: []corev1.EnvVar{
 								{Name: "POD_NAMESPACE", Value: plan.Namespace},
 								{Name: "HIBERNATOR_EXECUTION_ID", Value: executionID},
-								{Name: "HIBERNATOR_CONTROL_PLANE_ENDPOINT", Value: controlPlaneEndpoint},
+								{Name: "HIBERNATOR_CONTROL_PLANE_ENDPOINT", Value: infra.ControlPlaneEndpoint},
 								{Name: "HIBERNATOR_USE_TLS", Value: "false"},
-								{Name: "HIBERNATOR_GRPC_ENDPOINT", Value: fmt.Sprintf("%s:9444", controlPlaneEndpoint)},
-								{Name: "HIBERNATOR_WEBSOCKET_ENDPOINT", Value: fmt.Sprintf("ws://%s:8082", controlPlaneEndpoint)},
-								{Name: "HIBERNATOR_HTTP_CALLBACK_ENDPOINT", Value: fmt.Sprintf("http://%s:8082", controlPlaneEndpoint)},
+								{Name: "HIBERNATOR_GRPC_ENDPOINT", Value: fmt.Sprintf("%s:9444", infra.ControlPlaneEndpoint)},
+								{Name: "HIBERNATOR_WEBSOCKET_ENDPOINT", Value: fmt.Sprintf("ws://%s:8082", infra.ControlPlaneEndpoint)},
+								{Name: "HIBERNATOR_HTTP_CALLBACK_ENDPOINT", Value: fmt.Sprintf("http://%s:8082", infra.ControlPlaneEndpoint)},
 								{Name: "HIBERNATOR_TARGET_PARAMS", Value: string(paramsJSON)},
 								{Name: "HIBERNATOR_CONNECTOR_KIND", Value: target.ConnectorRef.Kind},
 								{Name: "HIBERNATOR_CONNECTOR_NAME", Value: target.ConnectorRef.Name},

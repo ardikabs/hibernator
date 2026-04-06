@@ -53,7 +53,11 @@ spec:
                 properties:
                   failFast:
                     default: true
-                    description: FailFast stops execution on first failure.
+                    description: |-
+                      FailFast stops execution on first failure.
+
+                      Strict mode already implies fail-fast behavior.
+                      Deprecated: FailFast is deprecated and will be removed in a future release. Use Mode=Strict for fail-fast behavior.
                     type: boolean
                   mode:
                     default: Strict

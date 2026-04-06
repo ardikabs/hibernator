@@ -21,7 +21,15 @@ type defaultUpdater[T client.Object] struct {
 	pool *keyedworker.Pool[types.NamespacedName, Update[T]]
 }
 
+// Send applies the update's Mutator to the resource (optimistic in-memory mutation)
+// and submits the update to the async pool for eventual writeback to Kubernetes by the status writer.
 func (u *defaultUpdater[T]) Send(update Update[T]) {
+	// TODO: Send invokes the Mutator eagerly (in-memory mutation)
+	// AND delivers to the async pool (which applies the same Mutator again during
+	// writeback). Today this works because all Mutators are idempotent set-field
+	// operations. If a non-idempotent Mutator is added in the future, the double
+	// invocation could cause subtle bugs. Consider splitting "optimistic local
+	// update" from "queued server write" into two distinct paths.
 	if update.Mutator != nil {
 		update.Mutator.Mutate(update.Resource)
 	}

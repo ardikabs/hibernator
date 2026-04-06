@@ -162,6 +162,11 @@ func (o *Overflow[T]) Consume(fn func(ctx context.Context, item T) bool) {
 
 	// Hard limit: if processing all items takes longer than 5 seconds,
 	// stop and return the remainder to the queue.
+	//
+	// TODO: context.Background() is intentional here — Consume
+	// runs as a cleanup/timer callback that must not be cancelled by any parent
+	// context. If the manager ever needs cooperative cancellation for graceful
+	// shutdown, consider accepting a base context parameter.
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 

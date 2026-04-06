@@ -189,6 +189,10 @@ type Behavior struct {
 
 	// FailFast stops execution on first failure.
 	// +kubebuilder:default=true
+	//
+	// TODO: FailFast is semantically redundant with Mode=Strict.
+	// Strict mode already implies fail-fast behavior.
+	// Deprecated: FailFast is deprecated and will be removed in a future release. Use Mode=Strict for fail-fast behavior.
 	FailFast bool `json:"failFast,omitempty"`
 
 	// Retries is the maximum number of retry attempts for failed operations.

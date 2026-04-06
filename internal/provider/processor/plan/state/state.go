@@ -13,9 +13,7 @@ import (
 
 	"github.com/go-logr/logr"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
-	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/types"
-	"k8s.io/utils/clock"
 	"k8s.io/utils/ptr"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
@@ -149,23 +147,17 @@ func New(key types.NamespacedName, planCtx *message.PlanContext, cfg *Config) Ha
 // newState constructs a private state value from the given key, plan context, and config.
 func newState(key types.NamespacedName, planCtx *message.PlanContext, cfg *Config) *state {
 	return &state{
-		Key:                  key,
-		PlanCtx:              planCtx,
-		Log:                  cfg.Log,
-		Client:               cfg.Client,
-		APIReader:            cfg.APIReader,
-		Clock:                cfg.Clock,
-		Scheme:               cfg.Scheme,
-		Planner:              cfg.Planner,
-		Resources:            cfg.Resources,
-		Statuses:             cfg.Statuses,
-		RestoreManager:       cfg.RestoreManager,
-		Notifier:             cfg.Notifier,
-		ControlPlaneEndpoint: cfg.ControlPlaneEndpoint,
-		RunnerImage:          cfg.RunnerImage,
-		RunnerServiceAccount: cfg.RunnerServiceAccount,
-		OnJobMissing:         cfg.OnJobMissing,
-		OnJobFound:           cfg.OnJobFound,
+		Key:            key,
+		PlanCtx:        planCtx,
+		Log:            cfg.Log,
+		Infrastructure: cfg.Infrastructure,
+		ExecutorInfra:  cfg.ExecutorInfra,
+		Callbacks:      cfg.Callbacks,
+		Planner:        cfg.Planner,
+		RestoreManager: cfg.RestoreManager,
+		Resources:      cfg.Resources,
+		Statuses:       cfg.Statuses,
+		Notifier:       cfg.Notifier,
 	}
 }
 
@@ -177,26 +169,18 @@ func newState(key types.NamespacedName, planCtx *message.PlanContext, cfg *Confi
 // handler types and tests). The type itself is unexported — callers outside the
 // package interact only through the Handler interface and the New() factory.
 type state struct {
-	client.Client
+	Infrastructure
 
-	Key     types.NamespacedName
-	Log     logr.Logger
-	PlanCtx *message.PlanContext
-
-	APIReader            client.Reader
-	Clock                clock.Clock
-	Scheme               *runtime.Scheme
-	Planner              *scheduler.Planner
-	Resources            *message.ControllerResources
-	Statuses             *statusprocessor.ControllerStatuses
-	RestoreManager       *restore.Manager
-	Notifier             notification.Notifier
-	ControlPlaneEndpoint string
-	RunnerImage          string
-	RunnerServiceAccount string
-
-	OnJobMissing func(target string) bool
-	OnJobFound   func(target string)
+	Log            logr.Logger
+	Key            types.NamespacedName
+	PlanCtx        *message.PlanContext
+	ExecutorInfra  ExecutorInfra
+	Callbacks      StateCallbacks
+	Planner        *scheduler.Planner
+	RestoreManager *restore.Manager
+	Resources      *message.ControllerResources
+	Statuses       *statusprocessor.ControllerStatuses
+	Notifier       notification.Notifier
 }
 
 // Handle is a no-op so that handler types embedding *state inherit a default
