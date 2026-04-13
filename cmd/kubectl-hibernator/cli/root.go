@@ -6,6 +6,7 @@ Licensed under the Apache License, Version 2.0.
 package cli
 
 import (
+	"context"
 	"os"
 
 	"github.com/spf13/cobra"
@@ -62,8 +63,11 @@ Then use as:
   kubectl hibernator restart my-plan
   kubectl hibernator logs my-plan`,
 		PersistentPreRunE: func(cmd *cobra.Command, args []string) error {
-			formatter := output.NewFormatter(os.Stdout, os.Stderr)
-			cmd.SetContext(output.WithFormatter(cmd.Context(), formatter))
+			if err := cmd.ValidateRequiredFlags(); err != nil {
+				output.FromContext(cmd.Context()).Error(err.Error())
+				return err
+			}
+
 			return nil
 		},
 		SilenceUsage:  true,
@@ -89,5 +93,7 @@ Then use as:
 	cmd.AddCommand(notification.NewCommand(opts))
 	cmd.AddCommand(logs.NewCommand(opts))
 
+	out := output.NewFormatter(os.Stdout, os.Stderr)
+	cmd.SetContext(output.WithFormatter(context.Background(), out))
 	return cmd
 }
