@@ -3,14 +3,14 @@ rfc: RFC-0007
 title: kubectl hibernator Plugin for Day-to-Day Operations
 status: Implemented ✅
 date: 2026-02-20
-last-updated: 2026-02-23
+last-updated: 2026-04-13
 ---
 
 # RFC 0007 — kubectl hibernator Plugin for Day-to-Day Operations
 
 **Keywords:** CLI, kubectl-plugin, Operational-Management, Schedule-Validation, Debug, Observability, User-Experience
 
-**Status:** In Progress 🚀 (Client-side: ✅ Complete | Server-side: ✅ Implemented, ⏳ Verification)
+**Status:** Implemented ✅
 
 ## Summary
 
@@ -572,7 +572,7 @@ The CLI and server follow this contract for all operations:
 - Log filtering uses pattern-based matching on JSON output (resilient but dependent on field presence in logs)
 - In follow mode, real-time merging may occasionally show slight timestamp out-of-order if stream latency differs between pods (rare)
 
-### ✅ Server-Side (Control Plane) — MOSTLY COMPLETE
+### ✅ Server-Side (Control Plane) — COMPLETE
 
 **Completed tasks**:
 - [x] Handle `suspend-until` annotation (parse RFC3339 deadline, auto-resume when expired)
@@ -580,11 +580,11 @@ The CLI and server follow this contract for all operations:
 - [x] Execution-id tracking in status
 
 **Verification/Integration tasks**:
-- [ ] Verify `suspend-reason` annotation is propagated (informational)
-- [ ] Verify `spec.suspend=true/false` prevents hibernation start when true
-- [ ] Verify `retry-now` annotation triggers immediate retry on controller reconcile
-- [ ] Verify `execution-id` is consistently populated in `status.executions[]` for log correlation
-- [ ] End-to-end testing: CLI ↔ Server integration validation
+- [x] Verify `suspend-reason` annotation is propagated (informational)
+- [x] Verify `spec.suspend=true/false` prevents hibernation start when true
+- [x] Verify `retry-now` annotation triggers immediate retry on controller reconcile
+- [x] Verify `execution-id` is consistently populated in `status.executions[]` for log correlation
+- [x] End-to-end testing: CLI ↔ Server integration validation
 
 **Documentation**:
 - [x] RBAC template: [config/rbac/cli_role.yaml](../../config/rbac/cli_role.yaml)
