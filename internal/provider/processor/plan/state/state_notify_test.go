@@ -121,6 +121,30 @@ func TestBuildPayload_NoSpecTargetMatch_EmptyConnector(t *testing.T) {
 	assert.Empty(t, p.Targets[0].Connector.Name)
 }
 
+func TestBuildPayload_SuccessPreservesMixedTargetStates(t *testing.T) {
+	plan := &hibernatorv1alpha1.HibernatePlan{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "plan-c",
+			Namespace: "default",
+		},
+		Status: hibernatorv1alpha1.HibernatePlanStatus{
+			Executions: []hibernatorv1alpha1.ExecutionStatus{
+				{Target: "t1", Executor: "eks", State: hibernatorv1alpha1.StateCompleted},
+				{Target: "t2", Executor: "rds", State: hibernatorv1alpha1.StateFailed},
+				{Target: "t3", Executor: "ec2", State: hibernatorv1alpha1.StateAborted},
+			},
+		},
+	}
+
+	clk := clocktesting.NewFakeClock(time.Now())
+	p := buildPayload(plan, hibernatorv1alpha1.EventSuccess, clk.Now)
+
+	require.Len(t, p.Targets, 3)
+	assert.Equal(t, "Completed", p.Targets[0].State)
+	assert.Equal(t, "Failed", p.Targets[1].State)
+	assert.Equal(t, "Aborted", p.Targets[2].State)
+}
+
 // ---------------------------------------------------------------------------
 // enrichConnectorInfo
 // ---------------------------------------------------------------------------

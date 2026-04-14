@@ -67,18 +67,18 @@ func (b *blockSetBuilder) Add(blocks ...slackapi.Block) *blockSetBuilder {
 }
 
 func (b *blockSetBuilder) AddWhen(condition bool, block slackapi.Block) *blockSetBuilder {
-	if condition {
-		b.blocks = append(b.blocks, block)
+	if !condition {
+		return b
 	}
-	return b
+	return b.Add(block)
 }
 
 func (b *blockSetBuilder) AddWhenText(text string, factory func(string) slackapi.Block) *blockSetBuilder {
-	if strings.TrimSpace(text) == "" {
+	trimmed := strings.TrimSpace(text)
+	if trimmed == "" {
 		return b
 	}
-	b.blocks = append(b.blocks, factory(text))
-	return b
+	return b.Add(factory(trimmed))
 }
 
 func (b *blockSetBuilder) AddWhenTextBlocks(text string, factory func(string) []slackapi.Block) *blockSetBuilder {

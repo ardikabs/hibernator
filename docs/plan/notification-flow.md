@@ -341,15 +341,14 @@ sequenceDiagram
 
     WM->>WK: PlanContext updated
     WK->>SH: Handle(ctx, planCtx)
-    SH->>SH: Build DispatchRequest for "Start" event
-    SH->>UP: Send(Update{PreHook: submitStart, Mutator: setHibernating})
+    SH->>UP: Send(Update{Mutator: setHibernating, PostHook: submitStart})
 
     UP->>UP: Fetch fresh plan
-    UP->>SH: Execute PreHook
-    SH->>D: Submit(DispatchRequest{Event:"Start", SinkType:"slack",...})
-    D-->>SH: return immediately (non-blocking)
     UP->>UP: Apply Mutator → phase = Hibernating
     UP->>KW: status.Update(plan)
+    UP->>SH: Execute PostHook
+    SH->>D: Submit(DispatchRequest{Event:"Start", SinkType:"slack",...})
+    D-->>SH: return immediately (non-blocking)
 
     Note over D: async, decoupled from reconciliation
 

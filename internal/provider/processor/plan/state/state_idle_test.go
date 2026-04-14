@@ -10,6 +10,8 @@ import (
 	"testing"
 
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 
 	hibernatorv1alpha1 "github.com/ardikabs/hibernator/api/v1alpha1"
 	"github.com/ardikabs/hibernator/internal/message"
@@ -98,4 +100,95 @@ func TestIdleState_Handle_HibernatedShouldStayHibernated(t *testing.T) {
 
 	assert.Equal(t, hibernatorv1alpha1.PhaseHibernated, plan.Status.Phase)
 	assert.Zero(t, planStatuses(st).Len())
+}
+
+func TestIdleState_TransitionToHibernating_StartNotificationUsesMutatedPendingTargets(t *testing.T) {
+	plan := basePlanForState("p", hibernatorv1alpha1.PhaseActive)
+	plan.Spec.Targets = []hibernatorv1alpha1.Target{
+		{Name: "db", Type: "rds"},
+		{Name: "app", Type: "eks"},
+	}
+	plan.Status.Executions = []hibernatorv1alpha1.ExecutionStatus{
+		{Target: "db", Executor: "rds", State: hibernatorv1alpha1.StateCompleted},
+		{Target: "app", Executor: "eks", State: hibernatorv1alpha1.StateCompleted},
+	}
+
+	c := newHandlerFakeClient(plan)
+	st := newHandlerState(plan, c)
+	spy := &spyNotifier{}
+	st.Notifier = spy
+	st.PlanCtx.Notifications = []hibernatorv1alpha1.HibernateNotification{{
+		ObjectMeta: metav1.ObjectMeta{Name: "n1", Namespace: "default"},
+		Spec: hibernatorv1alpha1.HibernateNotificationSpec{
+			OnEvents: []hibernatorv1alpha1.NotificationEvent{hibernatorv1alpha1.EventStart},
+			Sinks: []hibernatorv1alpha1.NotificationSink{{
+				Name:      "slack",
+				Type:      hibernatorv1alpha1.SinkSlack,
+				SecretRef: hibernatorv1alpha1.ObjectKeyReference{Name: "s1"},
+			}},
+		},
+	}}
+
+	h := &idleState{state: st}
+	_, err := h.transitionToHibernating(st.Log)
+	require.NoError(t, err)
+
+	upd := <-planStatuses(st).C()
+	require.NotNil(t, upd.PostHook)
+	require.NoError(t, upd.PostHook(context.Background(), plan))
+
+	require.Len(t, spy.requests, 1)
+	req := spy.requests[0]
+	assert.Equal(t, string(hibernatorv1alpha1.EventStart), req.Payload.Event)
+	assert.Equal(t, string(hibernatorv1alpha1.PhaseHibernating), req.Payload.Phase)
+	assert.Equal(t, string(hibernatorv1alpha1.OperationHibernate), req.Payload.Operation)
+	require.Len(t, req.Payload.Targets, 2)
+	assert.Equal(t, "Pending", req.Payload.Targets[0].State)
+	assert.Equal(t, "Pending", req.Payload.Targets[1].State)
+}
+
+func TestIdleState_TransitionToWakingUp_StartNotificationUsesMutatedPendingTargets(t *testing.T) {
+	plan := basePlanForState("p", hibernatorv1alpha1.PhaseHibernated)
+	plan.Spec.Targets = []hibernatorv1alpha1.Target{
+		{Name: "db", Type: "rds"},
+		{Name: "app", Type: "eks"},
+	}
+	plan.Status.CurrentCycleID = "cycle-001"
+	plan.Status.Executions = []hibernatorv1alpha1.ExecutionStatus{
+		{Target: "db", Executor: "rds", State: hibernatorv1alpha1.StateCompleted},
+		{Target: "app", Executor: "eks", State: hibernatorv1alpha1.StateCompleted},
+	}
+
+	c := newHandlerFakeClient(plan)
+	st := newHandlerState(plan, c)
+	spy := &spyNotifier{}
+	st.Notifier = spy
+	st.PlanCtx.Notifications = []hibernatorv1alpha1.HibernateNotification{{
+		ObjectMeta: metav1.ObjectMeta{Name: "n1", Namespace: "default"},
+		Spec: hibernatorv1alpha1.HibernateNotificationSpec{
+			OnEvents: []hibernatorv1alpha1.NotificationEvent{hibernatorv1alpha1.EventStart},
+			Sinks: []hibernatorv1alpha1.NotificationSink{{
+				Name:      "slack",
+				Type:      hibernatorv1alpha1.SinkSlack,
+				SecretRef: hibernatorv1alpha1.ObjectKeyReference{Name: "s1"},
+			}},
+		},
+	}}
+
+	h := &idleState{state: st}
+	_, err := h.transitionToWakingUp(st.Log)
+	require.NoError(t, err)
+
+	upd := <-planStatuses(st).C()
+	require.NotNil(t, upd.PostHook)
+	require.NoError(t, upd.PostHook(context.Background(), plan))
+
+	require.Len(t, spy.requests, 1)
+	req := spy.requests[0]
+	assert.Equal(t, string(hibernatorv1alpha1.EventStart), req.Payload.Event)
+	assert.Equal(t, string(hibernatorv1alpha1.PhaseWakingUp), req.Payload.Phase)
+	assert.Equal(t, string(hibernatorv1alpha1.OperationWakeUp), req.Payload.Operation)
+	require.Len(t, req.Payload.Targets, 2)
+	assert.Equal(t, "Pending", req.Payload.Targets[0].State)
+	assert.Equal(t, "Pending", req.Payload.Targets[1].State)
 }

@@ -41,7 +41,7 @@ The configuration must be in a JSON object stored under `config` key in secret r
 |-------|------|----------|-------------|
 | `webhook_url` | `string` | Yes | WebhookURL is the Slack Incoming Webhook URL. |
 | `format` | `string` | No | Format controls Slack payload mode. Supported values: `text` (message text only), and `json` (Slack blocks payload, using preset layouts or custom templates). |
-| `block_layout` | `string` | No | BlockLayout selects the preset JSON layout used when format=json and no custom JSON template is provided (or parsing fails). Supported values: `default`, `compact`, `progress`. |
+| `block_layout` | `string` | No | BlockLayout selects the preset JSON layout used when format=json and no custom JSON template is provided (or parsing fails). Supported values: `default`, `compact`, `auto`. For `ExecutionProgress`, `default` and `compact` suppress non-terminal updates (`Pending`, `Running`) and only send terminal updates (`Completed`, `Failed`, `Aborted`). Use `auto` for full progress streaming |
 | `max_targets` | `int` | No | MaxTargets limits target lines in preset JSON layouts. It defaults to 8, which is enough to show all targets in most cases while keeping the message concise. |
 | `additional_scopes` | `[]string` | No | AdditionalScopes appends additional scope fields to the scope context. Account and Cluster are always included by default. Supported: `environment` (alias: env), `region`, `project`, `provider`, `connector`, `account`, `cluster`. |
 

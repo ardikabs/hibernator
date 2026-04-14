@@ -16,7 +16,7 @@ last-updated: 2026-04-13
 
 This RFC proposes a decoupled, selector-based notification system for the Hibernator Operator. By introducing a new Custom Resource Definition (CRD) called `HibernateNotification`, users can define notification rules (triggers and sinks) that apply to one or multiple `HibernatePlan` resources based on label selectors. Notifications are delivered through a dedicated lifecycle that integrates with the async phase-driven reconciler via `PlanContext`, using pre/post hooks on status transitions to fire events. Users can customize message formatting through Go templates referenced from ConfigMaps.
 
-For Slack-specific formatting modes (`format=text|json`), template behavior per mode, and preset JSON layouts (`default|compact|progress`), see [RFC-0009](./0009-slack-block-kit-notification-format.md).
+For Slack-specific formatting modes (`format=text|json`), template behavior per mode, and preset JSON layouts (`default|compact|auto`), see [RFC-0009](./0009-slack-block-kit-notification-format.md).
 
 ## Motivation
 
@@ -50,7 +50,7 @@ Notifications fire at well-defined points in the hibernation lifecycle. Each hoo
 
 | Hook Point | Timing | Status Processor Hook | Description |
 |------------|--------|----------------------|-------------|
-| `Start` | Right before execution begins | **PreHook** on `Hibernating` / `WakingUp` transition | Fires when the plan transitions from `Active`/`Hibernated` into an execution phase. The status write has not yet been persisted. |
+| `Start` | When execution begins | **PostHook** on `Hibernating` / `WakingUp` transition | Fires when the plan transitions from `Active`/`Hibernated` into an execution phase, after the status write is persisted so payload reflects the new cycle state. |
 | `Success` | After execution completes successfully | **PostHook** on `Hibernated` / `Active` transition | Fires after all targets complete and the plan transitions to its resting state. |
 | `Failure` | When retries exhausted (permanent error) | **PostHook** on `Error` transition, gated by `retryCount >= behavior.retries` | Fires only when all automatic recovery attempts have been exhausted and the plan enters a permanent `Error` state. This is an escalation signal — someone needs to look at this NOW. |
 | `PhaseChange` | On every phase transition | **PostHook** on any status write where phase changed | Fires on every `phaseBefore != phaseAfter`. Noisy — intended for audit trails and debugging. |
@@ -61,8 +61,8 @@ Notifications fire at well-defined points in the hibernation lifecycle. Each hoo
 
 State handlers already send `statusprocessor.Update[T]` with `PreHook` and `PostHook` fields. Notification dispatch will be wired into these hooks:
 
-- **PreHook triggers** (`Start`, `Recovery`): Notification fires before the status write is persisted to the API server. If the PreHook returns an error, the status write is aborted (but notification dispatch itself must never return errors — it is fire-and-forget within the hook).
-- **PostHook triggers** (`Success`, `Failure`, `PhaseChange`): Notification fires after a successful status write. PostHook errors are logged but do not roll back the write. The `Failure` hook is **conditional** — it only dispatches when `plan.Status.RetryCount >= plan.Spec.Behavior.Retries`, meaning all automatic recovery has been exhausted. On earlier Error transitions (where retries remain), only `Recovery` fires as an early warning.
+- **PreHook triggers** (`Recovery`): Notification fires before the status write is persisted to the API server. If the PreHook returns an error, the status write is aborted (but notification dispatch itself must never return errors — it is fire-and-forget within the hook).
+- **PostHook triggers** (`Start`, `Success`, `Failure`, `PhaseChange`): Notification fires after a successful status write. PostHook errors are logged but do not roll back the write. The `Failure` hook is **conditional** — it only dispatches when `plan.Status.RetryCount >= plan.Spec.Behavior.Retries`, meaning all automatic recovery has been exhausted. On earlier Error transitions (where retries remain), only `Recovery` fires as an early warning.
 
 ### 2. PlanContext Integration
 
@@ -114,7 +114,7 @@ spec:
   onEvents:
     - Failure      # Retries exhausted, permanent error (PostHook on Error when retryCount >= retries)
     - Recovery     # Recovery retry triggered (PreHook on retry)
-    - Start        # Right before execution begins (PreHook on Hibernating/WakingUp)
+    - Start        # Execution begins (PostHook on Hibernating/WakingUp transition)
     - Success      # Execution completed successfully (PostHook on Hibernated/Active)
     # - PhaseChange  # Every phase transition (noisy, for debugging/audit)
 
@@ -252,16 +252,16 @@ The notification system has its own dedicated lifecycle within the reconciler, f
 │   1. Receive PlanContext with Notifications           │
 │   2. State handler evaluates phase transition         │
 │   3. Constructs statusprocessor.Update with hooks:    │
-│      - PreHook: dispatch Start/Recovery notifications │
-│      - PostHook: dispatch Success/Failure/PhaseChange │
+│      - PreHook: dispatch Recovery notifications        │
+│      - PostHook: dispatch Start/Success/Failure/PhaseChange │
 └──────────────────────┬──────────────────────────────┘
                        │ Update queued
                        ▼
 ┌─────────────────────────────────────────────────────┐
 │ StatusProcessor (UpdateProcessor.apply)               │
-│   1. Execute PreHook → fire pre-execution notifs      │
+│   1. Execute PreHook → fire retry warnings (Recovery) │
 │   2. Mutate + write status to API server              │
-│   3. Execute PostHook → fire post-execution notifs    │
+│   3. Execute PostHook → fire Start/Success/Failure/PhaseChange │
 └──────────────────────┬──────────────────────────────┘
                        │ Async dispatch
                        ▼
@@ -437,8 +437,8 @@ For webhook sinks without a custom template, this JSON is sent as-is in the HTTP
 ### Phase 5: Hook Wiring in State Handlers
 
 - Wire notification dispatch into status update PreHook/PostHook closures in state handlers:
-  - `idleState.transitionToHibernating()` → PreHook: `Start`
-  - `idleState.transitionToWakingUp()` → PreHook: `Start`
+  - `idleState.transitionToHibernating()` → PostHook: `Start`
+  - `idleState.transitionToWakingUp()` → PostHook: `Start`
   - `hibernatingState` completion → PostHook: `Success`
   - `wakingUpState` completion → PostHook: `Success`
   - `→ Error` transition **when `retryCount >= behavior.retries`** → PostHook: `Failure`

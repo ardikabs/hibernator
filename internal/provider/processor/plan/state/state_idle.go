@@ -83,14 +83,6 @@ func (state *idleState) transitionToHibernating(log logr.Logger) (StateResult, e
 	state.Statuses.PlanStatuses.Send(statusprocessor.Update[*hibernatorv1alpha1.HibernatePlan]{
 		NamespacedName: state.Key,
 		Resource:       plan,
-		PreHook: state.notifyHook(hibernatorv1alpha1.EventStart, func(p *hibernatorv1alpha1.HibernatePlan) notification.Payload {
-			// PreHook sees pre-mutation state — override with target values.
-			payload := buildPayload(p, hibernatorv1alpha1.EventStart, state.Clock.Now)
-			payload.Phase = string(hibernatorv1alpha1.PhaseHibernating)
-			payload.Operation = string(hibernatorv1alpha1.OperationHibernate)
-			payload.CycleID = cycleID
-			return payload
-		}),
 		Mutator: statusprocessor.MutatorFunc[*hibernatorv1alpha1.HibernatePlan](func(p *hibernatorv1alpha1.HibernatePlan) {
 			p.Status.Phase = hibernatorv1alpha1.PhaseHibernating
 			p.Status.CurrentCycleID = cycleID
@@ -99,7 +91,12 @@ func (state *idleState) transitionToHibernating(log logr.Logger) (StateResult, e
 			p.Status.Executions = executions
 			p.Status.LastTransitionTime = ptr.To(metav1.NewTime(now))
 		}),
-		PostHook: state.phaseChangePostHook(previousPhase),
+		PostHook: chainHooks(
+			state.notifyHook(hibernatorv1alpha1.EventStart, func(p *hibernatorv1alpha1.HibernatePlan) notification.Payload {
+				return buildPayload(p, hibernatorv1alpha1.EventStart, state.Clock.Now)
+			}),
+			state.phaseChangePostHook(previousPhase),
+		),
 	})
 
 	log.V(1).Info("queued transition to Hibernating", "cycleID", cycleID)
@@ -126,13 +123,6 @@ func (state *idleState) transitionToWakingUp(log logr.Logger) (StateResult, erro
 	state.Statuses.PlanStatuses.Send(statusprocessor.Update[*hibernatorv1alpha1.HibernatePlan]{
 		NamespacedName: state.Key,
 		Resource:       plan,
-		PreHook: state.notifyHook(hibernatorv1alpha1.EventStart, func(p *hibernatorv1alpha1.HibernatePlan) notification.Payload {
-			// PreHook sees pre-mutation state — override with target values.
-			payload := buildPayload(p, hibernatorv1alpha1.EventStart, state.Clock.Now)
-			payload.Phase = string(hibernatorv1alpha1.PhaseWakingUp)
-			payload.Operation = string(hibernatorv1alpha1.OperationWakeUp)
-			return payload
-		}),
 		Mutator: statusprocessor.MutatorFunc[*hibernatorv1alpha1.HibernatePlan](func(p *hibernatorv1alpha1.HibernatePlan) {
 			p.Status.Phase = hibernatorv1alpha1.PhaseWakingUp
 			p.Status.CurrentStageIndex = 0
@@ -140,7 +130,12 @@ func (state *idleState) transitionToWakingUp(log logr.Logger) (StateResult, erro
 			p.Status.Executions = executions
 			p.Status.LastTransitionTime = ptr.To(metav1.NewTime(now))
 		}),
-		PostHook: state.phaseChangePostHook(previousPhase),
+		PostHook: chainHooks(
+			state.notifyHook(hibernatorv1alpha1.EventStart, func(p *hibernatorv1alpha1.HibernatePlan) notification.Payload {
+				return buildPayload(p, hibernatorv1alpha1.EventStart, state.Clock.Now)
+			}),
+			state.phaseChangePostHook(previousPhase),
+		),
 	})
 
 	log.V(1).Info("queued transition to WakingUp", "cycleID", plan.Status.CurrentCycleID)

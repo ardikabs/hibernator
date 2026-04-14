@@ -43,7 +43,7 @@ rules:
     resources: ["scheduleexceptions/finalizers"]
     verbs: ["update"]
 
-  # ScheduleException
+  # HibernateNotification
   - apiGroups: ["hibernator.ardikabs.com"]
     resources: ["hibernatenotifications"]
     verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
