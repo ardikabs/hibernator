@@ -51,6 +51,29 @@ Each sink reads its configuration from a Kubernetes Secret. The Secret must cont
         }
     ```
 
+    Optional advanced Slack config:
+
+    ```json
+    {
+      "webhook_url": "https://hooks.slack.com/services/T00/B00/xxxx",
+      "format": "json",
+      "block_layout": "default",
+      "max_targets": 8,
+      "additional_scopes": ["environment", "region"]
+    }
+    ```
+
+    - `format: text` (default): sends plain Slack text.
+    - `format: json`: sends Slack blocks JSON.
+      - if `templateRef` exists, template output is parsed as Slack JSON payload.
+      - if no `templateRef` (or JSON parse fails), built-in preset layout is used.
+    - `block_layout`: preset for JSON mode (`default`, `compact`, `progress`).
+      - `progress` is optimized for `ExecutionProgress` events.
+    - `max_targets`: maximum target lines in preset JSON output.
+    - `additional_scopes`: appends extra bottom scope metadata context.
+      - defaults already include Account and Cluster.
+      - supported values: `environment` (alias `env`), `region`, `project`, `provider`, `connector`, `account`, `cluster`.
+
 === "Telegram"
 
     ```yaml
@@ -191,6 +214,11 @@ spec:
 
 By default, each sink uses a built-in template that produces a well-formatted message with event indicators, plan details, phase, targets, and error information. To customize the message format, create a ConfigMap with a Go template and reference it via `templateRef`:
 
+For Slack:
+
+- with `format=text`, your template should render plain text.
+- with `format=json`, your template should render a Slack JSON payload (typically with `blocks`, optionally with `text`).
+
 ### Step 1: Create the Template ConfigMap
 
 ```yaml
@@ -213,6 +241,35 @@ data:
     *Operation:* {{ .Operation | default "N/A" }}
     {{ if .ErrorMessage }}*Error:* {{ .ErrorMessage }}{{ end }}
     *Time:* {{ .Timestamp | date "2006-01-02 15:04:05 MST" }}
+```
+
+Slack JSON template example (`format=json`):
+
+```yaml
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: slack-json-templates
+  namespace: hibernator-system
+data:
+  template.gotpl: |
+    {{- $fallback := printf "[%s] %s/%s phase=%s" .Event .Plan.Namespace .Plan.Name .Phase -}}
+    {
+      "text": {{ $fallback | toJson }},
+      "blocks": [
+        {
+          "type": "header",
+          "text": { "type": "plain_text", "text": "Hibernator Notification" }
+        },
+        {
+          "type": "section",
+          "text": {
+            "type": "mrkdwn",
+            "text": {{ (printf "*Event:* %s\\n*Plan:* `%s/%s`\\n*Phase:* `%s`" .Event .Plan.Namespace .Plan.Name .Phase) | toJson }}
+          }
+        }
+      ]
+    }
 ```
 
 ### Step 2: Reference It in the Sink

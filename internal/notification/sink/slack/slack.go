@@ -10,6 +10,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"strings"
 
 	slackapi "github.com/slack-go/slack"
 
@@ -57,27 +58,110 @@ func (s *Sink) Type() string {
 }
 
 // Send renders the notification payload using the Slack template and delivers it
-// via Incoming Webhook. If opts.CustomTemplateRef is set, that template is used
-// instead of the built-in default.
+// via Incoming Webhook.
+//
+// Behavior by config.format:
+//   - text (default): render text and send as plain Slack text message.
+//   - json: if custom template is provided, render and parse JSON payload;
+//     otherwise build a preset JSON blocks payload.
 func (s *Sink) Send(ctx context.Context, payload sink.Payload, opts sink.SendOptions) error {
 	var cfg config
 	if err := json.Unmarshal(opts.Config, &cfg); err != nil {
 		return fmt.Errorf("parse slack sink config: %w", err)
 	}
+	cfg.useDefaults()
+	if err := cfg.validate(); err != nil {
+		return err
+	}
 	if cfg.WebhookURL == "" {
 		return fmt.Errorf("slack sink config: webhook_url is required")
 	}
 
-	var renderOpts []sink.RenderOption
-	if opts.CustomTemplate != nil {
-		renderOpts = append(renderOpts, sink.WithCustomTemplate(opts.CustomTemplate))
-	}
-
-	content := s.renderer.Render(ctx, payload, renderOpts...)
-	msg := &slackapi.WebhookMessage{Text: content}
+	msg := s.buildMessage(ctx, payload, cfg, opts.CustomTemplate)
 
 	if err := slackapi.PostWebhookCustomHTTPContext(ctx, cfg.WebhookURL, s.client, msg); err != nil {
 		return fmt.Errorf("send slack notification: %w", err)
+	}
+
+	return nil
+}
+
+func (s *Sink) buildMessage(ctx context.Context, payload sink.Payload, cfg config, customTemplate *sink.CustomTemplate) *slackapi.WebhookMessage {
+	switch cfg.Format {
+	case formatJSON:
+		if customTemplate != nil {
+			rendered := s.renderer.Render(ctx, payload, sink.WithCustomTemplate(customTemplate))
+			if msg, err := parseJSONTemplateMessage(rendered, payload); err == nil {
+				return msg
+			}
+		}
+		return presetJSONMessage(payload, cfg.BlockLayout, cfg.MaxTargets, cfg.AdditionalScopes)
+
+	case formatText:
+		fallthrough
+	default:
+		var renderOpts []sink.RenderOption
+		if customTemplate != nil {
+			renderOpts = append(renderOpts, sink.WithCustomTemplate(customTemplate))
+		}
+		content := s.renderer.Render(ctx, payload, renderOpts...)
+		return &slackapi.WebhookMessage{Text: content}
+	}
+}
+
+func parseJSONTemplateMessage(rendered string, payload sink.Payload) (*slackapi.WebhookMessage, error) {
+	rendered = strings.TrimSpace(rendered)
+	if rendered == "" {
+		return nil, fmt.Errorf("empty template output")
+	}
+
+	var msg slackapi.WebhookMessage
+	if err := json.Unmarshal([]byte(rendered), &msg); err == nil {
+		if msg.Blocks != nil && len(msg.Blocks.BlockSet) > 0 {
+			if strings.TrimSpace(msg.Text) == "" {
+				msg.Text = fallbackText(payload)
+			}
+			return &msg, nil
+		}
+	}
+
+	var blocks slackapi.Blocks
+	if err := json.Unmarshal([]byte(rendered), &blocks); err == nil && len(blocks.BlockSet) > 0 {
+		return &slackapi.WebhookMessage{
+			Text:   fallbackText(payload),
+			Blocks: &blocks,
+		}, nil
+	}
+
+	return nil, fmt.Errorf("template output is not a valid Slack JSON payload")
+}
+
+func (c config) validate() error {
+	switch c.Format {
+	case formatText, formatJSON:
+		// ok
+	default:
+		return fmt.Errorf("slack sink config: format must be %q or %q", formatText, formatJSON)
+	}
+
+	if c.Format != formatJSON {
+		return nil
+	}
+
+	switch c.BlockLayout {
+	case blockLayoutDefault, blockLayoutCompact, blockLayoutProgress:
+		// ok
+	default:
+		return fmt.Errorf("slack sink config: block_layout must be one of %q, %q, %q", blockLayoutDefault, blockLayoutCompact, blockLayoutProgress)
+	}
+
+	for _, scope := range c.AdditionalScopes {
+		switch scope {
+		case scopeAccount, scopeCluster, scopeEnvironment, scopeRegion, scopeProject, scopeProvider, scopeConnector:
+			// ok
+		default:
+			return fmt.Errorf("slack sink config: unsupported additional scope %q", scope)
+		}
 	}
 
 	return nil

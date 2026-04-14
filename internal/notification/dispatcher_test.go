@@ -7,9 +7,13 @@ package notification
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"log/slog"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"sync"
 	"sync/atomic"
@@ -26,6 +30,7 @@ import (
 
 	hibernatorv1alpha1 "github.com/ardikabs/hibernator/api/v1alpha1"
 	sinktypes "github.com/ardikabs/hibernator/internal/notification/sink"
+	slacksink "github.com/ardikabs/hibernator/internal/notification/sink/slack"
 )
 
 // stubSink is a test double that records Send calls.
@@ -551,6 +556,148 @@ func TestDispatcher_MalformedCustomTemplate(t *testing.T) {
 
 	require.True(t, stub.waitCalls(1, 2*time.Second))
 	assert.Equal(t, "Start", stub.getCalls()[0].Payload.Event)
+}
+
+func TestDispatcher_SlackJSONTemplate_EndToEnd(t *testing.T) {
+	receivedCh := make(chan map[string]any, 1)
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		assert.Equal(t, http.MethodPost, r.Method)
+		assert.Equal(t, "application/json", r.Header.Get("Content-Type"))
+
+		body, err := io.ReadAll(r.Body)
+		require.NoError(t, err)
+
+		var payload map[string]any
+		require.NoError(t, json.Unmarshal(body, &payload))
+		select {
+		case receivedCh <- payload:
+		default:
+		}
+
+		w.WriteHeader(http.StatusOK)
+		w.Write([]byte("ok")) //nolint:errcheck
+	}))
+	defer server.Close()
+
+	secret := sinkSecret("default", "slack-secret", []byte(fmt.Sprintf(`{"webhook_url":%q,"format":"json"}`, server.URL)))
+	tmplKey := defaultTemplateKey
+	cm := &corev1.ConfigMap{
+		ObjectMeta: metav1.ObjectMeta{Namespace: "default", Name: "slack-json-template"},
+		Data: map[string]string{
+			tmplKey: `{
+	"text": {{ (printf "custom %s %s/%s" .Event .Plan.Namespace .Plan.Name) | toJson }},
+	"blocks": [
+		{
+			"type": "section",
+			"text": {"type": "mrkdwn", "text": {{ (printf "*Plan:* %s/%s" .Plan.Namespace .Plan.Name) | toJson }}}
+		}
+	]
+}`,
+		},
+	}
+
+	client := fake.NewClientBuilder().
+		WithScheme(newTestScheme()).
+		WithObjects(secret, cm).
+		Build()
+
+	registry := sinktypes.NewRegistry()
+	registry.Register(slacksink.New(NewTemplateEngine(logr.Discard()), slacksink.WithHTTPClient(&http.Client{Timeout: 5 * time.Second})))
+
+	d := NewDispatcher(logr.Discard(), client, registry, DispatcherConfig{Workers: 1, ChannelSize: 8})
+	startDispatcher(t, d)
+
+	d.Submit(Request{
+		Payload:   testPayload("Start"),
+		SinkName:  "slack-json",
+		SinkType:  "slack",
+		SecretRef: hibernatorv1alpha1.ObjectKeyReference{Name: "slack-secret"},
+		TemplateRef: &hibernatorv1alpha1.ObjectKeyReference{
+			Name: "slack-json-template",
+			Key:  &tmplKey,
+		},
+	})
+
+	select {
+	case got := <-receivedCh:
+		text, _ := got["text"].(string)
+		assert.Contains(t, text, "custom Start default/test-plan")
+
+		blocks, ok := got["blocks"].([]any)
+		require.True(t, ok)
+		require.NotEmpty(t, blocks)
+
+		first, ok := blocks[0].(map[string]any)
+		require.True(t, ok)
+		assert.Equal(t, "section", first["type"])
+
+	case <-time.After(2 * time.Second):
+		t.Fatal("timed out waiting for Slack webhook payload")
+	}
+}
+
+func TestDispatcher_SlackJSONTemplate_InvalidFallsBackToPreset(t *testing.T) {
+	receivedCh := make(chan map[string]any, 1)
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		body, err := io.ReadAll(r.Body)
+		require.NoError(t, err)
+
+		var payload map[string]any
+		require.NoError(t, json.Unmarshal(body, &payload))
+		select {
+		case receivedCh <- payload:
+		default:
+		}
+
+		w.WriteHeader(http.StatusOK)
+		w.Write([]byte("ok")) //nolint:errcheck
+	}))
+	defer server.Close()
+
+	secret := sinkSecret("default", "slack-secret", []byte(fmt.Sprintf(`{"webhook_url":%q,"format":"json","block_layout":"compact"}`, server.URL)))
+	tmplKey := defaultTemplateKey
+	cm := &corev1.ConfigMap{
+		ObjectMeta: metav1.ObjectMeta{Namespace: "default", Name: "slack-bad-json-template"},
+		Data: map[string]string{
+			tmplKey: `this is not json`,
+		},
+	}
+
+	client := fake.NewClientBuilder().
+		WithScheme(newTestScheme()).
+		WithObjects(secret, cm).
+		Build()
+
+	registry := sinktypes.NewRegistry()
+	registry.Register(slacksink.New(NewTemplateEngine(logr.Discard()), slacksink.WithHTTPClient(&http.Client{Timeout: 5 * time.Second})))
+
+	d := NewDispatcher(logr.Discard(), client, registry, DispatcherConfig{Workers: 1, ChannelSize: 8})
+	startDispatcher(t, d)
+
+	d.Submit(Request{
+		Payload:   testPayload("Start"),
+		SinkName:  "slack-json",
+		SinkType:  "slack",
+		SecretRef: hibernatorv1alpha1.ObjectKeyReference{Name: "slack-secret"},
+		TemplateRef: &hibernatorv1alpha1.ObjectKeyReference{
+			Name: "slack-bad-json-template",
+			Key:  &tmplKey,
+		},
+	})
+
+	select {
+	case got := <-receivedCh:
+		text, _ := got["text"].(string)
+		assert.Contains(t, text, "[Start]")
+		assert.Contains(t, text, "default/test-plan")
+
+		blocks, ok := got["blocks"].([]any)
+		require.True(t, ok)
+		require.NotEmpty(t, blocks)
+
+	case <-time.After(2 * time.Second):
+		t.Fatal("timed out waiting for Slack webhook payload")
+	}
 }
 
 func TestDispatcher_SubmitAfterShutdown(t *testing.T) {
