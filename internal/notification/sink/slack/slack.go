@@ -149,10 +149,10 @@ func (c config) validate() error {
 	}
 
 	switch c.BlockLayout {
-	case blockLayoutDefault, blockLayoutCompact, blockLayoutProgress:
+	case blockLayoutDefault, blockLayoutCompact, blockLayoutAuto:
 		// ok
 	default:
-		return fmt.Errorf("slack sink config: block_layout must be one of %q, %q, %q", blockLayoutDefault, blockLayoutCompact, blockLayoutProgress)
+		return fmt.Errorf("slack sink config: block_layout must be one of %q, %q, %q", blockLayoutDefault, blockLayoutCompact, blockLayoutAuto)
 	}
 
 	for _, scope := range c.AdditionalScopes {

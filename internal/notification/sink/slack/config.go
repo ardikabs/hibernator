@@ -17,8 +17,9 @@ const (
 	blockLayoutDefault = "default"
 	// blockLayoutCompact is the short high-signal layout.
 	blockLayoutCompact = "compact"
-	// blockLayoutProgress is optimized for ExecutionProgress events.
-	blockLayoutProgress = "progress"
+	// blockLayoutAuto uses progress layout for ExecutionProgress events and
+	// falls back to default layout for all other events.
+	blockLayoutAuto = "auto"
 
 	// Scope keys for JSON preset footer metadata.
 	scopeAccount     = "account"
@@ -46,7 +47,7 @@ type config struct {
 
 	// BlockLayout selects the preset JSON layout used when format=json and
 	// no custom JSON template is provided (or parsing fails).
-	// Supported values: `default`, `compact`, `progress`.
+	// Supported values: `default`, `compact`, `auto`.
 	BlockLayout string `json:"block_layout,omitempty"`
 
 	// MaxTargets limits target lines in preset JSON layouts.

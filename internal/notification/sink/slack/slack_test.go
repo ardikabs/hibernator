@@ -8,7 +8,6 @@ package slack
 import (
 	"context"
 	"encoding/json"
-	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -43,6 +42,9 @@ func testPayload() sink.Payload {
 		Plan: sink.PlanInfo{
 			Name:      "test-plan",
 			Namespace: "default",
+			Labels: map[string]string{
+				"env": "dev",
+			},
 		},
 		Event:     "Start",
 		Timestamp: time.Date(2026, 3, 28, 10, 0, 0, 0, time.UTC),
@@ -207,7 +209,7 @@ func TestSendJSONRejectsRemovedPerTargetAlias(t *testing.T) {
 	assert.Contains(t, err.Error(), "block_layout must be one of")
 }
 
-func TestSendJSONProgressLayoutFallsBackForNonProgressEvent(t *testing.T) {
+func TestSendJSONAutoLayoutFallsBackForNonProgressEvent(t *testing.T) {
 	var bodyRaw string
 
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -219,7 +221,7 @@ func TestSendJSONProgressLayoutFallsBackForNonProgressEvent(t *testing.T) {
 	}))
 	defer server.Close()
 
-	cfg, _ := json.Marshal(config{WebhookURL: server.URL, Format: "json", BlockLayout: "progress"})
+	cfg, _ := json.Marshal(config{WebhookURL: server.URL, Format: "json", BlockLayout: "auto"})
 	s := New(&stubRenderer{defaultText: "rendered:slack"}, WithHTTPClient(&http.Client{Timeout: 5 * time.Second}))
 	err := s.Send(context.Background(), testPayload(), sink.SendOptions{Config: cfg})
 
@@ -259,7 +261,7 @@ func TestSendJSONPresetMaxTargets(t *testing.T) {
 	assert.Contains(t, bodyRaw, "alpha")
 }
 
-func TestSendJSONPresetDefaultScopeLine(t *testing.T) {
+func TestSendJSONPresetDefaultLayoutDoesNotIncludeScopeLine(t *testing.T) {
 	var bodyRaw string
 
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -290,11 +292,11 @@ func TestSendJSONPresetDefaultScopeLine(t *testing.T) {
 	err := s.Send(context.Background(), p, sink.SendOptions{Config: cfg})
 
 	require.NoError(t, err)
-	assert.Contains(t, bodyRaw, "*Account:* `123456789012`")
-	assert.Contains(t, bodyRaw, "*Cluster:* `prod-eks`")
+	assert.NotContains(t, bodyRaw, "*Account:* `123456789012`")
+	assert.NotContains(t, bodyRaw, "*Cluster:* `prod-eks`")
 }
 
-func TestSendJSONPresetAdditionalScopes(t *testing.T) {
+func TestSendJSONPresetCompactLayoutDoesNotIncludeAdditionalScopes(t *testing.T) {
 	var bodyRaw string
 
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -332,14 +334,14 @@ func TestSendJSONPresetAdditionalScopes(t *testing.T) {
 	err := s.Send(context.Background(), p, sink.SendOptions{Config: cfg})
 
 	require.NoError(t, err)
-	assert.Contains(t, bodyRaw, "*Account:* `123456789012`")
-	assert.Contains(t, bodyRaw, "*Cluster:* `prod-eks`")
-	assert.Contains(t, bodyRaw, "*Environment:* `prod`")
-	assert.Contains(t, bodyRaw, "*Region:* `us-east-1`")
-	assert.Contains(t, bodyRaw, "*Provider:* `aws`")
+	assert.NotContains(t, bodyRaw, "*Account:* `123456789012`")
+	assert.NotContains(t, bodyRaw, "*Cluster:* `prod-eks`")
+	assert.NotContains(t, bodyRaw, "*Environment:* `prod`")
+	assert.NotContains(t, bodyRaw, "*Region:* `us-east-1`")
+	assert.NotContains(t, bodyRaw, "*Provider:* `aws`")
 }
 
-func TestSendJSONPresetAdditionalScopesEnvAlias(t *testing.T) {
+func TestSendJSONPresetDefaultLayoutDoesNotIncludeEnvScopeAlias(t *testing.T) {
 	var bodyRaw string
 
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -375,7 +377,61 @@ func TestSendJSONPresetAdditionalScopesEnvAlias(t *testing.T) {
 	err := s.Send(context.Background(), p, sink.SendOptions{Config: cfg})
 
 	require.NoError(t, err)
-	assert.Contains(t, bodyRaw, "*Environment:* `staging`")
+	assert.NotContains(t, bodyRaw, "*Environment:* `staging`")
+}
+
+func TestSendJSONAutoLayoutIncludesScopeLine(t *testing.T) {
+	var bodyRaw string
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		body, err := io.ReadAll(r.Body)
+		require.NoError(t, err)
+		bodyRaw = string(body)
+		w.WriteHeader(http.StatusOK)
+		w.Write([]byte("ok")) //nolint:errcheck
+	}))
+	defer server.Close()
+
+	p := testPayload()
+	p.Event = "ExecutionProgress"
+	p.TargetExecution = &sink.TargetInfo{
+		Name:     "rds-main",
+		Executor: "rds",
+		State:    "Running",
+		Connector: sink.ConnectorInfo{
+			AccountID:   "123456789012",
+			ClusterName: "prod-eks",
+			Region:      "us-east-1",
+			Provider:    "aws",
+		},
+	}
+	p.Plan.Labels = map[string]string{"env": "prod"}
+
+	cfg, _ := json.Marshal(config{
+		WebhookURL:       server.URL,
+		Format:           formatJSON,
+		BlockLayout:      blockLayoutAuto,
+		AdditionalScopes: []string{"environment", "region", "provider"},
+	})
+	s := New(&stubRenderer{defaultText: "rendered:slack"}, WithHTTPClient(&http.Client{Timeout: 5 * time.Second}))
+	err := s.Send(context.Background(), p, sink.SendOptions{Config: cfg})
+
+	require.NoError(t, err)
+	assert.Contains(t, bodyRaw, "Execution Progress")
+	assert.Contains(t, bodyRaw, "*Account:* `123456789012`")
+	assert.Contains(t, bodyRaw, "*Cluster:* `prod-eks`")
+	assert.Contains(t, bodyRaw, "*Environment:* `prod`")
+	assert.Contains(t, bodyRaw, "*Region:* `us-east-1`")
+	assert.Contains(t, bodyRaw, "*Provider:* `aws`")
+}
+
+func TestSendInvalidLegacyProgressBlockLayout(t *testing.T) {
+	cfg, _ := json.Marshal(config{WebhookURL: "https://hooks.slack.com/services/test", Format: "json", BlockLayout: "progress"})
+	s := New(&stubRenderer{defaultText: "rendered:slack"}, WithHTTPClient(&http.Client{Timeout: 5 * time.Second}))
+	err := s.Send(context.Background(), testPayload(), sink.SendOptions{Config: cfg})
+
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "block_layout must be one of")
 }
 
 func TestSendHTTPError(t *testing.T) {
@@ -554,55 +610,4 @@ func TestConfigUseDefaults_NormalizeAdditionalScopes(t *testing.T) {
 	cfg.useDefaults()
 
 	assert.Equal(t, []string{scopeEnvironment, scopeAccount, scopeCluster}, cfg.AdditionalScopes)
-}
-
-func TestLayoutFactory_UnknownLayoutFallsBackToDefault(t *testing.T) {
-	p := testPayload()
-	composer := newLayoutComposer(p, defaultMaxTargets, nil)
-	factory := newLayoutFactory()
-
-	blocks := factory.build("unknown-layout", composer)
-	require.NotEmpty(t, blocks)
-
-	raw, err := json.Marshal(blocks)
-	require.NoError(t, err)
-	assert.Contains(t, string(raw), "Hibernation Starting")
-}
-
-func TestLayoutFactory_ProgressFallsBackForNonProgressEvent(t *testing.T) {
-	p := testPayload() // Event=Start
-	composer := newLayoutComposer(p, defaultMaxTargets, nil)
-	factory := newLayoutFactory()
-
-	blocks := factory.build(blockLayoutProgress, composer)
-	require.NotEmpty(t, blocks)
-
-	raw, err := json.Marshal(blocks)
-	require.NoError(t, err)
-	assert.Contains(t, string(raw), "Hibernation Starting")
-	assert.NotContains(t, string(raw), "Execution Progress")
-}
-
-func TestLayoutFactory_ProgressUsesProgressLayoutForExecutionProgress(t *testing.T) {
-	p := testPayload()
-	p.Event = "ExecutionProgress"
-	p.TargetExecution = &sink.TargetInfo{
-		Name:     "rds-main",
-		Executor: "rds",
-		State:    "Running",
-		Message:  "stopping",
-	}
-	p.Operation = "shutdown"
-
-	composer := newLayoutComposer(p, defaultMaxTargets, nil)
-	factory := newLayoutFactory()
-
-	blocks := factory.build(blockLayoutProgress, composer)
-	require.NotEmpty(t, blocks)
-
-	raw, err := json.Marshal(blocks)
-	require.NoError(t, err)
-	assert.Contains(t, string(raw), "Execution Progress")
-	assert.Contains(t, string(raw), "rds-main")
-	assert.Contains(t, string(raw), fmt.Sprintf("*Operation:* %s", p.Operation))
 }

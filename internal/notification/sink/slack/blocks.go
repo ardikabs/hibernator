@@ -33,24 +33,26 @@ type layoutFactory struct {
 func newLayoutFactory() *layoutFactory {
 	return &layoutFactory{
 		builders: map[string]func(*layoutComposer) []slackapi.Block{
-			blockLayoutDefault:  (*layoutComposer).buildDefault,
-			blockLayoutCompact:  (*layoutComposer).buildCompact,
-			blockLayoutProgress: (*layoutComposer).buildProgress,
+			blockLayoutDefault: (*layoutComposer).buildDefault,
+			blockLayoutCompact: (*layoutComposer).buildCompact,
+			blockLayoutAuto:    (*layoutComposer).buildAuto,
 		},
 	}
 }
 
 func (f *layoutFactory) build(layout string, composer *layoutComposer) []slackapi.Block {
-	resolved := layout
-	if resolved == blockLayoutProgress && composer.payload.Event != "ExecutionProgress" {
-		resolved = blockLayoutDefault
-	}
-
-	builder, ok := f.builders[resolved]
+	builder, ok := f.builders[layout]
 	if !ok {
 		builder = f.builders[blockLayoutDefault]
 	}
 	return builder(composer)
+}
+
+func (c *layoutComposer) buildAuto() []slackapi.Block {
+	if c.payload.Event != "ExecutionProgress" || c.payload.TargetExecution == nil {
+		return c.buildDefault()
+	}
+	return c.buildProgress()
 }
 
 type layoutComposer struct {
@@ -68,18 +70,14 @@ func newLayoutComposer(payload sink.Payload, maxTargets int, additionalScopes []
 }
 
 func (c *layoutComposer) buildDefault() []slackapi.Block {
-	scope := c.scopeLine()
-	hasScope := scope != ""
-	errorMessage := c.payload.ErrorMessage
-	hasError := errorMessage != ""
-
 	return newBlockSetBuilder(8).
 		Add(
 			slackapi.NewHeaderBlock(plainText().WithEmoji().WithText(c.headerTitle()).Build()),
 			slackapi.NewDividerBlock(),
 			slackapi.NewSectionBlock(mdText().WithText(c.summaryLine()).Build(), nil, nil),
 		).
-		AddWhen(hasError, slackapi.NewSectionBlock(mdText().WithText(fmt.Sprintf("*Error:* %s", errorMessage)).Build(), nil, nil)).
+		AddWhen(c.payload.ErrorMessage != "",
+			slackapi.NewSectionBlock(mdText().WithText(fmt.Sprintf("*Error:* %s", c.payload.ErrorMessage)).Build(), nil, nil)).
 		AddWhenTextBlocks(targetLines(c.payload.Targets, c.maxTargets), func(targets string) []slackapi.Block {
 			return []slackapi.Block{
 				slackapi.NewDividerBlock(),
@@ -87,7 +85,6 @@ func (c *layoutComposer) buildDefault() []slackapi.Block {
 			}
 		}).
 		Add(c.metaContextBlock()).
-		AddWhen(hasScope, c.scopeContextBlock(scope)).
 		Build()
 }
 
@@ -96,19 +93,14 @@ func (c *layoutComposer) buildCompact() []slackapi.Block {
 	if c.payload.Event != "ExecutionProgress" {
 		targets = targetLines(c.payload.Targets, c.maxTargets)
 	}
-	scope := c.scopeLine()
-	hasScope := scope != ""
-	errorMessage := c.payload.ErrorMessage
-	hasError := errorMessage != ""
 
-	return newBlockSetBuilder(6).
+	return newBlockSetBuilder(5).
 		Add(slackapi.NewSectionBlock(mdText().WithText(c.compactSummary()).Build(), nil, nil)).
-		AddWhen(hasError, slackapi.NewSectionBlock(mdText().WithText(fmt.Sprintf("*Error:* %s", errorMessage)).Build(), nil, nil)).
+		AddWhen(c.payload.ErrorMessage != "", slackapi.NewSectionBlock(mdText().WithText(fmt.Sprintf("*Error:* %s", c.payload.ErrorMessage)).Build(), nil, nil)).
 		AddWhenText(targets, func(v string) slackapi.Block {
 			return slackapi.NewSectionBlock(mdText().WithText(v).Build(), nil, nil)
 		}).
 		Add(c.metaContextBlock()).
-		AddWhen(hasScope, c.scopeContextBlock(scope)).
 		Build()
 }
 
@@ -118,13 +110,13 @@ func (c *layoutComposer) buildProgress() []slackapi.Block {
 		return []slackapi.Block{}
 	}
 
-	sectionText := (*slackapi.TextBlockObject)(nil)
+	var detailSectionText *slackapi.TextBlockObject
 	if msg := strings.TrimSpace(target.Message); msg != "" {
-		sectionText = mdText().WithText(msg).Build()
+		detailSectionText = mdText().WithText(msg).Build()
 	}
 
-	section := slackapi.NewSectionBlock(
-		sectionText,
+	detailSection := slackapi.NewSectionBlock(
+		detailSectionText,
 		[]*slackapi.TextBlockObject{
 			mdText().WithText(fmt.Sprintf("*Target:* %s", target.Name)).Build(),
 			mdText().WithText(fmt.Sprintf("*Type:* %s", target.Executor)).Build(),
@@ -140,14 +132,12 @@ func (c *layoutComposer) buildProgress() []slackapi.Block {
 	}
 	scope := c.scopeLine()
 	hasScope := scope != ""
-	errorMessage := c.payload.ErrorMessage
-	hasError := errorMessage != ""
 
-	return newBlockSetBuilder(7).
+	return newBlockSetBuilder(6).
 		Add(slackapi.NewHeaderBlock(plainText().WithEmoji().WithText(title).Build())).
 		AddWhen(hasScope, c.scopeContextBlock(scope)).
-		Add(slackapi.NewDividerBlock(), section).
-		AddWhen(hasError, slackapi.NewSectionBlock(mdText().WithText(fmt.Sprintf("*Error:* %s", errorMessage)).Build(), nil, nil)).
+		Add(slackapi.NewDividerBlock(), detailSection).
+		AddWhen(c.payload.ErrorMessage != "", slackapi.NewSectionBlock(mdText().WithText(fmt.Sprintf("*Error:* %s", c.payload.ErrorMessage)).Build(), nil, nil)).
 		Add(c.metaContextBlock()).
 		Build()
 }

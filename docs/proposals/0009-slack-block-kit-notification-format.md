@@ -114,14 +114,14 @@ Proposed values:
 
 - `default`: balanced summary + detail layout.
 - `compact`: short high-signal layout for noisy channels.
-- `progress`: special layout optimized for `ExecutionProgress` events.
+- `auto`: uses progress layout for `ExecutionProgress` events and falls back to `default` for other events.
 
-Why `progress` is clearer:
+Why `auto` is clearer:
 
-- The intent is event-centric (`ExecutionProgress`), not data-shape-centric.
-- Easier to understand for operators reading sink config.
+- Behavior is explicit: event-aware selection with safe fallback.
+- Avoids requiring users to reason about event/layout mismatch handling.
 
-### Event behavior for `progress`
+### Event behavior for `auto`
 
 - For `ExecutionProgress`: highlight `.TargetExecution` as primary content.
 - For non-`ExecutionProgress` events: fallback to `default` layout behavior.
@@ -205,7 +205,7 @@ Error: RDS stop timed out after 300s
 [Context] Retry: 3
 ```
 
-### `format=json` + `block_layout=progress` (for `ExecutionProgress`)
+### `format=json` + `block_layout=auto` (for `ExecutionProgress`)
 
 ```text
 [Header] Execution Progress
@@ -252,7 +252,7 @@ default:
 ## Implementation Plan
 
 1. Extend Slack config parser with `format`, `block_layout`, `max_targets`.
-2. Implement preset builders: `default`, `compact`, `progress`.
+2. Implement preset builders: `default`, `compact`, `auto`.
 3. Implement JSON template parse path for `format=json`.
 4. Add fallback logic and tests.
 5. Update docs and examples.
@@ -263,7 +263,7 @@ default:
 |---|---|
 | Invalid JSON template output | Fallback to preset `block_layout`. |
 | Oversized block payload | Enforce `max_targets`, truncate long detail lines if needed. |
-| Layout confusion across events | Define `progress` as `ExecutionProgress`-optimized with fallback to `default` for other events. |
+| Layout confusion across events | Define `auto` to select progress layout for `ExecutionProgress`, and fallback to `default` for other events. |
 
 ## References
 

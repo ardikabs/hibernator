@@ -67,8 +67,8 @@ Each sink reads its configuration from a Kubernetes Secret. The Secret must cont
     - `format: json`: sends Slack blocks JSON.
       - if `templateRef` exists, template output is parsed as Slack JSON payload.
       - if no `templateRef` (or JSON parse fails), built-in preset layout is used.
-    - `block_layout`: preset for JSON mode (`default`, `compact`, `progress`).
-      - `progress` is optimized for `ExecutionProgress` events.
+    - `block_layout`: preset for JSON mode (`default`, `compact`, `auto`).
+      - `auto` uses progress layout for `ExecutionProgress` and falls back to `default` for other events.
     - `max_targets`: maximum target lines in preset JSON output.
     - `additional_scopes`: appends extra bottom scope metadata context.
       - defaults already include Account and Cluster.
