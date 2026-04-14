@@ -19,19 +19,31 @@ _Sink type: `slack`_
 
 Delivers messages via [Slack Incoming Webhooks](https://api.slack.com/messaging/webhooks).
 
+!!! tip "Formatting Message Text (Slack)"
+    When `format: json` is configured, message content is rendered using Slack message formatting semantics (`mrkdwn`/`plain_text`).
+    See Slack docs: [Formatting message text](https://docs.slack.dev/messaging/formatting-message-text/).
+
 ### Configuration
 
 The configuration must be in a JSON object stored under `config` key in secret reference:
 
 ```json
 {
-  "webhook_url": "<webhook_url>"
+  "webhook_url": "<webhook_url>",
+  "format": "<format>",
+  "block_layout": "<block_layout>",
+  "max_targets": "<max_targets>",
+  "additional_scopes": "<additional_scopes>"
 }
 ```
 
 | Field | Type | Required | Description |
 |-------|------|----------|-------------|
 | `webhook_url` | `string` | Yes | WebhookURL is the Slack Incoming Webhook URL. |
+| `format` | `string` | No | Format controls Slack payload mode. Supported values: `text` (message text only), and `json` (Slack blocks payload, using preset layouts or custom templates). |
+| `block_layout` | `string` | No | BlockLayout selects the preset JSON layout used when format=json and no custom JSON template is provided (or parsing fails). Supported values: `default`, `compact`, `progress`. |
+| `max_targets` | `int` | No | MaxTargets limits target lines in preset JSON layouts. It defaults to 8, which is enough to show all targets in most cases while keeping the message concise. |
+| `additional_scopes` | `[]string` | No | AdditionalScopes appends additional scope fields to the scope context. Account and Cluster are always included by default. Supported: `environment` (alias: env), `region`, `project`, `provider`, `connector`, `account`, `cluster`. |
 
 ### Default Template
 

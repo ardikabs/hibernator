@@ -3,7 +3,7 @@ rfc: RFC-0006
 title: Notification System via HibernateNotification CRD
 status: In Progress 🚀
 date: 2026-02-16
-last-updated: 2026-03-28
+last-updated: 2026-04-13
 ---
 
 # RFC 0006 — Notification System via HibernateNotification CRD
@@ -15,6 +15,8 @@ last-updated: 2026-03-28
 ## Summary
 
 This RFC proposes a decoupled, selector-based notification system for the Hibernator Operator. By introducing a new Custom Resource Definition (CRD) called `HibernateNotification`, users can define notification rules (triggers and sinks) that apply to one or multiple `HibernatePlan` resources based on label selectors. Notifications are delivered through a dedicated lifecycle that integrates with the async phase-driven reconciler via `PlanContext`, using pre/post hooks on status transitions to fire events. Users can customize message formatting through Go templates referenced from ConfigMaps.
+
+For Slack-specific formatting modes (`format=text|json`), template behavior per mode, and preset JSON layouts (`default|compact|progress`), see [RFC-0009](./0009-slack-block-kit-notification-format.md).
 
 ## Motivation
 

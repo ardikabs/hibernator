@@ -42,7 +42,10 @@ var sinkTypes = []struct {
 	{
 		Dir:         "slack",
 		DisplayName: "Slack",
-		Description: "Delivers messages via [Slack Incoming Webhooks](https://api.slack.com/messaging/webhooks).",
+		Description: "Delivers messages via [Slack Incoming Webhooks](https://api.slack.com/messaging/webhooks).\n\n" +
+			"!!! tip \"Formatting Message Text (Slack)\"\n" +
+			"    When `format: json` is configured, message content is rendered using Slack message formatting semantics (`mrkdwn`/`plain_text`).\n" +
+			"    See Slack docs: [Formatting message text](https://docs.slack.dev/messaging/formatting-message-text/).",
 	},
 	{
 		Dir:         "telegram",
