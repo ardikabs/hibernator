@@ -27,7 +27,8 @@ const (
 type NotificationEvent string
 
 const (
-	// EventStart fires right before execution begins (PreHook on Hibernating/WakingUp).
+	// EventStart fires when execution begins after the transition status write succeeds
+	// (PostHook on Hibernating/WakingUp transition).
 	EventStart NotificationEvent = "Start"
 	// EventSuccess fires after execution completes successfully (PostHook on Hibernated/Active).
 	EventSuccess NotificationEvent = "Success"

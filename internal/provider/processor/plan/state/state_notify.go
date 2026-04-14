@@ -20,10 +20,9 @@ import (
 // The returned function is placement-agnostic — callers attach it as either a
 // PreHook or PostHook depending on the event semantics:
 //
-//   - PreHook (Start, Recovery): notification fires before the status write.
-//     The payloadFn receives the pre-mutation object, so callers must override
-//     Phase/Operation/CycleID with the target values the mutation will set.
-//   - PostHook (Success, Failure, PhaseChange): notification fires after a
+//   - PreHook (Recovery): notification fires before the status write.
+//     The payloadFn receives the pre-mutation object.
+//   - PostHook (Start, Success, Failure, PhaseChange): notification fires after a
 //     successful write. The payloadFn receives the written object with final state.
 //
 // Returns nil when the dispatcher is not configured or no notifications exist,

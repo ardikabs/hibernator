@@ -69,6 +69,7 @@ Each sink reads its configuration from a Kubernetes Secret. The Secret must cont
       - if no `templateRef` (or JSON parse fails), built-in preset layout is used.
     - `block_layout`: preset for JSON mode (`default`, `compact`, `auto`).
       - `auto` uses progress layout for `ExecutionProgress` and falls back to `default` for other events.
+      - `default` and `compact` suppress non-terminal `ExecutionProgress` updates (`Pending`, `Running`) to reduce notification noise. Terminal updates (`Completed`, `Failed`, `Aborted`) are still sent.
     - `max_targets`: maximum target lines in preset JSON output.
     - `additional_scopes`: appends extra bottom scope metadata context.
       - defaults already include Account and Cluster.

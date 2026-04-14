@@ -684,7 +684,7 @@ _Appears in:_
 
 | Field | Description |
 | --- | --- |
-| `Start` | EventStart fires right before execution begins (PreHook on Hibernating/WakingUp).<br /> |
+| `Start` | EventStart fires when execution begins after the transition status write succeeds<br />(PostHook on Hibernating/WakingUp transition).<br /> |
 | `Success` | EventSuccess fires after execution completes successfully (PostHook on Hibernated/Active).<br /> |
 | `Failure` | EventFailure fires when retries exhausted and plan enters permanent Error state<br />(PostHook on Error transition, gated by retryCount >= behavior.retries).<br /> |
 | `Recovery` | EventRecovery fires each time the recovery system retries from Error (PreHook).<br /> |

@@ -14,6 +14,7 @@ import (
 
 	slackapi "github.com/slack-go/slack"
 
+	hibernatorv1alpha1 "github.com/ardikabs/hibernator/api/v1alpha1"
 	"github.com/ardikabs/hibernator/internal/notification/sink"
 )
 
@@ -73,8 +74,13 @@ func (s *Sink) Send(ctx context.Context, payload sink.Payload, opts sink.SendOpt
 	if err := cfg.validate(); err != nil {
 		return err
 	}
+
 	if cfg.WebhookURL == "" {
 		return fmt.Errorf("slack sink config: webhook_url is required")
+	}
+
+	if shouldSuppressExecutionProgress(payload, cfg) {
+		return nil
 	}
 
 	msg := s.buildMessage(ctx, payload, cfg, opts.CustomTemplate)
@@ -84,6 +90,33 @@ func (s *Sink) Send(ctx context.Context, payload sink.Payload, opts sink.SendOpt
 	}
 
 	return nil
+}
+
+func shouldSuppressExecutionProgress(payload sink.Payload, cfg config) bool {
+	if cfg.Format != formatJSON {
+		return false
+	}
+	if payload.Event != "ExecutionProgress" {
+		return false
+	}
+	if cfg.BlockLayout == blockLayoutAuto {
+		return false
+	}
+	if cfg.BlockLayout != blockLayoutDefault && cfg.BlockLayout != blockLayoutCompact {
+		return false
+	}
+	if payload.TargetExecution == nil {
+		return false
+	}
+
+	switch hibernatorv1alpha1.ExecutionState(payload.TargetExecution.State) {
+	case hibernatorv1alpha1.StateCompleted,
+		hibernatorv1alpha1.StateFailed,
+		hibernatorv1alpha1.StateAborted:
+		return false
+	default:
+		return true
+	}
 }
 
 func (s *Sink) buildMessage(ctx context.Context, payload sink.Payload, cfg config, customTemplate *sink.CustomTemplate) *slackapi.WebhookMessage {

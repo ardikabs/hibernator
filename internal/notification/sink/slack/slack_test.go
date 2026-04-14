@@ -425,6 +425,110 @@ func TestSendJSONAutoLayoutIncludesScopeLine(t *testing.T) {
 	assert.Contains(t, bodyRaw, "*Provider:* `aws`")
 }
 
+func TestSendJSONExecutionProgressDefaultSuppressesNonTerminal(t *testing.T) {
+	requestCount := 0
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		requestCount++
+		w.WriteHeader(http.StatusOK)
+		w.Write([]byte("ok")) //nolint:errcheck
+	}))
+	defer server.Close()
+
+	p := testPayload()
+	p.Event = "ExecutionProgress"
+	p.TargetExecution = &sink.TargetInfo{
+		Name:     "rds-main",
+		Executor: "rds",
+		State:    "Running",
+	}
+
+	cfg, _ := json.Marshal(config{WebhookURL: server.URL, Format: formatJSON, BlockLayout: blockLayoutDefault})
+	s := New(&stubRenderer{defaultText: "rendered:slack"}, WithHTTPClient(&http.Client{Timeout: 5 * time.Second}))
+	err := s.Send(context.Background(), p, sink.SendOptions{Config: cfg})
+
+	require.NoError(t, err)
+	assert.Equal(t, 0, requestCount)
+}
+
+func TestSendJSONExecutionProgressCompactSuppressesNonTerminal(t *testing.T) {
+	requestCount := 0
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		requestCount++
+		w.WriteHeader(http.StatusOK)
+		w.Write([]byte("ok")) //nolint:errcheck
+	}))
+	defer server.Close()
+
+	p := testPayload()
+	p.Event = "ExecutionProgress"
+	p.TargetExecution = &sink.TargetInfo{
+		Name:     "rds-main",
+		Executor: "rds",
+		State:    "Pending",
+	}
+
+	cfg, _ := json.Marshal(config{WebhookURL: server.URL, Format: formatJSON, BlockLayout: blockLayoutCompact})
+	s := New(&stubRenderer{defaultText: "rendered:slack"}, WithHTTPClient(&http.Client{Timeout: 5 * time.Second}))
+	err := s.Send(context.Background(), p, sink.SendOptions{Config: cfg})
+
+	require.NoError(t, err)
+	assert.Equal(t, 0, requestCount)
+}
+
+func TestSendJSONExecutionProgressDefaultSendsTerminalState(t *testing.T) {
+	requestCount := 0
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		requestCount++
+		w.WriteHeader(http.StatusOK)
+		w.Write([]byte("ok")) //nolint:errcheck
+	}))
+	defer server.Close()
+
+	p := testPayload()
+	p.Event = "ExecutionProgress"
+	p.TargetExecution = &sink.TargetInfo{
+		Name:     "rds-main",
+		Executor: "rds",
+		State:    "Completed",
+	}
+
+	cfg, _ := json.Marshal(config{WebhookURL: server.URL, Format: formatJSON, BlockLayout: blockLayoutDefault})
+	s := New(&stubRenderer{defaultText: "rendered:slack"}, WithHTTPClient(&http.Client{Timeout: 5 * time.Second}))
+	err := s.Send(context.Background(), p, sink.SendOptions{Config: cfg})
+
+	require.NoError(t, err)
+	assert.Equal(t, 1, requestCount)
+}
+
+func TestSendJSONExecutionProgressAutoSendsNonTerminal(t *testing.T) {
+	requestCount := 0
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		requestCount++
+		w.WriteHeader(http.StatusOK)
+		w.Write([]byte("ok")) //nolint:errcheck
+	}))
+	defer server.Close()
+
+	p := testPayload()
+	p.Event = "ExecutionProgress"
+	p.TargetExecution = &sink.TargetInfo{
+		Name:     "rds-main",
+		Executor: "rds",
+		State:    "Running",
+	}
+
+	cfg, _ := json.Marshal(config{WebhookURL: server.URL, Format: formatJSON, BlockLayout: blockLayoutAuto})
+	s := New(&stubRenderer{defaultText: "rendered:slack"}, WithHTTPClient(&http.Client{Timeout: 5 * time.Second}))
+	err := s.Send(context.Background(), p, sink.SendOptions{Config: cfg})
+
+	require.NoError(t, err)
+	assert.Equal(t, 1, requestCount)
+}
+
 func TestSendInvalidLegacyProgressBlockLayout(t *testing.T) {
 	cfg, _ := json.Marshal(config{WebhookURL: "https://hooks.slack.com/services/test", Format: "json", BlockLayout: "progress"})
 	s := New(&stubRenderer{defaultText: "rendered:slack"}, WithHTTPClient(&http.Client{Timeout: 5 * time.Second}))
