@@ -41,13 +41,16 @@ type channelDelivery struct {
 
 func (cd *channelDelivery) deliver(ctx context.Context, payload sink.Payload) (States, error) {
 	if shouldSuppressExecutionProgress(payload, cd.cfg) {
+		cd.rt.log.V(1).Info("suppressed Slack channel delivery for non-terminal execution progress", "event", payload.Event, "plan", payload.Plan.String(), "cycle_id", payload.CycleID, "block_layout", cd.cfg.BlockLayout)
 		return nil, nil
 	}
 
+	cd.rt.log.V(1).Info("sending Slack channel message", "event", payload.Event, "plan", payload.Plan.String(), "cycle_id", payload.CycleID, "format", cd.cfg.Format)
 	msg := cd.s.buildMessage(ctx, payload, cd.cfg, cd.rt.customTemplate)
 	if err := slackapi.PostWebhookCustomHTTPContext(ctx, cd.cfg.WebhookURL, cd.s.client, msg); err != nil {
 		return States{}, fmt.Errorf("send slack notification: %w", err)
 	}
+	cd.rt.log.V(1).Info("Slack channel message sent", "event", payload.Event, "plan", payload.Plan.String(), "cycle_id", payload.CycleID)
 	return nil, nil
 }
 
@@ -59,46 +62,84 @@ type threadDelivery struct {
 
 func (td *threadDelivery) deliver(ctx context.Context, payload sink.Payload) (States, error) {
 	if shouldSuppressExecutionProgress(payload, td.cfg) {
+		td.rt.log.V(1).Info("suppressed Slack thread delivery for non-terminal execution progress", "event", payload.Event, "plan", payload.Plan.String(), "cycle_id", payload.CycleID, "block_layout", td.cfg.BlockLayout)
 		return nil, nil
 	}
 
-	msg := td.s.buildMessage(ctx, payload, td.cfg, td.rt.customTemplate)
-	applyThreading(payload, td.rt.sinkState, msg)
+	event := hibernatorv1alpha1.NotificationEvent(payload.Event)
+	rootTS := resolveRootThreadTimestamp(payload, td.rt.sinkState)
+	rootCreated := false
+	td.rt.log.V(1).Info("starting Slack thread delivery", "event", payload.Event, "plan", payload.Plan.String(), "cycle_id", payload.CycleID, "has_existing_root", rootTS != "")
 
-	ts, err := td.sendViaChatAPI(ctx, td.cfg, msg)
+	if rootTS == "" {
+		td.rt.log.Info("creating Slack thread root message", "event", payload.Event, "plan", payload.Plan.String(), "cycle_id", payload.CycleID)
+		rootMsg := td.s.buildRootMessage(ctx, payload, td.cfg, td.rt.customTemplate)
+		createdTS, err := td.sendViaChatAPI(ctx, td.cfg, rootMsg)
+		if err != nil {
+			return nil, err
+		}
+		rootTS = createdTS
+		rootCreated = true
+		td.rt.log.Info("created Slack thread root message", "root_ts", rootTS, "channel_id", td.cfg.ChannelID, "plan", payload.Plan.String(), "cycle_id", payload.CycleID)
+	} else {
+		td.rt.log.V(1).Info("updating Slack thread root message", "root_ts", rootTS, "channel_id", td.cfg.ChannelID, "event", payload.Event)
+		rootMsg := td.s.buildRootMessage(ctx, payload, td.cfg, td.rt.customTemplate)
+		if err := td.updateViaChatAPI(ctx, td.cfg, rootTS, rootMsg); err != nil {
+			td.rt.log.Error(err, "failed to update root thread message", "root_ts", rootTS, "channel_id", td.cfg.ChannelID)
+		} else {
+			td.rt.log.V(1).Info("updated Slack thread root message", "root_ts", rootTS, "channel_id", td.cfg.ChannelID, "event", payload.Event)
+		}
+	}
+
+	replyMsg := td.s.buildMessage(ctx, payload, td.cfg, td.rt.customTemplate)
+	if rootTS != "" {
+		replyMsg.ThreadTimestamp = rootTS
+	}
+
+	td.rt.log.V(1).Info("sending Slack thread reply", "root_ts", rootTS, "event", payload.Event, "plan", payload.Plan.String(), "cycle_id", payload.CycleID)
+	_, err := td.sendViaChatAPI(ctx, td.cfg, replyMsg)
 	if err != nil {
 		return nil, err
 	}
+	td.rt.log.V(1).Info("sent Slack thread reply", "root_ts", rootTS, "event", payload.Event, "plan", payload.Plan.String(), "cycle_id", payload.CycleID)
 
-	event := hibernatorv1alpha1.NotificationEvent(payload.Event)
 	reaction := reactionForEvent(event)
-	bumpTS := msg.ThreadTimestamp
-	if event == hibernatorv1alpha1.EventStart {
-		bumpTS = ts
+	bumpTS := rootTS
+	shouldBump := shouldBumpReaction(td.rt.sinkState, event, bumpTS, reaction)
+	if rootCreated && bumpTS != "" && reaction != "" {
+		shouldBump = true
 	}
+	td.rt.log.V(1).Info("evaluated Slack root reaction update", "root_ts", bumpTS, "event", payload.Event, "reaction", reaction, "should_bump", shouldBump)
 
-	if shouldBumpReaction(td.rt.sinkState, event, bumpTS, reaction) {
+	if shouldBump {
 		prevReaction := strings.TrimSpace(td.rt.sinkState["slack.thread.last_reaction"])
 		if event == hibernatorv1alpha1.EventStart {
 			prevReaction = ""
 		}
+		if rootCreated {
+			prevReaction = ""
+		}
+		td.rt.log.V(1).Info("updating Slack root reaction", "root_ts", bumpTS, "prev_reaction", prevReaction, "next_reaction", reaction)
 		if err := td.overrideRootThreadReaction(ctx, td.cfg, bumpTS, prevReaction, reaction); err != nil {
 			td.rt.log.Error(err, "failed to override root thread reaction", "prev_reaction", prevReaction, "reaction", reaction, "root_ts", bumpTS, "channel_id", td.cfg.ChannelID)
+		} else {
+			td.rt.log.V(1).Info("updated Slack root reaction", "root_ts", bumpTS, "reaction", reaction)
 		}
 	}
 
 	metadata := map[string]string{
-		"slack.thread.ref": threadReference(payload),
+		"slack.thread.ref":     threadReference(payload),
+		"slack.thread.root_ts": rootTS,
 	}
-	if event == hibernatorv1alpha1.EventStart {
+	if rootCreated {
 		metadata["slack.thread.state"] = "root_sent"
-		metadata["slack.thread.root_ts"] = ts
 	} else {
 		metadata["slack.thread.state"] = "reply_sent"
 	}
 	if reaction != "" {
 		metadata["slack.thread.last_reaction"] = reaction
 	}
+	td.rt.log.V(1).Info("completed Slack thread delivery", "root_ts", rootTS, "event", payload.Event, "plan", payload.Plan.String(), "cycle_id", payload.CycleID, "root_created", rootCreated)
 
 	return metadata, nil
 }
@@ -129,6 +170,27 @@ func (td *threadDelivery) sendViaChatAPI(ctx context.Context, cfg config, msg *s
 		return "", fmt.Errorf("send slack notification: missing channel/ts in Slack API response")
 	}
 	return ts, nil
+}
+
+func (td *threadDelivery) updateViaChatAPI(ctx context.Context, cfg config, ts string, msg *slackapi.WebhookMessage) error {
+	if strings.TrimSpace(ts) == "" {
+		return nil
+	}
+
+	api := td.newSlackAPI(cfg)
+	opts := []slackapi.MsgOption{slackapi.MsgOptionText(msg.Text, false)}
+	if msg.Blocks != nil {
+		opts = append(opts, slackapi.MsgOptionBlocks(msg.Blocks.BlockSet...))
+	}
+
+	channel, updatedTS, _, err := api.UpdateMessageContext(ctx, cfg.ChannelID, ts, opts...)
+	if err != nil {
+		return fmt.Errorf("update slack root notification: %w", err)
+	}
+	if channel == "" || updatedTS == "" {
+		return fmt.Errorf("update slack root notification: missing channel/ts in Slack API response")
+	}
+	return nil
 }
 
 func (td *threadDelivery) bumpRootThreadEmoji(ctx context.Context, cfg config, rootTS, reaction string) error {
@@ -204,21 +266,19 @@ func shouldBumpReaction(sinkState map[string]string, event hibernatorv1alpha1.No
 	return strings.TrimSpace(sinkState["slack.thread.last_reaction"]) != reaction
 }
 
-func applyThreading(payload sink.Payload, sinkState map[string]string, msg *slackapi.WebhookMessage) {
+func resolveRootThreadTimestamp(payload sink.Payload, sinkState map[string]string) string {
 	event := hibernatorv1alpha1.NotificationEvent(payload.Event)
 	if event == hibernatorv1alpha1.EventStart {
-		return
+		return ""
 	}
 	if sinkState == nil {
-		return
+		return ""
 	}
 	if prevRef := strings.TrimSpace(sinkState["slack.thread.ref"]); prevRef != "" && prevRef != threadReference(payload) {
-		return
+		return ""
 	}
 
-	if rootTS := strings.TrimSpace(sinkState["slack.thread.root_ts"]); rootTS != "" {
-		msg.ThreadTimestamp = rootTS
-	}
+	return strings.TrimSpace(sinkState["slack.thread.root_ts"])
 }
 
 func reactionForEvent(event hibernatorv1alpha1.NotificationEvent) string {

@@ -76,7 +76,16 @@ func (s *Sink) Type() string {
 //   - text (default): render text and send as plain Slack text message.
 //   - json: if custom template is provided, render and parse JSON payload;
 //     otherwise build a preset JSON blocks payload.
+//
+// Behavior by config.delivery_mode:
+//   - channel: custom templates are honored when provided.
+//   - thread: custom templates are ignored intentionally, and the sink uses
+//     opinionated built-in thread layouts to keep root context/status updates
+//     consistent throughout the notification lifecycle.
 func (s *Sink) Send(ctx context.Context, payload sink.Payload, opts sink.SendOptions) (sink.SendResult, error) {
+	opts.Log.Info("dispatching Slack notification", "event", payload.Event, "plan", payload.Plan.String(), "cycle_id", payload.CycleID, "sink", payload.SinkName)
+	opts.Log.V(1).Info("starting Slack sink send", "has_custom_template", opts.CustomTemplate != nil, "has_sink_state", len(opts.SinkState) > 0)
+
 	var cfg config
 	if err := json.Unmarshal(opts.Config, &cfg); err != nil {
 		return sink.SendResult{}, fmt.Errorf("parse slack sink config: %w", err)
@@ -85,11 +94,18 @@ func (s *Sink) Send(ctx context.Context, payload sink.Payload, opts sink.SendOpt
 	if err := cfg.validate(); err != nil {
 		return sink.SendResult{}, err
 	}
+	opts.Log.Info("Slack sink config resolved", "delivery_mode", cfg.DeliveryMode, "format", cfg.Format, "block_layout", cfg.BlockLayout)
+
+	customTemplate := opts.CustomTemplate
+	if cfg.DeliveryMode == deliveryModeThread && customTemplate != nil {
+		opts.Log.Info("ignored custom template for Slack thread delivery mode; using built-in opinionated thread layout for consistent context")
+		customTemplate = nil
+	}
 
 	handler, err := newDeliveryHandler(s, cfg, deliveryRuntime{
 		log:            opts.Log,
 		sinkState:      opts.SinkState,
-		customTemplate: opts.CustomTemplate,
+		customTemplate: customTemplate,
 	})
 	if err != nil {
 		return sink.SendResult{}, err
@@ -98,6 +114,11 @@ func (s *Sink) Send(ctx context.Context, payload sink.Payload, opts sink.SendOpt
 	states, err := handler.deliver(ctx, payload)
 	if err != nil {
 		return sink.SendResult{}, err
+	}
+
+	opts.Log.Info("Slack notification dispatched", "delivery_mode", cfg.DeliveryMode, "event", payload.Event, "plan", payload.Plan.String(), "cycle_id", payload.CycleID)
+	if len(states) > 0 {
+		opts.Log.V(1).Info("Slack sink emitted state metadata", "state_keys", len(states), "has_root_ts", states["slack.thread.root_ts"] != "")
 	}
 
 	return sink.SendResult{States: states}, nil
@@ -133,6 +154,29 @@ func (s *Sink) buildMessage(ctx context.Context, payload sink.Payload, cfg confi
 	}
 }
 
+func (s *Sink) buildRootMessage(ctx context.Context, payload sink.Payload, cfg config, customTemplate *sink.CustomTemplate) *slackapi.WebhookMessage {
+	switch cfg.Format {
+	case formatJSON:
+		if customTemplate != nil {
+			rendered := s.renderer.Render(ctx, payload, sink.WithCustomTemplate(customTemplate))
+			if msg, err := parseJSONTemplateMessage(rendered, payload); err == nil {
+				return msg
+			}
+		}
+		return presetJSONRootMessage(payload, cfg)
+
+	case formatText:
+		fallthrough
+	default:
+		var renderOpts []sink.RenderOption
+		if customTemplate != nil {
+			renderOpts = append(renderOpts, sink.WithCustomTemplate(customTemplate))
+		}
+		content := s.renderer.Render(ctx, payload, renderOpts...)
+		return &slackapi.WebhookMessage{Text: content}
+	}
+}
+
 // presetJSONMessage builds a Slack message using the configured preset layout.
 func presetJSONMessage(payload sink.Payload, cfg config) *slackapi.WebhookMessage {
 	factory := newLayoutFactory()
@@ -140,6 +184,14 @@ func presetJSONMessage(payload sink.Payload, cfg config) *slackapi.WebhookMessag
 	return &slackapi.WebhookMessage{
 		Text:   fallbackText(payload),
 		Blocks: &slackapi.Blocks{BlockSet: factory.build(cfg.BlockLayout, composer)},
+	}
+}
+
+func presetJSONRootMessage(payload sink.Payload, cfg config) *slackapi.WebhookMessage {
+	composer := newLayoutComposer(payload, cfg)
+	return &slackapi.WebhookMessage{
+		Text:   fallbackText(payload),
+		Blocks: &slackapi.Blocks{BlockSet: composer.buildThreadRoot()},
 	}
 }
 
