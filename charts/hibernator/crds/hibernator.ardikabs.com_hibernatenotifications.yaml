@@ -217,6 +217,14 @@ spec:
                         On success: "Successfully sent notification for <sink-name>"
                         On failure: the error string from the sink provider.
                       type: string
+                    metadata:
+                      additionalProperties:
+                        type: string
+                      description: |-
+                        Metadata carries sink-specific arbitrary key/value context for this
+                        delivery attempt. Keys should be namespaced by sink type (for example,
+                        "slack.thread.root_ts") to avoid collisions.
+                      type: object
                     name:
                       description: Name is the sink name as defined in spec.sinks[].name.
                       type: string

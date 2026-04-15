@@ -76,16 +76,16 @@ func (s *Sink) Type() string {
 // Send renders the notification payload using the Telegram template and delivers it
 // via the Bot API SDK. If opts.CustomTemplateRef is set, that template is used
 // instead of the built-in default.
-func (s *Sink) Send(ctx context.Context, payload sink.Payload, opts sink.SendOptions) error {
+func (s *Sink) Send(ctx context.Context, payload sink.Payload, opts sink.SendOptions) (sink.SendResult, error) {
 	var cfg config
 	if err := json.Unmarshal(opts.Config, &cfg); err != nil {
-		return fmt.Errorf("parse telegram sink config: %w", err)
+		return sink.SendResult{}, fmt.Errorf("parse telegram sink config: %w", err)
 	}
 	if cfg.Token == "" {
-		return fmt.Errorf("telegram sink config: token is required")
+		return sink.SendResult{}, fmt.Errorf("telegram sink config: token is required")
 	}
 	if cfg.ChatID == "" {
-		return fmt.Errorf("telegram sink config: chat_id is required")
+		return sink.SendResult{}, fmt.Errorf("telegram sink config: chat_id is required")
 	}
 
 	var renderOpts []sink.RenderOption
@@ -105,7 +105,7 @@ func (s *Sink) Send(ctx context.Context, payload sink.Payload, opts sink.SendOpt
 
 	b, err := bot.New(cfg.Token, botOpts...)
 	if err != nil {
-		return fmt.Errorf("create telegram bot client: %w", err)
+		return sink.SendResult{}, fmt.Errorf("create telegram bot client: %w", err)
 	}
 
 	// Resolve ChatID: numeric int64 or string channel username (e.g., "@mychannel").
@@ -123,8 +123,8 @@ func (s *Sink) Send(ctx context.Context, payload sink.Payload, opts sink.SendOpt
 	}
 
 	if _, err := b.SendMessage(ctx, params); err != nil {
-		return fmt.Errorf("send telegram notification: %w", err)
+		return sink.SendResult{}, fmt.Errorf("send telegram notification: %w", err)
 	}
 
-	return nil
+	return sink.SendResult{}, nil
 }

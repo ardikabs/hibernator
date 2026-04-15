@@ -17,15 +17,6 @@ import (
 	"github.com/ardikabs/hibernator/internal/notification/sink"
 )
 
-func presetJSONMessage(payload sink.Payload, layout string, maxTargets int, additionalScopes []string) *slackapi.WebhookMessage {
-	factory := newLayoutFactory()
-	composer := newLayoutComposer(payload, maxTargets, additionalScopes)
-	return &slackapi.WebhookMessage{
-		Text:   fallbackText(payload),
-		Blocks: &slackapi.Blocks{BlockSet: factory.build(layout, composer)},
-	}
-}
-
 type layoutFactory struct {
 	builders map[string]func(*layoutComposer) []slackapi.Block
 }
@@ -59,13 +50,19 @@ type layoutComposer struct {
 	payload          sink.Payload
 	maxTargets       int
 	additionalScopes []string
+	timeDisplay      string
+	timezone         string
+	timeLayout       string
 }
 
-func newLayoutComposer(payload sink.Payload, maxTargets int, additionalScopes []string) *layoutComposer {
+func newLayoutComposer(payload sink.Payload, cfg config) *layoutComposer {
 	return &layoutComposer{
 		payload:          payload,
-		maxTargets:       maxTargets,
-		additionalScopes: additionalScopes,
+		maxTargets:       cfg.MaxTargets,
+		additionalScopes: cfg.AdditionalScopes,
+		timeDisplay:      cfg.TimeDisplay,
+		timezone:         cfg.Timezone,
+		timeLayout:       cfg.TimeLayout,
 	}
 }
 
@@ -170,9 +167,9 @@ func (c *layoutComposer) headerTitle() string {
 }
 
 func (c *layoutComposer) summaryLine() string {
-	plan := fmt.Sprintf("%s/%s", c.payload.Plan.Namespace, c.payload.Plan.Name)
 	parts := []string{
-		fmt.Sprintf("*Plan:* `%s`", plan),
+		fmt.Sprintf("*Plan:* `%s`", c.payload.Plan.String()),
+		fmt.Sprintf("*Cycle:* `%s`", c.payload.CycleID),
 		fmt.Sprintf("*Phase:* `%s`", c.payload.Phase),
 	}
 	if c.payload.Operation != "" {
@@ -185,7 +182,7 @@ func (c *layoutComposer) summaryLine() string {
 }
 
 func (c *layoutComposer) compactSummary() string {
-	return fmt.Sprintf("*%s* | `%s/%s` | `%s`", c.payload.Event, c.payload.Plan.Namespace, c.payload.Plan.Name, c.payload.Phase)
+	return fmt.Sprintf("*%s* | `%s` | `%s`", c.payload.Event, c.payload.Plan.String(), c.payload.Phase)
 }
 
 func (c *layoutComposer) contextLine() string {
@@ -194,11 +191,35 @@ func (c *layoutComposer) contextLine() string {
 		ts = time.Now().UTC()
 	}
 	parts := []string{fmt.Sprintf("Event: *%s*", c.payload.Event)}
+	ref := c.payload.Plan.String()
 	if c.payload.CycleID != "" {
-		parts = append(parts, fmt.Sprintf("Cycle: `%s`", c.payload.CycleID))
+		ref = fmt.Sprintf("%s/%s", ref, c.payload.CycleID)
 	}
-	parts = append(parts, fmt.Sprintf("Time: %s", ts.UTC().Format(time.RFC3339)))
+	if ref != "" {
+		parts = append(parts, fmt.Sprintf("`%s`", ref))
+	}
+	parts = append(parts, c.formatContextTime(ts))
 	return strings.Join(parts, " • ")
+}
+
+func (c *layoutComposer) formatContextTime(ts time.Time) string {
+	switch c.timeDisplay {
+	case timeDisplayFixed:
+		loc, err := time.LoadLocation(c.timezone)
+		if err != nil {
+			return ts.UTC().Format(c.timeLayout)
+		}
+		return ts.In(loc).Format(c.timeLayout)
+	case timeDisplayUTC:
+		fallthrough
+	case "":
+		return ts.UTC().Format(c.timeLayout)
+	case timeDisplaySlackDynamic:
+		fallthrough
+	default:
+		fallback := ts.UTC().Format(defaultTimeLayout)
+		return fmt.Sprintf("<!date^%d^{date_short_pretty} {time_secs}|%s>", ts.Unix(), fallback)
+	}
 }
 
 func (c *layoutComposer) metaContextBlock() *slackapi.ContextBlock {

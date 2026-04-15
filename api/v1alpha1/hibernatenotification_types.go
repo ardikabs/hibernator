@@ -171,6 +171,12 @@ type NotificationSinkStatus struct {
 	// On failure: the error string from the sink provider.
 	// +optional
 	Message string `json:"message,omitempty"`
+
+	// Metadata carries sink-specific arbitrary key/value context for this
+	// delivery attempt. Keys should be namespaced by sink type (for example,
+	// "slack.thread.root_ts") to avoid collisions.
+	// +optional
+	Metadata map[string]string `json:"metadata,omitempty"`
 }
 
 // +kubebuilder:object:root=true

@@ -55,11 +55,16 @@ Each sink reads its configuration from a Kubernetes Secret. The Secret must cont
 
     ```json
     {
-      "webhook_url": "https://hooks.slack.com/services/T00/B00/xxxx",
+      "bot_token": "xoxb-...",
+      "channel_id": "C1234567890",
       "format": "json",
       "block_layout": "default",
       "max_targets": 8,
-      "additional_scopes": ["environment", "region"]
+      "additional_scopes": ["environment", "region"],
+      "delivery_mode": "thread",
+      "time_display": "slack_dynamic",
+      "timezone": "Asia/Jakarta",
+      "time_layout": "Mon, 02 Jan 2006 15:04:05 MST"
     }
     ```
 
@@ -74,6 +79,15 @@ Each sink reads its configuration from a Kubernetes Secret. The Secret must cont
     - `additional_scopes`: appends extra bottom scope metadata context.
       - defaults already include Account and Cluster.
       - supported values: `environment` (alias `env`), `region`, `project`, `provider`, `connector`, `account`, `cluster`.
+    - `time_display`: controls context time rendering.
+      - `slack_dynamic` (default): Slack renders date/time in each viewer's locale/timezone.
+      - `fixed`: uses configured `timezone` + `time_layout`.
+      - `utc`: uses UTC + `time_layout`.
+    - `delivery_mode`: controls message grouping behavior.
+      - `channel` (default): every event posts as standalone message (requires `webhook_url`).
+      - `thread`: Start posts a root and subsequent events for the same plan/cycle continue in that thread (requires `bot_token` + `channel_id`).
+    - `timezone`: IANA timezone for `fixed` mode (for example `Asia/Jakarta`).
+    - `time_layout`: Go time layout for `fixed`/`utc` modes.
 
 === "Telegram"
 

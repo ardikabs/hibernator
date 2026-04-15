@@ -12,9 +12,9 @@ import (
 	"net/http"
 	"strings"
 
+	"github.com/go-logr/logr"
 	slackapi "github.com/slack-go/slack"
 
-	hibernatorv1alpha1 "github.com/ardikabs/hibernator/api/v1alpha1"
 	"github.com/ardikabs/hibernator/internal/notification/sink"
 )
 
@@ -36,8 +36,9 @@ func WithHTTPClient(client *http.Client) Option {
 
 // Sink sends notifications to Slack via Incoming Webhook URL.
 type Sink struct {
-	renderer sink.Renderer
-	client   *http.Client
+	renderer  sink.Renderer
+	client    *http.Client
+	serverURL string
 }
 
 // New creates a new Slack sink.
@@ -53,6 +54,16 @@ func New(renderer sink.Renderer, opts ...Option) *Sink {
 	return s
 }
 
+func withServerURL(url string) Option {
+	return func(s *Sink) {
+		s.serverURL = url
+	}
+}
+
+func newWithServerURL(renderer sink.Renderer, client *http.Client, serverURL string) *Sink {
+	return New(renderer, WithHTTPClient(client), withServerURL(serverURL))
+}
+
 // Type returns the sink type identifier.
 func (s *Sink) Type() string {
 	return SinkType
@@ -65,60 +76,40 @@ func (s *Sink) Type() string {
 //   - text (default): render text and send as plain Slack text message.
 //   - json: if custom template is provided, render and parse JSON payload;
 //     otherwise build a preset JSON blocks payload.
-func (s *Sink) Send(ctx context.Context, payload sink.Payload, opts sink.SendOptions) error {
+func (s *Sink) Send(ctx context.Context, payload sink.Payload, opts sink.SendOptions) (sink.SendResult, error) {
 	var cfg config
 	if err := json.Unmarshal(opts.Config, &cfg); err != nil {
-		return fmt.Errorf("parse slack sink config: %w", err)
+		return sink.SendResult{}, fmt.Errorf("parse slack sink config: %w", err)
 	}
 	cfg.useDefaults()
 	if err := cfg.validate(); err != nil {
-		return err
+		return sink.SendResult{}, err
 	}
 
-	if cfg.WebhookURL == "" {
-		return fmt.Errorf("slack sink config: webhook_url is required")
+	handler, err := newDeliveryHandler(s, cfg, deliveryRuntime{
+		log:            opts.Log,
+		sinkState:      opts.SinkState,
+		customTemplate: opts.CustomTemplate,
+	})
+	if err != nil {
+		return sink.SendResult{}, err
 	}
 
-	if shouldSuppressExecutionProgress(payload, cfg) {
-		return nil
+	state, err := handler.deliver(ctx, payload)
+	if err != nil {
+		return sink.SendResult{}, err
 	}
 
-	msg := s.buildMessage(ctx, payload, cfg, opts.CustomTemplate)
-
-	if err := slackapi.PostWebhookCustomHTTPContext(ctx, cfg.WebhookURL, s.client, msg); err != nil {
-		return fmt.Errorf("send slack notification: %w", err)
-	}
-
-	return nil
+	return sink.SendResult{Metadata: state}, nil
 }
 
-func shouldSuppressExecutionProgress(payload sink.Payload, cfg config) bool {
-	if cfg.Format != formatJSON {
-		return false
-	}
-	if payload.Event != "ExecutionProgress" {
-		return false
-	}
-	if cfg.BlockLayout == blockLayoutAuto {
-		return false
-	}
-	if cfg.BlockLayout != blockLayoutDefault && cfg.BlockLayout != blockLayoutCompact {
-		return false
-	}
-	if payload.TargetExecution == nil {
-		return false
-	}
-
-	switch hibernatorv1alpha1.ExecutionState(payload.TargetExecution.State) {
-	case hibernatorv1alpha1.StateCompleted,
-		hibernatorv1alpha1.StateFailed,
-		hibernatorv1alpha1.StateAborted:
-		return false
-	default:
-		return true
-	}
+type deliveryRuntime struct {
+	log            logr.Logger
+	sinkState      map[string]string
+	customTemplate *sink.CustomTemplate
 }
 
+// buildMessage constructs the Slack message based on the payload and config.
 func (s *Sink) buildMessage(ctx context.Context, payload sink.Payload, cfg config, customTemplate *sink.CustomTemplate) *slackapi.WebhookMessage {
 	switch cfg.Format {
 	case formatJSON:
@@ -128,7 +119,7 @@ func (s *Sink) buildMessage(ctx context.Context, payload sink.Payload, cfg confi
 				return msg
 			}
 		}
-		return presetJSONMessage(payload, cfg.BlockLayout, cfg.MaxTargets, cfg.AdditionalScopes)
+		return presetJSONMessage(payload, cfg)
 
 	case formatText:
 		fallthrough
@@ -142,6 +133,17 @@ func (s *Sink) buildMessage(ctx context.Context, payload sink.Payload, cfg confi
 	}
 }
 
+// presetJSONMessage builds a Slack message using the configured preset layout.
+func presetJSONMessage(payload sink.Payload, cfg config) *slackapi.WebhookMessage {
+	factory := newLayoutFactory()
+	composer := newLayoutComposer(payload, cfg)
+	return &slackapi.WebhookMessage{
+		Text:   fallbackText(payload),
+		Blocks: &slackapi.Blocks{BlockSet: factory.build(cfg.BlockLayout, composer)},
+	}
+}
+
+// parseJSONTemplateMessage attempts to parse the rendered template output as a Slack WebhookMessage.
 func parseJSONTemplateMessage(rendered string, payload sink.Payload) (*slackapi.WebhookMessage, error) {
 	rendered = strings.TrimSpace(rendered)
 	if rendered == "" {
@@ -167,35 +169,4 @@ func parseJSONTemplateMessage(rendered string, payload sink.Payload) (*slackapi.
 	}
 
 	return nil, fmt.Errorf("template output is not a valid Slack JSON payload")
-}
-
-func (c config) validate() error {
-	switch c.Format {
-	case formatText, formatJSON:
-		// ok
-	default:
-		return fmt.Errorf("slack sink config: format must be %q or %q", formatText, formatJSON)
-	}
-
-	if c.Format != formatJSON {
-		return nil
-	}
-
-	switch c.BlockLayout {
-	case blockLayoutDefault, blockLayoutCompact, blockLayoutAuto:
-		// ok
-	default:
-		return fmt.Errorf("slack sink config: block_layout must be one of %q, %q, %q", blockLayoutDefault, blockLayoutCompact, blockLayoutAuto)
-	}
-
-	for _, scope := range c.AdditionalScopes {
-		switch scope {
-		case scopeAccount, scopeCluster, scopeEnvironment, scopeRegion, scopeProject, scopeProvider, scopeConnector:
-			// ok
-		default:
-			return fmt.Errorf("slack sink config: unsupported additional scope %q", scope)
-		}
-	}
-
-	return nil
 }

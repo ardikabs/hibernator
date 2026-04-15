@@ -314,6 +314,7 @@ func (p *LifecycleProcessor) HandleDeliveryResult(result notification.DeliveryRe
 				Name:                result.SinkName,
 				Success:             result.Success,
 				TransitionTimestamp: ts,
+				Metadata:            result.Metadata,
 			}
 			if result.Success {
 				// TODO: add relevant success message from the sink provider.

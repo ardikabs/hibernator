@@ -5,7 +5,11 @@ Licensed under the Apache License, Version 2.0.
 
 package slack
 
-import "strings"
+import (
+	"fmt"
+	"strings"
+	"time"
+)
 
 const (
 	// formatText sends only plain text content.
@@ -21,6 +25,18 @@ const (
 	// falls back to default layout for all other events.
 	blockLayoutAuto = "auto"
 
+	// timeDisplaySlackDynamic renders time via Slack date token in viewer-local timezone.
+	timeDisplaySlackDynamic = "slack_dynamic"
+	// timeDisplayFixed renders time in configured timezone and layout.
+	timeDisplayFixed = "fixed"
+	// timeDisplayUTC renders time in UTC.
+	timeDisplayUTC = "utc"
+
+	// deliveryModeChannel posts each notification as a channel message.
+	deliveryModeChannel = "channel"
+	// deliveryModeThread posts notifications as replies in a cycle thread.
+	deliveryModeThread = "thread"
+
 	// Scope keys for JSON preset footer metadata.
 	scopeAccount     = "account"
 	scopeCluster     = "cluster"
@@ -30,15 +46,27 @@ const (
 	scopeProvider    = "provider"
 	scopeConnector   = "connector"
 
-	defaultFormat      = formatText
-	defaultBlockLayout = blockLayoutDefault
-	defaultMaxTargets  = 8
+	defaultFormat       = formatText
+	defaultBlockLayout  = blockLayoutDefault
+	defaultMaxTargets   = 8
+	defaultTimeDisplay  = timeDisplaySlackDynamic
+	defaultTimeLayout   = "Mon, 02 Jan 2006 15:04:05 MST"
+	defaultDeliveryMode = deliveryModeChannel
 )
 
 // config is the expected JSON schema for the Secret's "config" key.
 type config struct {
 	// WebhookURL is the Slack Incoming Webhook URL.
+	// Mutually exclusive with `bot_token` and `channel_id`, required when `delivery_mode=channel`.
 	WebhookURL string `json:"webhook_url"`
+
+	// BotToken is the Slack Bot token used for Web API delivery mode.
+	// Mutually exclusive with `webhook_url`, required when `delivery_mode=thread`.
+	BotToken string `json:"bot_token"`
+
+	// ChannelID is the Slack channel ID used for Web API delivery mode.
+	// Mutually exclusive with `webhook_url`, required when `delivery_mode=thread`.
+	ChannelID string `json:"channel_id"`
 
 	// Format controls Slack payload mode.
 	// Supported values: `text` (message text only), and
@@ -62,6 +90,28 @@ type config struct {
 	// Supported: `environment` (alias: env), `region`, `project`, `provider`, `connector`,
 	// `account`, `cluster`.
 	AdditionalScopes []string `json:"additional_scopes,omitempty"`
+
+	// TimeDisplay controls how preset JSON layouts render context time.
+	// Supported values:
+	// - `slack_dynamic` (default): Slack date token rendered in each viewer's locale/timezone.
+	// - `fixed`: rendered with Timezone + TimeLayout.
+	// - `utc`: rendered in UTC with TimeLayout.
+	TimeDisplay string `json:"time_display,omitempty"`
+
+	// Timezone is an IANA timezone name (for example, `Asia/Jakarta`) used only
+	// when TimeDisplay is `fixed`. Defaults to `UTC` in fixed mode.
+	Timezone string `json:"timezone,omitempty"`
+
+	// TimeLayout is Go time layout used by fixed/utc displays.
+	// Defaults to `Mon, 02 Jan 2006 15:04:05 MST`.
+	TimeLayout string `json:"time_layout,omitempty"`
+
+	// DeliveryMode controls message grouping behavior.
+	// Supported values:
+	// - `channel` (default): each event posts as standalone channel message.
+	// - `thread`: Start creates a root message and subsequent events for the same
+	//   plan/cycle are posted as thread replies.
+	DeliveryMode string `json:"delivery_mode,omitempty"`
 }
 
 func (c *config) useDefaults() {
@@ -79,7 +129,98 @@ func (c *config) useDefaults() {
 		c.MaxTargets = defaultMaxTargets
 	}
 
+	c.TimeDisplay = strings.ToLower(strings.TrimSpace(c.TimeDisplay))
+	if c.TimeDisplay == "" {
+		c.TimeDisplay = defaultTimeDisplay
+	}
+
+	c.Timezone = strings.TrimSpace(c.Timezone)
+	if c.TimeDisplay == timeDisplayFixed && c.Timezone == "" {
+		c.Timezone = "UTC"
+	}
+
+	c.TimeLayout = strings.TrimSpace(c.TimeLayout)
+	if c.TimeLayout == "" {
+		c.TimeLayout = defaultTimeLayout
+	}
+
+	c.DeliveryMode = strings.ToLower(strings.TrimSpace(c.DeliveryMode))
+	if c.DeliveryMode == "" {
+		c.DeliveryMode = defaultDeliveryMode
+	}
+
+	c.BotToken = strings.TrimSpace(c.BotToken)
+	c.ChannelID = strings.TrimSpace(c.ChannelID)
+
 	c.AdditionalScopes = normalizeScopeList(c.AdditionalScopes)
+}
+
+func (c config) validate() error {
+	prefixErr := "slack sink config:"
+
+	switch c.Format {
+	case formatText, formatJSON:
+		// ok
+	default:
+		return fmt.Errorf("%s format must be %q or %q", prefixErr, formatText, formatJSON)
+	}
+
+	switch c.DeliveryMode {
+	case deliveryModeChannel, deliveryModeThread:
+		// ok
+	default:
+		return fmt.Errorf("%s delivery_mode must be one of %q, %q", prefixErr, deliveryModeChannel, deliveryModeThread)
+	}
+
+	if c.DeliveryMode == deliveryModeChannel {
+		if c.WebhookURL == "" {
+			return fmt.Errorf("%s webhook_url is required when delivery_mode=%q", prefixErr, deliveryModeChannel)
+		}
+	}
+
+	if c.DeliveryMode == deliveryModeThread {
+		if c.BotToken == "" {
+			return fmt.Errorf("%s bot_token is required when delivery_mode=%q", prefixErr, deliveryModeThread)
+		}
+		if c.ChannelID == "" {
+			return fmt.Errorf("%s channel_id is required when delivery_mode=%q", prefixErr, deliveryModeThread)
+		}
+	}
+
+	if c.Format != formatJSON {
+		return nil
+	}
+
+	switch c.BlockLayout {
+	case blockLayoutDefault, blockLayoutCompact, blockLayoutAuto:
+		// ok
+	default:
+		return fmt.Errorf("%s block_layout must be one of %q, %q, %q", prefixErr, blockLayoutDefault, blockLayoutCompact, blockLayoutAuto)
+	}
+
+	switch c.TimeDisplay {
+	case timeDisplaySlackDynamic, timeDisplayFixed, timeDisplayUTC:
+		// ok
+	default:
+		return fmt.Errorf("%s time_display must be one of %q, %q, %q", prefixErr, timeDisplaySlackDynamic, timeDisplayFixed, timeDisplayUTC)
+	}
+
+	if c.TimeDisplay == timeDisplayFixed {
+		if _, err := time.LoadLocation(c.Timezone); err != nil {
+			return fmt.Errorf("%s invalid timezone %q: %w", prefixErr, c.Timezone, err)
+		}
+	}
+
+	for _, scope := range c.AdditionalScopes {
+		switch scope {
+		case scopeAccount, scopeCluster, scopeEnvironment, scopeRegion, scopeProject, scopeProvider, scopeConnector:
+			// ok
+		default:
+			return fmt.Errorf("%s unsupported additional scope %q", prefixErr, scope)
+		}
+	}
+
+	return nil
 }
 
 func normalizeScopeList(scopes []string) []string {

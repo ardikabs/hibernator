@@ -31,6 +31,10 @@ type DeliveryResult struct {
 
 	// Error is the dispatch error, if any. Nil when Success is true.
 	Error error
+
+	// Metadata carries sink-specific arbitrary key/value context emitted by sink
+	// delivery implementations (for example thread identifiers).
+	Metadata map[string]string
 }
 
 // DeliveryCallback is invoked after each dispatch attempt to report delivery
@@ -74,6 +78,9 @@ type PlanInfo = sink.PlanInfo
 
 // ConnectorInfo carries resolved connector metadata for template rendering.
 type ConnectorInfo = sink.ConnectorInfo
+
+// Result carries the outcome of a sink Send operation, including any sink-specific metadata.
+type Result = sink.SendResult
 
 // Overflow is a concurrency-safe, unbounded spillover queue.
 //

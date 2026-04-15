@@ -8,6 +8,7 @@ package notification
 import (
 	"context"
 	"fmt"
+	"maps"
 	"sync"
 	"time"
 
@@ -390,9 +391,9 @@ func (d *Dispatcher) dispatch(ctx context.Context, req Request) {
 	}
 
 	// Resolve sink credentials from Secret.
-	config, err := d.resolveSecret(ctx, req.Payload.Plan.Namespace, req.SecretRef)
-	if err != nil {
-		log.Error(err, "failed to resolve sink secret")
+	config, resolveErr := d.resolveSecret(ctx, req.Payload.Plan.Namespace, req.SecretRef)
+	if resolveErr != nil {
+		log.Error(resolveErr, "failed to resolve sink secret")
 		metrics.NotificationErrorsTotal.WithLabelValues(req.SinkType, req.Payload.Event).Inc()
 		return
 	}
@@ -442,28 +443,32 @@ func (d *Dispatcher) dispatch(ctx context.Context, req Request) {
 	sendOpts := sink.SendOptions{
 		Config:         config,
 		CustomTemplate: customTmpl,
+		SinkState:      d.resolveSinkState(ctx, req.NotificationRef, req.SinkName),
+		Log:            log,
 	}
 
 	// Send with timeout.
 	sendCtx, cancel := context.WithTimeout(ctx, d.dispatchTimeout)
 	defer cancel()
 
-	if err := provider.Send(sendCtx, sinkPayload, sendOpts); err != nil {
-		log.Error(err, "failed to send notification")
+	sendResult, sendErr := provider.Send(sendCtx, sinkPayload, sendOpts)
+	metadata := mergeMetadata(sendOpts.SinkState, sendResult.Metadata)
+	if sendErr != nil {
+		log.Error(sendErr, "failed to send notification")
 		metrics.NotificationErrorsTotal.WithLabelValues(req.SinkType, req.Payload.Event).Inc()
 		metrics.NotificationLatency.WithLabelValues(req.SinkType).Observe(time.Since(start).Seconds())
-		d.reportDelivery(req, false, err)
+		d.reportDelivery(req, false, sendErr, metadata)
 		return
 	}
 
 	log.Info("notification sent successfully")
 	metrics.NotificationSentTotal.WithLabelValues(req.SinkType, req.Payload.Event).Inc()
 	metrics.NotificationLatency.WithLabelValues(req.SinkType).Observe(time.Since(start).Seconds())
-	d.reportDelivery(req, true, nil)
+	d.reportDelivery(req, true, nil, metadata)
 }
 
 // reportDelivery invokes the delivery callback if configured.
-func (d *Dispatcher) reportDelivery(req Request, success bool, err error) {
+func (d *Dispatcher) reportDelivery(req Request, success bool, err error, metadata map[string]string) {
 	if d.deliveryCallback == nil {
 		return
 	}
@@ -473,7 +478,55 @@ func (d *Dispatcher) reportDelivery(req Request, success bool, err error) {
 		Timestamp:       time.Now(),
 		Success:         success,
 		Error:           err,
+		Metadata:        metadata,
 	})
+}
+
+func (d *Dispatcher) resolveSinkState(ctx context.Context, notifRef types.NamespacedName, sinkName string) map[string]string {
+	if notifRef.Name == "" {
+		return nil
+	}
+
+	notif := new(hibernatorv1alpha1.HibernateNotification)
+	if err := d.client.Get(ctx, notifRef, notif); err != nil {
+		return nil
+	}
+
+	for i := range notif.Status.SinkStatuses {
+		ss := notif.Status.SinkStatuses[i]
+		if ss.Name != sinkName {
+			continue
+		}
+		if len(ss.Metadata) == 0 {
+			return nil
+		}
+		state := make(map[string]string, len(ss.Metadata))
+		maps.Copy(state, ss.Metadata)
+		return state
+	}
+
+	return nil
+}
+
+func mergeMetadata(base, override map[string]string) map[string]string {
+	if len(base) == 0 && len(override) == 0 {
+		return nil
+	}
+	out := make(map[string]string, len(base)+len(override))
+	for k, v := range base {
+		out[k] = v
+	}
+	for k, v := range override {
+		if v == "" {
+			delete(out, k)
+			continue
+		}
+		out[k] = v
+	}
+	if len(out) == 0 {
+		return nil
+	}
+	return out
 }
 
 // resolveCustomTemplate loads a Go template string from a ConfigMap.

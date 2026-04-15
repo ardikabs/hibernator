@@ -207,6 +207,28 @@ func TestHandleDeliveryResult_Success(t *testing.T) {
 	assert.True(t, ss.Success)
 	assert.Equal(t, "Successfully sent notification for slack-prod", ss.Message)
 	assert.True(t, ss.TransitionTimestamp.Equal(&metav1.Time{Time: now}))
+	assert.Nil(t, ss.Metadata)
+}
+
+func TestHandleDeliveryResult_PersistsMetadata(t *testing.T) {
+	p, updater := newTestProcessor(t)
+
+	now := time.Date(2026, 4, 1, 12, 0, 0, 0, time.UTC)
+	p.HandleDeliveryResult(notification.DeliveryResult{
+		NotificationRef: types.NamespacedName{Name: "my-notif", Namespace: "default"},
+		SinkName:        "slack-prod",
+		Timestamp:       now,
+		Success:         true,
+		Metadata: map[string]string{
+			"slack.thread.root_ts": "12345.67890",
+		},
+	})
+
+	require.Equal(t, 1, updater.Len())
+	upd := <-updater.C()
+	require.Len(t, upd.Resource.Status.SinkStatuses, 1)
+	require.NotNil(t, upd.Resource.Status.SinkStatuses[0].Metadata)
+	assert.Equal(t, "12345.67890", upd.Resource.Status.SinkStatuses[0].Metadata["slack.thread.root_ts"])
 }
 
 func TestHandleDeliveryResult_Failure(t *testing.T) {

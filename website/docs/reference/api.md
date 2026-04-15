@@ -731,6 +731,7 @@ _Appears in:_
 | `success` _boolean_ | Success indicates whether this delivery attempt succeeded. |  |  |
 | `transitionTimestamp` _[Time](https://kubernetes.io/docs/reference/generated/kubernetes-api/v1.33/#time-v1-meta)_ | TransitionTimestamp is when the delivery attempt completed. |  |  |
 | `message` _string_ | Message is a human-readable description of the delivery outcome.<br />On success: "Successfully sent notification for <sink-name>"<br />On failure: the error string from the sink provider. |  | Optional: \{\} <br /> |
+| `metadata` _object (keys:string, values:string)_ | Refer to Kubernetes API documentation for fields of `metadata`. |  | Optional: \{\} <br /> |
 
 
 #### NotificationSinkType

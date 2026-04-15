@@ -58,7 +58,7 @@ func newStubSink(sinkType string) *stubSink {
 
 func (s *stubSink) Type() string { return s.sinkType }
 
-func (s *stubSink) Send(ctx context.Context, payload Payload, opts sinktypes.SendOptions) error {
+func (s *stubSink) Send(ctx context.Context, payload Payload, opts sinktypes.SendOptions) (Result, error) {
 	s.mu.Lock()
 	s.calls = append(s.calls, stubSendCall{Payload: payload, Config: opts.Config})
 	s.mu.Unlock()
@@ -71,9 +71,9 @@ func (s *stubSink) Send(ctx context.Context, payload Payload, opts sinktypes.Sen
 	}
 
 	if s.sendFunc != nil {
-		return s.sendFunc(ctx, payload, opts)
+		return Result{}, s.sendFunc(ctx, payload, opts)
 	}
-	return nil
+	return Result{}, nil
 }
 
 func (s *stubSink) getCalls() []stubSendCall {

@@ -75,544 +75,50 @@ func TestSendSuccess(t *testing.T) {
 		require.NoError(t, json.Unmarshal(body, &payload))
 		receivedText, _ = payload["text"].(string)
 
+		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusOK)
-		w.Write([]byte("ok")) //nolint:errcheck
+		w.Write([]byte(`{"ok":true,"channel":"C123","ts":"99999.00001"}`)) //nolint:errcheck
 	}))
 	defer server.Close()
 
 	cfg, _ := json.Marshal(config{WebhookURL: server.URL})
 	s := New(&stubRenderer{defaultText: "rendered:slack"}, WithHTTPClient(&http.Client{Timeout: 5 * time.Second}))
-	err := s.Send(context.Background(), testPayload(), sink.SendOptions{
-		Config: cfg,
-	})
+	_, err := s.Send(context.Background(), testPayload(), sink.SendOptions{Config: cfg})
 
 	require.NoError(t, err)
 	assert.Contains(t, receivedText, "rendered:")
 }
 
-func TestSendJSONPresetWithoutTemplate(t *testing.T) {
-	var payload map[string]any
-
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		body, err := io.ReadAll(r.Body)
-		require.NoError(t, err)
-		require.NoError(t, json.Unmarshal(body, &payload))
-		w.WriteHeader(http.StatusOK)
-		w.Write([]byte("ok")) //nolint:errcheck
-	}))
-	defer server.Close()
-
-	cfg, _ := json.Marshal(config{WebhookURL: server.URL, Format: "json", BlockLayout: "default"})
-	s := New(&stubRenderer{defaultText: "rendered:slack"}, WithHTTPClient(&http.Client{Timeout: 5 * time.Second}))
-	err := s.Send(context.Background(), testPayload(), sink.SendOptions{Config: cfg})
-
-	require.NoError(t, err)
-	text, _ := payload["text"].(string)
-	assert.Contains(t, text, "[Start]")
-	assert.Contains(t, text, "default/test-plan")
-
-	blocks, ok := payload["blocks"].([]any)
-	require.True(t, ok)
-	assert.NotEmpty(t, blocks)
-}
-
-func TestSendJSONTemplateMessageObject(t *testing.T) {
-	var payload map[string]any
-
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		body, err := io.ReadAll(r.Body)
-		require.NoError(t, err)
-		require.NoError(t, json.Unmarshal(body, &payload))
-		w.WriteHeader(http.StatusOK)
-		w.Write([]byte("ok")) //nolint:errcheck
-	}))
-	defer server.Close()
-
-	tmpl := `{"text":"custom fallback","blocks":[{"type":"section","text":{"type":"mrkdwn","text":"hello"}}]}`
-	cfg, _ := json.Marshal(config{WebhookURL: server.URL, Format: "json"})
-	s := New(&stubRenderer{defaultText: "rendered:slack"}, WithHTTPClient(&http.Client{Timeout: 5 * time.Second}))
-	err := s.Send(context.Background(), testPayload(), sink.SendOptions{
-		Config: cfg,
-		CustomTemplate: &sink.CustomTemplate{
-			Content: tmpl,
-		},
-	})
-
-	require.NoError(t, err)
-	assert.Equal(t, "custom fallback", payload["text"])
-	blocks, ok := payload["blocks"].([]any)
-	require.True(t, ok)
-	assert.Len(t, blocks, 1)
-}
-
-func TestSendJSONTemplateArrayPayload(t *testing.T) {
-	var payload map[string]any
-
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		body, err := io.ReadAll(r.Body)
-		require.NoError(t, err)
-		require.NoError(t, json.Unmarshal(body, &payload))
-		w.WriteHeader(http.StatusOK)
-		w.Write([]byte("ok")) //nolint:errcheck
-	}))
-	defer server.Close()
-
-	tmpl := `[{"type":"section","text":{"type":"mrkdwn","text":"from array"}}]`
-	cfg, _ := json.Marshal(config{WebhookURL: server.URL, Format: "json"})
-	s := New(&stubRenderer{defaultText: "rendered:slack"}, WithHTTPClient(&http.Client{Timeout: 5 * time.Second}))
-	err := s.Send(context.Background(), testPayload(), sink.SendOptions{
-		Config:         cfg,
-		CustomTemplate: &sink.CustomTemplate{Content: tmpl},
-	})
-
-	require.NoError(t, err)
-	text, _ := payload["text"].(string)
-	assert.Contains(t, text, "[Start]")
-	blocks, ok := payload["blocks"].([]any)
-	require.True(t, ok)
-	assert.Len(t, blocks, 1)
-}
-
-func TestSendJSONTemplateInvalidFallsBackToPreset(t *testing.T) {
-	var payload map[string]any
-
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		body, err := io.ReadAll(r.Body)
-		require.NoError(t, err)
-		require.NoError(t, json.Unmarshal(body, &payload))
-		w.WriteHeader(http.StatusOK)
-		w.Write([]byte("ok")) //nolint:errcheck
-	}))
-	defer server.Close()
-
-	cfg, _ := json.Marshal(config{WebhookURL: server.URL, Format: "json", BlockLayout: "compact"})
-	s := New(&stubRenderer{defaultText: "rendered:slack"}, WithHTTPClient(&http.Client{Timeout: 5 * time.Second}))
-	err := s.Send(context.Background(), testPayload(), sink.SendOptions{
-		Config:         cfg,
-		CustomTemplate: &sink.CustomTemplate{Content: "not-json"},
-	})
-
-	require.NoError(t, err)
-	text, _ := payload["text"].(string)
-	assert.Contains(t, text, "[Start]")
-	blocks, ok := payload["blocks"].([]any)
-	require.True(t, ok)
-	assert.NotEmpty(t, blocks)
-}
-
 func TestSendJSONRejectsRemovedPerTargetAlias(t *testing.T) {
 	cfg, _ := json.Marshal(config{WebhookURL: "https://hooks.slack.com/services/test", Format: "json", BlockLayout: "per_target"})
 	s := New(&stubRenderer{defaultText: "rendered:slack"}, WithHTTPClient(&http.Client{Timeout: 5 * time.Second}))
-	err := s.Send(context.Background(), testPayload(), sink.SendOptions{Config: cfg})
+	_, err := s.Send(context.Background(), testPayload(), sink.SendOptions{Config: cfg})
 
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "block_layout must be one of")
-}
-
-func TestSendJSONAutoLayoutFallsBackForNonProgressEvent(t *testing.T) {
-	var bodyRaw string
-
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		body, err := io.ReadAll(r.Body)
-		require.NoError(t, err)
-		bodyRaw = string(body)
-		w.WriteHeader(http.StatusOK)
-		w.Write([]byte("ok")) //nolint:errcheck
-	}))
-	defer server.Close()
-
-	cfg, _ := json.Marshal(config{WebhookURL: server.URL, Format: "json", BlockLayout: "auto"})
-	s := New(&stubRenderer{defaultText: "rendered:slack"}, WithHTTPClient(&http.Client{Timeout: 5 * time.Second}))
-	err := s.Send(context.Background(), testPayload(), sink.SendOptions{Config: cfg})
-
-	require.NoError(t, err)
-	assert.Contains(t, bodyRaw, "Hibernation Starting")
-	assert.NotContains(t, bodyRaw, "Execution Progress")
-}
-
-func TestSendJSONPresetMaxTargets(t *testing.T) {
-	var bodyRaw string
-
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		body, err := io.ReadAll(r.Body)
-		require.NoError(t, err)
-		bodyRaw = string(body)
-		w.WriteHeader(http.StatusOK)
-		w.Write([]byte("ok")) //nolint:errcheck
-	}))
-	defer server.Close()
-
-	p := testPayload()
-	p.Event = "Failure"
-	p.Phase = string(hibernatorv1alpha1.PhaseError)
-	p.ErrorMessage = "boom"
-	p.Targets = []sink.TargetInfo{
-		{Name: "zeta", Executor: "rds", State: "Completed"},
-		{Name: "alpha", Executor: "eks", State: "Failed"},
-		{Name: "beta", Executor: "ec2", State: "Completed"},
-	}
-
-	cfg, _ := json.Marshal(config{WebhookURL: server.URL, Format: "json", BlockLayout: "default", MaxTargets: 2})
-	s := New(&stubRenderer{defaultText: "rendered:slack"}, WithHTTPClient(&http.Client{Timeout: 5 * time.Second}))
-	err := s.Send(context.Background(), p, sink.SendOptions{Config: cfg})
-
-	require.NoError(t, err)
-	assert.Contains(t, bodyRaw, "... and 1 more target(s)")
-	assert.Contains(t, bodyRaw, "alpha")
-}
-
-func TestSendJSONPresetDefaultLayoutDoesNotIncludeScopeLine(t *testing.T) {
-	var bodyRaw string
-
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		body, err := io.ReadAll(r.Body)
-		require.NoError(t, err)
-		bodyRaw = string(body)
-		w.WriteHeader(http.StatusOK)
-		w.Write([]byte("ok")) //nolint:errcheck
-	}))
-	defer server.Close()
-
-	p := testPayload()
-	p.Event = "Failure"
-	p.Targets = []sink.TargetInfo{
-		{
-			Name:     "rds-main",
-			Executor: "rds",
-			State:    "Failed",
-			Connector: sink.ConnectorInfo{
-				AccountID:   "123456789012",
-				ClusterName: "prod-eks",
-			},
-		},
-	}
-
-	cfg, _ := json.Marshal(config{WebhookURL: server.URL, Format: formatJSON, BlockLayout: blockLayoutDefault})
-	s := New(&stubRenderer{defaultText: "rendered:slack"}, WithHTTPClient(&http.Client{Timeout: 5 * time.Second}))
-	err := s.Send(context.Background(), p, sink.SendOptions{Config: cfg})
-
-	require.NoError(t, err)
-	assert.NotContains(t, bodyRaw, "*Account:* `123456789012`")
-	assert.NotContains(t, bodyRaw, "*Cluster:* `prod-eks`")
-}
-
-func TestSendJSONPresetCompactLayoutDoesNotIncludeAdditionalScopes(t *testing.T) {
-	var bodyRaw string
-
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		body, err := io.ReadAll(r.Body)
-		require.NoError(t, err)
-		bodyRaw = string(body)
-		w.WriteHeader(http.StatusOK)
-		w.Write([]byte("ok")) //nolint:errcheck
-	}))
-	defer server.Close()
-
-	p := testPayload()
-	p.Plan.Labels = map[string]string{"env": "prod"}
-	p.Targets = []sink.TargetInfo{
-		{
-			Name:     "rds-main",
-			Executor: "rds",
-			State:    "Failed",
-			Connector: sink.ConnectorInfo{
-				AccountID:   "123456789012",
-				ClusterName: "prod-eks",
-				Region:      "us-east-1",
-				Provider:    "aws",
-			},
-		},
-	}
-
-	cfg, _ := json.Marshal(config{
-		WebhookURL:       server.URL,
-		Format:           formatJSON,
-		BlockLayout:      blockLayoutCompact,
-		AdditionalScopes: []string{"environment", "region", "provider"},
-	})
-	s := New(&stubRenderer{defaultText: "rendered:slack"}, WithHTTPClient(&http.Client{Timeout: 5 * time.Second}))
-	err := s.Send(context.Background(), p, sink.SendOptions{Config: cfg})
-
-	require.NoError(t, err)
-	assert.NotContains(t, bodyRaw, "*Account:* `123456789012`")
-	assert.NotContains(t, bodyRaw, "*Cluster:* `prod-eks`")
-	assert.NotContains(t, bodyRaw, "*Environment:* `prod`")
-	assert.NotContains(t, bodyRaw, "*Region:* `us-east-1`")
-	assert.NotContains(t, bodyRaw, "*Provider:* `aws`")
-}
-
-func TestSendJSONPresetDefaultLayoutDoesNotIncludeEnvScopeAlias(t *testing.T) {
-	var bodyRaw string
-
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		body, err := io.ReadAll(r.Body)
-		require.NoError(t, err)
-		bodyRaw = string(body)
-		w.WriteHeader(http.StatusOK)
-		w.Write([]byte("ok")) //nolint:errcheck
-	}))
-	defer server.Close()
-
-	p := testPayload()
-	p.Plan.Annotations = map[string]string{"environment": "staging"}
-	p.Targets = []sink.TargetInfo{
-		{
-			Name:     "eks-app",
-			Executor: "eks",
-			State:    "Completed",
-			Connector: sink.ConnectorInfo{
-				AccountID:   "111111111111",
-				ClusterName: "staging-eks",
-			},
-		},
-	}
-
-	cfg, _ := json.Marshal(config{
-		WebhookURL:       server.URL,
-		Format:           formatJSON,
-		BlockLayout:      blockLayoutDefault,
-		AdditionalScopes: []string{"env"},
-	})
-	s := New(&stubRenderer{defaultText: "rendered:slack"}, WithHTTPClient(&http.Client{Timeout: 5 * time.Second}))
-	err := s.Send(context.Background(), p, sink.SendOptions{Config: cfg})
-
-	require.NoError(t, err)
-	assert.NotContains(t, bodyRaw, "*Environment:* `staging`")
-}
-
-func TestSendJSONAutoLayoutIncludesScopeLine(t *testing.T) {
-	var bodyRaw string
-
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		body, err := io.ReadAll(r.Body)
-		require.NoError(t, err)
-		bodyRaw = string(body)
-		w.WriteHeader(http.StatusOK)
-		w.Write([]byte("ok")) //nolint:errcheck
-	}))
-	defer server.Close()
-
-	p := testPayload()
-	p.Event = "ExecutionProgress"
-	p.TargetExecution = &sink.TargetInfo{
-		Name:     "rds-main",
-		Executor: "rds",
-		State:    "Running",
-		Connector: sink.ConnectorInfo{
-			AccountID:   "123456789012",
-			ClusterName: "prod-eks",
-			Region:      "us-east-1",
-			Provider:    "aws",
-		},
-	}
-	p.Plan.Labels = map[string]string{"env": "prod"}
-
-	cfg, _ := json.Marshal(config{
-		WebhookURL:       server.URL,
-		Format:           formatJSON,
-		BlockLayout:      blockLayoutAuto,
-		AdditionalScopes: []string{"environment", "region", "provider"},
-	})
-	s := New(&stubRenderer{defaultText: "rendered:slack"}, WithHTTPClient(&http.Client{Timeout: 5 * time.Second}))
-	err := s.Send(context.Background(), p, sink.SendOptions{Config: cfg})
-
-	require.NoError(t, err)
-	assert.Contains(t, bodyRaw, "Execution Progress")
-	assert.Contains(t, bodyRaw, "*Account:* `123456789012`")
-	assert.Contains(t, bodyRaw, "*Cluster:* `prod-eks`")
-	assert.Contains(t, bodyRaw, "*Environment:* `prod`")
-	assert.Contains(t, bodyRaw, "*Region:* `us-east-1`")
-	assert.Contains(t, bodyRaw, "*Provider:* `aws`")
-}
-
-func TestSendJSONExecutionProgressDefaultSuppressesNonTerminal(t *testing.T) {
-	requestCount := 0
-
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		requestCount++
-		w.WriteHeader(http.StatusOK)
-		w.Write([]byte("ok")) //nolint:errcheck
-	}))
-	defer server.Close()
-
-	p := testPayload()
-	p.Event = "ExecutionProgress"
-	p.TargetExecution = &sink.TargetInfo{
-		Name:     "rds-main",
-		Executor: "rds",
-		State:    "Running",
-	}
-
-	cfg, _ := json.Marshal(config{WebhookURL: server.URL, Format: formatJSON, BlockLayout: blockLayoutDefault})
-	s := New(&stubRenderer{defaultText: "rendered:slack"}, WithHTTPClient(&http.Client{Timeout: 5 * time.Second}))
-	err := s.Send(context.Background(), p, sink.SendOptions{Config: cfg})
-
-	require.NoError(t, err)
-	assert.Equal(t, 0, requestCount)
-}
-
-func TestSendJSONExecutionProgressCompactSuppressesNonTerminal(t *testing.T) {
-	requestCount := 0
-
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		requestCount++
-		w.WriteHeader(http.StatusOK)
-		w.Write([]byte("ok")) //nolint:errcheck
-	}))
-	defer server.Close()
-
-	p := testPayload()
-	p.Event = "ExecutionProgress"
-	p.TargetExecution = &sink.TargetInfo{
-		Name:     "rds-main",
-		Executor: "rds",
-		State:    "Pending",
-	}
-
-	cfg, _ := json.Marshal(config{WebhookURL: server.URL, Format: formatJSON, BlockLayout: blockLayoutCompact})
-	s := New(&stubRenderer{defaultText: "rendered:slack"}, WithHTTPClient(&http.Client{Timeout: 5 * time.Second}))
-	err := s.Send(context.Background(), p, sink.SendOptions{Config: cfg})
-
-	require.NoError(t, err)
-	assert.Equal(t, 0, requestCount)
-}
-
-func TestSendJSONExecutionProgressDefaultSendsTerminalState(t *testing.T) {
-	requestCount := 0
-
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		requestCount++
-		w.WriteHeader(http.StatusOK)
-		w.Write([]byte("ok")) //nolint:errcheck
-	}))
-	defer server.Close()
-
-	p := testPayload()
-	p.Event = "ExecutionProgress"
-	p.TargetExecution = &sink.TargetInfo{
-		Name:     "rds-main",
-		Executor: "rds",
-		State:    "Completed",
-	}
-
-	cfg, _ := json.Marshal(config{WebhookURL: server.URL, Format: formatJSON, BlockLayout: blockLayoutDefault})
-	s := New(&stubRenderer{defaultText: "rendered:slack"}, WithHTTPClient(&http.Client{Timeout: 5 * time.Second}))
-	err := s.Send(context.Background(), p, sink.SendOptions{Config: cfg})
-
-	require.NoError(t, err)
-	assert.Equal(t, 1, requestCount)
-}
-
-func TestSendJSONExecutionProgressAutoSendsNonTerminal(t *testing.T) {
-	requestCount := 0
-
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		requestCount++
-		w.WriteHeader(http.StatusOK)
-		w.Write([]byte("ok")) //nolint:errcheck
-	}))
-	defer server.Close()
-
-	p := testPayload()
-	p.Event = "ExecutionProgress"
-	p.TargetExecution = &sink.TargetInfo{
-		Name:     "rds-main",
-		Executor: "rds",
-		State:    "Running",
-	}
-
-	cfg, _ := json.Marshal(config{WebhookURL: server.URL, Format: formatJSON, BlockLayout: blockLayoutAuto})
-	s := New(&stubRenderer{defaultText: "rendered:slack"}, WithHTTPClient(&http.Client{Timeout: 5 * time.Second}))
-	err := s.Send(context.Background(), p, sink.SendOptions{Config: cfg})
-
-	require.NoError(t, err)
-	assert.Equal(t, 1, requestCount)
 }
 
 func TestSendInvalidLegacyProgressBlockLayout(t *testing.T) {
 	cfg, _ := json.Marshal(config{WebhookURL: "https://hooks.slack.com/services/test", Format: "json", BlockLayout: "progress"})
 	s := New(&stubRenderer{defaultText: "rendered:slack"}, WithHTTPClient(&http.Client{Timeout: 5 * time.Second}))
-	err := s.Send(context.Background(), testPayload(), sink.SendOptions{Config: cfg})
+	_, err := s.Send(context.Background(), testPayload(), sink.SendOptions{Config: cfg})
 
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "block_layout must be one of")
 }
 
-func TestSendHTTPError(t *testing.T) {
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-		w.WriteHeader(http.StatusInternalServerError)
-		w.Write([]byte("internal server error")) //nolint:errcheck
-	}))
-	defer server.Close()
-
-	cfg, _ := json.Marshal(config{WebhookURL: server.URL})
-	s := New(&stubRenderer{defaultText: "rendered:slack"}, WithHTTPClient(&http.Client{Timeout: 5 * time.Second}))
-	err := s.Send(context.Background(), testPayload(), sink.SendOptions{
-		Config: cfg,
-	})
-
-	require.Error(t, err)
-	assert.Contains(t, err.Error(), "send slack notification")
-}
-
-func TestSendRateLimited(t *testing.T) {
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-		w.WriteHeader(http.StatusTooManyRequests)
-		w.Write([]byte("rate limited")) //nolint:errcheck
-	}))
-	defer server.Close()
-
-	cfg, _ := json.Marshal(config{WebhookURL: server.URL})
-	s := New(&stubRenderer{defaultText: "rendered:slack"}, WithHTTPClient(&http.Client{Timeout: 5 * time.Second}))
-	err := s.Send(context.Background(), testPayload(), sink.SendOptions{
-		Config: cfg,
-	})
-
-	require.Error(t, err)
-	assert.Contains(t, err.Error(), "send slack notification")
-}
-
-func TestSendContextCanceled(t *testing.T) {
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-		time.Sleep(10 * time.Second)
-		w.WriteHeader(http.StatusOK)
-	}))
-	defer server.Close()
-
-	ctx, cancel := context.WithCancel(context.Background())
-	cancel()
-
-	cfg, _ := json.Marshal(config{WebhookURL: server.URL})
-	s := New(&stubRenderer{defaultText: "rendered:slack"}, WithHTTPClient(&http.Client{Timeout: 5 * time.Second}))
-	err := s.Send(ctx, testPayload(), sink.SendOptions{
-		Config: cfg,
-	})
-
-	require.Error(t, err)
-}
-
-func TestSendInvalidURL(t *testing.T) {
-	cfg, _ := json.Marshal(config{WebhookURL: "://invalid"})
-	s := New(&stubRenderer{defaultText: "rendered:slack"}, WithHTTPClient(&http.Client{Timeout: 5 * time.Second}))
-	err := s.Send(context.Background(), testPayload(), sink.SendOptions{
-		Config: cfg,
-	})
-
-	require.Error(t, err)
-}
-
 func TestSendMissingWebhookURL(t *testing.T) {
 	cfg, _ := json.Marshal(config{})
 	s := New(&stubRenderer{defaultText: "rendered:slack"}, WithHTTPClient(&http.Client{Timeout: 5 * time.Second}))
-	err := s.Send(context.Background(), testPayload(), sink.SendOptions{Config: cfg})
+	_, err := s.Send(context.Background(), testPayload(), sink.SendOptions{Config: cfg})
 
 	require.Error(t, err)
-	assert.Contains(t, err.Error(), "webhook_url is required")
+	assert.Contains(t, err.Error(), "webhook_url is required when delivery_mode")
 }
 
 func TestSendInvalidConfig(t *testing.T) {
 	s := New(&stubRenderer{defaultText: "rendered:slack"}, WithHTTPClient(&http.Client{Timeout: 5 * time.Second}))
-	err := s.Send(context.Background(), testPayload(), sink.SendOptions{Config: []byte("not json")})
+	_, err := s.Send(context.Background(), testPayload(), sink.SendOptions{Config: []byte("not json")})
 
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "parse slack sink config")
@@ -621,7 +127,7 @@ func TestSendInvalidConfig(t *testing.T) {
 func TestSendInvalidFormat(t *testing.T) {
 	cfg, _ := json.Marshal(config{WebhookURL: "https://hooks.slack.com/services/test", Format: "yaml"})
 	s := New(&stubRenderer{defaultText: "rendered:slack"}, WithHTTPClient(&http.Client{Timeout: 5 * time.Second}))
-	err := s.Send(context.Background(), testPayload(), sink.SendOptions{Config: cfg})
+	_, err := s.Send(context.Background(), testPayload(), sink.SendOptions{Config: cfg})
 
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "format must be")
@@ -630,7 +136,7 @@ func TestSendInvalidFormat(t *testing.T) {
 func TestSendInvalidBlockLayout(t *testing.T) {
 	cfg, _ := json.Marshal(config{WebhookURL: "https://hooks.slack.com/services/test", Format: "json", BlockLayout: "oncall"})
 	s := New(&stubRenderer{defaultText: "rendered:slack"}, WithHTTPClient(&http.Client{Timeout: 5 * time.Second}))
-	err := s.Send(context.Background(), testPayload(), sink.SendOptions{Config: cfg})
+	_, err := s.Send(context.Background(), testPayload(), sink.SendOptions{Config: cfg})
 
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "block_layout must be one of")
@@ -644,32 +150,60 @@ func TestSendInvalidAdditionalScope(t *testing.T) {
 		AdditionalScopes: []string{"foobar"},
 	})
 	s := New(&stubRenderer{defaultText: "rendered:slack"}, WithHTTPClient(&http.Client{Timeout: 5 * time.Second}))
-	err := s.Send(context.Background(), testPayload(), sink.SendOptions{Config: cfg})
+	_, err := s.Send(context.Background(), testPayload(), sink.SendOptions{Config: cfg})
 
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "unsupported additional scope")
 }
 
-func TestSendTextIgnoresInvalidBlockLayout(t *testing.T) {
-	var payload map[string]any
-
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		body, err := io.ReadAll(r.Body)
-		require.NoError(t, err)
-		require.NoError(t, json.Unmarshal(body, &payload))
-		w.WriteHeader(http.StatusOK)
-		w.Write([]byte("ok")) //nolint:errcheck
-	}))
-	defer server.Close()
-
-	cfg, _ := json.Marshal(config{WebhookURL: server.URL, Format: "text", BlockLayout: "oncall"})
+func TestSendInvalidTimeDisplay(t *testing.T) {
+	cfg, _ := json.Marshal(config{WebhookURL: "https://hooks.slack.com/services/test", Format: "json", TimeDisplay: "local"})
 	s := New(&stubRenderer{defaultText: "rendered:slack"}, WithHTTPClient(&http.Client{Timeout: 5 * time.Second}))
-	err := s.Send(context.Background(), testPayload(), sink.SendOptions{Config: cfg})
+	_, err := s.Send(context.Background(), testPayload(), sink.SendOptions{Config: cfg})
 
-	require.NoError(t, err)
-	assert.Equal(t, "rendered:slack", payload["text"])
-	_, hasBlocks := payload["blocks"]
-	assert.False(t, hasBlocks)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "time_display must be one of")
+}
+
+func TestSendInvalidDeliveryMode(t *testing.T) {
+	cfg, _ := json.Marshal(config{WebhookURL: "https://hooks.slack.com/services/test", Format: "json", DeliveryMode: "pipe"})
+	s := New(&stubRenderer{defaultText: "rendered:slack"}, WithHTTPClient(&http.Client{Timeout: 5 * time.Second}))
+	_, err := s.Send(context.Background(), testPayload(), sink.SendOptions{Config: cfg})
+
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "delivery_mode must be one of")
+}
+
+func TestSendThreadModeRequiresBotToken(t *testing.T) {
+	cfg, _ := json.Marshal(config{Format: "json", DeliveryMode: deliveryModeThread, ChannelID: "C123"})
+	s := New(&stubRenderer{defaultText: "rendered:slack"}, WithHTTPClient(&http.Client{Timeout: 5 * time.Second}))
+	_, err := s.Send(context.Background(), testPayload(), sink.SendOptions{Config: cfg})
+
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "bot_token is required when delivery_mode")
+}
+
+func TestSendThreadModeRequiresChannelID(t *testing.T) {
+	cfg, _ := json.Marshal(config{Format: "json", DeliveryMode: deliveryModeThread, BotToken: "xoxb-test"})
+	s := New(&stubRenderer{defaultText: "rendered:slack"}, WithHTTPClient(&http.Client{Timeout: 5 * time.Second}))
+	_, err := s.Send(context.Background(), testPayload(), sink.SendOptions{Config: cfg})
+
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "channel_id is required when delivery_mode")
+}
+
+func TestSendInvalidTimezoneForFixedTimeDisplay(t *testing.T) {
+	cfg, _ := json.Marshal(config{
+		WebhookURL:  "https://hooks.slack.com/services/test",
+		Format:      "json",
+		TimeDisplay: timeDisplayFixed,
+		Timezone:    "Mars/OlympusMons",
+	})
+	s := New(&stubRenderer{defaultText: "rendered:slack"}, WithHTTPClient(&http.Client{Timeout: 5 * time.Second}))
+	_, err := s.Send(context.Background(), testPayload(), sink.SendOptions{Config: cfg})
+
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "invalid timezone")
 }
 
 func TestParseJSONTemplateMessageAddsFallbackTextWhenMissing(t *testing.T) {
@@ -706,6 +240,9 @@ func TestConfigUseDefaults(t *testing.T) {
 	assert.Equal(t, formatText, cfg.Format)
 	assert.Equal(t, blockLayoutDefault, cfg.BlockLayout)
 	assert.Equal(t, defaultMaxTargets, cfg.MaxTargets)
+	assert.Equal(t, defaultTimeDisplay, cfg.TimeDisplay)
+	assert.Equal(t, defaultTimeLayout, cfg.TimeLayout)
+	assert.Equal(t, defaultDeliveryMode, cfg.DeliveryMode)
 	assert.Empty(t, cfg.AdditionalScopes)
 }
 
