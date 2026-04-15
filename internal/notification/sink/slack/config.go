@@ -109,8 +109,14 @@ type config struct {
 	// DeliveryMode controls message grouping behavior.
 	// Supported values:
 	// - `channel` (default): each event posts as standalone channel message.
-	// - `thread`: Start creates a root message and subsequent events for the same
-	//   plan/cycle are posted as thread replies.
+	// - `thread`: root message is treated as a live status card and updated on every
+	//   delivered event for the same plan/cycle, while event entries are posted as
+	//   thread replies (including Start).
+	//   In `thread` mode, `templateRef`/custom templates are intentionally ignored:
+	//   the sink always uses built-in, opinionated thread layouts so context and
+	//   status progression remain consistent across root updates and replies.
+	//   Recommendation: include `ExecutionProgress` in onEvents so root status moves
+	//   continuously across execution; otherwise root updates only on subscribed events.
 	DeliveryMode string `json:"delivery_mode,omitempty"`
 }
 

@@ -399,7 +399,7 @@ func TestSendJSONPresetContextTime_UTC(t *testing.T) {
 	assert.Contains(t, bodyRaw, "Tue, 20 Jan 2026 15:04:05 UTC")
 }
 
-func TestSendJSONPresetContextUsesPlanCycleReference(t *testing.T) {
+func TestSendJSONPresetContextUsesCycleReference(t *testing.T) {
 	var bodyRaw string
 
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -422,8 +422,7 @@ func TestSendJSONPresetContextUsesPlanCycleReference(t *testing.T) {
 
 	require.NoError(t, err)
 	assert.Contains(t, bodyRaw, "Event: *ExecutionProgress*")
-	assert.Contains(t, bodyRaw, "`default/test-plan/cycle-0001`")
-	assert.NotContains(t, bodyRaw, "Cycle: `")
+	assert.Contains(t, bodyRaw, "Cycle: `cycle-0001`")
 }
 
 func TestSendTextIgnoresInvalidBlockLayout(t *testing.T) {

@@ -85,7 +85,11 @@ Each sink reads its configuration from a Kubernetes Secret. The Secret must cont
       - `utc`: uses UTC + `time_layout`.
     - `delivery_mode`: controls message grouping behavior.
       - `channel` (default): every event posts as standalone message (requires `webhook_url`).
-      - `thread`: Start posts a root and subsequent events for the same plan/cycle continue in that thread (requires `bot_token` + `channel_id`).
+      - `thread`: keeps a living root message per plan/cycle (updated on each delivered event) and appends every event as a thread reply, including `Start` (requires `bot_token` + `channel_id`).
+        - root message includes a static progress bar relative to total targets (for example `[██░░░░░░░░] 1/10`) so progression remains visible even though the root is updated in place.
+        - custom templates from `templateRef` are intentionally ignored in `thread` mode; Hibernator always uses built-in, opinionated thread layouts so root context and status progression stay consistent across updates and replies.
+        - controller logs include an info message when this happens: `ignored custom template for Slack thread delivery mode; using built-in opinionated thread layout for consistent context`.
+        - strongly recommended to include `ExecutionProgress` in `onEvents` for smooth root progression (`Starting -> In Progress -> Completed/Failed`). Without it, root updates only when subscribed events are emitted.
     - `timezone`: IANA timezone for `fixed` mode (for example `Asia/Jakarta`).
     - `time_layout`: Go time layout for `fixed`/`utc` modes.
 
@@ -233,6 +237,7 @@ For Slack:
 
 - with `format=text`, your template should render plain text.
 - with `format=json`, your template should render a Slack JSON payload (typically with `blocks`, optionally with `text`).
+- when `delivery_mode=thread`, custom templates are not used; built-in opinionated thread layouts take precedence to preserve consistent context style on the root status card and all thread replies.
 
 ### Step 1: Create the Template ConfigMap
 

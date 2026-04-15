@@ -139,6 +139,26 @@ func (c *layoutComposer) buildProgress() []slackapi.Block {
 		Build()
 }
 
+func (c *layoutComposer) buildThreadRoot() []slackapi.Block {
+	return newBlockSetBuilder(8).
+		Add(
+			slackapi.NewHeaderBlock(plainText().WithEmoji().WithText(c.threadRootHeaderTitle()).Build()),
+			slackapi.NewDividerBlock(),
+			slackapi.NewSectionBlock(mdText().WithText(c.threadRootSummaryLine()).Build(), nil, nil),
+		).
+		AddWhen(c.payload.ErrorMessage != "",
+			slackapi.NewSectionBlock(mdText().WithText(fmt.Sprintf("*Error:* %s", c.payload.ErrorMessage)).Build(), nil, nil),
+		).
+		AddWhenTextBlocks(targetLines(c.payload.Targets, c.maxTargets), func(targets string) []slackapi.Block {
+			return []slackapi.Block{
+				slackapi.NewDividerBlock(),
+				slackapi.NewSectionBlock(mdText().WithText(targets).Build(), nil, nil),
+			}
+		}).
+		Add(slackapi.NewContextBlock("notification-cycle", mdText().WithText(c.threadRootContextLine()).Build())).
+		Build()
+}
+
 func (c *layoutComposer) headerTitle() string {
 	switch hibernatorv1alpha1.NotificationEvent(c.payload.Event) {
 	case hibernatorv1alpha1.EventStart:
@@ -166,6 +186,28 @@ func (c *layoutComposer) headerTitle() string {
 	}
 }
 
+func (c *layoutComposer) threadRootHeaderTitle() string {
+	operation := "Wake-Up"
+	if strings.EqualFold(c.payload.Operation, "shutdown") {
+		operation = "Hibernation"
+	}
+
+	switch hibernatorv1alpha1.NotificationEvent(c.payload.Event) {
+	case hibernatorv1alpha1.EventStart:
+		return fmt.Sprintf(":arrow_forward: %s Starting", operation)
+	case hibernatorv1alpha1.EventSuccess:
+		return fmt.Sprintf(":white_check_mark: %s Completed", operation)
+	case hibernatorv1alpha1.EventFailure:
+		return fmt.Sprintf(":alert: %s Failed", operation)
+	case hibernatorv1alpha1.EventRecovery,
+		hibernatorv1alpha1.EventExecutionProgress,
+		hibernatorv1alpha1.EventPhaseChange:
+		return fmt.Sprintf(":loading: %s In Progress", operation)
+	default:
+		return fmt.Sprintf(":loading: %s In Progress", operation)
+	}
+}
+
 func (c *layoutComposer) summaryLine() string {
 	parts := []string{
 		fmt.Sprintf("*Plan:* `%s`", c.payload.Plan.String()),
@@ -185,18 +227,75 @@ func (c *layoutComposer) compactSummary() string {
 	return fmt.Sprintf("*%s* | `%s` | `%s`", c.payload.Event, c.payload.Plan.String(), c.payload.Phase)
 }
 
+func (c *layoutComposer) threadRootSummaryLine() string {
+	parts := []string{
+		fmt.Sprintf("*Plan:* `%s`", c.payload.Plan.String()),
+		fmt.Sprintf("*Cycle:* `%s`", c.payload.CycleID),
+		fmt.Sprintf("*Phase:* `%s`", c.payload.Phase),
+	}
+
+	if c.payload.Operation != "" {
+		parts = append(parts, fmt.Sprintf("*Operation:* `%s`", c.payload.Operation))
+	}
+	if c.payload.RetryCount > 0 {
+		parts = append(parts, fmt.Sprintf("*Retry:* `%d`", c.payload.RetryCount))
+	}
+	if progress := c.threadRootProgressLine(); progress != "" {
+		parts = append(parts, progress)
+	}
+
+	return strings.Join(parts, "\n")
+}
+
+func (c *layoutComposer) threadRootProgressLine() string {
+	total := len(c.payload.Targets)
+	if total <= 0 {
+		return ""
+	}
+
+	done := 0
+	for _, target := range c.payload.Targets {
+		switch hibernatorv1alpha1.ExecutionState(target.State) {
+		case hibernatorv1alpha1.StateCompleted,
+			hibernatorv1alpha1.StateFailed,
+			hibernatorv1alpha1.StateAborted:
+			done++
+		}
+	}
+
+	barWidth := 10
+	filled := (done * barWidth) / total
+	if filled < 0 {
+		filled = 0
+	}
+	if filled > barWidth {
+		filled = barWidth
+	}
+
+	bar := fmt.Sprintf("[%s%s]", strings.Repeat("█", filled), strings.Repeat("░", barWidth-filled))
+	return fmt.Sprintf("*Progress:* `%s` `%d/%d`", bar, done, total)
+}
+
+func (c *layoutComposer) threadRootContextLine() string {
+	ts := c.payload.Timestamp
+	if ts.IsZero() {
+		ts = time.Now().UTC()
+	}
+	cycle := c.payload.CycleID
+	if strings.TrimSpace(cycle) == "" {
+		cycle = "n/a"
+	}
+	return fmt.Sprintf("Cycle: `%s` • %s", cycle, c.formatContextTime(ts))
+}
+
 func (c *layoutComposer) contextLine() string {
 	ts := c.payload.Timestamp
 	if ts.IsZero() {
 		ts = time.Now().UTC()
 	}
 	parts := []string{fmt.Sprintf("Event: *%s*", c.payload.Event)}
-	ref := c.payload.Plan.String()
 	if c.payload.CycleID != "" {
-		ref = fmt.Sprintf("%s/%s", ref, c.payload.CycleID)
-	}
-	if ref != "" {
-		parts = append(parts, fmt.Sprintf("`%s`", ref))
+		parts = append(parts, fmt.Sprintf("Cycle: `%s`", c.payload.CycleID))
 	}
 	parts = append(parts, c.formatContextTime(ts))
 	return strings.Join(parts, " • ")
