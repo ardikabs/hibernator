@@ -16,10 +16,10 @@ import (
 	"github.com/ardikabs/hibernator/internal/notification/sink"
 )
 
-type State = map[string]string
+type States = map[string]string
 
 type deliveryHandler interface {
-	deliver(ctx context.Context, payload sink.Payload) (State, error)
+	deliver(ctx context.Context, payload sink.Payload) (States, error)
 }
 
 func newDeliveryHandler(s *Sink, cfg config, rt deliveryRuntime) (deliveryHandler, error) {
@@ -39,14 +39,14 @@ type channelDelivery struct {
 	rt  deliveryRuntime
 }
 
-func (cd *channelDelivery) deliver(ctx context.Context, payload sink.Payload) (State, error) {
+func (cd *channelDelivery) deliver(ctx context.Context, payload sink.Payload) (States, error) {
 	if shouldSuppressExecutionProgress(payload, cd.cfg) {
 		return nil, nil
 	}
 
 	msg := cd.s.buildMessage(ctx, payload, cd.cfg, cd.rt.customTemplate)
 	if err := slackapi.PostWebhookCustomHTTPContext(ctx, cd.cfg.WebhookURL, cd.s.client, msg); err != nil {
-		return State{}, fmt.Errorf("send slack notification: %w", err)
+		return States{}, fmt.Errorf("send slack notification: %w", err)
 	}
 	return nil, nil
 }
@@ -57,7 +57,7 @@ type threadDelivery struct {
 	rt  deliveryRuntime
 }
 
-func (td *threadDelivery) deliver(ctx context.Context, payload sink.Payload) (State, error) {
+func (td *threadDelivery) deliver(ctx context.Context, payload sink.Payload) (States, error) {
 	if shouldSuppressExecutionProgress(payload, td.cfg) {
 		return nil, nil
 	}

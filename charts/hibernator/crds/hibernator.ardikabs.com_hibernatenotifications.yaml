@@ -204,45 +204,89 @@ spec:
                 format: int64
                 type: integer
               sinkStatuses:
-                description: |-
-                  SinkStatuses is a history log of per-sink delivery attempts, ordered newest-first.
-                  The controller retains at most 20 entries; older entries are evicted when the cap is reached.
-                items:
-                  description: NotificationSinkStatus records the outcome of a single
-                    notification delivery attempt.
+                additionalProperties:
+                  description: NotificationSinkStatus records tracked delivery state
+                    for a sink key.
                   properties:
-                    message:
-                      description: |-
-                        Message is a human-readable description of the delivery outcome.
-                        On success: "Successfully sent notification for <sink-name>"
-                        On failure: the error string from the sink provider.
+                    cycleId:
+                      description: CycleID is the execution cycle identifier.
                       type: string
-                    metadata:
+                    failureCount:
+                      description: FailureCount is the number of failed deliveries
+                        for this sink key.
+                      format: int32
+                      type: integer
+                    lastFailureTime:
+                      description: LastFailureTime is when the most recent failed
+                        delivery completed.
+                      format: date-time
+                      type: string
+                    lastSuccessTime:
+                      description: LastSuccessTime is when the most recent successful
+                        delivery completed.
+                      format: date-time
+                      type: string
+                    message:
+                      description: Message is a human-readable description of the
+                        most recent delivery outcome.
+                      type: string
+                    operation:
+                      description: Operation is the operation associated with this
+                        sink status (shutdown/wakeup).
+                      type: string
+                    planRef:
+                      description: PlanRef identifies the plan this sink status belongs
+                        to.
+                      properties:
+                        name:
+                          description: Name of the HibernatePlan.
+                          type: string
+                        namespace:
+                          description: |-
+                            Namespace of the HibernatePlan.
+                            If empty, defaults to the exception's namespace.
+                          type: string
+                      required:
+                      - name
+                      type: object
+                    sinkName:
+                      description: SinkName is the sink name as defined in spec.sinks[].name.
+                      type: string
+                    states:
                       additionalProperties:
                         type: string
                       description: |-
-                        Metadata carries sink-specific arbitrary key/value context for this
-                        delivery attempt. Keys should be namespaced by sink type (for example,
+                        States carries sink-specific arbitrary key/value context for this sink key.
+                        Keys should be namespaced by sink type (for example,
                         "slack.thread.root_ts") to avoid collisions.
                       type: object
-                    name:
-                      description: Name is the sink name as defined in spec.sinks[].name.
-                      type: string
                     success:
-                      description: Success indicates whether this delivery attempt
-                        succeeded.
+                      description: Success indicates whether the most recent delivery
+                        attempt succeeded.
                       type: boolean
+                    successCount:
+                      description: SuccessCount is the number of successful deliveries
+                        for this sink key.
+                      format: int32
+                      type: integer
                     transitionTimestamp:
-                      description: TransitionTimestamp is when the delivery attempt
-                        completed.
+                      description: TransitionTimestamp is when the most recent delivery
+                        attempt completed.
                       format: date-time
                       type: string
                   required:
-                  - name
+                  - planRef
+                  - sinkName
                   - success
                   - transitionTimestamp
                   type: object
-                type: array
+                description: |-
+                  SinkStatuses stores tracked per-sink delivery state scoped by
+                  sink + plan + cycle + operation.
+                  The key format is implementation-defined by the controller.
+                  Retention prioritizes relevance: for each sink+plan pair, only the most
+                  recent 2 cycle entries are retained.
+                type: object
               state:
                 default: Detached
                 description: |-

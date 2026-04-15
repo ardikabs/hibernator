@@ -142,41 +142,71 @@ type HibernateNotificationStatus struct {
 	// +optional
 	LastFailureTime *metav1.Time `json:"lastFailureTime,omitempty"`
 
-	// SinkStatuses is a history log of per-sink delivery attempts, ordered newest-first.
-	// The controller retains at most 20 entries; older entries are evicted when the cap is reached.
+	// SinkStatuses stores tracked per-sink delivery state scoped by
+	// sink + plan + cycle + operation.
+	// The key format is implementation-defined by the controller.
+	// Retention prioritizes relevance: for each sink+plan pair, only the most
+	// recent 2 cycle entries are retained.
 	// +optional
-	SinkStatuses []NotificationSinkStatus `json:"sinkStatuses,omitempty"`
+	SinkStatuses map[string]NotificationSinkStatus `json:"sinkStatuses,omitempty"`
 
 	// ObservedGeneration is the most recent .metadata.generation observed by the controller.
 	// +optional
 	ObservedGeneration int64 `json:"observedGeneration,omitempty"`
 }
 
-// MaxSinkStatusHistory is the maximum number of entries retained in SinkStatuses.
-const MaxSinkStatusHistory = 20
+// MaxSinkStatusCyclesPerPlan is the number of most-recent cycle entries kept
+// per sink+plan pair in SinkStatuses.
+const MaxSinkStatusCyclesPerPlan = 2
 
-// NotificationSinkStatus records the outcome of a single notification delivery attempt.
+// MaxSinkStatusEntries is a safety cap across all sink status entries.
+const MaxSinkStatusEntries = 500
+
+// NotificationSinkStatus records tracked delivery state for a sink key.
 type NotificationSinkStatus struct {
-	// Name is the sink name as defined in spec.sinks[].name.
-	Name string `json:"name"`
+	// SinkName is the sink name as defined in spec.sinks[].name.
+	SinkName string `json:"sinkName"`
 
-	// Success indicates whether this delivery attempt succeeded.
+	// PlanRef identifies the plan this sink status belongs to.
+	PlanRef PlanReference `json:"planRef"`
+
+	// CycleID is the execution cycle identifier.
+	// +optional
+	CycleID string `json:"cycleId,omitempty"`
+
+	// Operation is the operation associated with this sink status (shutdown/wakeup).
+	// +optional
+	Operation string `json:"operation,omitempty"`
+
+	// Success indicates whether the most recent delivery attempt succeeded.
 	Success bool `json:"success"`
 
-	// TransitionTimestamp is when the delivery attempt completed.
+	// TransitionTimestamp is when the most recent delivery attempt completed.
 	TransitionTimestamp metav1.Time `json:"transitionTimestamp"`
 
-	// Message is a human-readable description of the delivery outcome.
-	// On success: "Successfully sent notification for <sink-name>"
-	// On failure: the error string from the sink provider.
+	// SuccessCount is the number of successful deliveries for this sink key.
+	SuccessCount int32 `json:"successCount,omitempty"`
+
+	// FailureCount is the number of failed deliveries for this sink key.
+	FailureCount int32 `json:"failureCount,omitempty"`
+
+	// LastSuccessTime is when the most recent successful delivery completed.
+	// +optional
+	LastSuccessTime *metav1.Time `json:"lastSuccessTime,omitempty"`
+
+	// LastFailureTime is when the most recent failed delivery completed.
+	// +optional
+	LastFailureTime *metav1.Time `json:"lastFailureTime,omitempty"`
+
+	// Message is a human-readable description of the most recent delivery outcome.
 	// +optional
 	Message string `json:"message,omitempty"`
 
-	// Metadata carries sink-specific arbitrary key/value context for this
-	// delivery attempt. Keys should be namespaced by sink type (for example,
+	// States carries sink-specific arbitrary key/value context for this sink key.
+	// Keys should be namespaced by sink type (for example,
 	// "slack.thread.root_ts") to avoid collisions.
 	// +optional
-	Metadata map[string]string `json:"metadata,omitempty"`
+	States map[string]string `json:"states,omitempty"`
 }
 
 // +kubebuilder:object:root=true

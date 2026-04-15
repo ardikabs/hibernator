@@ -443,7 +443,7 @@ func (d *Dispatcher) dispatch(ctx context.Context, req Request) {
 	sendOpts := sink.SendOptions{
 		Config:         config,
 		CustomTemplate: customTmpl,
-		SinkState:      d.resolveSinkState(ctx, req.NotificationRef, req.SinkName),
+		SinkState:      d.resolveSinkState(ctx, req.NotificationRef, req.SinkName, req.Payload.Plan.Namespace, req.Payload.Plan.Name, req.Payload.CycleID, req.Payload.Operation),
 		Log:            log,
 	}
 
@@ -452,37 +452,41 @@ func (d *Dispatcher) dispatch(ctx context.Context, req Request) {
 	defer cancel()
 
 	sendResult, sendErr := provider.Send(sendCtx, sinkPayload, sendOpts)
-	metadata := mergeMetadata(sendOpts.SinkState, sendResult.Metadata)
+	states := mergeStates(sendOpts.SinkState, sendResult.States)
 	if sendErr != nil {
 		log.Error(sendErr, "failed to send notification")
 		metrics.NotificationErrorsTotal.WithLabelValues(req.SinkType, req.Payload.Event).Inc()
 		metrics.NotificationLatency.WithLabelValues(req.SinkType).Observe(time.Since(start).Seconds())
-		d.reportDelivery(req, false, sendErr, metadata)
+		d.reportDelivery(req, false, sendErr, states)
 		return
 	}
 
 	log.Info("notification sent successfully")
 	metrics.NotificationSentTotal.WithLabelValues(req.SinkType, req.Payload.Event).Inc()
 	metrics.NotificationLatency.WithLabelValues(req.SinkType).Observe(time.Since(start).Seconds())
-	d.reportDelivery(req, true, nil, metadata)
+	d.reportDelivery(req, true, nil, states)
 }
 
 // reportDelivery invokes the delivery callback if configured.
-func (d *Dispatcher) reportDelivery(req Request, success bool, err error, metadata map[string]string) {
+func (d *Dispatcher) reportDelivery(req Request, success bool, err error, states map[string]string) {
 	if d.deliveryCallback == nil {
 		return
 	}
 	d.deliveryCallback(DeliveryResult{
 		NotificationRef: req.NotificationRef,
 		SinkName:        req.SinkName,
+		PlanNamespace:   req.Payload.Plan.Namespace,
+		PlanName:        req.Payload.Plan.Name,
+		CycleID:         req.Payload.CycleID,
+		Operation:       req.Payload.Operation,
 		Timestamp:       time.Now(),
 		Success:         success,
 		Error:           err,
-		Metadata:        metadata,
+		States:          states,
 	})
 }
 
-func (d *Dispatcher) resolveSinkState(ctx context.Context, notifRef types.NamespacedName, sinkName string) map[string]string {
+func (d *Dispatcher) resolveSinkState(ctx context.Context, notifRef types.NamespacedName, sinkName, planNamespace, planName, cycleID, operation string) map[string]string {
 	if notifRef.Name == "" {
 		return nil
 	}
@@ -492,23 +496,22 @@ func (d *Dispatcher) resolveSinkState(ctx context.Context, notifRef types.Namesp
 		return nil
 	}
 
-	for i := range notif.Status.SinkStatuses {
-		ss := notif.Status.SinkStatuses[i]
-		if ss.Name != sinkName {
-			continue
+	if notif.Status.SinkStatuses != nil {
+		key := SinkStatusKey(sinkName, planNamespace, planName, cycleID, operation)
+		if ss, ok := notif.Status.SinkStatuses[key]; ok {
+			if len(ss.States) == 0 {
+				return nil
+			}
+			state := make(map[string]string, len(ss.States))
+			maps.Copy(state, ss.States)
+			return state
 		}
-		if len(ss.Metadata) == 0 {
-			return nil
-		}
-		state := make(map[string]string, len(ss.Metadata))
-		maps.Copy(state, ss.Metadata)
-		return state
 	}
 
 	return nil
 }
 
-func mergeMetadata(base, override map[string]string) map[string]string {
+func mergeStates(base, override map[string]string) map[string]string {
 	if len(base) == 0 && len(override) == 0 {
 		return nil
 	}

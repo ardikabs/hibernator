@@ -157,9 +157,9 @@ type Sink interface {
 // SendResult contains sink-specific delivery metadata captured during send.
 // Fields are optional; zero value means no additional metadata.
 type SendResult struct {
-	// Metadata carries sink-specific arbitrary key/value context emitted by sink
+	// States carries sink-specific arbitrary key/value context emitted by sink
 	// delivery implementations (for example thread identifiers).
-	Metadata map[string]string
+	States map[string]string
 }
 
 // SendOptions carries the resolved sink configuration for a single dispatch.
@@ -177,7 +177,7 @@ type SendOptions struct {
 	CustomTemplate *CustomTemplate
 
 	// SinkState carries sink-specific state restored from HibernateNotification
-	// status history metadata for this sink name.
+	// status tracked states for the current sink+plan+cycle+operation key.
 	SinkState map[string]string
 
 	// Log is the per-send logger scoped by the dispatcher/caller.

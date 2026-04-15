@@ -490,7 +490,7 @@ _Appears in:_
 | `watchedPlans` _[PlanReference](#planreference) array_ | WatchedPlans is the list of HibernatePlan references currently matching the selector. |  | Optional: \{\} <br /> |
 | `lastDeliveryTime` _[Time](https://kubernetes.io/docs/reference/generated/kubernetes-api/v1.33/#time-v1-meta)_ | LastDeliveryTime is the timestamp of the most recent successful notification delivery<br />across all sinks. Nil if no successful delivery has occurred. |  | Optional: \{\} <br /> |
 | `lastFailureTime` _[Time](https://kubernetes.io/docs/reference/generated/kubernetes-api/v1.33/#time-v1-meta)_ | LastFailureTime is the timestamp of the most recent failed notification delivery<br />across all sinks. Nil if no failure has occurred. |  | Optional: \{\} <br /> |
-| `sinkStatuses` _[NotificationSinkStatus](#notificationsinkstatus) array_ | SinkStatuses is a history log of per-sink delivery attempts, ordered newest-first.<br />The controller retains at most 20 entries; older entries are evicted when the cap is reached. |  | Optional: \{\} <br /> |
+| `sinkStatuses` _object (keys:string, values:[NotificationSinkStatus](#notificationsinkstatus))_ | SinkStatuses stores tracked per-sink delivery state scoped by<br />sink + plan + cycle + operation.<br />The key format is implementation-defined by the controller.<br />Retention prioritizes relevance: for each sink+plan pair, only the most<br />recent 2 cycle entries are retained. |  | Optional: \{\} <br /> |
 | `observedGeneration` _integer_ | ObservedGeneration is the most recent .metadata.generation observed by the controller. |  | Optional: \{\} <br /> |
 
 
@@ -718,7 +718,7 @@ _Appears in:_
 
 
 
-NotificationSinkStatus records the outcome of a single notification delivery attempt.
+NotificationSinkStatus records tracked delivery state for a sink key.
 
 
 
@@ -727,11 +727,18 @@ _Appears in:_
 
 | Field | Description | Default | Validation |
 | --- | --- | --- | --- |
-| `name` _string_ | Name is the sink name as defined in spec.sinks[].name. |  |  |
-| `success` _boolean_ | Success indicates whether this delivery attempt succeeded. |  |  |
-| `transitionTimestamp` _[Time](https://kubernetes.io/docs/reference/generated/kubernetes-api/v1.33/#time-v1-meta)_ | TransitionTimestamp is when the delivery attempt completed. |  |  |
-| `message` _string_ | Message is a human-readable description of the delivery outcome.<br />On success: "Successfully sent notification for <sink-name>"<br />On failure: the error string from the sink provider. |  | Optional: \{\} <br /> |
-| `metadata` _object (keys:string, values:string)_ | Refer to Kubernetes API documentation for fields of `metadata`. |  | Optional: \{\} <br /> |
+| `sinkName` _string_ | SinkName is the sink name as defined in spec.sinks[].name. |  |  |
+| `planRef` _[PlanReference](#planreference)_ | PlanRef identifies the plan this sink status belongs to. |  |  |
+| `cycleId` _string_ | CycleID is the execution cycle identifier. |  | Optional: \{\} <br /> |
+| `operation` _string_ | Operation is the operation associated with this sink status (shutdown/wakeup). |  | Optional: \{\} <br /> |
+| `success` _boolean_ | Success indicates whether the most recent delivery attempt succeeded. |  |  |
+| `transitionTimestamp` _[Time](https://kubernetes.io/docs/reference/generated/kubernetes-api/v1.33/#time-v1-meta)_ | TransitionTimestamp is when the most recent delivery attempt completed. |  |  |
+| `successCount` _integer_ | SuccessCount is the number of successful deliveries for this sink key. |  |  |
+| `failureCount` _integer_ | FailureCount is the number of failed deliveries for this sink key. |  |  |
+| `lastSuccessTime` _[Time](https://kubernetes.io/docs/reference/generated/kubernetes-api/v1.33/#time-v1-meta)_ | LastSuccessTime is when the most recent successful delivery completed. |  | Optional: \{\} <br /> |
+| `lastFailureTime` _[Time](https://kubernetes.io/docs/reference/generated/kubernetes-api/v1.33/#time-v1-meta)_ | LastFailureTime is when the most recent failed delivery completed. |  | Optional: \{\} <br /> |
+| `message` _string_ | Message is a human-readable description of the most recent delivery outcome. |  | Optional: \{\} <br /> |
+| `states` _object (keys:string, values:string)_ | States carries sink-specific arbitrary key/value context for this sink key.<br />Keys should be namespaced by sink type (for example,<br />"slack.thread.root_ts") to avoid collisions. |  | Optional: \{\} <br /> |
 
 
 #### NotificationSinkType
@@ -876,6 +883,7 @@ PlanReference references a HibernatePlan.
 
 _Appears in:_
 - [HibernateNotificationStatus](#hibernatenotificationstatus)
+- [NotificationSinkStatus](#notificationsinkstatus)
 - [ScheduleExceptionSpec](#scheduleexceptionspec)
 
 | Field | Description | Default | Validation |

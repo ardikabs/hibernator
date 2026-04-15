@@ -95,12 +95,12 @@ func (s *Sink) Send(ctx context.Context, payload sink.Payload, opts sink.SendOpt
 		return sink.SendResult{}, err
 	}
 
-	state, err := handler.deliver(ctx, payload)
+	states, err := handler.deliver(ctx, payload)
 	if err != nil {
 		return sink.SendResult{}, err
 	}
 
-	return sink.SendResult{Metadata: state}, nil
+	return sink.SendResult{States: states}, nil
 }
 
 type deliveryRuntime struct {

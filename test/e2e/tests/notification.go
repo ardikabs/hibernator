@@ -614,12 +614,17 @@ var _ = Describe("Notification E2E", func() {
 			// SinkStatuses history should have at least one entry.
 			g.Expect(fresh.Status.SinkStatuses).NotTo(BeEmpty(), "sinkStatuses should have delivery history")
 
-			// The newest entry should be a success for our fake-webhook sink.
-			newest := fresh.Status.SinkStatuses[0]
-			g.Expect(newest.Name).To(Equal("fake-webhook"))
-			g.Expect(newest.Success).To(BeTrue())
-			g.Expect(newest.TransitionTimestamp.IsZero()).To(BeFalse())
-			g.Expect(newest.Message).NotTo(BeEmpty())
+			// At least one tracked entry should be a success for our fake-webhook sink.
+			found := false
+			for _, ss := range fresh.Status.SinkStatuses {
+				if ss.SinkName == "fake-webhook" {
+					found = true
+					g.Expect(ss.Success).To(BeTrue())
+					g.Expect(ss.TransitionTimestamp.IsZero()).To(BeFalse())
+					g.Expect(ss.Message).NotTo(BeEmpty())
+				}
+			}
+			g.Expect(found).To(BeTrue(), "sinkStatuses should contain fake-webhook entry")
 
 			// LastDeliveryTime should be set after a successful delivery.
 			g.Expect(fresh.Status.LastDeliveryTime).NotTo(BeNil(), "lastDeliveryTime should be set after successful delivery")
@@ -785,29 +790,23 @@ var _ = Describe("Notification E2E", func() {
 		Eventually(fakeNotifSink.Len, testutil.DefaultTimeout, testutil.DefaultInterval).
 			Should(BeNumerically(">=", 2))
 
-		By("Verifying sinkStatuses history has multiple entries in newest-first order")
+		By("Verifying sinkStatuses tracked entries for fake-webhook")
 		Eventually(func(g Gomega) {
 			fresh := &hibernatorv1alpha1.HibernateNotification{}
 			g.Expect(k8sClient.Get(ctx, client.ObjectKeyFromObject(notification), fresh)).To(Succeed())
 
-			// At least 2 entries (Start + Success) delivered.
-			g.Expect(len(fresh.Status.SinkStatuses)).To(BeNumerically(">=", 2),
-				"sinkStatuses should have at least 2 entries after Start+Success delivery")
-
-			// History is newest-first: the second delivery (Success) should appear before the first (Start).
-			g.Expect(fresh.Status.SinkStatuses[0].TransitionTimestamp.Time).To(
-				BeTemporally(">=", fresh.Status.SinkStatuses[1].TransitionTimestamp.Time),
-				"sinkStatuses should be ordered newest-first",
-			)
+			// At least one tracked entry should exist after Start+Success.
+			g.Expect(len(fresh.Status.SinkStatuses)).To(BeNumerically(">=", 1),
+				"sinkStatuses should have tracked entries after Start+Success delivery")
 
 			// All entries should be successes since the fake sink never errors.
 			for _, ss := range fresh.Status.SinkStatuses {
 				g.Expect(ss.Success).To(BeTrue())
-				g.Expect(ss.Name).To(Equal("fake-webhook"))
+				g.Expect(ss.SinkName).To(Equal("fake-webhook"))
 			}
 
-			// History should not exceed the cap.
-			g.Expect(len(fresh.Status.SinkStatuses)).To(BeNumerically("<=", hibernatorv1alpha1.MaxSinkStatusHistory))
+			// Per sink+plan retention keeps only the 2 most recent cycles.
+			g.Expect(len(fresh.Status.SinkStatuses)).To(BeNumerically("<=", hibernatorv1alpha1.MaxSinkStatusCyclesPerPlan))
 		}, testutil.DefaultTimeout, testutil.DefaultInterval).Should(Succeed())
 	})
 

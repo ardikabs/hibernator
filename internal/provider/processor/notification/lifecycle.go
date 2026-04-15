@@ -32,7 +32,8 @@ import (
 // It subscribes to NotificationResources and, for each binding update, syncs the
 // watchedPlans list and State field in the status of the corresponding
 // HibernateNotification. It also receives delivery callbacks from the notification
-// Dispatcher to record per-sink delivery history (newest-first, capped at 20 entries).
+// Dispatcher to record per-sink tracked delivery state keyed by
+// sink + plan + cycle + operation.
 //
 // # State machine
 //
@@ -52,7 +53,7 @@ import (
 //  1. keyedworker.Pool per-key FIFO serialization — at most one apply() runs per
 //     notification key at any time, turning concurrent Sends into a serial queue.
 //  2. Fresh apiReader.Get inside RetryOnConflict — each apply reads the true server
-//     state before mutating, so prepend always targets the latest slice.
+//     state before mutating, so map updates and pruning always apply to the latest state.
 //  3. Independent Resource per Send — HandleDeliveryResult creates a fresh empty
 //     HibernateNotification each call, so defaultUpdater.Send's pre-application
 //     never mutates shared state across concurrent callers.
@@ -291,12 +292,12 @@ func (p *LifecycleProcessor) removePlanRef(ctx context.Context, log logr.Logger,
 }
 
 // HandleDeliveryResult processes a delivery callback from the notification
-// Dispatcher and records it as a history entry in SinkStatuses.
+// Dispatcher and upserts tracked state in SinkStatuses.
 //
 // Safe to call from any goroutine — each call creates an independent Update
 // with its own empty Resource, so concurrent calls never share mutable state.
 // The underlying keyedworker.Pool serializes apply() per notification key,
-// ensuring history entries are prepended in strict FIFO order to a
+// ensuring sink status map updates are applied in strict FIFO order to a
 // freshly-fetched server copy.
 func (p *LifecycleProcessor) HandleDeliveryResult(result notification.DeliveryResult) {
 	if result.NotificationRef.Name == "" {
@@ -309,18 +310,35 @@ func (p *LifecycleProcessor) HandleDeliveryResult(result notification.DeliveryRe
 		Mutator: statusprocessor.MutatorFunc[*hibernatorv1alpha1.HibernateNotification](func(n *hibernatorv1alpha1.HibernateNotification) {
 			ts := metav1.NewTime(result.Timestamp)
 
-			// Build the history entry.
-			entry := hibernatorv1alpha1.NotificationSinkStatus{
-				Name:                result.SinkName,
-				Success:             result.Success,
-				TransitionTimestamp: ts,
-				Metadata:            result.Metadata,
+			if n.Status.SinkStatuses == nil {
+				n.Status.SinkStatuses = make(map[string]hibernatorv1alpha1.NotificationSinkStatus)
 			}
+
+			entryKey := notification.SinkStatusKey(result.SinkName, result.PlanNamespace, result.PlanName, result.CycleID, result.Operation)
+			entry, exists := n.Status.SinkStatuses[entryKey]
+			if !exists {
+				entry = hibernatorv1alpha1.NotificationSinkStatus{
+					SinkName: result.SinkName,
+					PlanRef: hibernatorv1alpha1.PlanReference{
+						Namespace: result.PlanNamespace,
+						Name:      result.PlanName,
+					},
+					CycleID:   result.CycleID,
+					Operation: result.Operation,
+				}
+			}
+			entry.TransitionTimestamp = ts
+			entry.Success = result.Success
+			entry.States = result.States
+
 			if result.Success {
-				// TODO: add relevant success message from the sink provider.
+				entry.SuccessCount++
+				entry.LastSuccessTime = &ts
 				entry.Message = fmt.Sprintf("Successfully sent notification for %s", result.SinkName)
 				n.Status.LastDeliveryTime = &ts
 			} else {
+				entry.FailureCount++
+				entry.LastFailureTime = &ts
 				entry.Message = fmt.Sprintf("Failed to send notification for %s", result.SinkName)
 				if result.Error != nil {
 					entry.Message = result.Error.Error()
@@ -328,11 +346,59 @@ func (p *LifecycleProcessor) HandleDeliveryResult(result notification.DeliveryRe
 				n.Status.LastFailureTime = &ts
 			}
 
-			// Prepend (newest-first) and cap at maxSinkStatusHistory.
-			n.Status.SinkStatuses = lo.Slice(
-				append([]hibernatorv1alpha1.NotificationSinkStatus{entry}, n.Status.SinkStatuses...),
-				0, hibernatorv1alpha1.MaxSinkStatusHistory,
-			)
+			n.Status.SinkStatuses[entryKey] = entry
+
+			pruneSinkStatusesPerPlan(n)
+			pruneSinkStatusesToMaxEntries(n)
 		}),
 	})
+}
+
+func pruneSinkStatusesPerPlan(n *hibernatorv1alpha1.HibernateNotification) {
+	if len(n.Status.SinkStatuses) <= 1 {
+		return
+	}
+
+	type keyedStatus struct {
+		key    string
+		status hibernatorv1alpha1.NotificationSinkStatus
+	}
+
+	all := make([]keyedStatus, 0, len(n.Status.SinkStatuses))
+	for key, ss := range n.Status.SinkStatuses {
+		all = append(all, keyedStatus{key: key, status: ss})
+	}
+	sort.Slice(all, func(i, j int) bool {
+		return all[i].status.TransitionTimestamp.After(all[j].status.TransitionTimestamp.Time)
+	})
+
+	counts := make(map[string]int)
+	for _, item := range all {
+		group := fmt.Sprintf("%s|%s/%s", item.status.SinkName, item.status.PlanRef.Namespace, item.status.PlanRef.Name)
+		counts[group]++
+		if counts[group] > hibernatorv1alpha1.MaxSinkStatusCyclesPerPlan {
+			delete(n.Status.SinkStatuses, item.key)
+		}
+	}
+}
+
+func pruneSinkStatusesToMaxEntries(n *hibernatorv1alpha1.HibernateNotification) {
+	if len(n.Status.SinkStatuses) <= hibernatorv1alpha1.MaxSinkStatusEntries {
+		return
+	}
+
+	type keyedStatus struct {
+		key  string
+		time metav1.Time
+	}
+	all := make([]keyedStatus, 0, len(n.Status.SinkStatuses))
+	for key, ss := range n.Status.SinkStatuses {
+		all = append(all, keyedStatus{key: key, time: ss.TransitionTimestamp})
+	}
+	sort.Slice(all, func(i, j int) bool {
+		return all[i].time.After(all[j].time.Time)
+	})
+	for i := hibernatorv1alpha1.MaxSinkStatusEntries; i < len(all); i++ {
+		delete(n.Status.SinkStatuses, all[i].key)
+	}
 }

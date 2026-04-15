@@ -188,6 +188,10 @@ func TestHandleDeliveryResult_Success(t *testing.T) {
 	p.HandleDeliveryResult(notification.DeliveryResult{
 		NotificationRef: types.NamespacedName{Name: "my-notif", Namespace: "default"},
 		SinkName:        "slack-prod",
+		PlanNamespace:   "default",
+		PlanName:        "my-plan",
+		CycleID:         "cycle-001",
+		Operation:       "shutdown",
 		Timestamp:       now,
 		Success:         true,
 	})
@@ -200,14 +204,23 @@ func TestHandleDeliveryResult_Success(t *testing.T) {
 	assert.True(t, upd.Resource.Status.LastDeliveryTime.Equal(&metav1.Time{Time: now}))
 	assert.Nil(t, upd.Resource.Status.LastFailureTime)
 
-	// History entry prepended.
 	require.Len(t, upd.Resource.Status.SinkStatuses, 1)
-	ss := upd.Resource.Status.SinkStatuses[0]
-	assert.Equal(t, "slack-prod", ss.Name)
+	var ss hibernatorv1alpha1.NotificationSinkStatus
+	for _, v := range upd.Resource.Status.SinkStatuses {
+		ss = v
+		break
+	}
+	assert.Equal(t, "slack-prod", ss.SinkName)
+	assert.Equal(t, "default", ss.PlanRef.Namespace)
+	assert.Equal(t, "my-plan", ss.PlanRef.Name)
+	assert.Equal(t, "cycle-001", ss.CycleID)
+	assert.Equal(t, "shutdown", ss.Operation)
 	assert.True(t, ss.Success)
 	assert.Equal(t, "Successfully sent notification for slack-prod", ss.Message)
 	assert.True(t, ss.TransitionTimestamp.Equal(&metav1.Time{Time: now}))
-	assert.Nil(t, ss.Metadata)
+	assert.Nil(t, ss.States)
+	assert.EqualValues(t, 1, ss.SuccessCount)
+	assert.EqualValues(t, 0, ss.FailureCount)
 }
 
 func TestHandleDeliveryResult_PersistsMetadata(t *testing.T) {
@@ -217,9 +230,13 @@ func TestHandleDeliveryResult_PersistsMetadata(t *testing.T) {
 	p.HandleDeliveryResult(notification.DeliveryResult{
 		NotificationRef: types.NamespacedName{Name: "my-notif", Namespace: "default"},
 		SinkName:        "slack-prod",
+		PlanNamespace:   "default",
+		PlanName:        "my-plan",
+		CycleID:         "cycle-001",
+		Operation:       "shutdown",
 		Timestamp:       now,
 		Success:         true,
-		Metadata: map[string]string{
+		States: map[string]string{
 			"slack.thread.root_ts": "12345.67890",
 		},
 	})
@@ -227,8 +244,10 @@ func TestHandleDeliveryResult_PersistsMetadata(t *testing.T) {
 	require.Equal(t, 1, updater.Len())
 	upd := <-updater.C()
 	require.Len(t, upd.Resource.Status.SinkStatuses, 1)
-	require.NotNil(t, upd.Resource.Status.SinkStatuses[0].Metadata)
-	assert.Equal(t, "12345.67890", upd.Resource.Status.SinkStatuses[0].Metadata["slack.thread.root_ts"])
+	for _, ss := range upd.Resource.Status.SinkStatuses {
+		require.NotNil(t, ss.States)
+		assert.Equal(t, "12345.67890", ss.States["slack.thread.root_ts"])
+	}
 }
 
 func TestHandleDeliveryResult_Failure(t *testing.T) {
@@ -238,6 +257,10 @@ func TestHandleDeliveryResult_Failure(t *testing.T) {
 	p.HandleDeliveryResult(notification.DeliveryResult{
 		NotificationRef: types.NamespacedName{Name: "my-notif", Namespace: "default"},
 		SinkName:        "slack-prod",
+		PlanNamespace:   "default",
+		PlanName:        "my-plan",
+		CycleID:         "cycle-001",
+		Operation:       "shutdown",
 		Timestamp:       now,
 		Success:         false,
 		Error:           errors.New("connection refused"),
@@ -251,10 +274,17 @@ func TestHandleDeliveryResult_Failure(t *testing.T) {
 	require.NotNil(t, upd.Resource.Status.LastFailureTime)
 	assert.True(t, upd.Resource.Status.LastFailureTime.Equal(&metav1.Time{Time: now}))
 
-	// History entry.
 	require.Len(t, upd.Resource.Status.SinkStatuses, 1)
-	ss := upd.Resource.Status.SinkStatuses[0]
-	assert.Equal(t, "slack-prod", ss.Name)
+	var ss hibernatorv1alpha1.NotificationSinkStatus
+	for _, v := range upd.Resource.Status.SinkStatuses {
+		ss = v
+		break
+	}
+	assert.Equal(t, "slack-prod", ss.SinkName)
+	assert.Equal(t, "default", ss.PlanRef.Namespace)
+	assert.Equal(t, "my-plan", ss.PlanRef.Name)
+	assert.Equal(t, "cycle-001", ss.CycleID)
+	assert.Equal(t, "shutdown", ss.Operation)
 	assert.False(t, ss.Success)
 	assert.Equal(t, "connection refused", ss.Message)
 }
@@ -266,6 +296,10 @@ func TestHandleDeliveryResult_FailureWithNilError(t *testing.T) {
 	p.HandleDeliveryResult(notification.DeliveryResult{
 		NotificationRef: types.NamespacedName{Name: "my-notif", Namespace: "default"},
 		SinkName:        "slack-prod",
+		PlanNamespace:   "default",
+		PlanName:        "my-plan",
+		CycleID:         "cycle-001",
+		Operation:       "shutdown",
 		Timestamp:       now,
 		Success:         false,
 	})
@@ -273,9 +307,10 @@ func TestHandleDeliveryResult_FailureWithNilError(t *testing.T) {
 	require.Equal(t, 1, updater.Len())
 	upd := <-updater.C()
 
-	ss := upd.Resource.Status.SinkStatuses[0]
-	assert.False(t, ss.Success)
-	assert.Equal(t, "Failed to send notification for slack-prod", ss.Message, "message should use fallback when error is nil")
+	for _, ss := range upd.Resource.Status.SinkStatuses {
+		assert.False(t, ss.Success)
+		assert.Equal(t, "Failed to send notification for slack-prod", ss.Message, "message should use fallback when error is nil")
+	}
 }
 
 func TestHandleDeliveryResult_SkipsEmptyRef(t *testing.T) {
@@ -298,10 +333,10 @@ func TestHandleDeliveryResult_NewestFirst(t *testing.T) {
 	t2 := time.Date(2026, 4, 1, 11, 0, 0, 0, time.UTC)
 
 	p.HandleDeliveryResult(notification.DeliveryResult{
-		NotificationRef: ref, SinkName: "slack", Timestamp: t1, Success: true,
+		NotificationRef: ref, SinkName: "slack", PlanNamespace: "default", PlanName: "plan-a", CycleID: "cycle-001", Operation: "shutdown", Timestamp: t1, Success: true,
 	})
 	p.HandleDeliveryResult(notification.DeliveryResult{
-		NotificationRef: ref, SinkName: "telegram", Timestamp: t2, Success: false,
+		NotificationRef: ref, SinkName: "telegram", PlanNamespace: "default", PlanName: "plan-a", CycleID: "cycle-001", Operation: "shutdown", Timestamp: t2, Success: false,
 		Error: errors.New("timeout"),
 	})
 
@@ -315,24 +350,28 @@ func TestHandleDeliveryResult_NewestFirst(t *testing.T) {
 	}
 
 	require.Len(t, notif.Status.SinkStatuses, 2)
-	// Newest (telegram @ t2) should be at index 0.
-	assert.Equal(t, "telegram", notif.Status.SinkStatuses[0].Name)
-	assert.False(t, notif.Status.SinkStatuses[0].Success)
-	assert.Equal(t, "slack", notif.Status.SinkStatuses[1].Name)
-	assert.True(t, notif.Status.SinkStatuses[1].Success)
+	var sinkNames []string
+	for _, ss := range notif.Status.SinkStatuses {
+		sinkNames = append(sinkNames, ss.SinkName)
+	}
+	assert.ElementsMatch(t, []string{"telegram", "slack"}, sinkNames)
 }
 
-func TestHandleDeliveryResult_CapsAtMaxHistory(t *testing.T) {
+func TestHandleDeliveryResult_KeepsOnlyLast2CyclesPerSinkPlan(t *testing.T) {
 	p, updater := newTestProcessor(t)
 
 	ref := types.NamespacedName{Name: "notif", Namespace: "default"}
 	base := time.Date(2026, 4, 1, 0, 0, 0, 0, time.UTC)
 
-	const total = 25
+	const total = 5
 	for i := 0; i < total; i++ {
 		p.HandleDeliveryResult(notification.DeliveryResult{
 			NotificationRef: ref,
-			SinkName:        fmt.Sprintf("sink-%02d", i),
+			SinkName:        "sink-a",
+			PlanNamespace:   "default",
+			PlanName:        "plan-a",
+			CycleID:         fmt.Sprintf("cycle-%02d", i),
+			Operation:       "shutdown",
 			Timestamp:       base.Add(time.Duration(i) * time.Minute),
 			Success:         true,
 		})
@@ -346,11 +385,12 @@ func TestHandleDeliveryResult_CapsAtMaxHistory(t *testing.T) {
 		upd.Mutator.Mutate(notif)
 	}
 
-	assert.Len(t, notif.Status.SinkStatuses, hibernatorv1alpha1.MaxSinkStatusHistory)
-	// The newest entry (sink-24) should be at index 0.
-	assert.Equal(t, "sink-24", notif.Status.SinkStatuses[0].Name)
-	// The oldest retained entry should be sink-05 (25-20=5).
-	assert.Equal(t, "sink-05", notif.Status.SinkStatuses[hibernatorv1alpha1.MaxSinkStatusHistory-1].Name)
+	assert.Len(t, notif.Status.SinkStatuses, hibernatorv1alpha1.MaxSinkStatusCyclesPerPlan)
+	var cycleIDs []string
+	for _, ss := range notif.Status.SinkStatuses {
+		cycleIDs = append(cycleIDs, ss.CycleID)
+	}
+	assert.ElementsMatch(t, []string{"cycle-04", "cycle-03"}, cycleIDs)
 }
 
 // ---------------------------------------------------------------------------

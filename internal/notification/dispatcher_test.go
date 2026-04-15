@@ -1084,3 +1084,8 @@ func TestDispatcher_OverflowMaxSizeDropsExcess(t *testing.T) {
 	cancel()
 	<-startDone
 }
+
+func TestSinkStatusKey_CanonicalFormat(t *testing.T) {
+	key := SinkStatusKey("slack-prod", "default", "my-plan", "cycle-001", "shutdown")
+	require.Equal(t, "slack-prod|default/my-plan|cycle-001|shutdown", key)
+}

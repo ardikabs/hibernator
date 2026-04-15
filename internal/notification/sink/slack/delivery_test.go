@@ -38,10 +38,10 @@ func TestSend_DeliveryModeThread_StartReturnsThreadMetadata(t *testing.T) {
 	result, err := s.Send(context.Background(), p, sink.SendOptions{Config: cfg})
 
 	require.NoError(t, err)
-	require.NotNil(t, result.Metadata)
-	assert.Equal(t, "root_sent", result.Metadata["slack.thread.state"])
-	assert.Equal(t, "12345.67890", result.Metadata["slack.thread.root_ts"])
-	assert.Equal(t, "default/test-plan/abc123/shutdown", result.Metadata["slack.thread.ref"])
+	require.NotNil(t, result.States)
+	assert.Equal(t, "root_sent", result.States["slack.thread.state"])
+	assert.Equal(t, "12345.67890", result.States["slack.thread.root_ts"])
+	assert.Equal(t, "default/test-plan/abc123/shutdown", result.States["slack.thread.ref"])
 }
 
 func TestSend_DeliveryModeThread_ReplyUsesRootTsFromSinkState(t *testing.T) {
@@ -83,9 +83,9 @@ func TestSend_DeliveryModeThread_ReplyUsesRootTsFromSinkState(t *testing.T) {
 	assert.Contains(t, postBodyRaw, "thread_ts=12345.67890")
 	assert.Equal(t, 0, removeCalls)
 	assert.Equal(t, 0, addCalls)
-	require.NotNil(t, result.Metadata)
-	assert.Equal(t, "reply_sent", result.Metadata["slack.thread.state"])
-	assert.Equal(t, "default/test-plan/abc123/shutdown", result.Metadata["slack.thread.ref"])
+	require.NotNil(t, result.States)
+	assert.Equal(t, "reply_sent", result.States["slack.thread.state"])
+	assert.Equal(t, "default/test-plan/abc123/shutdown", result.States["slack.thread.ref"])
 }
 
 func TestSend_DeliveryModeThread_ReplyOverridesReactionOnStateChange(t *testing.T) {
@@ -121,8 +121,8 @@ func TestSend_DeliveryModeThread_ReplyOverridesReactionOnStateChange(t *testing.
 	require.NoError(t, err)
 	assert.Equal(t, 1, removeCalls)
 	assert.Equal(t, 1, addCalls)
-	require.NotNil(t, result.Metadata)
-	assert.Equal(t, "white_check_mark", result.Metadata["slack.thread.last_reaction"])
+	require.NotNil(t, result.States)
+	assert.Equal(t, "white_check_mark", result.States["slack.thread.last_reaction"])
 }
 
 func TestSend_DeliveryModeThread_ReplySkipsRootTsOnOperationMismatch(t *testing.T) {
@@ -156,9 +156,9 @@ func TestSend_DeliveryModeThread_ReplySkipsRootTsOnOperationMismatch(t *testing.
 
 	require.NoError(t, err)
 	assert.NotContains(t, postBodyRaw, "thread_ts=12345.67890")
-	require.NotNil(t, result.Metadata)
-	assert.Equal(t, "reply_sent", result.Metadata["slack.thread.state"])
-	assert.Equal(t, "default/test-plan/abc123/wakeup", result.Metadata["slack.thread.ref"])
+	require.NotNil(t, result.States)
+	assert.Equal(t, "reply_sent", result.States["slack.thread.state"])
+	assert.Equal(t, "default/test-plan/abc123/wakeup", result.States["slack.thread.ref"])
 }
 
 func TestSendJSONExecutionProgressDefaultSuppressesNonTerminal(t *testing.T) {
