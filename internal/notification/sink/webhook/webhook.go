@@ -58,13 +58,13 @@ func (s *Sink) Type() string {
 // The body always includes a "context" field with the raw payload. When
 // enable_renderer is true in the config, a "rendered" field is added with
 // the template-rendered message.
-func (s *Sink) Send(ctx context.Context, payload sink.Payload, opts sink.SendOptions) error {
+func (s *Sink) Send(ctx context.Context, payload sink.Payload, opts sink.SendOptions) (sink.SendResult, error) {
 	var cfg config
 	if err := json.Unmarshal(opts.Config, &cfg); err != nil {
-		return fmt.Errorf("parse webhook sink config: %w", err)
+		return sink.SendResult{}, fmt.Errorf("parse webhook sink config: %w", err)
 	}
 	if cfg.URL == "" {
-		return fmt.Errorf("webhook sink config: url is required")
+		return sink.SendResult{}, fmt.Errorf("webhook sink config: url is required")
 	}
 
 	body := webhookBody{
@@ -81,12 +81,12 @@ func (s *Sink) Send(ctx context.Context, payload sink.Payload, opts sink.SendOpt
 
 	jsonBody, err := json.Marshal(body)
 	if err != nil {
-		return fmt.Errorf("marshal webhook body: %w", err)
+		return sink.SendResult{}, fmt.Errorf("marshal webhook body: %w", err)
 	}
 
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, cfg.URL, bytes.NewReader(jsonBody))
 	if err != nil {
-		return fmt.Errorf("create webhook request: %w", err)
+		return sink.SendResult{}, fmt.Errorf("create webhook request: %w", err)
 	}
 	req.Header.Set("Content-Type", "application/json")
 
@@ -96,7 +96,7 @@ func (s *Sink) Send(ctx context.Context, payload sink.Payload, opts sink.SendOpt
 
 	resp, err := s.client.Do(req)
 	if err != nil {
-		return fmt.Errorf("send webhook notification: %w", err)
+		return sink.SendResult{}, fmt.Errorf("send webhook notification: %w", err)
 	}
 	// nolint:errcheck
 	defer resp.Body.Close()
@@ -105,8 +105,8 @@ func (s *Sink) Send(ctx context.Context, payload sink.Payload, opts sink.SendOpt
 	io.Copy(io.Discard, resp.Body)
 
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		return fmt.Errorf("webhook returned non-2xx status: %d", resp.StatusCode)
+		return sink.SendResult{}, fmt.Errorf("webhook returned non-2xx status: %d", resp.StatusCode)
 	}
 
-	return nil
+	return sink.SendResult{}, nil
 }

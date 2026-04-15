@@ -73,7 +73,7 @@ func TestSendWithoutRenderer(t *testing.T) {
 	cfg, _ := json.Marshal(config{URL: server.URL})
 	s := New(nil, WithHTTPClient(&http.Client{Timeout: 5 * time.Second}))
 
-	err := s.Send(context.Background(), testPayload(), sink.SendOptions{Config: cfg})
+	_, err := s.Send(context.Background(), testPayload(), sink.SendOptions{Config: cfg})
 
 	require.NoError(t, err)
 	assert.Equal(t, "application/json", receivedContentType)
@@ -96,7 +96,7 @@ func TestSendWithRendererEnabled(t *testing.T) {
 	cfg, _ := json.Marshal(config{URL: server.URL, EnableRenderer: true})
 	s := New(&stubRenderer{}, WithHTTPClient(&http.Client{Timeout: 5 * time.Second}))
 
-	err := s.Send(context.Background(), testPayload(), sink.SendOptions{Config: cfg})
+	_, err := s.Send(context.Background(), testPayload(), sink.SendOptions{Config: cfg})
 
 	require.NoError(t, err)
 	assert.Equal(t, "rendered-content", receivedBody.Rendered)
@@ -129,7 +129,7 @@ func TestSendWithRendererEnabledAndCustomTemplate(t *testing.T) {
 	}
 	s := New(renderer, WithHTTPClient(&http.Client{Timeout: 5 * time.Second}))
 
-	err := s.Send(context.Background(), testPayload(), sink.SendOptions{
+	_, err := s.Send(context.Background(), testPayload(), sink.SendOptions{
 		Config:         cfg,
 		CustomTemplate: ct,
 	})
@@ -159,7 +159,7 @@ func TestSendWithCustomHeaders(t *testing.T) {
 	})
 	s := New(nil, WithHTTPClient(&http.Client{Timeout: 5 * time.Second}))
 
-	err := s.Send(context.Background(), testPayload(), sink.SendOptions{Config: cfg})
+	_, err := s.Send(context.Background(), testPayload(), sink.SendOptions{Config: cfg})
 
 	require.NoError(t, err)
 	assert.Equal(t, "Bearer test-token", receivedAuth)
@@ -170,7 +170,7 @@ func TestSendMissingURL(t *testing.T) {
 	cfg, _ := json.Marshal(config{})
 	s := New(nil)
 
-	err := s.Send(context.Background(), testPayload(), sink.SendOptions{Config: cfg})
+	_, err := s.Send(context.Background(), testPayload(), sink.SendOptions{Config: cfg})
 
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "url is required")
@@ -178,7 +178,7 @@ func TestSendMissingURL(t *testing.T) {
 
 func TestSendInvalidConfig(t *testing.T) {
 	s := New(nil)
-	err := s.Send(context.Background(), testPayload(), sink.SendOptions{Config: []byte("not json")})
+	_, err := s.Send(context.Background(), testPayload(), sink.SendOptions{Config: []byte("not json")})
 
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "parse webhook sink config")
@@ -193,7 +193,7 @@ func TestSendNon2xxStatus(t *testing.T) {
 	cfg, _ := json.Marshal(config{URL: server.URL})
 	s := New(nil, WithHTTPClient(&http.Client{Timeout: 5 * time.Second}))
 
-	err := s.Send(context.Background(), testPayload(), sink.SendOptions{Config: cfg})
+	_, err := s.Send(context.Background(), testPayload(), sink.SendOptions{Config: cfg})
 
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "non-2xx status: 500")
@@ -213,7 +213,7 @@ func TestSendRendererEnabledButNilRenderer(t *testing.T) {
 	cfg, _ := json.Marshal(config{URL: server.URL, EnableRenderer: true})
 	s := New(nil, WithHTTPClient(&http.Client{Timeout: 5 * time.Second}))
 
-	err := s.Send(context.Background(), testPayload(), sink.SendOptions{Config: cfg})
+	_, err := s.Send(context.Background(), testPayload(), sink.SendOptions{Config: cfg})
 
 	require.NoError(t, err)
 	assert.Empty(t, receivedBody.Rendered, "rendered should be empty when renderer is nil")
@@ -232,7 +232,7 @@ func TestSendContextCancellation(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 50*time.Millisecond)
 	defer cancel()
 
-	err := s.Send(ctx, testPayload(), sink.SendOptions{Config: cfg})
+	_, err := s.Send(ctx, testPayload(), sink.SendOptions{Config: cfg})
 	require.Error(t, err)
 }
 
@@ -267,7 +267,7 @@ func TestSendWithConnectorInfo(t *testing.T) {
 		},
 	}
 
-	err := s.Send(context.Background(), p, sink.SendOptions{Config: cfg})
+	_, err := s.Send(context.Background(), p, sink.SendOptions{Config: cfg})
 
 	require.NoError(t, err)
 	require.Len(t, receivedBody.Context.Targets, 1)
@@ -313,7 +313,7 @@ func TestSendWithTargetExecution(t *testing.T) {
 	}
 	p.TargetExecution = &te
 
-	err := s.Send(context.Background(), p, sink.SendOptions{Config: cfg})
+	_, err := s.Send(context.Background(), p, sink.SendOptions{Config: cfg})
 	require.NoError(t, err)
 
 	require.NotNil(t, receivedBody.Context.TargetExecution)
@@ -343,7 +343,7 @@ func TestSendWithoutTargetExecution_OmitsField(t *testing.T) {
 	p := testPayload()
 	p.TargetExecution = nil
 
-	err := s.Send(context.Background(), p, sink.SendOptions{Config: cfg})
+	_, err := s.Send(context.Background(), p, sink.SendOptions{Config: cfg})
 	require.NoError(t, err)
 	assert.Nil(t, receivedBody.Context.TargetExecution)
 }

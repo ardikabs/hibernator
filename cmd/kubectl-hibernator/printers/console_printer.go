@@ -9,6 +9,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"sort"
 	"strings"
 	"time"
 
@@ -570,12 +571,16 @@ func (p *ConsolePrinter) printNotifDescribe(out *NotifDescribeOutput, w io.Write
 
 	if len(notif.Status.SinkStatuses) > 0 {
 		tw.line("  Recent Deliveries:")
-		for _, ss := range notif.Status.SinkStatuses {
+		sinkStatuses := lo.Values(notif.Status.SinkStatuses)
+		sort.Slice(sinkStatuses, func(i, j int) bool {
+			return sinkStatuses[i].TransitionTimestamp.After(sinkStatuses[j].TransitionTimestamp.Time)
+		})
+		for _, ss := range sinkStatuses {
 			status := "[FAIL]"
 			if ss.Success {
 				status = "[OK]"
 			}
-			tw.line("    %s %s at %s", status, ss.Name, ss.TransitionTimestamp.Format(time.RFC3339))
+			tw.line("    %s %s (%s/%s %s %s) at %s", status, ss.SinkName, ss.PlanRef.Namespace, ss.PlanRef.Name, ss.Operation, ss.CycleID, ss.TransitionTimestamp.Format(time.RFC3339))
 			if ss.Message != "" {
 				tw.line("        %s", ss.Message)
 			}

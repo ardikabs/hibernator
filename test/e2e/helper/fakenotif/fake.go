@@ -48,13 +48,13 @@ func (s *Sink) Type() string {
 
 // Send records the notification payload. It never returns an error and does not
 // require any valid config in opts — the config bytes are intentionally ignored.
-func (s *Sink) Send(_ context.Context, payload sink.Payload, _ sink.SendOptions) error {
+func (s *Sink) Send(_ context.Context, payload sink.Payload, _ sink.SendOptions) (sink.SendResult, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.records = append(s.records, Record{
 		Payload: payload,
 	})
-	return nil
+	return sink.SendResult{}, nil
 }
 
 // Records returns a copy of all notifications received so far.

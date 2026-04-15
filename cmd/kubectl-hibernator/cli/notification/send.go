@@ -266,6 +266,7 @@ func executeSend(ctx context.Context, opts *sendOptions, sinkType, sinkName stri
 	sendOpts := sink.SendOptions{
 		Config:         configBytes,
 		CustomTemplate: customTemplate,
+		Log:            logger,
 	}
 
 	out := output.FromContext(ctx)
@@ -288,7 +289,7 @@ func executeSend(ctx context.Context, opts *sendOptions, sinkType, sinkName stri
 		return d.PrintObj(dryRunOutput, os.Stdout)
 	}
 
-	if err := sinkInstance.Send(ctx, payload, sendOpts); err != nil {
+	if _, err := sinkInstance.Send(ctx, payload, sendOpts); err != nil {
 		return fmt.Errorf("failed to send notification via %s sink %q: %w", sinkType, sinkName, err)
 	}
 

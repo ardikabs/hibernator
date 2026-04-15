@@ -431,14 +431,14 @@ func (p *JSONPrinter) notifDescribeToJSON(out *NotifDescribeOutput) NotifDescrib
 		}
 	}
 
-	sinkStatuses := make([]NotifSinkStatusJSON, len(notif.Status.SinkStatuses))
-	for i, ss := range notif.Status.SinkStatuses {
-		sinkStatuses[i] = NotifSinkStatusJSON{
-			Name:      ss.Name,
+	sinkStatuses := make([]NotifSinkStatusJSON, 0, len(notif.Status.SinkStatuses))
+	for _, ss := range notif.Status.SinkStatuses {
+		sinkStatuses = append(sinkStatuses, NotifSinkStatusJSON{
+			Name:      ss.SinkName,
 			Success:   ss.Success,
 			Timestamp: ss.TransitionTimestamp.Format(time.RFC3339),
 			Message:   ss.Message,
-		}
+		})
 	}
 
 	result := NotifDescribeJSON{

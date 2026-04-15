@@ -20,8 +20,8 @@ type fakeSink struct {
 
 func (f *fakeSink) Type() string { return f.sinkType }
 
-func (f *fakeSink) Send(_ context.Context, _ Payload, _ SendOptions) error {
-	return nil
+func (f *fakeSink) Send(_ context.Context, _ Payload, _ SendOptions) (SendResult, error) {
+	return SendResult{}, nil
 }
 
 func TestRegistryRegisterAndGet(t *testing.T) {

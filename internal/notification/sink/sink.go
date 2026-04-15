@@ -13,6 +13,8 @@ import (
 	"fmt"
 	"sync"
 	"time"
+
+	"github.com/go-logr/logr"
 )
 
 // PlanInfo carries plan metadata inside the Payload.
@@ -149,7 +151,15 @@ type Sink interface {
 	//
 	// Implementations must respect ctx cancellation and should use short HTTP timeouts.
 	// Errors are logged by the dispatcher but never propagate to the reconciler.
-	Send(ctx context.Context, payload Payload, opts SendOptions) error
+	Send(ctx context.Context, payload Payload, opts SendOptions) (SendResult, error)
+}
+
+// SendResult contains sink-specific delivery metadata captured during send.
+// Fields are optional; zero value means no additional metadata.
+type SendResult struct {
+	// States carries sink-specific arbitrary key/value context emitted by sink
+	// delivery implementations (for example thread identifiers).
+	States map[string]string
 }
 
 // SendOptions carries the resolved sink configuration for a single dispatch.
@@ -165,6 +175,14 @@ type SendOptions struct {
 	// from a ConfigMap. When set, sinks should pass it to Renderer via
 	// WithCustomTemplate so the engine uses it instead of the built-in default.
 	CustomTemplate *CustomTemplate
+
+	// SinkState carries sink-specific state restored from HibernateNotification
+	// status tracked states for the current sink+plan+cycle+operation key.
+	SinkState map[string]string
+
+	// Log is the per-send logger scoped by the dispatcher/caller.
+	// It is optional; sinks should handle zero-value logger gracefully.
+	Log logr.Logger
 }
 
 // Registry holds registered notification sinks.

@@ -7,6 +7,7 @@ package notification
 
 import (
 	"context"
+	"fmt"
 	"sync"
 	"time"
 
@@ -23,6 +24,18 @@ type DeliveryResult struct {
 	// SinkName is the sink that was dispatched to.
 	SinkName string
 
+	// PlanNamespace is the namespace of the plan that emitted this event.
+	PlanNamespace string
+
+	// PlanName is the name of the plan that emitted this event.
+	PlanName string
+
+	// CycleID is the execution cycle identifier associated with this dispatch.
+	CycleID string
+
+	// Operation is the operation associated with this dispatch (shutdown/wakeup).
+	Operation string
+
 	// Timestamp is when the dispatch completed.
 	Timestamp time.Time
 
@@ -31,6 +44,10 @@ type DeliveryResult struct {
 
 	// Error is the dispatch error, if any. Nil when Success is true.
 	Error error
+
+	// States carries sink-specific arbitrary key/value context emitted by sink
+	// delivery implementations (for example thread identifiers).
+	States map[string]string
 }
 
 // DeliveryCallback is invoked after each dispatch attempt to report delivery
@@ -74,6 +91,16 @@ type PlanInfo = sink.PlanInfo
 
 // ConnectorInfo carries resolved connector metadata for template rendering.
 type ConnectorInfo = sink.ConnectorInfo
+
+// Result carries the outcome of a sink Send operation, including any sink-specific metadata.
+type Result = sink.SendResult
+
+// SinkStatusKey builds the canonical HibernateNotification sink status key.
+//
+// Format: <sink>|<namespace>/<plan>|<cycle>|<operation>
+func SinkStatusKey(sinkName, planNamespace, planName, cycleID, operation string) string {
+	return fmt.Sprintf("%s|%s/%s|%s|%s", sinkName, planNamespace, planName, cycleID, operation)
+}
 
 // Overflow is a concurrency-safe, unbounded spillover queue.
 //

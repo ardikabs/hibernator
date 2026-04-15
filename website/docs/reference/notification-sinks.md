@@ -30,20 +30,32 @@ The configuration must be in a JSON object stored under `config` key in secret r
 ```json
 {
   "webhook_url": "<webhook_url>",
+  "bot_token": "<bot_token>",
+  "channel_id": "<channel_id>",
   "format": "<format>",
   "block_layout": "<block_layout>",
   "max_targets": "<max_targets>",
-  "additional_scopes": "<additional_scopes>"
+  "additional_scopes": "<additional_scopes>",
+  "time_display": "<time_display>",
+  "timezone": "<timezone>",
+  "time_layout": "<time_layout>",
+  "delivery_mode": "<delivery_mode>"
 }
 ```
 
 | Field | Type | Required | Description |
 |-------|------|----------|-------------|
-| `webhook_url` | `string` | Yes | WebhookURL is the Slack Incoming Webhook URL. |
+| `webhook_url` | `string` | Yes | WebhookURL is the Slack Incoming Webhook URL. Mutually exclusive with `bot_token` and `channel_id`, required when `delivery_mode=channel`. |
+| `bot_token` | `string` | Yes | BotToken is the Slack Bot token used for Web API delivery mode. Mutually exclusive with `webhook_url`, required when `delivery_mode=thread`. |
+| `channel_id` | `string` | Yes | ChannelID is the Slack channel ID used for Web API delivery mode. Mutually exclusive with `webhook_url`, required when `delivery_mode=thread`. |
 | `format` | `string` | No | Format controls Slack payload mode. Supported values: `text` (message text only), and `json` (Slack blocks payload, using preset layouts or custom templates). |
 | `block_layout` | `string` | No | BlockLayout selects the preset JSON layout used when format=json and no custom JSON template is provided (or parsing fails). Supported values: `default`, `compact`, `auto`. For `ExecutionProgress`, `default` and `compact` suppress non-terminal updates (`Pending`, `Running`) and only send terminal updates (`Completed`, `Failed`, `Aborted`). Use `auto` for full progress streaming |
 | `max_targets` | `int` | No | MaxTargets limits target lines in preset JSON layouts. It defaults to 8, which is enough to show all targets in most cases while keeping the message concise. |
 | `additional_scopes` | `[]string` | No | AdditionalScopes appends additional scope fields to the scope context. Account and Cluster are always included by default. Supported: `environment` (alias: env), `region`, `project`, `provider`, `connector`, `account`, `cluster`. |
+| `time_display` | `string` | No | TimeDisplay controls how preset JSON layouts render context time. Supported values: - `slack_dynamic` (default): Slack date token rendered in each viewer's locale/timezone. - `fixed`: rendered with Timezone + TimeLayout. - `utc`: rendered in UTC with TimeLayout. |
+| `timezone` | `string` | No | Timezone is an IANA timezone name (for example, `Asia/Jakarta`) used only when TimeDisplay is `fixed`. Defaults to `UTC` in fixed mode. |
+| `time_layout` | `string` | No | TimeLayout is Go time layout used by fixed/utc displays. Defaults to `Mon, 02 Jan 2006 15:04:05 MST`. |
+| `delivery_mode` | `string` | No | DeliveryMode controls message grouping behavior. Supported values: - `channel` (default): each event posts as standalone channel message. - `thread`: Start creates a root message and subsequent events for the same plan/cycle are posted as thread replies. |
 
 ### Default Template
 
