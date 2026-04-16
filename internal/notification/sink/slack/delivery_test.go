@@ -285,6 +285,138 @@ func TestSend_DeliveryModeThread_ReplyOverridesReactionOnStateChange(t *testing.
 	assert.Equal(t, "white_check_mark", result.States["slack.thread.last_reaction"])
 }
 
+func TestSend_DeliveryModeThread_ReplyPreservesTerminalSuccessAgainstLateProgress(t *testing.T) {
+	postCalls := 0
+	updateCalls := 0
+	removeCalls := 0
+	addCalls := 0
+	var postBodyRaw string
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		body, err := io.ReadAll(r.Body)
+		require.NoError(t, err)
+
+		w.Header().Set("Content-Type", "application/json")
+		switch {
+		case strings.Contains(r.URL.Path, "chat.update"):
+			updateCalls++
+			w.WriteHeader(http.StatusOK)
+			w.Write([]byte(`{"ok":true,"channel":"C123","ts":"12345.67890","text":"updated"}`)) //nolint:errcheck
+			return
+		case strings.Contains(r.URL.Path, "chat.postMessage"):
+			postCalls++
+			postBodyRaw = string(body)
+			w.WriteHeader(http.StatusOK)
+			w.Write([]byte(`{"ok":true,"channel":"C123","ts":"99999.00001"}`)) //nolint:errcheck
+			return
+		case strings.Contains(r.URL.Path, "reactions.remove"):
+			removeCalls++
+			w.WriteHeader(http.StatusOK)
+			w.Write([]byte(`{"ok":true}`)) //nolint:errcheck
+			return
+		case strings.Contains(r.URL.Path, "reactions.add"):
+			addCalls++
+			w.WriteHeader(http.StatusOK)
+			w.Write([]byte(`{"ok":true}`)) //nolint:errcheck
+			return
+		default:
+			w.WriteHeader(http.StatusOK)
+			w.Write([]byte(`{"ok":true}`)) //nolint:errcheck
+		}
+	}))
+	defer server.Close()
+
+	p := testPayload()
+	p.Event = string(hibernatorv1alpha1.EventExecutionProgress)
+	p.TargetExecution = &sink.TargetInfo{Name: "db", Executor: "noop", State: "Running"}
+
+	cfg, _ := json.Marshal(config{BotToken: "xoxb-test", ChannelID: "C123", Format: formatJSON, BlockLayout: blockLayoutAuto, DeliveryMode: deliveryModeThread})
+	s := newWithServerURL(&stubRenderer{defaultText: "rendered:slack"}, &http.Client{Timeout: 5 * time.Second}, server.URL+"/")
+	result, err := s.Send(context.Background(), p, sink.SendOptions{
+		Config: cfg,
+		SinkState: map[string]string{
+			"slack.thread.root_ts":       "12345.67890",
+			"slack.thread.ref":           "default/test-plan/abc123/shutdown",
+			"slack.thread.last_reaction": "white_check_mark",
+		},
+	})
+
+	require.NoError(t, err)
+	assert.Equal(t, 0, updateCalls)
+	assert.Equal(t, 1, postCalls)
+	assert.Contains(t, postBodyRaw, "thread_ts=12345.67890")
+	assert.Equal(t, 0, removeCalls)
+	assert.Equal(t, 0, addCalls)
+	require.NotNil(t, result.States)
+	assert.Equal(t, "white_check_mark", result.States["slack.thread.last_reaction"])
+}
+
+func TestSend_DeliveryModeThread_ReplyPreservesTerminalFailureAgainstLateProgress(t *testing.T) {
+	postCalls := 0
+	updateCalls := 0
+	removeCalls := 0
+	addCalls := 0
+	var postBodyRaw string
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		body, err := io.ReadAll(r.Body)
+		require.NoError(t, err)
+
+		w.Header().Set("Content-Type", "application/json")
+		switch {
+		case strings.Contains(r.URL.Path, "chat.update"):
+			updateCalls++
+			w.WriteHeader(http.StatusOK)
+			w.Write([]byte(`{"ok":true,"channel":"C123","ts":"12345.67890","text":"updated"}`)) //nolint:errcheck
+			return
+		case strings.Contains(r.URL.Path, "chat.postMessage"):
+			postCalls++
+			postBodyRaw = string(body)
+			w.WriteHeader(http.StatusOK)
+			w.Write([]byte(`{"ok":true,"channel":"C123","ts":"99999.00001"}`)) //nolint:errcheck
+			return
+		case strings.Contains(r.URL.Path, "reactions.remove"):
+			removeCalls++
+			w.WriteHeader(http.StatusOK)
+			w.Write([]byte(`{"ok":true}`)) //nolint:errcheck
+			return
+		case strings.Contains(r.URL.Path, "reactions.add"):
+			addCalls++
+			w.WriteHeader(http.StatusOK)
+			w.Write([]byte(`{"ok":true}`)) //nolint:errcheck
+			return
+		default:
+			w.WriteHeader(http.StatusOK)
+			w.Write([]byte(`{"ok":true}`)) //nolint:errcheck
+		}
+	}))
+	defer server.Close()
+
+	p := testPayload()
+	p.Event = string(hibernatorv1alpha1.EventExecutionProgress)
+	p.TargetExecution = &sink.TargetInfo{Name: "db", Executor: "noop", State: "Running"}
+
+	cfg, _ := json.Marshal(config{BotToken: "xoxb-test", ChannelID: "C123", Format: formatJSON, BlockLayout: blockLayoutAuto, DeliveryMode: deliveryModeThread})
+	s := newWithServerURL(&stubRenderer{defaultText: "rendered:slack"}, &http.Client{Timeout: 5 * time.Second}, server.URL+"/")
+	result, err := s.Send(context.Background(), p, sink.SendOptions{
+		Config: cfg,
+		SinkState: map[string]string{
+			"slack.thread.root_ts":       "12345.67890",
+			"slack.thread.ref":           "default/test-plan/abc123/shutdown",
+			"slack.thread.last_reaction": "x",
+		},
+	})
+
+	require.NoError(t, err)
+	assert.Equal(t, 0, updateCalls)
+	assert.Equal(t, 1, postCalls)
+	assert.Contains(t, postBodyRaw, "thread_ts=12345.67890")
+	assert.Equal(t, 0, removeCalls)
+	assert.Equal(t, 0, addCalls)
+	require.NotNil(t, result.States)
+	assert.Equal(t, "x", result.States["slack.thread.last_reaction"])
+}
+
 func TestSend_DeliveryModeThread_ReplySkipsRootTsOnOperationMismatch(t *testing.T) {
 	var postBodyRaw string
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

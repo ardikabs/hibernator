@@ -112,6 +112,9 @@ type config struct {
 	// - `thread`: root message is treated as a live status card and updated on every
 	//   delivered event for the same plan/cycle, while event entries are posted as
 	//   thread replies (including Start).
+	//   Root status is monotonic per sink+plan+cycle+operation: once terminal (`Success`/`Failure`),
+	//   late non-terminal events (`ExecutionProgress`, `Recovery`, `PhaseChange`, `Start`)
+	//   do not downgrade root status back to in-progress, though they are still posted as thread replies.
 	//   In `thread` mode, `templateRef`/custom templates are intentionally ignored:
 	//   the sink always uses built-in, opinionated thread layouts so context and
 	//   status progression remain consistent across root updates and replies.
