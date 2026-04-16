@@ -127,10 +127,42 @@ type RestoreState struct {
 	Items []WorkloadState `json:"items"`
 }
 
+type operationOutcome string
+
+const (
+	operationOutcomeApplied      operationOutcome = "applied"
+	operationOutcomeSkippedStale operationOutcome = "skipped_stale"
+)
+
+type operationStats struct {
+	processed    int
+	applied      int
+	skippedStale int
+}
+
+func formatShutdownMessage(stats operationStats, namespaceCount int) string {
+	msg := fmt.Sprintf("scaled %d workload(s) to zero across %d namespace(s)", stats.applied, namespaceCount)
+	return appendCountSegment(msg, "skipped", stats.skippedStale, "stale workload")
+}
+
+func formatWakeUpMessage(stats operationStats) string {
+	msg := fmt.Sprintf("restored %d workload(s)", stats.applied)
+	return appendCountSegment(msg, "skipped", stats.skippedStale, "stale workload")
+}
+
+func appendCountSegment(msg, action string, count int, noun string) string {
+	if count <= 0 {
+		return msg
+	}
+
+	return fmt.Sprintf("%s, %s %d %s(s)", msg, action, count, noun)
+}
+
 // Shutdown scales down all matched workloads to zero replicas.
 func (e *Executor) Shutdown(ctx context.Context, log logr.Logger, spec executor.Spec) (*executor.Result, error) {
 	log = log.WithName("workloadscaler").WithValues("target", spec.TargetName, "targetType", spec.TargetType)
 	log.Info("executor starting shutdown")
+	e.waitinglist = nil
 
 	var params executorparams.WorkloadScalerParameters
 	if len(spec.Parameters) > 0 {
@@ -169,7 +201,7 @@ func (e *Executor) Shutdown(ctx context.Context, log logr.Logger, spec executor.
 
 	log.Info("target namespaces discovered", "count", len(targetNamespaces), "namespaces", strings.Join(targetNamespaces, ", "))
 
-	totalWorkloadscaled := 0
+	stats := operationStats{}
 	for _, ns := range targetNamespaces {
 		for _, kind := range includedGroups {
 			gvr, err := e.resolveGVR(kind)
@@ -182,15 +214,14 @@ func (e *Executor) Shutdown(ctx context.Context, log logr.Logger, spec executor.
 				return nil, fmt.Errorf("scale down %s in namespace %s: %w", kind, ns, err)
 			}
 
-			// Track if any workload had non-zero replicas
-			if counts > 0 {
-				totalWorkloadscaled += counts
-			}
+			stats.processed += counts.processed
+			stats.applied += counts.applied
+			stats.skippedStale += counts.skippedStale
 		}
 	}
 
 	// Wait for all workloads to scale if configured
-	msg := fmt.Sprintf("scaled %d workload(s) to zero across %d namespace(s)", totalWorkloadscaled, len(targetNamespaces))
+	msg := formatShutdownMessage(stats, len(targetNamespaces))
 
 	if params.AwaitCompletion.Enabled {
 		timeout := params.AwaitCompletion.Timeout
@@ -221,7 +252,11 @@ func (e *Executor) Shutdown(ctx context.Context, log logr.Logger, spec executor.
 		}
 	}
 
-	log.Info("shutdown completed", "numberOfWorkloadsScaled", totalWorkloadscaled)
+	log.Info("shutdown completed",
+		"processed", stats.processed,
+		"scaled", stats.applied,
+		"skippedStale", stats.skippedStale,
+	)
 
 	return &executor.Result{Message: msg}, nil
 }
@@ -230,6 +265,7 @@ func (e *Executor) Shutdown(ctx context.Context, log logr.Logger, spec executor.
 func (e *Executor) WakeUp(ctx context.Context, log logr.Logger, spec executor.Spec, restore executor.RestoreData) (*executor.Result, error) {
 	log = log.WithName("workloadscaler").WithValues("target", spec.TargetName, "targetType", spec.TargetType)
 	log.Info("executor starting wakeup")
+	e.waitinglist = nil
 
 	var params executorparams.WorkloadScalerParameters
 
@@ -252,6 +288,8 @@ func (e *Executor) WakeUp(ctx context.Context, log logr.Logger, spec executor.Sp
 		return nil, fmt.Errorf("build kubernetes clients: %w", err)
 	}
 
+	stats := operationStats{processed: len(restore.Data)}
+
 	// Restore each workload
 	for workloadKey, stateBytes := range restore.Data {
 		var state WorkloadState
@@ -260,13 +298,21 @@ func (e *Executor) WakeUp(ctx context.Context, log logr.Logger, spec executor.Sp
 			return nil, fmt.Errorf("unmarshal workload state %s: %w", workloadKey, err)
 		}
 
-		if err := e.restoreWorkload(ctx, log, client, state, params); err != nil {
+		outcome, err := e.restoreWorkload(ctx, log, client, state, params)
+		if err != nil {
 			return nil, fmt.Errorf("restore %s/%s in namespace %s: %w", state.Kind, state.Name, state.Namespace, err)
+		}
+
+		switch outcome {
+		case operationOutcomeApplied:
+			stats.applied++
+		case operationOutcomeSkippedStale:
+			stats.skippedStale++
 		}
 	}
 
 	// Wait for all workloads to scale if configured
-	msg := fmt.Sprintf("restored %d workload(s)", len(restore.Data))
+	msg := formatWakeUpMessage(stats)
 
 	if params.AwaitCompletion.Enabled {
 		timeout := params.AwaitCompletion.Timeout
@@ -297,7 +343,11 @@ func (e *Executor) WakeUp(ctx context.Context, log logr.Logger, spec executor.Sp
 		}
 	}
 
-	log.Info("wakeup completed", "workloadCount", len(restore.Data))
+	log.Info("wakeup completed",
+		"processed", stats.processed,
+		"restored", stats.applied,
+		"skippedStale", stats.skippedStale,
+	)
 
 	return &executor.Result{Message: msg}, nil
 }
@@ -336,12 +386,12 @@ func (e *Executor) scaleDownWorkloads(ctx context.Context,
 	gvr schema.GroupVersionResource,
 	workloadSelector *metav1.LabelSelector,
 	params executorparams.WorkloadScalerParameters,
-	callback executor.SaveRestoreDataFunc) (int, error) {
+	callback executor.SaveRestoreDataFunc) (operationStats, error) {
 
 	// Convert label selector to Kubernetes labels.Selector
 	selector, err := metav1.LabelSelectorAsSelector(workloadSelector)
 	if err != nil {
-		return 0, fmt.Errorf("invalid label selector: %w", err)
+		return operationStats{}, fmt.Errorf("invalid label selector: %w", err)
 	}
 
 	log.Info("scaling down workloads",
@@ -355,20 +405,25 @@ func (e *Executor) scaleDownWorkloads(ctx context.Context,
 	if err != nil {
 		if apierrors.IsNotFound(err) {
 			log.Info("no resources found, skipping", "namespace", namespace, "resource", gvr.Resource)
-			return 0, nil
+			return operationStats{}, nil
 		}
 
-		return 0, fmt.Errorf("list resources: %w", err)
+		return operationStats{}, fmt.Errorf("list resources: %w", err)
 	}
 
 	// Build unified map: key = namespace/kind/name
 	statesMap := make(map[string]json.RawMessage)
-	counts := 0
+	stats := operationStats{}
 
 	for _, item := range list.Items {
+		stats.processed++
+
 		// Get the scale subresource for this workload
 		scaleObj, err := client.GetScale(ctx, gvr, namespace, item.GetName())
 		if err != nil {
+			if apierrors.IsNotFound(err) {
+				stats.skippedStale++
+			}
 			log.Info("failed to get scale subresource, skipping", "namespace", namespace, "name", item.GetName(), "kind", item.GetKind())
 			continue
 		}
@@ -376,7 +431,7 @@ func (e *Executor) scaleDownWorkloads(ctx context.Context,
 		// Get current replica count from scale.spec.replicas
 		replicas, found, err := unstructured.NestedInt64(scaleObj.Object, "spec", "replicas")
 		if err != nil {
-			return 0, fmt.Errorf("get replicas from scale for %s/%s: %w", item.GetKind(), item.GetName(), err)
+			return operationStats{}, fmt.Errorf("get replicas from scale for %s/%s: %w", item.GetKind(), item.GetName(), err)
 		}
 		if !found {
 			// Skip if scale object doesn't have spec.replicas
@@ -384,9 +439,7 @@ func (e *Executor) scaleDownWorkloads(ctx context.Context,
 		}
 
 		// Track if this workload has non-zero replicas
-		if replicas > 0 {
-			counts++
-		}
+		shouldCountAsApplied := replicas > 0
 
 		// Store current state with key = namespace/kind/name
 		key := fmt.Sprintf("%s/%s/%s", item.GetNamespace(), item.GetKind(), item.GetName())
@@ -404,7 +457,7 @@ func (e *Executor) scaleDownWorkloads(ctx context.Context,
 
 		// Scale to zero by updating scale.spec.replicas
 		if err := unstructured.SetNestedField(scaleObj.Object, int64(0), "spec", "replicas"); err != nil {
-			return 0, fmt.Errorf("set replicas to zero in scale for %s/%s: %w", item.GetKind(), item.GetName(), err)
+			return operationStats{}, fmt.Errorf("set replicas to zero in scale for %s/%s: %w", item.GetKind(), item.GetName(), err)
 		}
 
 		// Update the scale subresource
@@ -412,12 +465,17 @@ func (e *Executor) scaleDownWorkloads(ctx context.Context,
 		if err != nil {
 			if apierrors.IsNotFound(err) {
 				log.Info("resource not found, skipping", "namespace", namespace, "name", item.GetName(), "kind", item.GetKind())
+				stats.skippedStale++
 
 				// Skip resources that no longer exist
 				continue
 			}
 
-			return 0, fmt.Errorf("update scale for %s/%s: %w", item.GetKind(), item.GetName(), err)
+			return operationStats{}, fmt.Errorf("update scale for %s/%s: %w", item.GetKind(), item.GetName(), err)
+		}
+
+		if shouldCountAsApplied {
+			stats.applied++
 		}
 
 		// Add to waiting list if awaitCompletion is configured
@@ -434,11 +492,11 @@ func (e *Executor) scaleDownWorkloads(ctx context.Context,
 		}
 	}
 
-	return counts, nil
+	return stats, nil
 }
 
 // restoreWorkload restores a single workload to its previous replica count.
-func (e *Executor) restoreWorkload(ctx context.Context, log logr.Logger, client Client, state WorkloadState, params executorparams.WorkloadScalerParameters) error {
+func (e *Executor) restoreWorkload(ctx context.Context, log logr.Logger, client Client, state WorkloadState, params executorparams.WorkloadScalerParameters) (operationOutcome, error) {
 	gvr := state.GetGVR()
 
 	log.Info("scaling up workloads",
@@ -453,15 +511,15 @@ func (e *Executor) restoreWorkload(ctx context.Context, log logr.Logger, client 
 	if err != nil {
 		if apierrors.IsNotFound(err) {
 			log.Info("resource not found, skipping", "namespace", state.Namespace, "name", state.Name, "kind", state.Kind)
-			return nil
+			return operationOutcomeSkippedStale, nil
 		}
 
-		return fmt.Errorf("get scale subresource: %w", err)
+		return "", fmt.Errorf("get scale subresource: %w", err)
 	}
 
 	// Update scale.spec.replicas to restore previous count
 	if err := unstructured.SetNestedField(scaleObj.Object, int64(state.Replicas), "spec", "replicas"); err != nil {
-		return fmt.Errorf("set replicas in scale: %w", err)
+		return "", fmt.Errorf("set replicas in scale: %w", err)
 	}
 
 	// Update the scale subresource
@@ -469,10 +527,10 @@ func (e *Executor) restoreWorkload(ctx context.Context, log logr.Logger, client 
 	if err != nil {
 		if apierrors.IsNotFound(err) {
 			log.Info("resource not found, skipping", "namespace", state.Namespace, "name", state.Name, "kind", state.Kind)
-			return nil
+			return operationOutcomeSkippedStale, nil
 		}
 
-		return fmt.Errorf("update scale subresource: %w", err)
+		return "", fmt.Errorf("update scale subresource: %w", err)
 	}
 
 	// Add to waiting list if awaitCompletion is configured
@@ -480,7 +538,7 @@ func (e *Executor) restoreWorkload(ctx context.Context, log logr.Logger, client 
 		e.waitinglist = append(e.waitinglist, state)
 	}
 
-	return nil
+	return operationOutcomeApplied, nil
 }
 
 // resolveGVR resolves a kind to its GroupVersionResource.

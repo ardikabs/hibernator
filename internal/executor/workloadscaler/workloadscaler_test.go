@@ -417,3 +417,17 @@ func TestResolveGVR_Unknown_NotInMap(t *testing.T) {
 	assert.Contains(t, err.Error(), "UnknownKind")
 	assert.Contains(t, err.Error(), "is not a supported common resource")
 }
+
+func TestFormatMessages(t *testing.T) {
+	shutdownNoStale := formatShutdownMessage(operationStats{applied: 3, skippedStale: 0}, 2)
+	assert.Equal(t, "scaled 3 workload(s) to zero across 2 namespace(s)", shutdownNoStale)
+
+	shutdownWithStale := formatShutdownMessage(operationStats{applied: 3, skippedStale: 2}, 2)
+	assert.Equal(t, "scaled 3 workload(s) to zero across 2 namespace(s), skipped 2 stale workload(s)", shutdownWithStale)
+
+	wakeupNoStale := formatWakeUpMessage(operationStats{applied: 4, skippedStale: 0})
+	assert.Equal(t, "restored 4 workload(s)", wakeupNoStale)
+
+	wakeupWithStale := formatWakeUpMessage(operationStats{applied: 4, skippedStale: 1})
+	assert.Equal(t, "restored 4 workload(s), skipped 1 stale workload(s)", wakeupWithStale)
+}

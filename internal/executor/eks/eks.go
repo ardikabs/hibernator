@@ -12,6 +12,7 @@ import (
 	"context"
 	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"sync"
 	"sync/atomic"
@@ -45,6 +46,37 @@ type NodeGroupState struct {
 	DesiredSize int32 `json:"desired"`
 	MinSize     int32 `json:"min"`
 	MaxSize     int32 `json:"max"`
+}
+
+type operationOutcome string
+
+const (
+	operationOutcomeApplied      operationOutcome = "applied"
+	operationOutcomeSkippedStale operationOutcome = "skipped_stale"
+)
+
+type operationStats struct {
+	processed    int
+	applied      int
+	skippedStale int
+}
+
+func formatShutdownMessage(clusterName string, stats operationStats) string {
+	msg := fmt.Sprintf("scaled %d node group(s) to zero in EKS cluster %s", stats.applied, clusterName)
+	return appendCountSegment(msg, "skipped", stats.skippedStale, "stale node group")
+}
+
+func formatWakeUpMessage(clusterName string, stats operationStats) string {
+	msg := fmt.Sprintf("restored %d node group(s) in EKS cluster %s", stats.applied, clusterName)
+	return appendCountSegment(msg, "skipped", stats.skippedStale, "stale node group")
+}
+
+func appendCountSegment(msg, action string, count int, noun string) string {
+	if count <= 0 {
+		return msg
+	}
+
+	return fmt.Sprintf("%s, %s %d %s(s)", msg, action, count, noun)
 }
 
 // Executor implements the EKS hibernation logic for Managed Node Groups.
@@ -135,6 +167,7 @@ func (e *Executor) Validate(spec executor.Spec) error {
 func (e *Executor) Shutdown(ctx context.Context, log logr.Logger, spec executor.Spec) (*executor.Result, error) {
 	log = log.WithName("eks").WithValues("target", spec.TargetName, "targetType", spec.TargetType)
 	log.Info("executor starting shutdown")
+	e.waitinglist = nil
 
 	params, err := e.parseParams(spec.Parameters)
 	if err != nil {
@@ -168,6 +201,8 @@ func (e *Executor) Shutdown(ctx context.Context, log logr.Logger, spec executor.
 		return nil, fmt.Errorf("determine target node groups: %w", err)
 	}
 
+	stats := operationStats{processed: len(targetNodeGroups)}
+
 	// Scale each node group to zero
 	for _, ngName := range targetNodeGroups {
 		log.Info("scaling node group to zero",
@@ -175,17 +210,25 @@ func (e *Executor) Shutdown(ctx context.Context, log logr.Logger, spec executor.
 			"nodeGroup", ngName,
 		)
 
-		if err := e.scaleNodeGroupToZero(ctx, log, eksClient, k8sClient, clusterName, ngName, params, spec.SaveRestoreData); err != nil {
+		outcome, err := e.scaleNodeGroupToZero(ctx, log, eksClient, k8sClient, clusterName, ngName, params, spec.SaveRestoreData)
+		if err != nil {
 			log.Error(err, "failed to scale node group",
 				"clusterName", clusterName,
 				"nodeGroup", ngName,
 			)
 			return nil, fmt.Errorf("scale node group %s: %w", ngName, err)
 		}
+
+		switch outcome {
+		case operationOutcomeApplied:
+			stats.applied++
+		case operationOutcomeSkippedStale:
+			stats.skippedStale++
+		}
 	}
 
 	// Wait for all node groups to complete scaling down if configured
-	msg := fmt.Sprintf("scaled %d node group(s) to zero in EKS cluster %s", len(targetNodeGroups), clusterName)
+	msg := formatShutdownMessage(clusterName, stats)
 
 	if params.AwaitCompletion.Enabled {
 		timeout := params.AwaitCompletion.Timeout
@@ -218,7 +261,9 @@ func (e *Executor) Shutdown(ctx context.Context, log logr.Logger, spec executor.
 
 	log.Info("shutdown completed",
 		"clusterName", clusterName,
-		"nodeGroupCount", len(targetNodeGroups),
+		"processed", stats.processed,
+		"scaled", stats.applied,
+		"skippedStale", stats.skippedStale,
 	)
 
 	return &executor.Result{Message: msg}, nil
@@ -228,6 +273,7 @@ func (e *Executor) Shutdown(ctx context.Context, log logr.Logger, spec executor.
 func (e *Executor) WakeUp(ctx context.Context, log logr.Logger, spec executor.Spec, restore executor.RestoreData) (*executor.Result, error) {
 	log = log.WithName("eks").WithValues("target", spec.TargetName, "targetType", spec.TargetType)
 	log.Info("executor starting wakeup")
+	e.waitinglist = nil
 
 	if len(restore.Data) == 0 {
 		log.Info("no restore data available, wakeup operation is no-op")
@@ -251,6 +297,7 @@ func (e *Executor) WakeUp(ctx context.Context, log logr.Logger, spec executor.Sp
 
 	eksClient := e.eksFactory(cfg)
 	clusterName := params.ClusterName
+	stats := operationStats{processed: len(restore.Data)}
 
 	// Restore each node group
 	for ngName, stateBytes := range restore.Data {
@@ -268,17 +315,25 @@ func (e *Executor) WakeUp(ctx context.Context, log logr.Logger, spec executor.Sp
 			"maxSize", state.MaxSize,
 		)
 
-		if err := e.restoreNodeGroup(ctx, log, eksClient, clusterName, ngName, state, params); err != nil {
+		outcome, err := e.restoreNodeGroup(ctx, log, eksClient, clusterName, ngName, state, params)
+		if err != nil {
 			log.Error(err, "failed to restore node group",
 				"clusterName", clusterName,
 				"nodeGroup", ngName,
 			)
 			return nil, fmt.Errorf("restore node group %s: %w", ngName, err)
 		}
+
+		switch outcome {
+		case operationOutcomeApplied:
+			stats.applied++
+		case operationOutcomeSkippedStale:
+			stats.skippedStale++
+		}
 	}
 
 	// Wait for all node groups to become active if configured
-	msg := fmt.Sprintf("restored %d node group(s) in EKS cluster %s", len(restore.Data), clusterName)
+	msg := formatWakeUpMessage(clusterName, stats)
 
 	if params.AwaitCompletion.Enabled {
 		timeout := params.AwaitCompletion.Timeout
@@ -311,7 +366,9 @@ func (e *Executor) WakeUp(ctx context.Context, log logr.Logger, spec executor.Sp
 
 	log.Info("wakeup completed",
 		"clusterName", clusterName,
-		"nodeGroupCount", len(restore.Data),
+		"processed", stats.processed,
+		"restored", stats.applied,
+		"skippedStale", stats.skippedStale,
 	)
 	return &executor.Result{Message: msg}, nil
 }
@@ -349,14 +406,22 @@ func (e *Executor) listNodeGroups(ctx context.Context, client EKSClient, cluster
 	return out.Nodegroups, nil
 }
 
-func (e *Executor) scaleNodeGroupToZero(ctx context.Context, log logr.Logger, eksClient EKSClient, k8sClient K8SClient, clusterName, ngName string, params Parameters, callback executor.SaveRestoreDataFunc) error {
+func (e *Executor) scaleNodeGroupToZero(ctx context.Context, log logr.Logger, eksClient EKSClient, k8sClient K8SClient, clusterName, ngName string, params Parameters, callback executor.SaveRestoreDataFunc) (operationOutcome, error) {
 	// Get current state
 	desc, err := eksClient.DescribeNodegroup(ctx, &eks.DescribeNodegroupInput{
 		ClusterName:   aws.String(clusterName),
 		NodegroupName: aws.String(ngName),
 	})
 	if err != nil {
-		return err
+		var notFoundErr *types.ResourceNotFoundException
+		if errors.As(err, &notFoundErr) {
+			log.Info("node group not found, skipping stale shutdown entry",
+				"clusterName", clusterName,
+				"nodeGroup", ngName,
+			)
+			return operationOutcomeSkippedStale, nil
+		}
+		return "", err
 	}
 
 	state := NodeGroupState{
@@ -375,7 +440,15 @@ func (e *Executor) scaleNodeGroupToZero(ctx context.Context, log logr.Logger, ek
 			MaxSize:     aws.Int32(state.MaxSize), // Keep max
 		},
 	}); err != nil {
-		return err
+		var notFoundErr *types.ResourceNotFoundException
+		if errors.As(err, &notFoundErr) {
+			log.Info("node group not found during scale update, skipping stale shutdown entry",
+				"clusterName", clusterName,
+				"nodeGroup", ngName,
+			)
+			return operationOutcomeSkippedStale, nil
+		}
+		return "", err
 	}
 
 	// Add to waiting list for awaiting completion if configured
@@ -397,11 +470,28 @@ func (e *Executor) scaleNodeGroupToZero(ctx context.Context, log logr.Logger, ek
 		}
 	}
 
-	return nil
+	return operationOutcomeApplied, nil
 }
 
-func (e *Executor) restoreNodeGroup(ctx context.Context, log logr.Logger, client EKSClient, clusterName, ngName string, state NodeGroupState, params Parameters) error {
-	_, err := client.UpdateNodegroupConfig(ctx, &eks.UpdateNodegroupConfigInput{
+func (e *Executor) restoreNodeGroup(ctx context.Context, log logr.Logger, client EKSClient, clusterName, ngName string, state NodeGroupState, params Parameters) (operationOutcome, error) {
+	_, err := client.DescribeNodegroup(ctx, &eks.DescribeNodegroupInput{
+		ClusterName:   aws.String(clusterName),
+		NodegroupName: aws.String(ngName),
+	})
+	if err != nil {
+		var notFoundErr *types.ResourceNotFoundException
+		if errors.As(err, &notFoundErr) {
+			log.Info("node group not found, skipping stale restore entry",
+				"clusterName", clusterName,
+				"nodeGroup", ngName,
+			)
+			return operationOutcomeSkippedStale, nil
+		}
+
+		return "", err
+	}
+
+	_, err = client.UpdateNodegroupConfig(ctx, &eks.UpdateNodegroupConfigInput{
 		ClusterName:   aws.String(clusterName),
 		NodegroupName: aws.String(ngName),
 		ScalingConfig: &types.NodegroupScalingConfig{
@@ -411,7 +501,16 @@ func (e *Executor) restoreNodeGroup(ctx context.Context, log logr.Logger, client
 		},
 	})
 	if err != nil {
-		return err
+		var notFoundErr *types.ResourceNotFoundException
+		if errors.As(err, &notFoundErr) {
+			log.Info("node group not found during restore update, skipping stale restore entry",
+				"clusterName", clusterName,
+				"nodeGroup", ngName,
+			)
+			return operationOutcomeSkippedStale, nil
+		}
+
+		return "", err
 	}
 
 	// Add to waiting list for awaiting completion if configured
@@ -426,7 +525,7 @@ func (e *Executor) restoreNodeGroup(ctx context.Context, log logr.Logger, client
 		"maxSize", state.MaxSize,
 	)
 
-	return nil
+	return operationOutcomeApplied, nil
 }
 
 // waitForNodesDeleted waits for all Nodes managed by the ManagedNodeGroup to be deleted.
