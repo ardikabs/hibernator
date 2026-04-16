@@ -305,6 +305,14 @@ func TestWakeUp_RestoreNodeGroups(t *testing.T) {
 
 	mockEKS := &mocks.EKSClient{}
 
+	// Setup expectation for DescribeNodegroup call during restore pre-check
+	mockEKS.On("DescribeNodegroup", mock.Anything, &eks.DescribeNodegroupInput{
+		ClusterName:   aws.String("my-cluster"),
+		NodegroupName: aws.String("ng-1"),
+	}).Return(&eks.DescribeNodegroupOutput{
+		Nodegroup: &types.Nodegroup{},
+	}, nil)
+
 	// Setup expectation for UpdateNodegroupConfig call during restore
 	mockEKS.On("UpdateNodegroupConfig", mock.Anything, mock.MatchedBy(func(input *eks.UpdateNodegroupConfigInput) bool {
 		return aws.ToString(input.ClusterName) == "my-cluster" &&
@@ -339,6 +347,49 @@ func TestWakeUp_RestoreNodeGroups(t *testing.T) {
 	_, err := e.WakeUp(ctx, logr.Discard(), spec, restore)
 	assert.NoError(t, err)
 
+	mockEKS.AssertExpectations(t)
+}
+
+func TestWakeUp_SkipsStaleNodeGroup(t *testing.T) {
+	ctx := context.Background()
+
+	mockEKS := &mocks.EKSClient{}
+
+	// Setup expectation for DescribeNodegroup returning NotFound
+	mockEKS.On("DescribeNodegroup", mock.Anything, &eks.DescribeNodegroupInput{
+		ClusterName:   aws.String("my-cluster"),
+		NodegroupName: aws.String("ng-stale"),
+	}).Return(nil, &types.ResourceNotFoundException{Message: aws.String("nodegroup not found")})
+
+	eksFactory := func(cfg aws.Config) EKSClient { return mockEKS }
+	stsFactory := func(cfg aws.Config) STSClient { return &mocks.STSClient{} }
+
+	e := NewWithClients(eksFactory, stsFactory, nil)
+
+	nodeGroupState, _ := json.Marshal(NodeGroupState{DesiredSize: 3, MinSize: 1, MaxSize: 5})
+
+	spec := executor.Spec{
+		TargetName: "test-cluster",
+		TargetType: "eks",
+		Parameters: json.RawMessage(`{"clusterName": "my-cluster"}`),
+		ConnectorConfig: executor.ConnectorConfig{
+			AWS: &executor.AWSConnectorConfig{Region: "us-east-1"},
+		},
+	}
+
+	restore := executor.RestoreData{
+		Type: "eks",
+		Data: map[string]json.RawMessage{
+			"ng-stale": nodeGroupState,
+		},
+	}
+
+	res, err := e.WakeUp(ctx, logr.Discard(), spec, restore)
+	assert.NoError(t, err)
+	assert.Contains(t, res.Message, "skipped 1 stale node group(s)")
+
+	// Ensure no update call was attempted for stale nodegroup
+	mockEKS.AssertNotCalled(t, "UpdateNodegroupConfig", mock.Anything, mock.Anything)
 	mockEKS.AssertExpectations(t)
 }
 
@@ -740,4 +791,18 @@ func TestSetupK8SClient_K8SFactoryError(t *testing.T) {
 	_, err := e.setupK8SClient(ctx, logr.Discard(), mockEKS, cfg, &spec, "my-cluster")
 	assert.Error(t, err)
 	assert.Contains(t, err.Error(), "create Kubernetes client")
+}
+
+func TestFormatMessages(t *testing.T) {
+	shutdownNoStale := formatShutdownMessage("my-cluster", operationStats{applied: 2, skippedStale: 0})
+	assert.Equal(t, "scaled 2 node group(s) to zero in EKS cluster my-cluster", shutdownNoStale)
+
+	shutdownWithStale := formatShutdownMessage("my-cluster", operationStats{applied: 2, skippedStale: 1})
+	assert.Equal(t, "scaled 2 node group(s) to zero in EKS cluster my-cluster, skipped 1 stale node group(s)", shutdownWithStale)
+
+	wakeupNoStale := formatWakeUpMessage("my-cluster", operationStats{applied: 3, skippedStale: 0})
+	assert.Equal(t, "restored 3 node group(s) in EKS cluster my-cluster", wakeupNoStale)
+
+	wakeupWithStale := formatWakeUpMessage("my-cluster", operationStats{applied: 3, skippedStale: 2})
+	assert.Equal(t, "restored 3 node group(s) in EKS cluster my-cluster, skipped 2 stale node group(s)", wakeupWithStale)
 }

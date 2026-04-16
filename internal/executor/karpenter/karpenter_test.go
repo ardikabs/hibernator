@@ -668,6 +668,20 @@ func TestExecutorType_Constant(t *testing.T) {
 	assert.Equal(t, "karpenter", e.Type())
 }
 
+func TestFormatMessages(t *testing.T) {
+	shutdownNoStale := formatShutdownMessage(operationStats{applied: 2, skippedStale: 0})
+	assert.Equal(t, "scaled down 2 Karpenter NodePool(s)", shutdownNoStale)
+
+	shutdownWithStale := formatShutdownMessage(operationStats{applied: 2, skippedStale: 1})
+	assert.Equal(t, "scaled down 2 Karpenter NodePool(s), skipped 1 stale NodePool(s)", shutdownWithStale)
+
+	wakeupNoStale := formatWakeUpMessage(operationStats{applied: 3, skippedStale: 0})
+	assert.Equal(t, "restored 3 Karpenter NodePool(s)", wakeupNoStale)
+
+	wakeupWithStale := formatWakeUpMessage(operationStats{applied: 3, skippedStale: 2})
+	assert.Equal(t, "restored 3 Karpenter NodePool(s), skipped 2 stale NodePool(s)", wakeupWithStale)
+}
+
 func TestKarpenterParameters_Empty(t *testing.T) {
 	params := executorparams.KarpenterParameters{
 		NodePools: []string{},

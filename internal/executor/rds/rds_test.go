@@ -880,3 +880,20 @@ func TestParameters_JSON(t *testing.T) {
 func TestExecutorType_Constant(t *testing.T) {
 	assert.Equal(t, "rds", ExecutorType)
 }
+
+func TestFormatMessages(t *testing.T) {
+	shutdownNoStale := formatShutdownMessage(operationStats{applied: 4, skippedStale: 0})
+	assert.Equal(t, "stopped 4 RDS resource(s)", shutdownNoStale)
+
+	shutdownWithStale := formatShutdownMessage(operationStats{applied: 4, skippedStale: 1})
+	assert.Equal(t, "stopped 4 RDS resource(s), skipped 1 stale resource(s)", shutdownWithStale)
+
+	wakeupNoSkips := formatWakeUpMessage(operationStats{applied: 5, skippedStale: 0, skippedKey: 0})
+	assert.Equal(t, "started 5 RDS resource(s)", wakeupNoSkips)
+
+	wakeupWithStale := formatWakeUpMessage(operationStats{applied: 5, skippedStale: 2, skippedKey: 0})
+	assert.Equal(t, "started 5 RDS resource(s), skipped 2 stale resource(s)", wakeupWithStale)
+
+	wakeupWithAllSkips := formatWakeUpMessage(operationStats{applied: 5, skippedStale: 2, skippedKey: 1})
+	assert.Equal(t, "started 5 RDS resource(s), skipped 2 stale resource(s), skipped 1 unrecognized restore key(s)", wakeupWithAllSkips)
+}
