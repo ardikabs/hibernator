@@ -60,37 +60,95 @@ type threadDelivery struct {
 	rt  deliveryRuntime
 }
 
+type threadDeliveryFlow struct {
+	event                hibernatorv1alpha1.NotificationEvent
+	rootTS               string
+	rootCreated          bool
+	prevReaction         string
+	preserveTerminalRoot bool
+	nextReaction         string
+	effectiveReaction    string
+}
+
 func (td *threadDelivery) deliver(ctx context.Context, payload sink.Payload) (States, error) {
 	if shouldSuppressExecutionProgress(payload, td.cfg) {
 		td.rt.log.V(1).Info("suppressed Slack thread delivery for non-terminal execution progress", "event", payload.Event, "plan", payload.Plan.String(), "cycle_id", payload.CycleID, "block_layout", td.cfg.BlockLayout)
 		return nil, nil
 	}
 
+	flow := td.newThreadDeliveryFlow(payload)
+	td.rt.log.V(1).Info(
+		"starting Slack thread delivery",
+		"event", payload.Event,
+		"plan", payload.Plan.String(),
+		"cycle_id", payload.CycleID,
+		"has_existing_root", flow.rootTS != "",
+	)
+
+	if err := td.syncThreadRoot(ctx, payload, &flow); err != nil {
+		return nil, err
+	}
+	if err := td.sendThreadReply(ctx, payload, flow.rootTS); err != nil {
+		return nil, err
+	}
+	td.syncThreadRootReaction(ctx, payload, &flow)
+
+	states := td.buildThreadStates(payload, flow)
+	td.rt.log.V(1).Info("completed Slack thread delivery", "root_ts", flow.rootTS, "event", payload.Event, "plan", payload.Plan.String(), "cycle_id", payload.CycleID, "root_created", flow.rootCreated)
+
+	return states, nil
+}
+
+func (td *threadDelivery) newThreadDeliveryFlow(payload sink.Payload) threadDeliveryFlow {
 	event := hibernatorv1alpha1.NotificationEvent(payload.Event)
 	rootTS := resolveRootThreadTimestamp(payload, td.rt.sinkState)
-	rootCreated := false
-	td.rt.log.V(1).Info("starting Slack thread delivery", "event", payload.Event, "plan", payload.Plan.String(), "cycle_id", payload.CycleID, "has_existing_root", rootTS != "")
+	prevReaction := strings.TrimSpace(td.rt.sinkState["slack.thread.last_reaction"])
 
-	if rootTS == "" {
+	flow := threadDeliveryFlow{
+		event:             event,
+		rootTS:            rootTS,
+		prevReaction:      prevReaction,
+		nextReaction:      reactionForEvent(event),
+		effectiveReaction: prevReaction,
+	}
+	if rootTS != "" {
+		flow.preserveTerminalRoot = shouldPreserveTerminalRoot(prevReaction, event)
+	}
+
+	return flow
+}
+
+func (td *threadDelivery) syncThreadRoot(ctx context.Context, payload sink.Payload, flow *threadDeliveryFlow) error {
+	if flow.rootTS == "" {
 		td.rt.log.Info("creating Slack thread root message", "event", payload.Event, "plan", payload.Plan.String(), "cycle_id", payload.CycleID)
 		rootMsg := td.s.buildRootMessage(ctx, payload, td.cfg, td.rt.customTemplate)
 		createdTS, err := td.sendViaChatAPI(ctx, td.cfg, rootMsg)
 		if err != nil {
-			return nil, err
+			return err
 		}
-		rootTS = createdTS
-		rootCreated = true
-		td.rt.log.Info("created Slack thread root message", "root_ts", rootTS, "channel_id", td.cfg.ChannelID, "plan", payload.Plan.String(), "cycle_id", payload.CycleID)
-	} else {
-		td.rt.log.V(1).Info("updating Slack thread root message", "root_ts", rootTS, "channel_id", td.cfg.ChannelID, "event", payload.Event)
-		rootMsg := td.s.buildRootMessage(ctx, payload, td.cfg, td.rt.customTemplate)
-		if err := td.updateViaChatAPI(ctx, td.cfg, rootTS, rootMsg); err != nil {
-			td.rt.log.Error(err, "failed to update root thread message", "root_ts", rootTS, "channel_id", td.cfg.ChannelID)
-		} else {
-			td.rt.log.V(1).Info("updated Slack thread root message", "root_ts", rootTS, "channel_id", td.cfg.ChannelID, "event", payload.Event)
-		}
+		flow.rootTS = createdTS
+		flow.rootCreated = true
+		td.rt.log.Info("created Slack thread root message", "root_ts", flow.rootTS, "channel_id", td.cfg.ChannelID, "plan", payload.Plan.String(), "cycle_id", payload.CycleID)
+		return nil
 	}
 
+	if flow.preserveTerminalRoot {
+		td.rt.log.V(1).Info("skipping Slack thread root update to preserve terminal state", "root_ts", flow.rootTS, "event", payload.Event, "prev_reaction", flow.prevReaction)
+		return nil
+	}
+
+	td.rt.log.V(1).Info("updating Slack thread root message", "root_ts", flow.rootTS, "channel_id", td.cfg.ChannelID, "event", payload.Event)
+	rootMsg := td.s.buildRootMessage(ctx, payload, td.cfg, td.rt.customTemplate)
+	if err := td.updateViaChatAPI(ctx, td.cfg, flow.rootTS, rootMsg); err != nil {
+		td.rt.log.Error(err, "failed to update root thread message", "root_ts", flow.rootTS, "channel_id", td.cfg.ChannelID)
+		return nil
+	}
+
+	td.rt.log.V(1).Info("updated Slack thread root message", "root_ts", flow.rootTS, "channel_id", td.cfg.ChannelID, "event", payload.Event)
+	return nil
+}
+
+func (td *threadDelivery) sendThreadReply(ctx context.Context, payload sink.Payload, rootTS string) error {
 	replyMsg := td.s.buildMessage(ctx, payload, td.cfg, td.rt.customTemplate)
 	if rootTS != "" {
 		replyMsg.ThreadTimestamp = rootTS
@@ -99,49 +157,57 @@ func (td *threadDelivery) deliver(ctx context.Context, payload sink.Payload) (St
 	td.rt.log.V(1).Info("sending Slack thread reply", "root_ts", rootTS, "event", payload.Event, "plan", payload.Plan.String(), "cycle_id", payload.CycleID)
 	_, err := td.sendViaChatAPI(ctx, td.cfg, replyMsg)
 	if err != nil {
-		return nil, err
+		return err
 	}
 	td.rt.log.V(1).Info("sent Slack thread reply", "root_ts", rootTS, "event", payload.Event, "plan", payload.Plan.String(), "cycle_id", payload.CycleID)
+	return nil
+}
 
-	reaction := reactionForEvent(event)
-	bumpTS := rootTS
-	shouldBump := shouldBumpReaction(td.rt.sinkState, event, bumpTS, reaction)
-	if rootCreated && bumpTS != "" && reaction != "" {
+func (td *threadDelivery) syncThreadRootReaction(ctx context.Context, payload sink.Payload, flow *threadDeliveryFlow) {
+	if flow.preserveTerminalRoot {
+		td.rt.log.V(1).Info("skipping Slack root reaction downgrade to preserve terminal state", "root_ts", flow.rootTS, "event", payload.Event, "prev_reaction", flow.prevReaction, "next_reaction", flow.nextReaction)
+		return
+	}
+
+	shouldBump := shouldBumpReaction(flow.prevReaction, flow.event, flow.rootTS, flow.nextReaction)
+	if flow.rootCreated && flow.rootTS != "" && flow.nextReaction != "" {
 		shouldBump = true
 	}
-	td.rt.log.V(1).Info("evaluated Slack root reaction update", "root_ts", bumpTS, "event", payload.Event, "reaction", reaction, "should_bump", shouldBump)
+	td.rt.log.V(1).Info("evaluated Slack root reaction update", "root_ts", flow.rootTS, "event", payload.Event, "reaction", flow.nextReaction, "should_bump", shouldBump)
 
-	if shouldBump {
-		prevReaction := strings.TrimSpace(td.rt.sinkState["slack.thread.last_reaction"])
-		if event == hibernatorv1alpha1.EventStart {
-			prevReaction = ""
-		}
-		if rootCreated {
-			prevReaction = ""
-		}
-		td.rt.log.V(1).Info("updating Slack root reaction", "root_ts", bumpTS, "prev_reaction", prevReaction, "next_reaction", reaction)
-		if err := td.overrideRootThreadReaction(ctx, td.cfg, bumpTS, prevReaction, reaction); err != nil {
-			td.rt.log.Error(err, "failed to override root thread reaction", "prev_reaction", prevReaction, "reaction", reaction, "root_ts", bumpTS, "channel_id", td.cfg.ChannelID)
-		} else {
-			td.rt.log.V(1).Info("updated Slack root reaction", "root_ts", bumpTS, "reaction", reaction)
-		}
+	if !shouldBump {
+		return
 	}
 
-	metadata := map[string]string{
+	prevReactionForBump := flow.prevReaction
+	if flow.event == hibernatorv1alpha1.EventStart || flow.rootCreated {
+		prevReactionForBump = ""
+	}
+
+	td.rt.log.V(1).Info("updating Slack root reaction", "root_ts", flow.rootTS, "prev_reaction", prevReactionForBump, "next_reaction", flow.nextReaction)
+	if err := td.overrideRootThreadReaction(ctx, td.cfg, flow.rootTS, prevReactionForBump, flow.nextReaction); err != nil {
+		td.rt.log.Error(err, "failed to override root thread reaction", "prev_reaction", prevReactionForBump, "reaction", flow.nextReaction, "root_ts", flow.rootTS, "channel_id", td.cfg.ChannelID)
+		return
+	}
+
+	td.rt.log.V(1).Info("updated Slack root reaction", "root_ts", flow.rootTS, "reaction", flow.nextReaction)
+	flow.effectiveReaction = flow.nextReaction
+}
+
+func (td *threadDelivery) buildThreadStates(payload sink.Payload, flow threadDeliveryFlow) States {
+	states := map[string]string{
 		"slack.thread.ref":     threadReference(payload),
-		"slack.thread.root_ts": rootTS,
+		"slack.thread.root_ts": flow.rootTS,
 	}
-	if rootCreated {
-		metadata["slack.thread.state"] = "root_sent"
+	if flow.rootCreated {
+		states["slack.thread.state"] = "root_sent"
 	} else {
-		metadata["slack.thread.state"] = "reply_sent"
+		states["slack.thread.state"] = "reply_sent"
 	}
-	if reaction != "" {
-		metadata["slack.thread.last_reaction"] = reaction
+	if flow.effectiveReaction != "" {
+		states["slack.thread.last_reaction"] = flow.effectiveReaction
 	}
-	td.rt.log.V(1).Info("completed Slack thread delivery", "root_ts", rootTS, "event", payload.Event, "plan", payload.Plan.String(), "cycle_id", payload.CycleID, "root_created", rootCreated)
-
-	return metadata, nil
+	return states
 }
 
 func (td *threadDelivery) newSlackAPI(cfg config) *slackapi.Client {
@@ -256,14 +322,42 @@ func shouldSuppressExecutionProgress(payload sink.Payload, cfg config) bool {
 	}
 }
 
-func shouldBumpReaction(sinkState map[string]string, event hibernatorv1alpha1.NotificationEvent, bumpTS, reaction string) bool {
+func shouldBumpReaction(prevReaction string, event hibernatorv1alpha1.NotificationEvent, bumpTS, reaction string) bool {
 	if bumpTS == "" || reaction == "" {
 		return false
 	}
 	if event == hibernatorv1alpha1.EventStart {
 		return true
 	}
-	return strings.TrimSpace(sinkState["slack.thread.last_reaction"]) != reaction
+	return strings.TrimSpace(prevReaction) != reaction
+}
+
+func shouldPreserveTerminalRoot(prevReaction string, event hibernatorv1alpha1.NotificationEvent) bool {
+	if !isTerminalReaction(prevReaction) {
+		return false
+	}
+	return isNonTerminalEvent(event)
+}
+
+func isTerminalReaction(reaction string) bool {
+	switch strings.TrimSpace(reaction) {
+	case "white_check_mark", "x":
+		return true
+	default:
+		return false
+	}
+}
+
+func isNonTerminalEvent(event hibernatorv1alpha1.NotificationEvent) bool {
+	switch event {
+	case hibernatorv1alpha1.EventStart,
+		hibernatorv1alpha1.EventExecutionProgress,
+		hibernatorv1alpha1.EventRecovery,
+		hibernatorv1alpha1.EventPhaseChange:
+		return true
+	default:
+		return false
+	}
 }
 
 func resolveRootThreadTimestamp(payload sink.Payload, sinkState map[string]string) string {

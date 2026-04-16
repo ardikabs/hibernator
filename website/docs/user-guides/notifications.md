@@ -87,6 +87,7 @@ Each sink reads its configuration from a Kubernetes Secret. The Secret must cont
       - `channel` (default): every event posts as standalone message (requires `webhook_url`).
       - `thread`: keeps a living root message per plan/cycle (updated on each delivered event) and appends every event as a thread reply, including `Start` (requires `bot_token` + `channel_id`).
         - root message includes a static progress bar relative to total targets (for example `[██░░░░░░░░] 1/10`) so progression remains visible even though the root is updated in place.
+        - root status is monotonic per sink+plan+cycle+operation: once root reaches a terminal state (`Success`/`Failure`), late non-terminal events (`ExecutionProgress`, `Recovery`, `PhaseChange`, `Start`) do not downgrade the root back to `In Progress`; those events are still posted as thread replies.
         - custom templates from `templateRef` are intentionally ignored in `thread` mode; Hibernator always uses built-in, opinionated thread layouts so root context and status progression stay consistent across updates and replies.
         - controller logs include an info message when this happens: `ignored custom template for Slack thread delivery mode; using built-in opinionated thread layout for consistent context`.
         - strongly recommended to include `ExecutionProgress` in `onEvents` for smooth root progression (`Starting -> In Progress -> Completed/Failed`). Without it, root updates only when subscribed events are emitted.
