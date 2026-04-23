@@ -212,6 +212,28 @@ func TestWakeUp_StartPreviouslyRunningInstances(t *testing.T) {
 
 	mockEC2 := &mocks.EC2Client{}
 
+	// Setup expectation for DescribeInstances to discover stopped instances.
+	mockEC2.On("DescribeInstances", mock.Anything, mock.Anything).Return(&awsec2.DescribeInstancesOutput{
+		Reservations: []types.Reservation{
+			{
+				Instances: []types.Instance{
+					{
+						InstanceId: aws.String("i-123456"),
+						State: &types.InstanceState{
+							Name: types.InstanceStateNameStopped,
+						},
+					},
+					{
+						InstanceId: aws.String("i-789012"),
+						State: &types.InstanceState{
+							Name: types.InstanceStateNameStopped,
+						},
+					},
+				},
+			},
+		},
+	}, nil)
+
 	// Setup expectation for StartInstances
 	mockEC2.On("StartInstances", mock.Anything, &awsec2.StartInstancesInput{
 		InstanceIds: []string{"i-123456"},
@@ -251,6 +273,28 @@ func TestWakeUp_StartInstancesSkipsMissingIDs(t *testing.T) {
 	ctx := context.Background()
 
 	mockEC2 := &mocks.EC2Client{}
+
+	// Setup expectation for DescribeInstances to discover stopped instances.
+	mockEC2.On("DescribeInstances", mock.Anything, mock.Anything).Return(&awsec2.DescribeInstancesOutput{
+		Reservations: []types.Reservation{
+			{
+				Instances: []types.Instance{
+					{
+						InstanceId: aws.String("i-valid"),
+						State: &types.InstanceState{
+							Name: types.InstanceStateNameStopped,
+						},
+					},
+					{
+						InstanceId: aws.String("i-missing"),
+						State: &types.InstanceState{
+							Name: types.InstanceStateNameStopped,
+						},
+					},
+				},
+			},
+		},
+	}, nil)
 
 	isBulkStartInput := func(input *awsec2.StartInstancesInput) bool {
 		if input == nil || len(input.InstanceIds) != 2 {
