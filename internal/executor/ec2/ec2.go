@@ -17,6 +17,7 @@ import (
 	"github.com/aws/aws-sdk-go-v2/service/ec2/types"
 	"github.com/aws/smithy-go"
 	"github.com/go-logr/logr"
+	"github.com/samber/lo"
 
 	"github.com/ardikabs/hibernator/internal/executor"
 	"github.com/ardikabs/hibernator/pkg/awsutil"
@@ -120,9 +121,9 @@ func (e *Executor) Shutdown(ctx context.Context, log logr.Logger, spec executor.
 
 	client := e.ec2Factory(cfg)
 
-	// Find instances
+	// Find running instances to stop.
 	log.Info("discovering EC2 instances matching selector")
-	instances, err := e.findInstances(ctx, client, params.Selector)
+	instances, err := e.findInstancesByState(ctx, client, params.Selector, types.InstanceStateNameRunning)
 	if err != nil {
 		log.Error(err, "failed to find instances")
 		return nil, fmt.Errorf("find instances: %w", err)
@@ -236,8 +237,8 @@ func (e *Executor) WakeUp(ctx context.Context, log logr.Logger, spec executor.Sp
 
 	client := e.ec2Factory(cfg)
 
-	// Start instances that were previously running
-	var instancesToStart []string
+	// Build restore lookup for instances that were running before shutdown.
+	previouslyRunning := make(map[string]struct{}, len(restore.Data))
 	for instanceID, stateBytes := range restore.Data {
 		var inst InstanceState
 		if err := json.Unmarshal(stateBytes, &inst); err != nil {
@@ -246,12 +247,35 @@ func (e *Executor) WakeUp(ctx context.Context, log logr.Logger, spec executor.Sp
 		}
 
 		if inst.WasRunning {
-			instancesToStart = append(instancesToStart, inst.InstanceID)
-			log.Info("instance marked for start",
-				"instanceId", inst.InstanceID,
-				"wasRunning", inst.WasRunning,
-			)
+			id := inst.InstanceID
+			if id == "" {
+				id = instanceID
+			}
+
+			previouslyRunning[id] = struct{}{}
 		}
+	}
+
+	// Re-discover current stopped instances from selector, then intersect
+	// with restore data to keep wakeup idempotent.
+	instances, err := e.findInstancesByState(ctx, client, params.Selector, types.InstanceStateNameStopped)
+	if err != nil {
+		log.Error(err, "failed to find instances eligible for wakeup")
+		return nil, fmt.Errorf("find instances: %w", err)
+	}
+
+	instancesToStart := make([]string, 0, len(instances))
+	for _, inst := range instances {
+		instanceID := aws.ToString(inst.InstanceId)
+		if _, ok := previouslyRunning[instanceID]; !ok {
+			continue
+		}
+
+		instancesToStart = append(instancesToStart, instanceID)
+		log.Info("instance marked for start",
+			"instanceId", instanceID,
+			"state", inst.State.Name,
+		)
 	}
 
 	msg := fmt.Sprintf("started %d EC2 instance(s)", len(instancesToStart))
@@ -290,6 +314,7 @@ func (e *Executor) WakeUp(ctx context.Context, log logr.Logger, spec executor.Sp
 	return &executor.Result{Message: msg}, nil
 }
 
+// startInstancesWithMissingTolerance attempts to start all instances in bulk, but if it encounters an InvalidInstanceID.NotFound error, it retries starting each instance individually to tolerate missing instances.
 func (e *Executor) startInstancesWithMissingTolerance(ctx context.Context, log logr.Logger, client EC2Client, instanceIDs []string) ([]string, int, error) {
 	log.Info("starting instances", "count", len(instanceIDs))
 	_, err := client.StartInstances(ctx, &ec2.StartInstancesInput{InstanceIds: instanceIDs})
@@ -298,7 +323,7 @@ func (e *Executor) startInstancesWithMissingTolerance(ctx context.Context, log l
 		return instanceIDs, 0, nil
 	}
 
-	if !isInvalidInstanceIDNotFound(err) {
+	if !isInstanceNotFound(err) {
 		return nil, 0, fmt.Errorf("start instances: %w", err)
 	}
 
@@ -309,7 +334,7 @@ func (e *Executor) startInstancesWithMissingTolerance(ctx context.Context, log l
 
 	for _, instanceID := range instanceIDs {
 		if _, err := client.StartInstances(ctx, &ec2.StartInstancesInput{InstanceIds: []string{instanceID}}); err != nil {
-			if isInvalidInstanceIDNotFound(err) {
+			if isInstanceNotFound(err) {
 				skippedMissing++
 				log.Info("skipping missing instance", "instanceId", instanceID)
 				continue
@@ -330,7 +355,9 @@ func (e *Executor) startInstancesWithMissingTolerance(ctx context.Context, log l
 	return started, skippedMissing, nil
 }
 
-func isInvalidInstanceIDNotFound(err error) bool {
+// isInstanceNotFound checks if the error is an InvalidInstanceID.NotFound error,
+// which indicates that one or more instance IDs do not exist.
+func isInstanceNotFound(err error) bool {
 	var apiErr smithy.APIError
 	if !errors.As(err, &apiErr) {
 		return false
@@ -440,7 +467,7 @@ func (e *Executor) loadAWSConfig(ctx context.Context, spec executor.Spec) (aws.C
 	return awsutil.BuildAWSConfig(ctx, spec.ConnectorConfig.AWS)
 }
 
-func (e *Executor) findInstances(ctx context.Context, client EC2Client, selector Selector) ([]types.Instance, error) {
+func (e *Executor) findInstancesByState(ctx context.Context, client EC2Client, selector Selector, states ...types.InstanceStateName) ([]types.Instance, error) {
 	input := &ec2.DescribeInstancesInput{}
 
 	// Build filters
@@ -472,10 +499,15 @@ func (e *Executor) findInstances(ctx context.Context, client EC2Client, selector
 		input.InstanceIds = selector.InstanceIDs
 	}
 
-	// Exclude terminated and shutting-down instances
+	if len(states) == 0 {
+		return nil, fmt.Errorf("at least one instance state is required")
+	}
+
 	filters = append(filters, types.Filter{
-		Name:   aws.String("instance-state-name"),
-		Values: []string{"running"},
+		Name: aws.String("instance-state-name"),
+		Values: lo.Map(states, func(state types.InstanceStateName, _ int) string {
+			return string(state)
+		}),
 	})
 
 	if len(filters) > 0 {
