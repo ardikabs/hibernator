@@ -14,6 +14,7 @@ import (
 	"github.com/aws/aws-sdk-go-v2/aws"
 	awsec2 "github.com/aws/aws-sdk-go-v2/service/ec2"
 	"github.com/aws/aws-sdk-go-v2/service/ec2/types"
+	"github.com/aws/smithy-go"
 	"github.com/go-logr/logr"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/mock"
@@ -242,6 +243,77 @@ func TestWakeUp_StartPreviouslyRunningInstances(t *testing.T) {
 
 	_, err := e.WakeUp(ctx, logr.Discard(), spec, restore)
 	assert.NoError(t, err)
+
+	mockEC2.AssertExpectations(t)
+}
+
+func TestWakeUp_StartInstancesSkipsMissingIDs(t *testing.T) {
+	ctx := context.Background()
+
+	mockEC2 := &mocks.EC2Client{}
+
+	isBulkStartInput := func(input *awsec2.StartInstancesInput) bool {
+		if input == nil || len(input.InstanceIds) != 2 {
+			return false
+		}
+
+		hasValid := false
+		hasMissing := false
+		for _, id := range input.InstanceIds {
+			switch id {
+			case "i-valid":
+				hasValid = true
+			case "i-missing":
+				hasMissing = true
+			}
+		}
+
+		return hasValid && hasMissing
+	}
+
+	// First bulk start fails because one instance no longer exists.
+	mockEC2.On("StartInstances", mock.Anything, mock.MatchedBy(isBulkStartInput)).
+		Return((*awsec2.StartInstancesOutput)(nil), &smithy.GenericAPIError{Code: "InvalidInstanceID.NotFound", Message: "The instance ID 'i-missing' does not exist", Fault: smithy.FaultClient}).
+		Once()
+
+	// Fallback starts valid instance successfully.
+	mockEC2.On("StartInstances", mock.Anything, &awsec2.StartInstancesInput{InstanceIds: []string{"i-valid"}}).
+		Return(&awsec2.StartInstancesOutput{}, nil).
+		Once()
+
+	// Missing instance is skipped during fallback.
+	mockEC2.On("StartInstances", mock.Anything, &awsec2.StartInstancesInput{InstanceIds: []string{"i-missing"}}).
+		Return((*awsec2.StartInstancesOutput)(nil), &smithy.GenericAPIError{Code: "InvalidInstanceID.NotFound", Message: "The instance ID 'i-missing' does not exist", Fault: smithy.FaultClient}).
+		Once()
+
+	ec2Factory := func(cfg aws.Config) EC2Client { return mockEC2 }
+
+	e := NewWithClients(ec2Factory, nil)
+
+	instanceValidState, _ := json.Marshal(InstanceState{InstanceID: "i-valid", WasRunning: true})
+	instanceMissingState, _ := json.Marshal(InstanceState{InstanceID: "i-missing", WasRunning: true})
+
+	spec := executor.Spec{
+		TargetName: "test-instances",
+		TargetType: "ec2",
+		ConnectorConfig: executor.ConnectorConfig{
+			AWS: &executor.AWSConnectorConfig{Region: "us-east-1"},
+		},
+	}
+
+	restore := executor.RestoreData{
+		Type: "ec2",
+		Data: map[string]json.RawMessage{
+			"i-valid":   instanceValidState,
+			"i-missing": instanceMissingState,
+		},
+	}
+
+	result, err := e.WakeUp(ctx, logr.Discard(), spec, restore)
+	assert.NoError(t, err)
+	assert.NotNil(t, result)
+	assert.Contains(t, result.Message, "started 1 EC2 instance(s)")
+	assert.Contains(t, result.Message, "skipped 1 missing instance(s)")
 
 	mockEC2.AssertExpectations(t)
 }
