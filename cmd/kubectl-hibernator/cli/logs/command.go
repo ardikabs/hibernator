@@ -10,12 +10,15 @@ import (
 	"context"
 	"crypto/md5"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"os"
+	"os/signal"
 	"sort"
 	"strings"
 	"sync"
+	"syscall"
 	"time"
 
 	"github.com/spf13/cobra"
@@ -155,6 +158,8 @@ type logLine struct {
 func tailLogsFromPods(ctx context.Context, clientset *kubernetes.Clientset, pods []*corev1.Pod, opts *logsOptions, filter *logFilter) error {
 	out := output.FromContext(ctx)
 
+	out.Info("Looking up logs for plan %q...", filter.planName)
+
 	logChan := make(chan *logLine, 1000)
 	errChan := make(chan error, len(pods))
 	var wg sync.WaitGroup
@@ -184,7 +189,9 @@ func tailLogsFromPods(ctx context.Context, clientset *kubernetes.Clientset, pods
 
 	// Check for errors
 	close(errChan)
+	podErrorCount := 0
 	for err := range errChan {
+		podErrorCount++
 		out.Error("%v", err)
 	}
 
@@ -199,15 +206,27 @@ func tailLogsFromPods(ctx context.Context, clientset *kubernetes.Clientset, pods
 
 	// Deduplicate and display
 	seen := make(map[string]bool)
+	emittedCount := 0
 	for _, log := range allLogs {
 		if !seen[log.hash] {
 			seen[log.hash] = true
+			emittedCount++
 			if opts.root.JsonOutput {
 				out.Info(log.raw)
 			} else {
 				out.Info(log.line)
 			}
 		}
+	}
+
+	if emittedCount > 0 {
+		out.Info("Done. Found %d update(s) for plan %q.", emittedCount, filter.planName)
+	} else {
+		out.Info("Done. No updates found for plan %q.", filter.planName)
+	}
+
+	if podErrorCount > 0 {
+		out.Info("Note: Some information could not be retrieved (%d source(s)), so results may be incomplete.", podErrorCount)
 	}
 
 	return nil
@@ -217,15 +236,17 @@ func tailLogsFromPods(ctx context.Context, clientset *kubernetes.Clientset, pods
 func followLogsFromPods(ctx context.Context, clientset *kubernetes.Clientset, pods []*corev1.Pod, opts *logsOptions, filter *logFilter) error {
 	out := output.FromContext(ctx)
 
+	// Handle Ctrl+C/SIGTERM by canceling the streaming context so we can
+	// finish aggregation and print completion summaries before returning.
+	followCtx, stopSignals := signal.NotifyContext(ctx, os.Interrupt, syscall.SIGTERM)
+	defer stopSignals()
+
 	logChan := make(chan *logLine, 1000)
 	errChan := make(chan error, len(pods))
 	var wg sync.WaitGroup
 
 	// Show which pods we're querying
-	out.Info("Following logs from %d controller pod(s):", len(pods))
-	for _, pod := range pods {
-		out.Info("  - %s/%s", pod.Namespace, pod.Name)
-	}
+	out.Info("Starting live log stream for plan %q (press Ctrl+C to stop)...", filter.planName)
 	out.Info("")
 
 	// Stream logs from each pod concurrently
@@ -236,7 +257,10 @@ func followLogsFromPods(ctx context.Context, clientset *kubernetes.Clientset, po
 			logOpts := &corev1.PodLogOptions{
 				Follow: true,
 			}
-			if err := streamPodLogs(ctx, clientset, p, opts, filter, logOpts, logChan); err != nil {
+			if err := streamPodLogs(followCtx, clientset, p, opts, filter, logOpts, logChan); err != nil {
+				if errors.Is(err, context.Canceled) || followCtx.Err() != nil {
+					return
+				}
 				errChan <- fmt.Errorf("pod %s/%s: %w", p.Namespace, p.Name, err)
 			}
 		}(pod)
@@ -250,12 +274,14 @@ func followLogsFromPods(ctx context.Context, clientset *kubernetes.Clientset, po
 
 	// Collect and deduplicate logs as they arrive
 	seen := make(map[string]bool)
-	seenMutex := &sync.Mutex{}
+	seenMutex := new(sync.Mutex)
+	emittedCount := 0
 
 	for log := range logChan {
 		seenMutex.Lock()
 		if !seen[log.hash] {
 			seen[log.hash] = true
+			emittedCount++
 			if opts.root.JsonOutput {
 				out.Info(log.raw)
 			} else {
@@ -267,8 +293,22 @@ func followLogsFromPods(ctx context.Context, clientset *kubernetes.Clientset, po
 
 	// Report any errors
 	close(errChan)
+	podErrorCount := 0
 	for err := range errChan {
+		podErrorCount++
 		out.Error("%v", err)
+	}
+
+	out.Info("")
+
+	if emittedCount > 0 {
+		out.Info("Live stream ended. Found %d update(s) for plan %q.", emittedCount, filter.planName)
+	} else {
+		out.Info("Live stream ended. No updates found for plan %q.", filter.planName)
+	}
+
+	if podErrorCount > 0 {
+		out.Info("Note: Some information could not be retrieved (%d source(s)), so results may be incomplete.", podErrorCount)
 	}
 
 	return nil
