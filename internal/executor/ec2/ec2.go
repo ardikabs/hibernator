@@ -9,11 +9,13 @@ package ec2
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/service/ec2"
 	"github.com/aws/aws-sdk-go-v2/service/ec2/types"
+	"github.com/aws/smithy-go"
 	"github.com/go-logr/logr"
 
 	"github.com/ardikabs/hibernator/internal/executor"
@@ -255,23 +257,24 @@ func (e *Executor) WakeUp(ctx context.Context, log logr.Logger, spec executor.Sp
 	msg := fmt.Sprintf("started %d EC2 instance(s)", len(instancesToStart))
 
 	if len(instancesToStart) > 0 {
-		log.Info("starting instances", "count", len(instancesToStart))
-		_, err = client.StartInstances(ctx, &ec2.StartInstancesInput{
-			InstanceIds: instancesToStart,
-		})
+		startedInstances, skippedMissingCount, err := e.startInstancesWithMissingTolerance(ctx, log, client, instancesToStart)
 		if err != nil {
 			log.Error(err, "failed to start instances")
-			return nil, fmt.Errorf("start instances: %w", err)
+			return nil, err
 		}
-		log.Info("instances started successfully", "count", len(instancesToStart))
+
+		msg = fmt.Sprintf("started %d EC2 instance(s)", len(startedInstances))
+		if skippedMissingCount > 0 {
+			msg += fmt.Sprintf("; skipped %d missing instance(s)", skippedMissingCount)
+		}
 
 		// Wait for instances to reach running state if configured
-		if params.AwaitCompletion.Enabled {
+		if params.AwaitCompletion.Enabled && len(startedInstances) > 0 {
 			timeout := params.AwaitCompletion.Timeout
 			if timeout == "" {
 				timeout = DefaultWaitTimeout
 			}
-			if err := e.waitForInstancesRunning(ctx, log, client, instancesToStart, timeout); err != nil {
+			if err := e.waitForInstancesRunning(ctx, log, client, startedInstances, timeout); err != nil {
 				log.Error(err, "timeout waiting for instances to start")
 				msg += fmt.Sprintf("; not all instances confirmed running after %s timeout", timeout)
 			} else {
@@ -285,6 +288,55 @@ func (e *Executor) WakeUp(ctx context.Context, log logr.Logger, spec executor.Sp
 	log.Info("wakeup completed", "instanceCount", len(instancesToStart))
 
 	return &executor.Result{Message: msg}, nil
+}
+
+func (e *Executor) startInstancesWithMissingTolerance(ctx context.Context, log logr.Logger, client EC2Client, instanceIDs []string) ([]string, int, error) {
+	log.Info("starting instances", "count", len(instanceIDs))
+	_, err := client.StartInstances(ctx, &ec2.StartInstancesInput{InstanceIds: instanceIDs})
+	if err == nil {
+		log.Info("instances started successfully", "count", len(instanceIDs))
+		return instanceIDs, 0, nil
+	}
+
+	if !isInvalidInstanceIDNotFound(err) {
+		return nil, 0, fmt.Errorf("start instances: %w", err)
+	}
+
+	log.Info("bulk start encountered missing instance IDs; retrying per instance", "count", len(instanceIDs))
+
+	started := make([]string, 0, len(instanceIDs))
+	skippedMissing := 0
+
+	for _, instanceID := range instanceIDs {
+		if _, err := client.StartInstances(ctx, &ec2.StartInstancesInput{InstanceIds: []string{instanceID}}); err != nil {
+			if isInvalidInstanceIDNotFound(err) {
+				skippedMissing++
+				log.Info("skipping missing instance", "instanceId", instanceID)
+				continue
+			}
+
+			return nil, skippedMissing, fmt.Errorf("start instance %s: %w", instanceID, err)
+		}
+
+		started = append(started, instanceID)
+	}
+
+	log.Info("instances started with missing-instance tolerance",
+		"requestedCount", len(instanceIDs),
+		"startedCount", len(started),
+		"skippedMissingCount", skippedMissing,
+	)
+
+	return started, skippedMissing, nil
+}
+
+func isInvalidInstanceIDNotFound(err error) bool {
+	var apiErr smithy.APIError
+	if !errors.As(err, &apiErr) {
+		return false
+	}
+
+	return apiErr.ErrorCode() == "InvalidInstanceID.NotFound"
 }
 
 // waitForInstancesStopped waits for all instances to reach stopped state.
