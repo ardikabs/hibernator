@@ -20,21 +20,33 @@ Licensed under the Apache License, Version 2.0.
 //   - Clean removal: Remove cancels the per-key goroutine and drains the slot,
 //     freeing memory when a resource is deleted.
 //
+// # Two Factories: Slot vs Worker
+//
+// The Pool uses two distinct factories:
+//
+//   - slotFactory (via WithSlotFactory option): Creates per-key Slots that buffer
+//     values. Defaults to FIFOSlot. Must be provided at Pool construction time.
+//
+//   - workerFactory (via Register method): Creates per-key worker goroutine bodies.
+//     Must be provided at runtime when the context becomes available.
+//
+// This separation allows Deliver() calls to buffer values before Register() is called,
+// supporting decoupled initialization patterns common in controller-runtime Runnables.
+//
 // # Bring Your Own Slot
 //
-// The Pool is agnostic to delivery semantics. Callers choose a Slot implementation
-// via WithSlotFactory:
+// Callers choose a Slot implementation via WithSlotFactory:
 //
 //   - FIFOSlot: backed by a buffered channel. Every update is preserved in FIFO
 //     order. Use for consumers where no update can be dropped (e.g. status writers).
 //
-//   - LatestWinsSlot: backed by conflate.Pipeline. Concurrent sends coalesce into
-//     the latest value. Use for consumers where only the freshest snapshot matters
+//   - LatestWinsSlot: backed by a conflate.Pipeline. Concurrent sends coalesce into
+//     a single latest-value notification. Use for consumers where only the freshest snapshot matters
 //     and intermediate updates are safe to discard (e.g. plan actor workers).
 //
-// # Bring Your Own Run Body
+// # Bring Your Own Worker Body
 //
-// The consumer controls what the goroutine does by providing a factory to Start:
+// The consumer controls what the goroutine does by providing a workerFactory to Register:
 //
 //	pool.Register(ctx, func(key K, slot Slot[V]) func(context.Context) {
 //	    // Return the goroutine body. The Pool owns the goroutine's lifecycle.
@@ -43,18 +55,26 @@ Licensed under the Apache License, Version 2.0.
 //	    }
 //	})
 //
-// For the common stateless-callback pattern, HandlerRunFactory is a convenience
+// The workerFactory is stored atomically to ensure safe concurrent access with Deliver.
+// For the common stateless-callback pattern, RunnerFactory is a convenience
 // helper that wraps a per-value handler and an idle TTL into the factory signature.
 package keyedworker
 
 import (
 	"context"
 	"sync"
+	"sync/atomic"
 
 	"github.com/go-logr/logr"
 )
 
 const defaultFIFOBufSize = 100
+
+// workerFactoryFunc wraps the user-supplied worker factory for atomic storage.
+// This enables safe concurrent access between Register (write) and Deliver (read).
+type workerFactoryFunc[K comparable, V any] struct {
+	fn func(K, Slot[V]) func(context.Context)
+}
 
 // Pool manages a set of per-key worker goroutines.
 // The zero value is not usable; use New to create instances.
@@ -62,8 +82,9 @@ type Pool[K comparable, V any] struct {
 	mu      sync.RWMutex
 	entries map[K]*entry[V]
 
-	// factory is the goroutine-body factory registered at Start.
-	factory func(K, Slot[V]) func(context.Context)
+	// workerFactory represents the user-supplied factory for per-key goroutine bodies. It is nil until Register is called.
+	// Use atomic operations to access.
+	workerFactory atomic.Pointer[workerFactoryFunc[K, V]]
 
 	// slotFactory creates a fresh Slot for each new entry.
 	slotFactory func() Slot[V]
@@ -130,7 +151,11 @@ func WithAutoRemoveOnIdle[K comparable, V any]() Option[K, V] {
 	return func(p *Pool[K, V]) { p.autoRemoveOnIdle = true }
 }
 
-// New creates a new Pool. The pool is not active until Start is called.
+// New creates a new Pool with the configured slotFactory.
+//
+// The pool is not active until Register is called with the workerFactory.
+// Deliver can be called before Register; values will buffer in the slot
+// and workers will activate once Register provides the workerFactory.
 func New[K comparable, V any](opts ...Option[K, V]) *Pool[K, V] {
 	p := &Pool[K, V]{
 		entries: make(map[K]*entry[V]),
@@ -145,26 +170,27 @@ func New[K comparable, V any](opts ...Option[K, V]) *Pool[K, V] {
 	return p
 }
 
-// Register arms the pool with a goroutine-body factory and parent context, then
+// Register arms the pool with a workerFactory and parent context, then
 // activates workers for any keys whose slots already have pending items (from
-// pre-Register Deliver calls). Must be called exactly once before Deliver can
-// dispatch work.
+// pre-Register Deliver calls). Must be called exactly once before workers can
+// start processing.
 //
-// Register is non-blocking — it returns immediately after arming the factory
+// Register stores the workerFactory atomically to ensure safe concurrent access
+// with Deliver. It is non-blocking — it returns immediately after arming the factory
 // and flushing pre-buffered items. The caller is responsible for blocking until
 // the desired lifetime is over (e.g. <-ctx.Done()), then calling Stop.
 //
-// factory receives a key and the key's Slot and must return a func(context.Context)
+// workerFactory receives a key and the key's Slot and must return a func(context.Context)
 // that is the goroutine body. The Pool owns the goroutine's lifecycle — the returned
 // func must respect ctx cancellation and return when done.
-func (p *Pool[K, V]) Register(ctx context.Context, factory func(K, Slot[V]) func(context.Context)) {
+func (p *Pool[K, V]) Register(ctx context.Context, workerFactoryFn func(K, Slot[V]) func(context.Context)) {
 	p.ctxMu.Lock()
 	p.parentCtx, p.parentCancel = context.WithCancel(ctx)
 	p.ctxMu.Unlock()
 
-	p.factory = factory
+	p.workerFactory.Store(&workerFactoryFunc[K, V]{fn: workerFactoryFn})
 
-	// Activate workers for any items that arrived before Start was called.
+	// Activate workers for any items that arrived before Register was called.
 	p.mu.RLock()
 	for key, e := range p.entries {
 		if e.slot.Len() > 0 {
@@ -176,12 +202,12 @@ func (p *Pool[K, V]) Register(ctx context.Context, factory func(K, Slot[V]) func
 
 // Deliver routes value to the per-key slot and ensures the worker goroutine is running.
 // Never blocks: if the slot is full (for FIFO) the value is dropped at the slot level.
-// Safe to call before Start; pending items are processed once Start registers the factory.
+// Safe to call before Register; pending items are processed once Register provides the workerFactory.
 func (p *Pool[K, V]) Deliver(key K, value V) {
 	e := p.getOrCreate(key)
 	e.slot.Send(value)
 
-	if p.factory != nil {
+	if p.workerFactory.Load() != nil {
 		p.ensureRunning(key, e)
 	}
 }
@@ -286,7 +312,7 @@ func (p *Pool[K, V]) ensureRunning(key K, e *entry[V]) {
 	go p.runEntry(ctx, key, e)
 }
 
-// runEntry launches the user-supplied goroutine body. It fires the onSpawn hook
+// runEntry launches the user-supplied worker goroutine body. It fires the onSpawn hook
 // before calling the body, and the onRemove hook plus idle-restart / auto-remove
 // logic in its defer.
 func (p *Pool[K, V]) runEntry(ctx context.Context, key K, e *entry[V]) {
@@ -294,7 +320,15 @@ func (p *Pool[K, V]) runEntry(ctx context.Context, key K, e *entry[V]) {
 		p.onSpawn(key)
 	}
 
-	fn := p.factory(key, e.slot)
+	// Load the workerFactory atomically. This is safe because Register stores it
+	// atomically before any workers can start (ensureRunning checks parentCtx first).
+	wf := p.workerFactory.Load()
+	if wf == nil {
+		// No workerFactory registered yet; this shouldn't happen because ensureRunning
+		// checks parentCtx, but be defensive.
+		return
+	}
+	fn := wf.fn(key, e.slot)
 
 	defer func() {
 		e.mu.Lock()

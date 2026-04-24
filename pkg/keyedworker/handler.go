@@ -12,9 +12,9 @@ import (
 	"time"
 )
 
-// RunnerFactory wraps a stateless per-value handler into the Pool factory
-// signature. The returned factory is suitable for passing directly to Pool.Register
-// when the consumer does not need to maintain any state across deliveries.
+// RunnerFactory wraps a stateless per-value handler into a workerFactory
+// suitable for passing directly to Pool.Register when the consumer does not need
+// to maintain any state across deliveries.
 //
 // # When to use RunnerFactory
 //
@@ -27,12 +27,12 @@ import (
 //
 // If the caller can manage its own serialization — maintaining a dedicated
 // long-lived goroutine, an event loop, or a structured receive/send discipline —
-// it should supply a custom factory directly to Pool.Register and skip
+// it should supply a custom workerFactory directly to Pool.Register and skip
 // RunnerFactory entirely. The Coordinator is a canonical example: it owns an
 // explicit actor model with a select loop and state machine, so it drives the
 // slot directly and does not need RunnerFactory's idle-reap abstraction.
 //
-// The goroutine body it produces drives the slot via an idle timer loop:
+// The goroutine body produced by the workerFactory drives the slot via an idle timer loop:
 //   - On each slot signal the handler is called with the latest value.
 //   - The idle timer is reset on each delivery.
 //   - When idleTTL elapses with no delivery the goroutine returns, allowing

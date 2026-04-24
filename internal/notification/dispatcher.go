@@ -9,7 +9,6 @@ import (
 	"context"
 	"fmt"
 	"maps"
-	"sync"
 	"sync/atomic"
 	"time"
 
@@ -110,10 +109,6 @@ type Dispatcher struct {
 
 	// activeWorkerCount tracks the number of currently active workers for graceful shutdown.
 	activeWorkerCount atomic.Int64
-
-	// readiness represents the completion of Start.
-	// Submit waits on this to ensure Start has completed before accepting requests.
-	readiness *sync.WaitGroup
 }
 
 type streamKey struct {
@@ -151,7 +146,6 @@ func NewDispatcher(log logr.Logger, c client.Reader, registry *sink.Registry, cf
 		dispatchTimeout: cfg.DispatchTimeout,
 		workerIdleTTL:   cfg.WorkerIdleTTL,
 		done:            make(chan struct{}),
-		readiness:       new(sync.WaitGroup),
 	}
 
 	d.pool = keyedworker.New(
@@ -170,7 +164,6 @@ func NewDispatcher(log logr.Logger, c client.Reader, registry *sink.Registry, cf
 		keyedworker.WithLogger[streamKey, Request](log.WithName("pool")),
 	)
 
-	d.readiness.Add(1)
 	return d
 }
 
@@ -205,9 +198,8 @@ func (d *Dispatcher) Start(ctx context.Context) error {
 	)
 
 	d.pool.Register(ctx, d.workerFactory)
-	d.log.V(1).Info("notification dispatcher running", "mode", "keyed-stream")
-	d.readiness.Done()
 
+	d.log.V(1).Info("notification dispatcher running", "mode", "keyed-stream")
 	<-ctx.Done()
 	d.log.V(1).Info("notification dispatcher initiating shutdown")
 	close(d.done)
@@ -242,8 +234,6 @@ waitLoop:
 // is dropped by the slot and counted in NotificationDropTotal.
 // After shutdown begins (d.done closed), requests are discarded with a metric.
 func (d *Dispatcher) Submit(req Request) {
-	d.readiness.Wait() // ensure Start has completed before accepting requests
-
 	log := d.log.WithValues(
 		"plan", req.Payload.Plan.String(),
 		"sink", req.SinkName,
