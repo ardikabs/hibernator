@@ -174,6 +174,15 @@ test-e2e: envtest ginkgo ## Run E2E tests in parallel via Ginkgo multi-process.
 	@echo "$(CYAN)Running E2E tests (procs=$(E2E_PROCS))...$(RESET)"
 	@KUBEBUILDER_ASSETS=$$($(ENVTEST) use -p path 2>/dev/null) $(GINKGO) --procs=$(E2E_PROCS) --tags=e2e -v ./test/e2e/...
 
+.PHONY: test-e2e-focus
+test-e2e-focus: envtest ## Run E2E tests matching a specific prefix. Usage: make test-e2e-focus FOCUS="Notification"
+	@if [ -z "$(FOCUS)" ]; then \
+		echo "$(RED)Error: FOCUS is required. Usage: make test-e2e-focus FOCUS=\"Notification\"$(RESET)"; \
+		exit 1; \
+	fi
+	@echo "$(CYAN)Running E2E tests with focus: $(FOCUS)...$(RESET)"
+	@$(GOCMD) test ./test/e2e/ -v -tags=e2e -ginkgo.v -ginkgo.focus="$(FOCUS)"
+
 .PHONY: test-pkg
 test-pkg: ## Run tests for a specific package. Usage: make test-pkg PKG=./internal/scheduler/...
 	@if [ -z "$(PKG)" ]; then \

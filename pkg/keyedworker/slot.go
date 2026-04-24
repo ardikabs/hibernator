@@ -43,15 +43,23 @@ type Slot[V any] interface {
 
 // FIFOSlot returns a SlotFactory that creates FIFO-ordered slots backed by a
 // buffered channel of size bufSize. When the buffer is full, Send drops the value
-// (non-blocking). Every value sent is preserved and delivered in order.
+// (non-blocking). Every accepted value is preserved and delivered in order.
 //
 // Use FIFOSlot for consumers where every update is meaningful and must not be
 // discarded (e.g. status writers that serialise K8s write calls).
 func FIFOSlot[V any](bufSize int) func() Slot[V] {
+	return FIFOSlotWithOnDrop[V](bufSize, nil)
+}
+
+// FIFOSlotWithOnDrop is like FIFOSlot, but invokes onDrop when a value is
+// dropped because the FIFO buffer is full. Pass nil for onDrop to disable drop
+// callbacks.
+func FIFOSlotWithOnDrop[V any](bufSize int, onDrop func(V)) func() Slot[V] {
 	return func() Slot[V] {
 		s := &fifoSlot[V]{
 			queue:  make(chan V, bufSize),
 			signal: make(chan struct{}, 1),
+			onDrop: onDrop,
 		}
 		return s
 	}
@@ -60,12 +68,16 @@ func FIFOSlot[V any](bufSize int) func() Slot[V] {
 type fifoSlot[V any] struct {
 	queue  chan V
 	signal chan struct{}
+	onDrop func(V)
 }
 
 func (s *fifoSlot[V]) Send(v V) {
 	select {
 	case s.queue <- v:
 	default:
+		if s.onDrop != nil {
+			s.onDrop(v)
+		}
 		// Buffer full — drop. Pool logs this at the Deliver call site.
 		return
 	}

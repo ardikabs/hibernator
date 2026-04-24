@@ -8,6 +8,7 @@ Licensed under the Apache License, Version 2.0.
 package tests
 
 import (
+	"fmt"
 	"time"
 
 	. "github.com/onsi/ginkgo/v2"
@@ -939,5 +940,142 @@ var _ = Describe("Notification E2E", func() {
 			return false
 		}, testutil.DefaultTimeout, testutil.DefaultInterval).
 			Should(BeTrue(), "expected ExecutionProgress notification with state=Completed for 'database'")
+	})
+
+	It("EventOrdering: should deliver ExecutionProgress before Success for the same cycle", func() {
+		const planLabel = "notif-ordering-test"
+
+		By("Creating HibernateNotification subscribed to ExecutionProgress and Success events")
+		notification = &hibernatorv1alpha1.HibernateNotification{
+			ObjectMeta: metav1.ObjectMeta{
+				Name:      "notif-ordering",
+				Namespace: testNamespace,
+			},
+			Spec: hibernatorv1alpha1.HibernateNotificationSpec{
+				Selector: metav1.LabelSelector{
+					MatchLabels: map[string]string{"test-scenario": planLabel},
+				},
+				OnEvents: []hibernatorv1alpha1.NotificationEvent{
+					hibernatorv1alpha1.EventStart,
+					hibernatorv1alpha1.EventExecutionProgress,
+					hibernatorv1alpha1.EventSuccess,
+				},
+				Sinks: []hibernatorv1alpha1.NotificationSink{
+					{
+						Name:      "fake-webhook",
+						Type:      hibernatorv1alpha1.NotificationSinkType(fakenotif.SinkType),
+						SecretRef: hibernatorv1alpha1.ObjectKeyReference{Name: sinkSecret.Name, Key: ptr.To("config")},
+					},
+				},
+			},
+		}
+		Expect(k8sClient.Create(ctx, notification)).To(Succeed())
+
+		// Start in on-hours so the plan initialises to Active first.
+		fakeClock.SetTime(time.Date(2026, 6, 15, 8, 0, 0, 0, time.UTC))
+
+		By("Creating HibernatePlan with labels matching the notification selector")
+		plan, _ = testutil.NewHibernatePlanBuilder("notif-ordering", testNamespace).
+			WithLabels(map[string]string{"test-scenario": planLabel}).
+			WithSchedule("20:00", "06:00", "MON", "TUE", "WED", "THU", "FRI", "SAT", "SUN").
+			WithExecutionStrategy(hibernatorv1alpha1.ExecutionStrategy{
+				Type: hibernatorv1alpha1.StrategySequential,
+			}).
+			WithTarget(hibernatorv1alpha1.Target{
+				Name: "database",
+				Type: "noop",
+				ConnectorRef: hibernatorv1alpha1.ConnectorRef{
+					Kind: "CloudProvider",
+					Name: "notif-aws",
+				},
+			}).
+			Build()
+		Expect(k8sClient.Create(ctx, plan)).To(Succeed())
+
+		By("Verifying plan initializes to Active phase")
+		testutil.EventuallyPhase(ctx, k8sClient, plan, hibernatorv1alpha1.PhaseActive)
+
+		// ------------------------------------------------------------------ Trigger hibernation
+		By("Advancing clock to off-hours to trigger hibernation")
+		fakeClock.SetTime(time.Date(2026, 6, 15, 20, 1, 10, 0, time.UTC))
+		testutil.TriggerReconcile(ctx, k8sClient, plan)
+
+		By("Verifying plan transitions to Hibernating")
+		testutil.EventuallyPhase(ctx, k8sClient, plan, hibernatorv1alpha1.PhaseHibernating)
+		hibernatingJob := testutil.EventuallyJobCreated(ctx, k8sClient, testNamespace, plan.Name, hibernatorv1alpha1.OperationHibernate, "database")
+		testutil.SimulateJobRunning(ctx, k8sClient, hibernatingJob, fakeClock.Now())
+		testutil.TriggerReconcile(ctx, k8sClient, plan)
+
+		// Wait for ExecutionProgress to be delivered first
+		By("Waiting for ExecutionProgress notification")
+		Eventually(func() bool {
+			for _, r := range fakeNotifSink.Records() {
+				if r.Payload.Event == "ExecutionProgress" &&
+					r.Payload.TargetExecution != nil &&
+					r.Payload.TargetExecution.Name == "database" {
+					return true
+				}
+			}
+			return false
+		}, testutil.DefaultTimeout, testutil.DefaultInterval).
+			Should(BeTrue(), "expected ExecutionProgress notification")
+
+		// Get the CycleID from the first ExecutionProgress notification
+		var cycleID string
+		for _, r := range fakeNotifSink.Records() {
+			if r.Payload.Event == "ExecutionProgress" {
+				cycleID = r.Payload.CycleID
+				break
+			}
+		}
+		Expect(cycleID).NotTo(BeEmpty(), "CycleID should be set in ExecutionProgress notification")
+
+		By("Simulating hibernation Job success")
+		hibernationJob := testutil.EventuallyJobCreated(ctx, k8sClient, testNamespace, plan.Name,
+			hibernatorv1alpha1.OperationHibernate, "database")
+		testutil.SimulateJobSuccess(ctx, k8sClient, hibernationJob, fakeClock.Now())
+
+		By("Verifying plan transitions to Hibernated")
+		testutil.EventuallyPhase(ctx, k8sClient, plan, hibernatorv1alpha1.PhaseHibernated)
+
+		By("Waiting for Success notification")
+		Eventually(fakeNotifSink.Len, testutil.DefaultTimeout, testutil.DefaultInterval).
+			Should(BeNumerically(">=", 2), "expected both ExecutionProgress and Success notifications")
+
+		// Verify deterministic ordering: all ExecutionProgress events for this cycle
+		// should be delivered before the Success event
+		By("Verifying ExecutionProgress was delivered before Success for the same cycle")
+		records := fakeNotifSink.Records()
+
+		var executionProgressIndices []int
+		var successIndex int
+		successFound := false
+
+		for i, r := range records {
+			if r.Payload.CycleID == cycleID {
+				switch r.Payload.Event {
+				case "ExecutionProgress":
+					executionProgressIndices = append(executionProgressIndices, i)
+				case "Success":
+					if !successFound {
+						successIndex = i
+						successFound = true
+					}
+				}
+			}
+		}
+
+		Expect(successFound).To(BeTrue(), "Success notification should be found for cycle %s", cycleID)
+		Expect(executionProgressIndices).NotTo(BeEmpty(), "At least one ExecutionProgress should be found for cycle %s", cycleID)
+
+		// All ExecutionProgress events should come before Success
+		for _, epIndex := range executionProgressIndices {
+			Expect(epIndex).To(BeNumerically("<", successIndex),
+				"ExecutionProgress (index %d) should be delivered before Success (index %d) for cycle %s",
+				epIndex, successIndex, cycleID)
+		}
+
+		By(fmt.Sprintf("Verified deterministic ordering: %d ExecutionProgress events delivered before Success for cycle %s",
+			len(executionProgressIndices), cycleID))
 	})
 })

@@ -221,6 +221,43 @@ func TestPool_Deliver_FIFOBufferFull_DropsUpdate(t *testing.T) {
 	// No assertion needed beyond "no panic or deadlock".
 }
 
+func TestPool_Deliver_FIFOBufferFull_OnDropCallbackCalled(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	const bufSize = 1
+	blocker := make(chan struct{})
+	dropped := make(chan int, 8)
+
+	p := New(WithSlotFactory[string](FIFOSlotWithOnDrop[int](bufSize, func(v int) {
+		dropped <- v
+	})))
+	p.Register(ctx, RunnerFactory[string](testIdleTTL,
+		func(_ context.Context, _ int) error {
+			<-blocker
+			return nil
+		},
+		nil,
+	))
+
+	// First request is consumed by worker and blocks.
+	p.Deliver("k", 1)
+	time.Sleep(20 * time.Millisecond)
+
+	// Second fills buffer, third is dropped and must trigger callback.
+	p.Deliver("k", 2)
+	p.Deliver("k", 3)
+
+	select {
+	case v := <-dropped:
+		assert.Equal(t, 3, v)
+	case <-time.After(time.Second):
+		t.Fatal("expected onDrop callback to be called")
+	}
+
+	close(blocker)
+}
+
 // ---------------------------------------------------------------------------
 // LatestWinsSlot — coalescing behaviour
 // ---------------------------------------------------------------------------

@@ -216,4 +216,13 @@ var (
 		},
 		[]string{"sink_type", "event"},
 	)
+
+	// NotificationWorkerGoroutinesGauge tracks the number of live keyed stream
+	// workers in the notification dispatcher.
+	NotificationWorkerGoroutinesGauge = factory.NewGauge(
+		prometheus.GaugeOpts{
+			Name: "hibernator_notification_worker_goroutines",
+			Help: "Number of live per-stream notification worker goroutines",
+		},
+	)
 )

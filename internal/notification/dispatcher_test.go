@@ -12,6 +12,7 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"math/rand"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -26,6 +27,7 @@ import (
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
+	"k8s.io/apimachinery/pkg/types"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
 
 	hibernatorv1alpha1 "github.com/ardikabs/hibernator/api/v1alpha1"
@@ -170,7 +172,7 @@ func TestDispatcher_SendsNotification(t *testing.T) {
 	}))
 
 	d := NewDispatcher(logger, client, registry, DispatcherConfig{
-		Workers: 1, ChannelSize: 8,
+		ChannelSize: 8,
 	})
 
 	startDispatcher(t, d)
@@ -197,7 +199,7 @@ func TestDispatcher_UnknownSinkType(t *testing.T) {
 	client := fake.NewClientBuilder().WithScheme(newTestScheme()).Build()
 
 	d := NewDispatcher(logr.Discard(), client, registry, DispatcherConfig{
-		Workers: 1, ChannelSize: 8,
+		ChannelSize: 8,
 	})
 
 	startDispatcher(t, d)
@@ -221,7 +223,7 @@ func TestDispatcher_SecretNotFound(t *testing.T) {
 	client := fake.NewClientBuilder().WithScheme(newTestScheme()).Build()
 
 	d := NewDispatcher(logr.Discard(), client, registry, DispatcherConfig{
-		Workers: 1, ChannelSize: 8,
+		ChannelSize: 8,
 	})
 
 	startDispatcher(t, d)
@@ -254,7 +256,7 @@ func TestDispatcher_SecretMissingConfigKey(t *testing.T) {
 		Build()
 
 	d := NewDispatcher(logr.Discard(), client, registry, DispatcherConfig{
-		Workers: 1, ChannelSize: 8,
+		ChannelSize: 8,
 	})
 
 	startDispatcher(t, d)
@@ -285,7 +287,7 @@ func TestDispatcher_SinkSendError(t *testing.T) {
 		Build()
 
 	d := NewDispatcher(logr.Discard(), client, registry, DispatcherConfig{
-		Workers: 1, ChannelSize: 8,
+		ChannelSize: 8,
 	})
 
 	startDispatcher(t, d)
@@ -316,7 +318,7 @@ func TestDispatcher_MultipleSinks(t *testing.T) {
 		Build()
 
 	d := NewDispatcher(logr.Discard(), client, registry, DispatcherConfig{
-		Workers: 2, ChannelSize: 16,
+		ChannelSize: 16,
 	})
 
 	startDispatcher(t, d)
@@ -341,7 +343,7 @@ func TestDispatcher_MultipleSinks(t *testing.T) {
 	assert.Len(t, telegramStub.getCalls(), 1)
 }
 
-func TestDispatcher_OverflowQueuesAllRequests(t *testing.T) {
+func TestDispatcher_PerStreamBufferDropsWhenSaturated(t *testing.T) {
 	// Slow sink to create backpressure.
 	stub := newStubSink("slack")
 	stub.sendFunc = func(_ context.Context, _ Payload, _ sinktypes.SendOptions) error {
@@ -357,9 +359,9 @@ func TestDispatcher_OverflowQueuesAllRequests(t *testing.T) {
 		WithObjects(secret).
 		Build()
 
-	// Small channel — overflow queue absorbs the excess.
+	// Small per-stream buffer — excess requests are dropped.
 	d := NewDispatcher(logr.Discard(), client, registry, DispatcherConfig{
-		Workers: 1, ChannelSize: 2,
+		ChannelSize: 2,
 	})
 
 	startDispatcher(t, d)
@@ -374,8 +376,8 @@ func TestDispatcher_OverflowQueuesAllRequests(t *testing.T) {
 		})
 	}
 
-	require.True(t, stub.waitCalls(total, 5*time.Second), "All requests should eventually be delivered")
-	assert.Equal(t, total, int(stub.callCount.Load()))
+	require.True(t, stub.waitCalls(2, 5*time.Second), "in-flight and buffered requests should be delivered")
+	assert.LessOrEqual(t, int(stub.callCount.Load()), 2)
 }
 
 func TestDispatcher_SubmitIsNonBlocking(t *testing.T) {
@@ -385,7 +387,7 @@ func TestDispatcher_SubmitIsNonBlocking(t *testing.T) {
 
 	client := fake.NewClientBuilder().WithScheme(newTestScheme()).Build()
 	d := NewDispatcher(logr.Discard(), client, registry, DispatcherConfig{
-		Workers: 1, ChannelSize: 1,
+		ChannelSize: 1,
 	})
 
 	startDispatcher(t, d)
@@ -424,7 +426,7 @@ func TestDispatcher_ContextCancellation(t *testing.T) {
 		Build()
 
 	d := NewDispatcher(logr.Discard(), client, registry, DispatcherConfig{
-		Workers: 1, ChannelSize: 8,
+		ChannelSize: 8,
 	})
 
 	ctx, cancel := context.WithCancel(context.Background())
@@ -448,22 +450,22 @@ func TestDispatcher_ContextCancellation(t *testing.T) {
 
 func TestDispatcher_Config(t *testing.T) {
 	d := NewDispatcher(logr.Discard(), nil, nil, DispatcherConfig{
-		Workers:         8,
 		ChannelSize:     512,
 		DispatchTimeout: 10 * time.Second,
+		WorkerIdleTTL:   45 * time.Second,
 	})
 
-	assert.Equal(t, 8, d.workers)
 	assert.Equal(t, 512, d.channelSize)
 	assert.Equal(t, 10*time.Second, d.dispatchTimeout)
+	assert.Equal(t, 45*time.Second, d.workerIdleTTL)
 }
 
 func TestDispatcher_ConfigZeroValuesUseDefaults(t *testing.T) {
 	d := NewDispatcher(logr.Discard(), nil, nil, DispatcherConfig{})
 
-	assert.Equal(t, defaultWorkers, d.workers)
 	assert.Equal(t, defaultChannelSize, d.channelSize)
 	assert.Equal(t, defaultDispatchTimeout, d.dispatchTimeout)
+	assert.Equal(t, defaultWorkerIdleTTL, d.workerIdleTTL)
 }
 
 func TestDispatcher_PassesPayloadToSink(t *testing.T) {
@@ -490,7 +492,7 @@ func TestDispatcher_PassesPayloadToSink(t *testing.T) {
 				Build()
 
 			d := NewDispatcher(logr.Discard(), client, registry, DispatcherConfig{
-				Workers: 1, ChannelSize: 8,
+				ChannelSize: 8,
 			})
 
 			startDispatcher(t, d)
@@ -537,7 +539,7 @@ func TestDispatcher_MalformedCustomTemplate(t *testing.T) {
 		Build()
 
 	d := NewDispatcher(logr.Discard(), client, registry, DispatcherConfig{
-		Workers: 1, ChannelSize: 8,
+		ChannelSize: 8,
 	})
 
 	startDispatcher(t, d)
@@ -604,7 +606,7 @@ func TestDispatcher_SlackJSONTemplate_EndToEnd(t *testing.T) {
 	registry := sinktypes.NewRegistry()
 	registry.Register(slacksink.New(NewTemplateEngine(logr.Discard()), slacksink.WithHTTPClient(&http.Client{Timeout: 5 * time.Second})))
 
-	d := NewDispatcher(logr.Discard(), client, registry, DispatcherConfig{Workers: 1, ChannelSize: 8})
+	d := NewDispatcher(logr.Discard(), client, registry, DispatcherConfig{ChannelSize: 8})
 	startDispatcher(t, d)
 
 	d.Submit(Request{
@@ -671,7 +673,7 @@ func TestDispatcher_SlackJSONTemplate_InvalidFallsBackToPreset(t *testing.T) {
 	registry := sinktypes.NewRegistry()
 	registry.Register(slacksink.New(NewTemplateEngine(logr.Discard()), slacksink.WithHTTPClient(&http.Client{Timeout: 5 * time.Second})))
 
-	d := NewDispatcher(logr.Discard(), client, registry, DispatcherConfig{Workers: 1, ChannelSize: 8})
+	d := NewDispatcher(logr.Discard(), client, registry, DispatcherConfig{ChannelSize: 8})
 	startDispatcher(t, d)
 
 	d.Submit(Request{
@@ -706,7 +708,7 @@ func TestDispatcher_SubmitAfterShutdown(t *testing.T) {
 	registry.Register(stub)
 	secret := sinkSecret("default", "slack-secret", []byte(`{"webhook_url":"url"}`))
 	client := fake.NewClientBuilder().WithScheme(newTestScheme()).WithObjects(secret).Build()
-	d := NewDispatcher(logr.Discard(), client, registry, DispatcherConfig{Workers: 1, ChannelSize: 2})
+	d := NewDispatcher(logr.Discard(), client, registry, DispatcherConfig{ChannelSize: 2})
 
 	ctx, cancel := context.WithCancel(context.Background())
 	startDone := make(chan struct{})
@@ -740,7 +742,7 @@ func TestDispatcher_SubmitWithCancelledContext(t *testing.T) {
 
 	client := fake.NewClientBuilder().WithScheme(newTestScheme()).Build()
 	d := NewDispatcher(logr.Discard(), client, registry, DispatcherConfig{
-		Workers: 1, ChannelSize: 2,
+		ChannelSize: 2,
 	})
 
 	ctx, cancel := context.WithCancel(context.Background())
@@ -785,7 +787,7 @@ func TestDispatcher_SubmitWithAvailableChannelSpace(t *testing.T) {
 		Build()
 
 	d := NewDispatcher(logr.Discard(), client, registry, DispatcherConfig{
-		Workers: 1, ChannelSize: 10,
+		ChannelSize: 10,
 	})
 
 	ctx, cancel := context.WithCancel(context.Background())
@@ -824,7 +826,7 @@ func TestDispatcher_SubmitWithFullChannelAndDrain(t *testing.T) {
 
 	// 1 worker, channel size 1.
 	d := NewDispatcher(logr.Discard(), client, registry, DispatcherConfig{
-		Workers: 1, ChannelSize: 1,
+		ChannelSize: 1,
 	})
 
 	ctx, cancel := context.WithCancel(context.Background())
@@ -840,16 +842,18 @@ func TestDispatcher_SubmitWithFullChannelAndDrain(t *testing.T) {
 	// 2nd request: fills the channel (size 1)
 	d.Submit(Request{Payload: testPayload("req2"), SinkType: "slack", SecretRef: hibernatorv1alpha1.ObjectKeyReference{Name: "slack-secret"}})
 
-	// 3rd request: should go to overflow
+	// 3rd request: should be dropped when per-stream buffer is saturated
 	d.Submit(Request{Payload: testPayload("req3"), SinkType: "slack", SecretRef: hibernatorv1alpha1.ObjectKeyReference{Name: "slack-secret"}})
 
-	// Eventually all should be delivered
+	// Eventually at least the in-flight request is delivered. Depending on
+	// scheduling, the second request may be buffered and delivered too.
 	assert.Eventually(t, func() bool {
-		return stub.callCount.Load() == 3
+		c := stub.callCount.Load()
+		return c >= 1 && c <= 2
 	}, 2*time.Second, 10*time.Millisecond)
 }
 
-func TestDispatcher_FullProcessOverflowAndFlush(t *testing.T) {
+func TestDispatcher_FullProcessPerStreamBufferAndFlush(t *testing.T) {
 	stub := newStubSink("slack")
 
 	// Barrier: signals when the worker has picked up the first request and is blocked.
@@ -875,7 +879,6 @@ func TestDispatcher_FullProcessOverflowAndFlush(t *testing.T) {
 	}))
 
 	d := NewDispatcher(logger, client, registry, DispatcherConfig{
-		Workers:     1,
 		ChannelSize: 1,
 	})
 
@@ -897,31 +900,28 @@ func TestDispatcher_FullProcessOverflowAndFlush(t *testing.T) {
 	}
 
 	// Worker is blocked on <-block. Channel is empty.
-	// req2 fills the channel (size 1), req3 goes to overflow.
+	// req2 fills the per-stream buffer (size 1), req3 is dropped.
 	d.Submit(Request{Payload: testPayload("req2"), SinkType: "slack", SecretRef: hibernatorv1alpha1.ObjectKeyReference{Name: "slack-secret"}})
 	d.Submit(Request{Payload: testPayload("req3"), SinkType: "slack", SecretRef: hibernatorv1alpha1.ObjectKeyReference{Name: "slack-secret"}})
-
-	// Worker is still blocked — overflow must hold req3 before we release.
-	assert.Equal(t, 1, d.overflow.Len(), "req3 should be in overflow while worker is blocked")
 
 	// Unblock the worker so it can process all requests.
 	close(block)
 
-	// Wait for all 3 to be delivered deterministically.
-	if !stub.waitCalls(3, 2*time.Second) {
-		t.Fatal("timed out waiting for all 3 requests to be delivered")
+	// Wait for 2 to be delivered deterministically (1 in-flight + 1 buffered).
+	if !stub.waitCalls(2, 2*time.Second) {
+		t.Fatal("timed out waiting for buffered requests to be delivered")
 	}
 
 	// Cancel context to trigger shutdown.
 	cancel()
 	<-startDone
 
-	assert.Equal(t, int32(3), stub.callCount.Load())
+	assert.Equal(t, int32(2), stub.callCount.Load())
 }
 
-func TestDispatcher_ShutdownFlushesOverflowItems(t *testing.T) {
-	// Verify that items stuck in overflow and the channel at shutdown time are
-	// still delivered during the graceful-shutdown drain.
+func TestDispatcher_ShutdownFlushesBufferedItems(t *testing.T) {
+	// Verify that items in-flight and buffered in a single stream are delivered
+	// during graceful-shutdown drain.
 	stub := newStubSink("slack")
 
 	// Barrier: signals when the worker has picked up the first request and is blocked.
@@ -947,7 +947,7 @@ func TestDispatcher_ShutdownFlushesOverflowItems(t *testing.T) {
 	}))
 
 	d := NewDispatcher(logger, client, registry, DispatcherConfig{
-		Workers: 1, ChannelSize: 1,
+		ChannelSize: 1,
 	})
 
 	ctx, cancel := context.WithCancel(context.Background())
@@ -967,21 +967,18 @@ func TestDispatcher_ShutdownFlushesOverflowItems(t *testing.T) {
 		t.Fatal("timed out waiting for worker to pick up first request")
 	}
 
-	// Worker is blocked. Submit remaining: 1 fills channel, rest go to overflow.
+	// Worker is blocked. Submit remaining: 1 fills buffer, rest are dropped.
 	for i := 1; i < total; i++ {
-		d.Submit(Request{Payload: testPayload("req"), SinkType: "slack", SinkName: fmt.Sprintf("slack-%d", i), SecretRef: hibernatorv1alpha1.ObjectKeyReference{Name: "slack-secret"}})
+		d.Submit(Request{Payload: testPayload("req"), SinkType: "slack", SinkName: "slack-0", SecretRef: hibernatorv1alpha1.ObjectKeyReference{Name: "slack-secret"}})
 	}
-
-	// Worker is still blocked — overflow must hold the excess before we release.
-	assert.GreaterOrEqual(t, d.overflow.Len(), 1, "some items should be in overflow while worker is blocked")
 
 	// Unblock the worker and cancel immediately — forces shutdown with pending items.
 	close(block)
 	cancel()
 	<-startDone
 
-	// All items must be delivered during graceful shutdown.
-	assert.Equal(t, int32(total), stub.callCount.Load(), "All items should be delivered during graceful shutdown")
+	// Exactly in-flight + one buffered should be delivered during graceful shutdown.
+	assert.Equal(t, int32(2), stub.callCount.Load(), "in-flight and buffered items should be delivered during graceful shutdown")
 }
 
 func TestDispatcher_ConcurrentSubmitDuringShutdown(t *testing.T) {
@@ -998,7 +995,7 @@ func TestDispatcher_ConcurrentSubmitDuringShutdown(t *testing.T) {
 		Build()
 
 	d := NewDispatcher(logr.Discard(), client, registry, DispatcherConfig{
-		Workers: 2, ChannelSize: 4,
+		ChannelSize: 4,
 	})
 
 	ctx, cancel := context.WithCancel(context.Background())
@@ -1044,8 +1041,8 @@ func TestDispatcher_ConcurrentSubmitDuringShutdown(t *testing.T) {
 	assert.GreaterOrEqual(t, stub.callCount.Load(), int32(0))
 }
 
-func TestDispatcher_OverflowMaxSizeDropsExcess(t *testing.T) {
-	// When overflow queue reaches maxOverflowSize, excess requests are dropped.
+func TestDispatcher_PerStreamBufferDropsExcess(t *testing.T) {
+	// When per-stream buffer is full, excess requests are dropped.
 	stub := newStubSink("slack")
 	// Block all sends so nothing gets consumed.
 	stub.sendFunc = func(ctx context.Context, payload Payload, opts sinktypes.SendOptions) error {
@@ -1057,11 +1054,8 @@ func TestDispatcher_OverflowMaxSizeDropsExcess(t *testing.T) {
 
 	client := fake.NewClientBuilder().WithScheme(newTestScheme()).Build()
 
-	const maxOverflow = 3
 	d := NewDispatcher(logr.Discard(), client, registry, DispatcherConfig{
-		Workers:         1,
-		ChannelSize:     1,
-		MaxOverflowSize: maxOverflow,
+		ChannelSize: 1,
 	})
 
 	ctx, cancel := context.WithCancel(context.Background())
@@ -1072,20 +1066,262 @@ func TestDispatcher_OverflowMaxSizeDropsExcess(t *testing.T) {
 	}()
 	time.Sleep(50 * time.Millisecond)
 
-	// Fill: 1 in worker (blocked), 1 in channel, maxOverflow in overflow = maxOverflow+2.
-	// Any additional should be dropped.
-	for i := 0; i < maxOverflow+10; i++ {
+	// Fill: 1 in worker (blocked), 1 in per-stream buffer; additional should be dropped.
+	for i := 0; i < 20; i++ {
 		d.Submit(Request{Payload: testPayload("flood"), SinkType: "slack", SecretRef: hibernatorv1alpha1.ObjectKeyReference{Name: "slack-secret"}})
 	}
 
-	overflowLen := d.overflow.Len()
-	assert.LessOrEqual(t, overflowLen, maxOverflow, "Overflow should not exceed max size")
-
 	cancel()
 	<-startDone
+
+	assert.LessOrEqual(t, stub.callCount.Load(), int32(2), "only in-flight and one buffered request can be observed")
 }
 
 func TestSinkStatusKey_CanonicalFormat(t *testing.T) {
 	key := SinkStatusKey("slack-prod", "default", "my-plan", "cycle-001", "shutdown")
 	require.Equal(t, "slack-prod|default/my-plan|cycle-001|shutdown", key)
+}
+
+// TestDispatcher_SameStreamOrdering_DeterministicFIFO verifies that events for the
+// same stream (same plan+cycle+notification+sink+operation) are processed in strict
+// FIFO order, eliminating the race condition between ExecutionProgress and Success.
+func TestDispatcher_SameStreamOrdering_DeterministicFIFO(t *testing.T) {
+	stub := newStubSink("slack")
+	// Slow sink to create backpressure and ensure events queue up
+	stub.sendFunc = func(_ context.Context, _ Payload, _ sinktypes.SendOptions) error {
+		time.Sleep(50 * time.Millisecond)
+		return nil
+	}
+	registry := sinktypes.NewRegistry()
+	registry.Register(stub)
+
+	secret := sinkSecret("default", "slack-secret", []byte(`{"webhook_url":"url"}`))
+	client := fake.NewClientBuilder().
+		WithScheme(newTestScheme()).
+		WithObjects(secret).
+		Build()
+
+	d := NewDispatcher(logr.Discard(), client, registry, DispatcherConfig{
+		ChannelSize: 10, // Buffer multiple events
+	})
+
+	startDispatcher(t, d)
+
+	// Submit 5 events in specific order to the same stream
+	events := []string{"Start", "ExecutionProgress", "ExecutionProgress", "ExecutionProgress", "Success"}
+	for i, event := range events {
+		payload := testPayload(event)
+		payload.CycleID = "cycle-001" // Same cycle
+		d.Submit(Request{
+			Payload:         payload,
+			SinkName:        "slack-sink",
+			SinkType:        "slack",
+			SecretRef:       hibernatorv1alpha1.ObjectKeyReference{Name: "slack-secret"},
+			NotificationRef: types.NamespacedName{Name: "notif-1", Namespace: "default"},
+		})
+		t.Logf("Submitted event %d: %s", i, event)
+	}
+
+	// Wait for all events to be delivered
+	require.True(t, stub.waitCalls(len(events), 5*time.Second), "All events should be delivered")
+
+	// Verify FIFO ordering
+	calls := stub.getCalls()
+	require.Len(t, calls, len(events))
+
+	for i, expectedEvent := range events {
+		actualEvent := calls[i].Payload.Event
+		assert.Equal(t, expectedEvent, actualEvent, "Event at position %d should match (FIFO ordering)", i)
+	}
+
+	t.Log("FIFO ordering verified: events processed in submission order")
+}
+
+// TestDispatcher_SameStreamOrdering_ExecutionProgressBeforeSuccess specifically
+// tests the reported race condition scenario where ExecutionProgress and Success
+// events could be reordered. With keyed workers, they must be deterministic.
+func TestDispatcher_SameStreamOrdering_ExecutionProgressBeforeSuccess(t *testing.T) {
+	stub := newStubSink("slack")
+	// Variable delay to simulate network jitter
+	var rngMu sync.Mutex
+	rng := rand.New(rand.NewSource(time.Now().UnixNano()))
+	stub.sendFunc = func(_ context.Context, _ Payload, _ sinktypes.SendOptions) error {
+		rngMu.Lock()
+		delay := time.Duration(10+rng.Intn(50)) * time.Millisecond
+		rngMu.Unlock()
+		time.Sleep(delay)
+		return nil
+	}
+	registry := sinktypes.NewRegistry()
+	registry.Register(stub)
+
+	secret := sinkSecret("default", "slack-secret", []byte(`{"webhook_url":"url"}`))
+	client := fake.NewClientBuilder().
+		WithScheme(newTestScheme()).
+		WithObjects(secret).
+		Build()
+
+	d := NewDispatcher(logr.Discard(), client, registry, DispatcherConfig{
+		ChannelSize: 5,
+	})
+
+	startDispatcher(t, d)
+
+	// Run multiple iterations to verify determinism
+	for iteration := 0; iteration < 10; iteration++ {
+		// Rapid-fire ExecutionProgress then Success to same stream
+		for i := 0; i < 3; i++ {
+			payload := testPayload("ExecutionProgress")
+			payload.CycleID = fmt.Sprintf("cycle-%d", iteration)
+			d.Submit(Request{
+				Payload:         payload,
+				SinkName:        "slack-sink",
+				SinkType:        "slack",
+				SecretRef:       hibernatorv1alpha1.ObjectKeyReference{Name: "slack-secret"},
+				NotificationRef: types.NamespacedName{Name: "notif-1", Namespace: "default"},
+			})
+		}
+
+		payload := testPayload("Success")
+		payload.CycleID = fmt.Sprintf("cycle-%d", iteration)
+		d.Submit(Request{
+			Payload:         payload,
+			SinkName:        "slack-sink",
+			SinkType:        "slack",
+			SecretRef:       hibernatorv1alpha1.ObjectKeyReference{Name: "slack-secret"},
+			NotificationRef: types.NamespacedName{Name: "notif-1", Namespace: "default"},
+		})
+
+		// Wait for this iteration's events
+		require.True(t, stub.waitCalls((iteration+1)*4, 5*time.Second), "Iteration %d: events should be delivered", iteration)
+
+		// Verify ordering for this cycle
+		calls := stub.getCalls()
+		cycleCalls := filterCallsByCycle(calls, fmt.Sprintf("cycle-%d", iteration))
+		require.Len(t, cycleCalls, 4, "Iteration %d: should have 4 events", iteration)
+
+		// First 3 should be ExecutionProgress, last should be Success
+		for i := 0; i < 3; i++ {
+			assert.Equal(t, "ExecutionProgress", cycleCalls[i].Payload.Event,
+				"Iteration %d: event %d should be ExecutionProgress", iteration, i)
+		}
+		assert.Equal(t, "Success", cycleCalls[3].Payload.Event,
+			"Iteration %d: event 3 should be Success", iteration)
+	}
+
+	t.Log("Deterministic ordering verified across 10 iterations")
+}
+
+// TestDispatcher_CrossStreamParallelism_DifferentStreamsConcurrent verifies that
+// different streams are processed concurrently while maintaining FIFO within each stream.
+func TestDispatcher_CrossStreamParallelism_DifferentStreamsConcurrent(t *testing.T) {
+	stub := newStubSink("slack")
+
+	// Use a latch pattern: first event from each stream signals readiness
+	stream1Started := make(chan struct{})
+	stream2Started := make(chan struct{})
+	barrier := make(chan struct{})
+
+	stub.sendFunc = func(_ context.Context, payload Payload, _ sinktypes.SendOptions) error {
+		// Signal stream start on first event
+		if payload.Event == "A1" {
+			close(stream1Started)
+		} else if payload.Event == "B1" {
+			close(stream2Started)
+		}
+		// Wait for barrier to ensure both streams are active concurrently
+		<-barrier
+		return nil
+	}
+
+	registry := sinktypes.NewRegistry()
+	registry.Register(stub)
+
+	secret := sinkSecret("default", "slack-secret", []byte(`{"webhook_url":"url"}`))
+	client := fake.NewClientBuilder().
+		WithScheme(newTestScheme()).
+		WithObjects(secret).
+		Build()
+
+	d := NewDispatcher(logr.Discard(), client, registry, DispatcherConfig{
+		ChannelSize: 10,
+	})
+
+	startDispatcher(t, d)
+
+	// Submit events to two different streams
+	// Stream 1: A1, A2
+	// Stream 2: B1, B2
+	for i := 1; i <= 2; i++ {
+		payload1 := testPayload(fmt.Sprintf("A%d", i))
+		payload1.CycleID = "stream-1"
+		d.Submit(Request{
+			Payload:         payload1,
+			SinkName:        "slack-sink",
+			SinkType:        "slack",
+			SecretRef:       hibernatorv1alpha1.ObjectKeyReference{Name: "slack-secret"},
+			NotificationRef: types.NamespacedName{Name: "notif-1", Namespace: "default"},
+		})
+
+		payload2 := testPayload(fmt.Sprintf("B%d", i))
+		payload2.CycleID = "stream-2"
+		d.Submit(Request{
+			Payload:         payload2,
+			SinkName:        "slack-sink",
+			SinkType:        "slack",
+			SecretRef:       hibernatorv1alpha1.ObjectKeyReference{Name: "slack-secret"},
+			NotificationRef: types.NamespacedName{Name: "notif-2", Namespace: "default"},
+		})
+	}
+
+	// Wait for both streams to start processing (shows parallelism)
+	select {
+	case <-stream1Started:
+		t.Log("Stream 1 started")
+	case <-time.After(2 * time.Second):
+		t.Fatal("Stream 1 did not start")
+	}
+
+	select {
+	case <-stream2Started:
+		t.Log("Stream 2 started")
+	case <-time.After(2 * time.Second):
+		t.Fatal("Stream 2 did not start")
+	}
+
+	// Both streams have started - release the barrier
+	close(barrier)
+
+	// Wait for all events
+	require.True(t, stub.waitCalls(4, 5*time.Second), "All events should be delivered")
+
+	// Verify FIFO ordering within each stream from the recorded calls
+	calls := stub.getCalls()
+
+	var stream1Order, stream2Order []string
+	for _, call := range calls {
+		if call.Payload.CycleID == "stream-1" {
+			stream1Order = append(stream1Order, call.Payload.Event)
+		} else {
+			stream2Order = append(stream2Order, call.Payload.Event)
+		}
+	}
+
+	require.Len(t, stream1Order, 2, "Stream 1 should have 2 events")
+	require.Len(t, stream2Order, 2, "Stream 2 should have 2 events")
+
+	assert.Equal(t, []string{"A1", "A2"}, stream1Order, "Stream 1 should be FIFO")
+	assert.Equal(t, []string{"B1", "B2"}, stream2Order, "Stream 2 should be FIFO")
+
+	t.Log("Cross-stream parallelism and FIFO ordering verified")
+}
+
+func filterCallsByCycle(calls []stubSendCall, cycleID string) []stubSendCall {
+	var filtered []stubSendCall
+	for _, call := range calls {
+		if call.Payload.CycleID == cycleID {
+			filtered = append(filtered, call)
+		}
+	}
+	return filtered
 }
