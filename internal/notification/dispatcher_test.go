@@ -12,6 +12,7 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"math/rand"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -26,6 +27,7 @@ import (
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
+	"k8s.io/apimachinery/pkg/types"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
 
 	hibernatorv1alpha1 "github.com/ardikabs/hibernator/api/v1alpha1"
@@ -1078,4 +1080,248 @@ func TestDispatcher_PerStreamBufferDropsExcess(t *testing.T) {
 func TestSinkStatusKey_CanonicalFormat(t *testing.T) {
 	key := SinkStatusKey("slack-prod", "default", "my-plan", "cycle-001", "shutdown")
 	require.Equal(t, "slack-prod|default/my-plan|cycle-001|shutdown", key)
+}
+
+// TestDispatcher_SameStreamOrdering_DeterministicFIFO verifies that events for the
+// same stream (same plan+cycle+notification+sink+operation) are processed in strict
+// FIFO order, eliminating the race condition between ExecutionProgress and Success.
+func TestDispatcher_SameStreamOrdering_DeterministicFIFO(t *testing.T) {
+	stub := newStubSink("slack")
+	// Slow sink to create backpressure and ensure events queue up
+	stub.sendFunc = func(_ context.Context, _ Payload, _ sinktypes.SendOptions) error {
+		time.Sleep(50 * time.Millisecond)
+		return nil
+	}
+	registry := sinktypes.NewRegistry()
+	registry.Register(stub)
+
+	secret := sinkSecret("default", "slack-secret", []byte(`{"webhook_url":"url"}`))
+	client := fake.NewClientBuilder().
+		WithScheme(newTestScheme()).
+		WithObjects(secret).
+		Build()
+
+	d := NewDispatcher(logr.Discard(), client, registry, DispatcherConfig{
+		ChannelSize: 10, // Buffer multiple events
+	})
+
+	startDispatcher(t, d)
+
+	// Submit 5 events in specific order to the same stream
+	events := []string{"Start", "ExecutionProgress", "ExecutionProgress", "ExecutionProgress", "Success"}
+	for i, event := range events {
+		payload := testPayload(event)
+		payload.CycleID = "cycle-001" // Same cycle
+		d.Submit(Request{
+			Payload:         payload,
+			SinkName:        "slack-sink",
+			SinkType:        "slack",
+			SecretRef:       hibernatorv1alpha1.ObjectKeyReference{Name: "slack-secret"},
+			NotificationRef: types.NamespacedName{Name: "notif-1", Namespace: "default"},
+		})
+		t.Logf("Submitted event %d: %s", i, event)
+	}
+
+	// Wait for all events to be delivered
+	require.True(t, stub.waitCalls(len(events), 5*time.Second), "All events should be delivered")
+
+	// Verify FIFO ordering
+	calls := stub.getCalls()
+	require.Len(t, calls, len(events))
+
+	for i, expectedEvent := range events {
+		actualEvent := calls[i].Payload.Event
+		assert.Equal(t, expectedEvent, actualEvent, "Event at position %d should match (FIFO ordering)", i)
+	}
+
+	t.Log("FIFO ordering verified: events processed in submission order")
+}
+
+// TestDispatcher_SameStreamOrdering_ExecutionProgressBeforeSuccess specifically
+// tests the reported race condition scenario where ExecutionProgress and Success
+// events could be reordered. With keyed workers, they must be deterministic.
+func TestDispatcher_SameStreamOrdering_ExecutionProgressBeforeSuccess(t *testing.T) {
+	stub := newStubSink("slack")
+	// Variable delay to simulate network jitter
+	var rngMu sync.Mutex
+	rng := rand.New(rand.NewSource(time.Now().UnixNano()))
+	stub.sendFunc = func(_ context.Context, _ Payload, _ sinktypes.SendOptions) error {
+		rngMu.Lock()
+		delay := time.Duration(10+rng.Intn(50)) * time.Millisecond
+		rngMu.Unlock()
+		time.Sleep(delay)
+		return nil
+	}
+	registry := sinktypes.NewRegistry()
+	registry.Register(stub)
+
+	secret := sinkSecret("default", "slack-secret", []byte(`{"webhook_url":"url"}`))
+	client := fake.NewClientBuilder().
+		WithScheme(newTestScheme()).
+		WithObjects(secret).
+		Build()
+
+	d := NewDispatcher(logr.Discard(), client, registry, DispatcherConfig{
+		ChannelSize: 5,
+	})
+
+	startDispatcher(t, d)
+
+	// Run multiple iterations to verify determinism
+	for iteration := 0; iteration < 10; iteration++ {
+		// Rapid-fire ExecutionProgress then Success to same stream
+		for i := 0; i < 3; i++ {
+			payload := testPayload("ExecutionProgress")
+			payload.CycleID = fmt.Sprintf("cycle-%d", iteration)
+			d.Submit(Request{
+				Payload:         payload,
+				SinkName:        "slack-sink",
+				SinkType:        "slack",
+				SecretRef:       hibernatorv1alpha1.ObjectKeyReference{Name: "slack-secret"},
+				NotificationRef: types.NamespacedName{Name: "notif-1", Namespace: "default"},
+			})
+		}
+
+		payload := testPayload("Success")
+		payload.CycleID = fmt.Sprintf("cycle-%d", iteration)
+		d.Submit(Request{
+			Payload:         payload,
+			SinkName:        "slack-sink",
+			SinkType:        "slack",
+			SecretRef:       hibernatorv1alpha1.ObjectKeyReference{Name: "slack-secret"},
+			NotificationRef: types.NamespacedName{Name: "notif-1", Namespace: "default"},
+		})
+
+		// Wait for this iteration's events
+		require.True(t, stub.waitCalls((iteration+1)*4, 5*time.Second), "Iteration %d: events should be delivered", iteration)
+
+		// Verify ordering for this cycle
+		calls := stub.getCalls()
+		cycleCalls := filterCallsByCycle(calls, fmt.Sprintf("cycle-%d", iteration))
+		require.Len(t, cycleCalls, 4, "Iteration %d: should have 4 events", iteration)
+
+		// First 3 should be ExecutionProgress, last should be Success
+		for i := 0; i < 3; i++ {
+			assert.Equal(t, "ExecutionProgress", cycleCalls[i].Payload.Event,
+				"Iteration %d: event %d should be ExecutionProgress", iteration, i)
+		}
+		assert.Equal(t, "Success", cycleCalls[3].Payload.Event,
+			"Iteration %d: event 3 should be Success", iteration)
+	}
+
+	t.Log("Deterministic ordering verified across 10 iterations")
+}
+
+// TestDispatcher_CrossStreamParallelism_DifferentStreamsConcurrent verifies that
+// different streams are processed concurrently while maintaining FIFO within each stream.
+func TestDispatcher_CrossStreamParallelism_DifferentStreamsConcurrent(t *testing.T) {
+	stub := newStubSink("slack")
+
+	// Use a latch pattern: first event from each stream signals readiness
+	stream1Started := make(chan struct{})
+	stream2Started := make(chan struct{})
+	barrier := make(chan struct{})
+
+	stub.sendFunc = func(_ context.Context, payload Payload, _ sinktypes.SendOptions) error {
+		// Signal stream start on first event
+		if payload.Event == "A1" {
+			close(stream1Started)
+		} else if payload.Event == "B1" {
+			close(stream2Started)
+		}
+		// Wait for barrier to ensure both streams are active concurrently
+		<-barrier
+		return nil
+	}
+
+	registry := sinktypes.NewRegistry()
+	registry.Register(stub)
+
+	secret := sinkSecret("default", "slack-secret", []byte(`{"webhook_url":"url"}`))
+	client := fake.NewClientBuilder().
+		WithScheme(newTestScheme()).
+		WithObjects(secret).
+		Build()
+
+	d := NewDispatcher(logr.Discard(), client, registry, DispatcherConfig{
+		ChannelSize: 10,
+	})
+
+	startDispatcher(t, d)
+
+	// Submit events to two different streams
+	// Stream 1: A1, A2
+	// Stream 2: B1, B2
+	for i := 1; i <= 2; i++ {
+		payload1 := testPayload(fmt.Sprintf("A%d", i))
+		payload1.CycleID = "stream-1"
+		d.Submit(Request{
+			Payload:         payload1,
+			SinkName:        "slack-sink",
+			SinkType:        "slack",
+			SecretRef:       hibernatorv1alpha1.ObjectKeyReference{Name: "slack-secret"},
+			NotificationRef: types.NamespacedName{Name: "notif-1", Namespace: "default"},
+		})
+
+		payload2 := testPayload(fmt.Sprintf("B%d", i))
+		payload2.CycleID = "stream-2"
+		d.Submit(Request{
+			Payload:         payload2,
+			SinkName:        "slack-sink",
+			SinkType:        "slack",
+			SecretRef:       hibernatorv1alpha1.ObjectKeyReference{Name: "slack-secret"},
+			NotificationRef: types.NamespacedName{Name: "notif-2", Namespace: "default"},
+		})
+	}
+
+	// Wait for both streams to start processing (shows parallelism)
+	select {
+	case <-stream1Started:
+		t.Log("Stream 1 started")
+	case <-time.After(2 * time.Second):
+		t.Fatal("Stream 1 did not start")
+	}
+
+	select {
+	case <-stream2Started:
+		t.Log("Stream 2 started")
+	case <-time.After(2 * time.Second):
+		t.Fatal("Stream 2 did not start")
+	}
+
+	// Both streams have started - release the barrier
+	close(barrier)
+
+	// Wait for all events
+	require.True(t, stub.waitCalls(4, 5*time.Second), "All events should be delivered")
+
+	// Verify FIFO ordering within each stream from the recorded calls
+	calls := stub.getCalls()
+
+	var stream1Order, stream2Order []string
+	for _, call := range calls {
+		if call.Payload.CycleID == "stream-1" {
+			stream1Order = append(stream1Order, call.Payload.Event)
+		} else {
+			stream2Order = append(stream2Order, call.Payload.Event)
+		}
+	}
+
+	require.Len(t, stream1Order, 2, "Stream 1 should have 2 events")
+	require.Len(t, stream2Order, 2, "Stream 2 should have 2 events")
+
+	assert.Equal(t, []string{"A1", "A2"}, stream1Order, "Stream 1 should be FIFO")
+	assert.Equal(t, []string{"B1", "B2"}, stream2Order, "Stream 2 should be FIFO")
+
+	t.Log("Cross-stream parallelism and FIFO ordering verified")
+}
+
+func filterCallsByCycle(calls []stubSendCall, cycleID string) []stubSendCall {
+	var filtered []stubSendCall
+	for _, call := range calls {
+		if call.Payload.CycleID == cycleID {
+			filtered = append(filtered, call)
+		}
+	}
+	return filtered
 }
