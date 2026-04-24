@@ -10,6 +10,7 @@ import (
 	"fmt"
 	"maps"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/go-logr/logr"
@@ -21,6 +22,7 @@ import (
 	hibernatorv1alpha1 "github.com/ardikabs/hibernator/api/v1alpha1"
 	"github.com/ardikabs/hibernator/internal/metrics"
 	"github.com/ardikabs/hibernator/internal/notification/sink"
+	"github.com/ardikabs/hibernator/pkg/keyedworker"
 )
 
 const (
@@ -36,14 +38,11 @@ const (
 	// defaultDrainTimeout is the maximum time to wait for workers to drain remaining items during shutdown.
 	defaultDrainTimeout = 30 * time.Second
 
+	// defaultWorkerIdleTTL is how long an idle per-stream worker stays alive.
+	defaultWorkerIdleTTL = 30 * time.Minute
+
 	// defaultChannelSize is the default buffered channel capacity for dispatch requests.
 	defaultChannelSize = 256
-
-	// defaultWorkers is the default number of concurrent dispatch goroutines.
-	defaultWorkers = 4
-
-	// defaultMaxOverflowSize is the default maximum number of requests allowed in the overflow queue before new requests are dropped.
-	defaultMaxOverflowSize = 4096
 )
 
 // DispatcherConfig holds tuning knobs for the notification Dispatcher.
@@ -53,17 +52,13 @@ type DispatcherConfig struct {
 	// Default: 256.
 	ChannelSize int
 
-	// Workers is the number of concurrent dispatch goroutines.
-	// Default: 4.
-	Workers int
-
 	// DispatchTimeout is the per-sink HTTP call timeout.
 	// Default: 5s.
 	DispatchTimeout time.Duration
 
-	// MaxOverflowSize is the maximum number of requests allowed in the overflow queue before new requests are dropped.
-	// Default: 4096.
-	MaxOverflowSize int
+	// WorkerIdleTTL is how long an idle per-stream worker stays alive before exiting.
+	// Default: 30m.
+	WorkerIdleTTL time.Duration
 }
 
 // withDefaults returns a copy with zero fields replaced by defaults.
@@ -71,25 +66,21 @@ func (c DispatcherConfig) withDefaults() DispatcherConfig {
 	if c.ChannelSize <= 0 {
 		c.ChannelSize = defaultChannelSize
 	}
-	if c.Workers <= 0 {
-		c.Workers = defaultWorkers
-	}
 	if c.DispatchTimeout <= 0 {
 		c.DispatchTimeout = defaultDispatchTimeout
 	}
-	if c.MaxOverflowSize <= 0 {
-		c.MaxOverflowSize = defaultMaxOverflowSize
+	if c.WorkerIdleTTL <= 0 {
+		c.WorkerIdleTTL = defaultWorkerIdleTTL
 	}
 	return c
 }
 
 // Dispatcher is a standalone controller-runtime Runnable that processes notification
 // dispatch requests asynchronously. Hook closures submit Requests via Submit, which
-// returns immediately (fire-and-forget). Requests flow through a buffered channel to
-// a pool of worker goroutines; when the channel is full, an internal overflow queue
-// absorbs the excess and a dedicated drainer goroutine feeds items back into the
-// channel as space becomes available. The caller never blocks and no request is dropped
-// during normal operation.
+// returns immediately (fire-and-forget). Requests are routed into per-stream FIFO
+// slots managed by keyedworker. Each stream is processed by at most one worker at
+// a time, guaranteeing deterministic ordering for that stream while preserving
+// concurrency across independent streams.
 //
 // The dispatcher:
 //   - resolves sink credentials (Secret lookup via informer cache)
@@ -102,63 +93,96 @@ type Dispatcher struct {
 	log             logr.Logger
 	client          client.Reader
 	registry        *sink.Registry
-	channelSize     int
-	workers         int
+	channelSize     int // per-stream buffer capacity
 	dispatchTimeout time.Duration
-	maxOverflowSize int
+	workerIdleTTL   time.Duration
 
 	// deliveryCallback is called after each dispatch attempt to report success/failure.
 	// Nil means no delivery tracking.
 	deliveryCallback DeliveryCallback
 
-	// requestCh is the primary buffered channel between Submit and workers.
-	// It is NEVER closed — workers exit via the allFlushed signal instead,
-	// which avoids send-on-closed-channel panics from concurrent Submit calls.
-	requestCh chan Request
-
 	// done is closed when the dispatcher begins shutting down.
 	// Submit checks this via non-blocking select for the fast-path discard.
 	done chan struct{}
 
-	// drained is closed after the drainer goroutine has fully stopped and returned
-	// any undrained items back to the overflow queue. This signals Start() that
-	// it's safe to flush the overflow queue into the channel without racing with the drainer.
-	drained chan struct{}
+	// pool manages per-stream workers and their request queues.
+	pool *keyedworker.Pool[streamKey, Request]
 
-	// flushed is closed after overflow has been fully flushed into requestCh.
-	// Workers switch from their main loop to a drain loop once this fires.
-	flushed chan struct{}
+	// activeWorkerCount tracks the number of currently active workers for graceful shutdown.
+	activeWorkerCount atomic.Int64
 
-	// overflow holds requests that couldn't fit in the channel when submitted.
-	//
-	// The overflow is concurrency-safe internally, but the dispatcher ensures that only the drainer goroutine mutates it,
-	// so no external locking is needed when the drainer appends or moves items back to the channel.
-	overflow *Overflow[Request]
+	// readiness represents the completion of Start.
+	// Submit waits on this to ensure Start has completed before accepting requests.
+	readiness *sync.WaitGroup
+}
 
-	// drainSignal is a 1-buffered channel used to wake the drainer goroutine
-	// when items are added to overflow.
-	drainSignal chan struct{}
+type streamKey struct {
+	Plan            types.NamespacedName
+	CycleID         string
+	NotificationRef types.NamespacedName
+	SinkName        string
+	SinkType        string
+	Operation       string
+}
+
+func streamKeyFromRequest(req Request) streamKey {
+	return streamKey{
+		Plan: types.NamespacedName{
+			Namespace: req.Payload.Plan.Namespace,
+			Name:      req.Payload.Plan.Name,
+		},
+		CycleID:         req.Payload.CycleID,
+		NotificationRef: req.NotificationRef,
+		SinkName:        req.SinkName,
+		SinkType:        req.SinkType,
+		Operation:       req.Payload.Operation,
+	}
 }
 
 // NewDispatcher creates a new NotificationDispatcher.
 // The client should be the cached reader (informer cache) for Secret lookups.
 func NewDispatcher(log logr.Logger, c client.Reader, registry *sink.Registry, cfg DispatcherConfig) *Dispatcher {
 	cfg = cfg.withDefaults()
-	return &Dispatcher{
+	d := &Dispatcher{
 		log:             log,
 		client:          c,
 		registry:        registry,
 		channelSize:     cfg.ChannelSize,
-		workers:         cfg.Workers,
 		dispatchTimeout: cfg.DispatchTimeout,
-		maxOverflowSize: cfg.MaxOverflowSize,
-		overflow:        new(Overflow[Request]),
-		requestCh:       make(chan Request, cfg.ChannelSize),
+		workerIdleTTL:   cfg.WorkerIdleTTL,
 		done:            make(chan struct{}),
-		drained:         make(chan struct{}),
-		flushed:         make(chan struct{}),
-		drainSignal:     make(chan struct{}, 1),
+		readiness:       new(sync.WaitGroup),
 	}
+
+	d.pool = keyedworker.New(
+		keyedworker.WithSlotFactory[streamKey](func() keyedworker.Slot[Request] {
+			return keyedworker.FIFOSlotWithOnDrop(cfg.ChannelSize, d.onRecordDrop)()
+		}),
+		keyedworker.WithAutoRemoveOnIdle[streamKey, Request](),
+		keyedworker.WithOnSpawnCallback[streamKey, Request](func(_ streamKey) {
+			d.activeWorkerCount.Add(1)
+			metrics.NotificationWorkerGoroutinesGauge.Inc()
+		}),
+		keyedworker.WithOnRemoveCallback[streamKey, Request](func(_ streamKey) {
+			d.activeWorkerCount.Add(-1)
+			metrics.NotificationWorkerGoroutinesGauge.Dec()
+		}),
+		keyedworker.WithLogger[streamKey, Request](log.WithName("pool")),
+	)
+
+	d.readiness.Add(1)
+	return d
+}
+
+func (d *Dispatcher) onRecordDrop(req Request) {
+	log := d.log.WithValues(
+		"plan", req.Payload.Plan.String(),
+		"sink", req.SinkName,
+		"sinkType", req.SinkType,
+		"event", req.Payload.Event,
+	)
+	log.Info("notification stream buffer full, dropping request")
+	metrics.NotificationDropTotal.WithLabelValues(req.SinkType, req.Payload.Event).Inc()
 }
 
 // NeedLeaderElection returns true — notifications should only fire from the leader.
@@ -169,55 +193,57 @@ func (d *Dispatcher) NeedLeaderElection() bool { return true }
 // interface rather than on *Dispatcher directly.
 func (d *Dispatcher) Notifier() Notifier { return d }
 
-// Start implements manager.Runnable. It spawns the overflow drainer, worker
-// goroutines, and blocks until ctx is cancelled. On shutdown it ensures all
-// in-flight and overflow items are delivered before returning.
-//
-// Shutdown sequence:
-//  1. close(d.done)         — Submit fast-path discards new requests
-//  2. d.shuttingDown = true — Submit overflow-path discards too
-//  3. Stop drainer, wait    — drainer returns unsent items to overflow
-//  4. Flush overflow → ch   — workers are still consuming from ch
-//  5. close(d.allFlushed)   — workers switch to drain-and-exit mode
-//  6. d.wg.Wait()           — all workers finish
-//
-// requestCh is never closed, so Submit can never panic with a
-// send-on-closed-channel even in a tiny race window.
+// Start implements manager.Runnable. It wires keyed per-stream workers and
+// blocks until ctx is cancelled. During shutdown, new submissions are rejected
+// and active stream workers are given a bounded time window to drain pending
+// per-stream items before Start returns.
 func (d *Dispatcher) Start(ctx context.Context) error {
-	d.log.Info("starting notification dispatcher", "workers", d.workers, "channelSize", d.channelSize)
-
-	// Start workers and overflow drainer.
-	go d.run(ctx)
-
-	d.log.V(1).Info("notification dispatcher running", "workers", d.workers, "channelSize", d.channelSize)
-	// Block until context is cancelled.
-	<-ctx.Done()
-
-	// --- Shutdown sequence ---
-	d.log.V(1).Info("notification dispatcher initiating shutdown")
-
-	// Signal shutdown to drainer and prevent Submit from accepting new requests.
-	close(d.done)
-
-	d.log.V(1).Info("notification dispatcher shutting down, waiting for flush",
-		"workers", d.workers,
-		"channelSize", len(d.requestCh),
-		"remainingOverflow", d.overflow.Len(),
+	d.log.Info("starting notification dispatcher",
+		"mode", "keyed-stream",
+		"perStreamBuffer", d.channelSize,
+		"workerIdleTTL", d.workerIdleTTL,
 	)
-	// At this point, workers goroutine might still performing flush from the remaining
-	// requests in the channel, once it dones, it will close the d.flushed channel
-	// to signal that all items have been flushed and processed regardless of the status.
-	<-d.flushed
+
+	d.pool.Register(ctx, d.workerFactory)
+	d.log.V(1).Info("notification dispatcher running", "mode", "keyed-stream")
+	d.readiness.Done()
+
+	<-ctx.Done()
+	d.log.V(1).Info("notification dispatcher initiating shutdown")
+	close(d.done)
+	d.pool.Stop()
+
+	deadline := time.NewTimer(defaultDrainTimeout)
+	defer deadline.Stop()
+	ticker := time.NewTicker(10 * time.Millisecond)
+	defer ticker.Stop()
+
+waitLoop:
+	for {
+		if d.activeWorkerCount.Load() <= 0 {
+			d.log.V(1).Info("notification dispatcher workers drained")
+			break
+		}
+
+		select {
+		case <-deadline.C:
+			d.log.Info("notification dispatcher drain timeout reached; stopping with active workers", "activeWorkers", d.activeWorkerCount.Load())
+			break waitLoop
+		case <-ticker.C:
+		}
+	}
 
 	d.log.Info("notification dispatcher stopped")
 	return nil
 }
 
-// Submit enqueues a dispatch request. It never blocks the caller: if the buffered
-// channel has room the request goes directly; otherwise it is appended to the
-// internal overflow queue and the drainer will move it to the channel asynchronously.
+// Submit enqueues a dispatch request. It never blocks the caller. Requests are
+// routed into per-stream FIFO slots; if a per-stream buffer is full, the request
+// is dropped by the slot and counted in NotificationDropTotal.
 // After shutdown begins (d.done closed), requests are discarded with a metric.
 func (d *Dispatcher) Submit(req Request) {
+	d.readiness.Wait() // ensure Start has completed before accepting requests
+
 	log := d.log.WithValues(
 		"plan", req.Payload.Plan.String(),
 		"sink", req.SinkName,
@@ -234,140 +260,68 @@ func (d *Dispatcher) Submit(req Request) {
 	default:
 	}
 
-	// Try non-blocking send to the channel. No lock needed here because
-	// requestCh is never closed — the worst case is sending one extra item
-	// after shutdown, which workers will drain.
-	select {
-	case d.requestCh <- req:
-		return
-	default:
-	}
+	key := streamKeyFromRequest(req)
+	log.V(1).Info("enqueueing notification request", "stream", key)
+	d.pool.Deliver(key, req)
+}
 
-	if d.overflow.Len() >= d.maxOverflowSize {
-		log.Info("overflow queue full, dropping notification request")
-		metrics.NotificationDropTotal.WithLabelValues(req.SinkType, req.Payload.Event).Inc()
-		return
-	}
+func (d *Dispatcher) workerFactory(key streamKey, slot keyedworker.Slot[Request]) func(context.Context) {
+	return func(ctx context.Context) {
+		log := d.log.WithValues("stream", key)
+		log.V(1).Info("notification stream worker started")
 
-	log.V(1).Info("request channel full, adding notification request to overflow")
-	d.overflow.Append(req)
+		idleTimer := time.NewTimer(d.workerIdleTTL)
+		defer idleTimer.Stop()
 
-	// Wake the drainer (non-blocking signal).
-	select {
-	case d.drainSignal <- struct{}{}:
-	default: // already signaled
+		for {
+			select {
+			case <-ctx.Done():
+				d.drainSlot(slot)
+				log.V(1).Info("notification stream worker stopped")
+				return
+
+			case <-slot.C():
+				if !idleTimer.Stop() {
+					select {
+					case <-idleTimer.C:
+					default:
+					}
+				}
+				idleTimer.Reset(d.workerIdleTTL)
+
+				d.dispatch(ctx, slot.Recv())
+
+			case <-idleTimer.C:
+				for {
+					select {
+					case <-slot.C():
+						d.dispatch(ctx, slot.Recv())
+					default:
+						log.V(1).Info("notification stream worker reaped due to idle ttl")
+						return
+					}
+				}
+			}
+		}
 	}
 }
 
-// overflowDrainerLoop runs in a goroutine, waiting for signals to move items
-// from the overflow queue to the main channel.
-// Exits when drainStop is closed (shutdown).
-func (d *Dispatcher) overflowDrainerLoop() {
-	d.log.Info("notification overflow drainer started")
+func (d *Dispatcher) drainSlot(slot keyedworker.Slot[Request]) {
+	drainCtx, cancel := context.WithTimeout(context.Background(), defaultDrainTimeout)
+	defer cancel()
 
 	for {
+		if drainCtx.Err() != nil {
+			return
+		}
+
 		select {
-		case <-d.drainSignal:
-			if interrupted := d.drainOverflow(); interrupted {
-				d.log.V(1).Info("notification overflow drainer interrupted during shutdown, returning remaining items to overflow",
-					"remainingOverflow", d.overflow.Len())
-			}
-		case <-d.done:
-			d.log.Info("notification overflow drainer stopped")
-			close(d.drained)
+		case <-slot.C():
+			d.dispatch(drainCtx, slot.Recv())
+		default:
 			return
 		}
 	}
-}
-
-// drainOverflow moves all items currently in the overflow queue into the main channel.
-// It sends items to the channel in a select with d.drainStop so it can be
-// interrupted during shutdown — any unsent items are returned to the overflow
-// queue for the final flush in Start().
-func (d *Dispatcher) drainOverflow() bool {
-	var interrupted bool
-
-	d.overflow.Consume(func(ctx context.Context, req Request) bool {
-		select {
-		case d.requestCh <- req:
-			return true
-
-			// Context canceled after 5 seconds
-		case <-ctx.Done():
-			return false
-
-			// Dispatcher shutdown is signaled via d.done,
-			// but we also need to listen to ctx.Done() here to avoid blocking on send if the dispatcher is trying to shut down while we're draining overflow. This allows the drainer to exit promptly without getting stuck trying to send on a full channel during shutdown.
-		case <-d.done:
-			interrupted = true
-			return false
-		}
-	})
-
-	return interrupted
-}
-
-// run starts the worker goroutines responsible for processing dispatch requests
-// from the channel, including the overflow drainer.
-//
-// On shutdown, workers exit their loop when ctx is cancelled. After all workers
-// have stopped, run() waits for the drainer to finish and then drains both the
-// request channel and the overflow queue in a single goroutine. This avoids
-// duplicate dispatches that would occur if multiple workers each independently
-// drained the overflow, and ensures channel items are not lost.
-func (d *Dispatcher) run(ctx context.Context) {
-	go d.overflowDrainerLoop()
-
-	var activeWorkers sync.WaitGroup
-	for i := 0; i < d.workers; i++ {
-		activeWorkers.Add(1)
-		go func(workerID int) {
-			defer activeWorkers.Done()
-			d.log.Info("notification worker started", "workerID", workerID)
-
-			for {
-				select {
-				case req := <-d.requestCh:
-					d.dispatch(ctx, req)
-
-				case <-ctx.Done():
-					d.log.Info("notification worker stopped", "workerID", workerID)
-					return
-				}
-			}
-		}(i + 1)
-	}
-
-	activeWorkers.Wait()
-
-	// Wait for the drainer to finish and return any undrained items back to overflow.
-	<-d.drained
-
-	d.log.V(1).Info("draining remaining requests after shutdown",
-		"channelLen", len(d.requestCh),
-		"remainingOverflow", d.overflow.Len(),
-	)
-
-	dCtx, dCancel := context.WithTimeout(context.Background(), defaultDrainTimeout)
-	defer dCancel()
-
-	// Drain any items left in the request channel.
-drainChannel:
-	for {
-		select {
-		case req := <-d.requestCh:
-			d.dispatch(dCtx, req)
-		default:
-			break drainChannel
-		}
-	}
-
-	// Drain remaining overflow items.
-	d.overflow.Range(func(r Request) {
-		d.dispatch(dCtx, r)
-	})
-
-	close(d.flushed)
 }
 
 // dispatch processes a single DispatchRequest: resolves credentials, builds
