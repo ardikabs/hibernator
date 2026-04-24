@@ -326,7 +326,7 @@ func TestWakeUp_RestoreNodeGroups(t *testing.T) {
 	e := NewWithClients(eksFactory, stsFactory, nil)
 
 	// Create per-nodegroup restore data (key = nodegroup name)
-	nodeGroupState, _ := json.Marshal(NodeGroupState{DesiredSize: 3, MinSize: 1, MaxSize: 5})
+	nodeGroupState, _ := json.Marshal(NodeGroupState{DesiredSize: 3, MinSize: 1, MaxSize: 5, WasScaled: true})
 
 	spec := executor.Spec{
 		TargetName: "test-cluster",
@@ -350,6 +350,44 @@ func TestWakeUp_RestoreNodeGroups(t *testing.T) {
 	mockEKS.AssertExpectations(t)
 }
 
+func TestWakeUp_SkipsNodeGroupNotScaled(t *testing.T) {
+	ctx := context.Background()
+
+	mockEKS := &mocks.EKSClient{}
+
+	eksFactory := func(cfg aws.Config) EKSClient { return mockEKS }
+	stsFactory := func(cfg aws.Config) STSClient { return &mocks.STSClient{} }
+
+	e := NewWithClients(eksFactory, stsFactory, nil)
+
+	// Node group with WasScaled=false (already at 0 before hibernation - voluntary action)
+	nodeGroupState, _ := json.Marshal(NodeGroupState{DesiredSize: 0, MinSize: 0, MaxSize: 5, WasScaled: false})
+
+	spec := executor.Spec{
+		TargetName: "test-cluster",
+		TargetType: "eks",
+		Parameters: json.RawMessage(`{"clusterName": "my-cluster"}`),
+		ConnectorConfig: executor.ConnectorConfig{
+			AWS: &executor.AWSConnectorConfig{Region: "us-east-1"},
+		},
+	}
+
+	restore := executor.RestoreData{
+		Type: "eks",
+		Data: map[string]json.RawMessage{
+			"ng-voluntary": nodeGroupState,
+		},
+	}
+
+	res, err := e.WakeUp(ctx, logr.Discard(), spec, restore)
+	assert.NoError(t, err)
+	assert.Contains(t, res.Message, "skipped 1 stale node group(s)")
+
+	// Ensure no API calls were made for node group that wasn't scaled by us
+	mockEKS.AssertNotCalled(t, "DescribeNodegroup", mock.Anything, mock.Anything)
+	mockEKS.AssertNotCalled(t, "UpdateNodegroupConfig", mock.Anything, mock.Anything)
+}
+
 func TestWakeUp_SkipsStaleNodeGroup(t *testing.T) {
 	ctx := context.Background()
 
@@ -366,7 +404,8 @@ func TestWakeUp_SkipsStaleNodeGroup(t *testing.T) {
 
 	e := NewWithClients(eksFactory, stsFactory, nil)
 
-	nodeGroupState, _ := json.Marshal(NodeGroupState{DesiredSize: 3, MinSize: 1, MaxSize: 5})
+	// Node group with WasScaled=true but no longer exists
+	nodeGroupState, _ := json.Marshal(NodeGroupState{DesiredSize: 3, MinSize: 1, MaxSize: 5, WasScaled: true})
 
 	spec := executor.Spec{
 		TargetName: "test-cluster",

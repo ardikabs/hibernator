@@ -108,6 +108,7 @@ type WorkloadState struct {
 	Namespace string `json:"namespace"`
 	Name      string `json:"name"`
 	Replicas  int32  `json:"replicas"`
+	WasScaled bool   `json:"wasScaled"` // true if scaled down by hibernator, false if already at 0
 }
 
 func (s WorkloadState) GetGVR() schema.GroupVersionResource {
@@ -298,6 +299,17 @@ func (e *Executor) WakeUp(ctx context.Context, log logr.Logger, spec executor.Sp
 			return nil, fmt.Errorf("unmarshal workload state %s: %w", workloadKey, err)
 		}
 
+		if !state.WasScaled {
+			stats.skippedStale++
+			log.Info("workload was already at zero replicas before hibernation, skipping restore",
+				"workload", workloadKey,
+				"namespace", state.Namespace,
+				"kind", state.Kind,
+				"name", state.Name,
+			)
+			continue
+		}
+
 		outcome, err := e.restoreWorkload(ctx, log, client, state, params)
 		if err != nil {
 			return nil, fmt.Errorf("restore %s/%s in namespace %s: %w", state.Kind, state.Name, state.Namespace, err)
@@ -438,8 +450,8 @@ func (e *Executor) scaleDownWorkloads(ctx context.Context,
 			continue
 		}
 
-		// Track if this workload has non-zero replicas
-		shouldCountAsApplied := replicas > 0
+		// Determine if this is a voluntary action (already at 0) or needs scaling
+		wasScaled := replicas > 0
 
 		// Store current state with key = namespace/kind/name
 		key := fmt.Sprintf("%s/%s/%s", item.GetNamespace(), item.GetKind(), item.GetName())
@@ -451,41 +463,57 @@ func (e *Executor) scaleDownWorkloads(ctx context.Context,
 			Namespace: item.GetNamespace(),
 			Name:      item.GetName(),
 			Replicas:  int32(replicas),
+			WasScaled: wasScaled,
 		}
 		stateBytes, _ := json.Marshal(state)
 		statesMap[key] = stateBytes
 
-		// Scale to zero by updating scale.spec.replicas
-		if err := unstructured.SetNestedField(scaleObj.Object, int64(0), "spec", "replicas"); err != nil {
-			return operationStats{}, fmt.Errorf("set replicas to zero in scale for %s/%s: %w", item.GetKind(), item.GetName(), err)
-		}
-
-		// Update the scale subresource
-		_, err = client.UpdateScale(ctx, gvr, namespace, scaleObj)
-		if err != nil {
-			if apierrors.IsNotFound(err) {
-				log.Info("resource not found, skipping", "namespace", namespace, "name", item.GetName(), "kind", item.GetKind())
-				stats.skippedStale++
-
-				// Skip resources that no longer exist
-				continue
+		// Scale to zero only if not already at zero
+		if wasScaled {
+			// Scale to zero by updating scale.spec.replicas
+			if err := unstructured.SetNestedField(scaleObj.Object, int64(0), "spec", "replicas"); err != nil {
+				return operationStats{}, fmt.Errorf("set replicas to zero in scale for %s/%s: %w", item.GetKind(), item.GetName(), err)
 			}
 
-			return operationStats{}, fmt.Errorf("update scale for %s/%s: %w", item.GetKind(), item.GetName(), err)
-		}
+			// Update the scale subresource
+			_, err = client.UpdateScale(ctx, gvr, namespace, scaleObj)
+			if err != nil {
+				if apierrors.IsNotFound(err) {
+					log.Info("resource not found, skipping", "namespace", namespace, "name", item.GetName(), "kind", item.GetKind())
+					stats.skippedStale++
 
-		if shouldCountAsApplied {
+					// Skip resources that no longer exist
+					continue
+				}
+
+				return operationStats{}, fmt.Errorf("update scale for %s/%s: %w", item.GetKind(), item.GetName(), err)
+			}
+
 			stats.applied++
+
+			// Add to waiting list if awaitCompletion is configured
+			if params.AwaitCompletion.Enabled {
+				e.waitinglist = append(e.waitinglist, state)
+			}
+
+			log.Info("workload scaled to zero",
+				"namespace", namespace,
+				"name", item.GetName(),
+				"kind", item.GetKind(),
+				"previousReplicas", replicas,
+			)
+		} else {
+			log.Info("workload already at zero replicas, skipping scale down",
+				"namespace", namespace,
+				"name", item.GetName(),
+				"kind", item.GetKind(),
+			)
 		}
 
-		// Add to waiting list if awaitCompletion is configured
-		if params.AwaitCompletion.Enabled {
-			e.waitinglist = append(e.waitinglist, state)
-		}
-
-		// Incremental save: persist this workload's restore data immediately
+		// Incremental save: persist this workload's restore data immediately.
+		// isLive=true because hibernator captured this state directly from the GetScale API call.
 		if callback != nil {
-			if err := callback(key, state, replicas > 0); err != nil {
+			if err := callback(key, state, true); err != nil {
 				log.Error(err, "failed to save restore data incrementally", "workload", key)
 				// Continue processing - save at end as fallback
 			}

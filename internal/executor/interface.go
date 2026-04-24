@@ -32,9 +32,11 @@ type RestoreData struct {
 	// - Noop: operation ID (e.g., "noop-12345")
 	Data map[string]json.RawMessage `json:"data"`
 
-	// IsLive indicates whether data was captured from running resources (true)
-	// or from already-shutdown state (false). High-quality data (IsLive=true)
-	// is preserved over low-quality data (IsLive=false) during save operations.
+	// IsLive indicates whether data was captured from actual resource state via API (true)
+	// or is cached/unknown state (false). When true, hibernator has direct knowledge of the
+	// resource state from a fresh API call. When false, the data may be stale or from an
+	// incomplete lifecycle. High-quality data (IsLive=true) is preserved over low-quality
+	// data (IsLive=false) during save operations.
 	IsLive bool `json:"isLive"`
 }
 
@@ -45,7 +47,9 @@ type RestoreData struct {
 //
 //	key: Resource-specific key (e.g., instanceID, nodeGroupName)
 //	value: Resource state (will be JSON-marshaled by callback implementation)
-//	isLive: Whether data was captured from running resources (quality indicator)
+//	isLive: Whether data was captured from actual resource state via API (true) or is
+//	        cached/unknown (false). True indicates hibernator directly observed the
+//	        resource state, false indicates data may be stale or from incomplete lifecycle.
 type SaveRestoreDataFunc func(key string, value interface{}, isLive bool) error
 
 // Spec holds target execution parameters.

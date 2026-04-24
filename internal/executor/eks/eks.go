@@ -46,6 +46,7 @@ type NodeGroupState struct {
 	DesiredSize int32 `json:"desired"`
 	MinSize     int32 `json:"min"`
 	MaxSize     int32 `json:"max"`
+	WasScaled   bool  `json:"wasScaled"` // true if scaled down by hibernator, false if already at 0
 }
 
 type operationOutcome string
@@ -307,6 +308,15 @@ func (e *Executor) WakeUp(ctx context.Context, log logr.Logger, spec executor.Sp
 			return nil, fmt.Errorf("unmarshal node group state %s: %w", ngName, err)
 		}
 
+		if !state.WasScaled {
+			stats.skippedStale++
+			log.Info("node group was already at zero before hibernation, skipping restore",
+				"clusterName", clusterName,
+				"nodeGroup", ngName,
+			)
+			continue
+		}
+
 		log.Info("restoring node group",
 			"clusterName", clusterName,
 			"nodeGroup", ngName,
@@ -424,47 +434,63 @@ func (e *Executor) scaleNodeGroupToZero(ctx context.Context, log logr.Logger, ek
 		return "", err
 	}
 
+	desiredSize := aws.ToInt32(desc.Nodegroup.ScalingConfig.DesiredSize)
+	minSize := aws.ToInt32(desc.Nodegroup.ScalingConfig.MinSize)
+	maxSize := aws.ToInt32(desc.Nodegroup.ScalingConfig.MaxSize)
+
+	// Determine if this is a voluntary action (already at 0) or needs scaling
+	wasScaled := desiredSize > 0
+
 	state := NodeGroupState{
-		DesiredSize: aws.ToInt32(desc.Nodegroup.ScalingConfig.DesiredSize),
-		MinSize:     aws.ToInt32(desc.Nodegroup.ScalingConfig.MinSize),
-		MaxSize:     aws.ToInt32(desc.Nodegroup.ScalingConfig.MaxSize),
+		DesiredSize: desiredSize,
+		MinSize:     minSize,
+		MaxSize:     maxSize,
+		WasScaled:   wasScaled,
 	}
 
-	// Scale to zero
-	if _, err = eksClient.UpdateNodegroupConfig(ctx, &eks.UpdateNodegroupConfigInput{
-		ClusterName:   aws.String(clusterName),
-		NodegroupName: aws.String(ngName),
-		ScalingConfig: &types.NodegroupScalingConfig{
-			MinSize:     aws.Int32(0),
-			DesiredSize: aws.Int32(0),
-			MaxSize:     aws.Int32(state.MaxSize), // Keep max
-		},
-	}); err != nil {
-		var notFoundErr *types.ResourceNotFoundException
-		if errors.As(err, &notFoundErr) {
-			log.Info("node group not found during scale update, skipping stale shutdown entry",
-				"clusterName", clusterName,
-				"nodeGroup", ngName,
-			)
-			return operationOutcomeSkippedStale, nil
+	// Scale to zero only if not already at zero
+	if wasScaled {
+		if _, err = eksClient.UpdateNodegroupConfig(ctx, &eks.UpdateNodegroupConfigInput{
+			ClusterName:   aws.String(clusterName),
+			NodegroupName: aws.String(ngName),
+			ScalingConfig: &types.NodegroupScalingConfig{
+				MinSize:     aws.Int32(0),
+				DesiredSize: aws.Int32(0),
+				MaxSize:     aws.Int32(maxSize), // Keep max
+			},
+		}); err != nil {
+			var notFoundErr *types.ResourceNotFoundException
+			if errors.As(err, &notFoundErr) {
+				log.Info("node group not found during scale update, skipping stale shutdown entry",
+					"clusterName", clusterName,
+					"nodeGroup", ngName,
+				)
+				return operationOutcomeSkippedStale, nil
+			}
+			return "", err
 		}
-		return "", err
+
+		// Add to waiting list for awaiting completion if configured
+		if params.AwaitCompletion.Enabled {
+			e.waitinglist = append(e.waitinglist, ngName)
+		}
+		log.Info("node group scaled to zero",
+			"nodeGroup", ngName,
+			"previousDesired", desiredSize,
+			"previousMin", minSize,
+			"previousMax", maxSize,
+		)
+	} else {
+		log.Info("node group already at zero, skipping scale down",
+			"nodeGroup", ngName,
+			"desiredSize", desiredSize,
+		)
 	}
 
-	// Add to waiting list for awaiting completion if configured
-	if params.AwaitCompletion.Enabled {
-		e.waitinglist = append(e.waitinglist, ngName)
-	}
-	log.Info("node group scaled successfully",
-		"nodeGroup", ngName,
-		"previousDesired", state.DesiredSize,
-		"previousMin", state.MinSize,
-		"previousMax", state.MaxSize,
-	)
-
-	// Incremental save: persist this node group's restore data immediately
+	// Incremental save: persist this node group's restore data immediately.
+	// isLive=true because hibernator captured this state directly from the DescribeNodegroup API call.
 	if callback != nil {
-		if err := callback(ngName, state, state.DesiredSize > 0); err != nil {
+		if err := callback(ngName, state, true); err != nil {
 			log.Error(err, "failed to save restore data incrementally", "nodeGroup", ngName)
 			// Continue processing - save at end as fallback
 		}

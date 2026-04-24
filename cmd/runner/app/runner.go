@@ -518,8 +518,8 @@ func (r *runner) loadK8SClusterConfig(ctx context.Context, spec *executor.Spec) 
 // This reduces Kubernetes API calls from N*2 to 1 (where N = number of resources).
 type restoreDataAccumulator struct {
 	mu          sync.Mutex
-	liveKeys    map[string]any // High-quality state (isLive=true)
-	nonLiveKeys map[string]any // Low-quality state (isLive=false)
+	liveKeys    map[string]any // Actual state captured via API (isLive=true)
+	nonLiveKeys map[string]any // Cached/unknown state (isLive=false)
 	log         logr.Logger
 }
 

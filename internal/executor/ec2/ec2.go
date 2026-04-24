@@ -162,9 +162,10 @@ func (e *Executor) Shutdown(ctx context.Context, log logr.Logger, spec executor.
 			instancesToStop = append(instancesToStop, instanceID)
 		}
 
-		// Incremental save: persist this instance's restore data immediately
+		// Incremental save: persist this instance's restore data immediately.
+		// isLive=true because hibernator captured this state directly from the DescribeInstances API call.
 		if spec.SaveRestoreData != nil {
-			if err := spec.SaveRestoreData(instanceID, state, wasRunning); err != nil {
+			if err := spec.SaveRestoreData(instanceID, state, true); err != nil {
 				log.Error(err, "failed to save restore data incrementally", "instanceId", instanceID)
 				// Continue processing - save at end as fallback
 			}
