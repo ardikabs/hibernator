@@ -46,7 +46,7 @@ type RestoreState struct {
 // DBInstanceState holds state for a single DB instance.
 type DBInstanceState struct {
 	InstanceId   string `json:"instanceId"`
-	WasStopped   bool   `json:"wasStopped"`
+	WasRunning   bool   `json:"wasRunning"` // true if running when hibernator saw it (restore on wakeup), false if already stopped
 	SnapshotId   string `json:"snapshotId,omitempty"`
 	InstanceType string `json:"instanceType,omitempty"`
 }
@@ -54,7 +54,7 @@ type DBInstanceState struct {
 // DBClusterState holds state for a single DB cluster.
 type DBClusterState struct {
 	ClusterId  string `json:"clusterId"`
-	WasStopped bool   `json:"wasStopped"`
+	WasRunning bool   `json:"wasRunning"` // true if running when hibernator saw it (restore on wakeup), false if already stopped
 	SnapshotId string `json:"snapshotId,omitempty"`
 }
 
@@ -381,7 +381,7 @@ func (e *Executor) WakeUp(ctx context.Context, log logr.Logger, spec executor.Sp
 				return nil, fmt.Errorf("unmarshal instance state %s: %w", instanceID, err)
 			}
 
-			if !state.WasStopped {
+			if state.WasRunning {
 				log.Info("starting RDS instance", "instanceId", state.InstanceId)
 				outcome, err := e.startInstance(ctx, log, client, state.InstanceId, params)
 				if err != nil {
@@ -397,7 +397,7 @@ func (e *Executor) WakeUp(ctx context.Context, log logr.Logger, spec executor.Sp
 				log.Info("instance started successfully", "instanceId", state.InstanceId)
 			} else {
 				stats.skippedStale++
-				log.Info("instance was already started, skipping start", "instanceId", state.InstanceId)
+				log.Info("instance was already stopped before hibernation, skipping start", "instanceId", state.InstanceId)
 			}
 
 		} else if strings.HasPrefix(key, "cluster:") {
@@ -408,7 +408,7 @@ func (e *Executor) WakeUp(ctx context.Context, log logr.Logger, spec executor.Sp
 				return nil, fmt.Errorf("unmarshal cluster state %s: %w", clusterID, err)
 			}
 
-			if !state.WasStopped {
+			if state.WasRunning {
 				log.Info("starting RDS cluster", "clusterId", state.ClusterId)
 				outcome, err := e.startCluster(ctx, log, client, state.ClusterId, params)
 				if err != nil {
@@ -424,7 +424,7 @@ func (e *Executor) WakeUp(ctx context.Context, log logr.Logger, spec executor.Sp
 				log.Info("cluster started successfully", "clusterId", state.ClusterId)
 			} else {
 				stats.skippedStale++
-				log.Info("cluster was already started, skipping start", "clusterId", state.ClusterId)
+				log.Info("cluster was already stopped before hibernation, skipping start", "clusterId", state.ClusterId)
 			}
 		} else {
 			stats.skippedKey++
@@ -535,71 +535,74 @@ func (e *Executor) stopInstance(ctx context.Context, log logr.Logger, client RDS
 
 	status := aws.ToString(instance.DBInstanceStatus)
 
-	// Check if already stopped
-	if status == "stopped" {
-		log.Info("instance is already stopped", "instanceId", instanceId)
-		state.WasStopped = true
-	}
+	switch status {
+	case "available":
+		state.WasRunning = true
 
-	// Create snapshot if requested
-	if snapshotBeforeStop {
-		snapshotId := fmt.Sprintf("%s-hibernate-%d", instanceId, time.Now().Unix())
-		log.Info("creating DB snapshot before stop", "instanceId", instanceId, "snapshotId", snapshotId)
-		_, err := client.CreateDBSnapshot(ctx, &rds.CreateDBSnapshotInput{
+		// Create snapshot if requested
+		if snapshotBeforeStop {
+			snapshotId := fmt.Sprintf("%s-hibernate-%d", instanceId, time.Now().Unix())
+			log.Info("creating DB snapshot before stop", "instanceId", instanceId, "snapshotId", snapshotId)
+			_, err := client.CreateDBSnapshot(ctx, &rds.CreateDBSnapshotInput{
+				DBInstanceIdentifier: aws.String(instanceId),
+				DBSnapshotIdentifier: aws.String(snapshotId),
+			})
+			if err != nil {
+				return "", fmt.Errorf("create snapshot: %w", err)
+			}
+			state.SnapshotId = snapshotId
+
+			// Wait for snapshot to be available
+			waiter := rds.NewDBSnapshotAvailableWaiter(client)
+			log.Info("waiting for snapshot to be available", "snapshotId", snapshotId)
+			if err := waiter.Wait(ctx, &rds.DescribeDBSnapshotsInput{
+				DBSnapshotIdentifier: aws.String(snapshotId),
+			}, 30*time.Minute); err != nil {
+				return "", fmt.Errorf("wait for snapshot: %w", err)
+			}
+			log.Info("snapshot available", "snapshotId", snapshotId)
+		}
+
+		// Stop instance
+		log.Info("stopping DB instance", "instanceId", instanceId)
+		if _, err = client.StopDBInstance(ctx, &rds.StopDBInstanceInput{
 			DBInstanceIdentifier: aws.String(instanceId),
-			DBSnapshotIdentifier: aws.String(snapshotId),
-		})
-		if err != nil {
-			return "", fmt.Errorf("create snapshot: %w", err)
+		}); err != nil {
+			var apiErr smithy.APIError
+			if errors.As(err, &apiErr) {
+				switch apiErr.ErrorCode() {
+				case "DBInstanceNotFound":
+					log.Info("instance not found, skipping ...", "instanceId", instanceId)
+					return operationOutcomeSkippedStale, nil
+				}
+			}
+			return "", err
 		}
-		state.SnapshotId = snapshotId
-
-		// Wait for snapshot to be available
-		waiter := rds.NewDBSnapshotAvailableWaiter(client)
-		log.Info("waiting for snapshot to be available", "snapshotId", snapshotId)
-		if err := waiter.Wait(ctx, &rds.DescribeDBSnapshotsInput{
-			DBSnapshotIdentifier: aws.String(snapshotId),
-		}, 30*time.Minute); err != nil {
-			return "", fmt.Errorf("wait for snapshot: %w", err)
-		}
-		log.Info("snapshot available", "snapshotId", snapshotId)
-	}
-
-	if status != "available" {
+	case "stopped":
+		state.WasRunning = false
+		log.Info("instance is already stopped", "instanceId", instanceId)
+	default:
 		log.Info("instance is in a status that cannot be stopped, skipping stop ...",
 			"instanceId", instanceId, "status", status)
 		return operationOutcomeSkippedStale, nil
+
 	}
 
-	// Stop instance
-	log.Info("stopping DB instance", "instanceId", instanceId)
-	if _, err = client.StopDBInstance(ctx, &rds.StopDBInstanceInput{
-		DBInstanceIdentifier: aws.String(instanceId),
-	}); err != nil {
-		var apiErr smithy.APIError
-		if errors.As(err, &apiErr) {
-			switch apiErr.ErrorCode() {
-			case "DBInstanceNotFound":
-				log.Info("instance not found, skipping ...", "instanceId", instanceId)
-				return operationOutcomeSkippedStale, nil
-			}
-		}
-		return "", err
-	}
-	log.Info("instance processed successfully",
-		"instanceId", instanceId,
-		"wasStopped", state.WasStopped,
-		"snapshotCreated", state.SnapshotId != "",
-	)
-
-	// Incremental save: persist this instance's restore data immediately
+	// Incremental save: persist this instance's restore data immediately.
+	// isLive=true because hibernator captured this state directly from the DescribeDBInstances API call.
 	if callback != nil {
 		key := "instance:" + state.InstanceId
-		if err := callback(key, state, !state.WasStopped); err != nil {
+		if err := callback(key, state, true); err != nil {
 			log.Error(err, "failed to save restore data incrementally", "instanceId", instanceId)
 			// Continue processing - save at end as fallback
 		}
 	}
+
+	log.Info("instance processed successfully",
+		"instanceId", instanceId,
+		"wasRunning", state.WasRunning,
+		"snapshotCreated", state.SnapshotId != "",
+	)
 
 	// Add to waiting list for awaiting completion if configured
 	if params.AwaitCompletion.Enabled {
@@ -637,72 +640,73 @@ func (e *Executor) stopCluster(ctx context.Context, log logr.Logger, client RDSC
 
 	status := aws.ToString(cluster.Status)
 
-	// Check if already stopped
-	if status == "stopped" {
+	switch status {
+	case "available":
+		state.WasRunning = true
+
+		// Create snapshot if requested
+		if snapshotBeforeStop {
+			snapshotId := fmt.Sprintf("%s-hibernate-%d", clusterId, time.Now().Unix())
+			log.Info("creating DB cluster snapshot before stop", "clusterId", clusterId, "snapshotId", snapshotId)
+			_, err := client.CreateDBClusterSnapshot(ctx, &rds.CreateDBClusterSnapshotInput{
+				DBClusterIdentifier:         aws.String(clusterId),
+				DBClusterSnapshotIdentifier: aws.String(snapshotId),
+			})
+			if err != nil {
+				return "", fmt.Errorf("create cluster snapshot: %w", err)
+			}
+			state.SnapshotId = snapshotId
+
+			// Wait for snapshot
+			waiter := rds.NewDBClusterSnapshotAvailableWaiter(client)
+			log.Info("waiting for cluster snapshot to be available", "snapshotId", snapshotId)
+			if err := waiter.Wait(ctx, &rds.DescribeDBClusterSnapshotsInput{
+				DBClusterSnapshotIdentifier: aws.String(snapshotId),
+			}, 30*time.Minute); err != nil {
+				return "", fmt.Errorf("wait for cluster snapshot: %w", err)
+			}
+			log.Info("cluster snapshot available", "snapshotId", snapshotId)
+		}
+
+		// Stop cluster
+		log.Info("stopping DB cluster", "clusterId", clusterId)
+		if _, err = client.StopDBCluster(ctx, &rds.StopDBClusterInput{
+			DBClusterIdentifier: aws.String(clusterId),
+		}); err != nil {
+			var apiErr smithy.APIError
+			if errors.As(err, &apiErr) {
+				switch apiErr.ErrorCode() {
+				case "DBClusterNotFoundFault":
+					log.Info("cluster not found, skipping ...", "clusterId", clusterId)
+					return operationOutcomeSkippedStale, nil
+				}
+			}
+			return "", err
+		}
+	case "stopped":
+		state.WasRunning = false
 		log.Info("cluster is already stopped", "clusterId", clusterId)
-		state.WasStopped = true
-	}
-
-	// Create snapshot if requested
-	if snapshotBeforeStop {
-		snapshotId := fmt.Sprintf("%s-hibernate-%d", clusterId, time.Now().Unix())
-		log.Info("creating DB cluster snapshot before stop", "clusterId", clusterId, "snapshotId", snapshotId)
-		_, err := client.CreateDBClusterSnapshot(ctx, &rds.CreateDBClusterSnapshotInput{
-			DBClusterIdentifier:         aws.String(clusterId),
-			DBClusterSnapshotIdentifier: aws.String(snapshotId),
-		})
-		if err != nil {
-			return "", fmt.Errorf("create cluster snapshot: %w", err)
-		}
-		state.SnapshotId = snapshotId
-
-		// Wait for snapshot
-		waiter := rds.NewDBClusterSnapshotAvailableWaiter(client)
-		log.Info("waiting for cluster snapshot to be available", "snapshotId", snapshotId)
-		if err := waiter.Wait(ctx, &rds.DescribeDBClusterSnapshotsInput{
-			DBClusterSnapshotIdentifier: aws.String(snapshotId),
-		}, 30*time.Minute); err != nil {
-			return "", fmt.Errorf("wait for cluster snapshot: %w", err)
-		}
-		log.Info("cluster snapshot available", "snapshotId", snapshotId)
-	}
-
-	if status != "available" {
+	default:
 		log.Info("cluster is in a status that cannot be stopped, skipping stop ...",
 			"clusterId", clusterId, "status", status)
 		return operationOutcomeSkippedStale, nil
 	}
 
-	// Stop cluster
-	log.Info("stopping DB cluster", "clusterId", clusterId)
-	if _, err = client.StopDBCluster(ctx, &rds.StopDBClusterInput{
-		DBClusterIdentifier: aws.String(clusterId),
-	}); err != nil {
-		var apiErr smithy.APIError
-		if errors.As(err, &apiErr) {
-			switch apiErr.ErrorCode() {
-			case "DBClusterNotFoundFault":
-				log.Info("cluster not found, skipping ...", "clusterId", clusterId)
-				return operationOutcomeSkippedStale, nil
-			}
-		}
-		return "", err
-	}
-
-	log.Info("cluster processed successfully",
-		"clusterId", clusterId,
-		"wasStopped", state.WasStopped,
-		"snapshotCreated", state.SnapshotId != "",
-	)
-
-	// Incremental save: persist this cluster's restore data immediately
+	// Incremental save: persist this cluster's restore data immediately.
+	// isLive=true because hibernator captured this state directly from the DescribeDBClusters API call.
 	if callback != nil {
 		key := "cluster:" + state.ClusterId
-		if err := callback(key, state, !state.WasStopped); err != nil {
+		if err := callback(key, state, true); err != nil {
 			log.Error(err, "failed to save restore data incrementally", "clusterId", clusterId)
 			// Continue processing - save at end as fallback
 		}
 	}
+
+	log.Info("cluster processed successfully",
+		"clusterId", clusterId,
+		"wasRunning", state.WasRunning,
+		"snapshotCreated", state.SnapshotId != "",
+	)
 
 	// Add to waiting list for awaiting completion if configured
 	if params.AwaitCompletion.Enabled {

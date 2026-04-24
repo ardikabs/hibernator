@@ -199,6 +199,7 @@ func TestWakeUp_RestoresReplicas(t *testing.T) {
 		Namespace: "default",
 		Name:      "test-deployment",
 		Replicas:  3,
+		WasScaled: true, // Was scaled down by hibernator, should be restored
 	}
 	workloadStateBytes, _ := json.Marshal(workloadState)
 	restoreData := executor.RestoreData{

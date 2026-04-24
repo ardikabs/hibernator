@@ -266,7 +266,7 @@ func TestWakeUp_StartInstance(t *testing.T) {
 	)
 
 	// Create per-instance restore data (key = "instance:<id>")
-	instanceState, _ := json.Marshal(DBInstanceState{InstanceId: "db-instance-1", WasStopped: false})
+	instanceState, _ := json.Marshal(DBInstanceState{InstanceId: "db-instance-1", WasRunning: true})
 
 	spec := executor.Spec{
 		TargetName: "test-db",
@@ -298,8 +298,8 @@ func TestWakeUp_InstanceAlreadyRunning(t *testing.T) {
 		nil,
 	)
 
-	// Create per-instance restore data with WasStopped=true (already stopped)
-	instanceState, _ := json.Marshal(DBInstanceState{InstanceId: "db-instance-1", WasStopped: true})
+	// Create per-instance restore data with WasRunning=false (already stopped)
+	instanceState, _ := json.Marshal(DBInstanceState{InstanceId: "db-instance-1", WasRunning: false})
 
 	spec := executor.Spec{
 		TargetName: "test-db",
@@ -341,7 +341,7 @@ func TestWakeUp_StartCluster(t *testing.T) {
 	)
 
 	// Create per-cluster restore data (key = "cluster:<id>")
-	clusterState, _ := json.Marshal(DBClusterState{ClusterId: "cluster-1", WasStopped: false})
+	clusterState, _ := json.Marshal(DBClusterState{ClusterId: "cluster-1", WasRunning: true})
 
 	spec := executor.Spec{
 		TargetName: "test-cluster",
@@ -373,8 +373,8 @@ func TestWakeUp_ClusterAlreadyRunning(t *testing.T) {
 		nil,
 	)
 
-	// Create per-cluster restore data with WasStopped=true (already stopped)
-	clusterState, _ := json.Marshal(DBClusterState{ClusterId: "cluster-1", WasStopped: true})
+	// Create per-cluster restore data with WasRunning=false (already stopped)
+	clusterState, _ := json.Marshal(DBClusterState{ClusterId: "cluster-1", WasRunning: false})
 
 	spec := executor.Spec{
 		TargetName: "test-cluster",
@@ -819,7 +819,7 @@ func TestRestoreState_JSON(t *testing.T) {
 			{
 				InstanceId:   "db-instance-1",
 				SnapshotId:   "snap-123",
-				WasStopped:   false,
+				WasRunning:   true,
 				InstanceType: "db.t3.medium",
 			},
 		},
@@ -834,14 +834,14 @@ func TestRestoreState_JSON(t *testing.T) {
 	assert.Len(t, decoded.Instances, 1)
 	assert.Equal(t, "db-instance-1", decoded.Instances[0].InstanceId)
 	assert.Equal(t, "snap-123", decoded.Instances[0].SnapshotId)
-	assert.False(t, decoded.Instances[0].WasStopped)
+	assert.True(t, decoded.Instances[0].WasRunning)
 	assert.Equal(t, "db.t3.medium", decoded.Instances[0].InstanceType)
 
 	clusterState := RestoreState{
 		Clusters: []DBClusterState{
 			{
 				ClusterId:  "aurora-cluster-1",
-				WasStopped: false,
+				WasRunning: true,
 			},
 		},
 	}
