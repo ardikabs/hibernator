@@ -69,17 +69,18 @@ This key ensures all requests belonging to the same sink execution stream are se
 3. **Adaptive lifecycle:** worker spawns lazily and reaps after idle TTL.
 4. **Shutdown drain:** queued per-stream items are drained before dispatcher stops.
 5. **Saturation behavior:** per-stream full buffer causes controlled drops and increments drop metric.
+6. **E2E ordering verification:** End-to-end test verifying ExecutionProgress arrives before Success for the same cycle.
 
 ## Implementation Checklist
 
-- [ ] Introduce stream key and key builder in notification dispatcher.
-- [ ] Replace shared queue worker model with keyedworker pool model.
-- [ ] Implement per-stream FIFO slot with drop callback for metrics.
-- [ ] Remove overflow queue/drainer logic from dispatcher.
-- [ ] Add worker idle TTL config and defaults.
-- [ ] Add active stream worker gauge metric.
-- [ ] Update dispatcher tests to keyed-stream behavior.
-- [ ] Run notification package tests and fix regressions.
+- [x] Introduce stream key and key builder in notification dispatcher.
+- [x] Replace shared queue worker model with keyedworker pool model.
+- [x] Implement per-stream FIFO slot with drop callback for metrics.
+- [x] Remove overflow queue/drainer logic from dispatcher.
+- [x] Add worker idle TTL config and defaults.
+- [x] Add active stream worker gauge metric.
+- [x] Update dispatcher tests to keyed-stream behavior.
+- [x] Run notification package tests and fix regressions.
 
 ## Out of Scope
 
