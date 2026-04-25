@@ -441,3 +441,160 @@ func TestSelector_JSON(t *testing.T) {
 func TestExecutorType_Constant(t *testing.T) {
 	assert.Equal(t, "ec2", ExecutorType)
 }
+
+// TestShutdown_CapturesAllStatesButOnlyStopsRunning tests that shutdown discovers
+// all instances regardless of state, records their actual state, but only stops
+// instances that are actually running.
+func TestShutdown_CapturesAllStatesButOnlyStopsRunning(t *testing.T) {
+	ctx := context.Background()
+
+	mockEC2 := &mocks.EC2Client{}
+
+	savedRestoreData := make(map[string]InstanceState)
+	saveFunc := func(key string, value any, isLive bool) error {
+		if state, ok := value.(InstanceState); ok {
+			savedRestoreData[key] = state
+		}
+		return nil
+	}
+
+	// Setup expectation for DescribeInstances to return instances in various states
+	mockEC2.On("DescribeInstances", mock.Anything, mock.Anything).Return(&awsec2.DescribeInstancesOutput{
+		Reservations: []types.Reservation{
+			{
+				Instances: []types.Instance{
+					{
+						// Running instance - should be stopped
+						InstanceId: aws.String("i-running"),
+						State: &types.InstanceState{
+							Name: types.InstanceStateNameRunning,
+						},
+					},
+					{
+						// Stopped instance - should NOT be stopped, but recorded with WasRunning=false
+						InstanceId: aws.String("i-stopped"),
+						State: &types.InstanceState{
+							Name: types.InstanceStateNameStopped,
+						},
+					},
+					{
+						// Stopping instance - should NOT be stopped (already stopping)
+						InstanceId: aws.String("i-stopping"),
+						State: &types.InstanceState{
+							Name: types.InstanceStateNameStopping,
+						},
+					},
+				},
+			},
+		},
+	}, nil)
+
+	// Setup expectation for StopInstances - only the running instance
+	mockEC2.On("StopInstances", mock.Anything, &awsec2.StopInstancesInput{
+		InstanceIds: []string{"i-running"},
+	}).Return(&awsec2.StopInstancesOutput{}, nil)
+
+	ec2Factory := func(cfg aws.Config) EC2Client { return mockEC2 }
+
+	e := NewWithClients(ec2Factory, nil)
+
+	spec := executor.Spec{
+		TargetName: "test-instances",
+		TargetType: "ec2",
+		Parameters: json.RawMessage(`{"selector": {"tags": {"Environment": "dev"}}}`),
+		ConnectorConfig: executor.ConnectorConfig{
+			AWS: &executor.AWSConnectorConfig{Region: "us-east-1"},
+		},
+		SaveRestoreData: saveFunc,
+	}
+
+	_, err := e.Shutdown(ctx, logr.Discard(), spec)
+	assert.NoError(t, err)
+
+	// Verify restore data was captured for ALL instances
+	assert.Len(t, savedRestoreData, 3, "Should capture all 3 instances")
+
+	// Verify WasRunning is correctly set based on actual state
+	assert.True(t, savedRestoreData["i-running"].WasRunning, "Running instance should have WasRunning=true")
+	assert.False(t, savedRestoreData["i-stopped"].WasRunning, "Stopped instance should have WasRunning=false")
+	assert.False(t, savedRestoreData["i-stopping"].WasRunning, "Stopping instance should have WasRunning=false")
+
+	mockEC2.AssertExpectations(t)
+}
+
+// TestWakeUp_SkipsAlreadyRunningInstances tests that wakeup skips instances
+// that are already running, only starting those that are stopped.
+func TestWakeUp_SkipsAlreadyRunningInstances(t *testing.T) {
+	ctx := context.Background()
+
+	mockEC2 := &mocks.EC2Client{}
+
+	// Setup expectation for DescribeInstances - discovers instances in mixed states
+	mockEC2.On("DescribeInstances", mock.Anything, mock.Anything).Return(&awsec2.DescribeInstancesOutput{
+		Reservations: []types.Reservation{
+			{
+				Instances: []types.Instance{
+					{
+						// Stopped instance with WasRunning=true - should be started
+						InstanceId: aws.String("i-stopped"),
+						State: &types.InstanceState{
+							Name: types.InstanceStateNameStopped,
+						},
+					},
+					{
+						// Running instance with WasRunning=true - should NOT be started (already running)
+						InstanceId: aws.String("i-running"),
+						State: &types.InstanceState{
+							Name: types.InstanceStateNameRunning,
+						},
+					},
+					{
+						// Stopped instance with WasRunning=false - should NOT be started
+						InstanceId: aws.String("i-manually-stopped"),
+						State: &types.InstanceState{
+							Name: types.InstanceStateNameStopped,
+						},
+					},
+				},
+			},
+		},
+	}, nil)
+
+	// Setup expectation for StartInstances - only the stopped instance with WasRunning=true
+	mockEC2.On("StartInstances", mock.Anything, &awsec2.StartInstancesInput{
+		InstanceIds: []string{"i-stopped"},
+	}).Return(&awsec2.StartInstancesOutput{}, nil)
+
+	ec2Factory := func(cfg aws.Config) EC2Client { return mockEC2 }
+
+	e := NewWithClients(ec2Factory, nil)
+
+	// Create restore data - all three instances were captured during shutdown
+	stoppedState, _ := json.Marshal(InstanceState{InstanceID: "i-stopped", WasRunning: true})
+	runningState, _ := json.Marshal(InstanceState{InstanceID: "i-running", WasRunning: true})
+	manuallyStoppedState, _ := json.Marshal(InstanceState{InstanceID: "i-manually-stopped", WasRunning: false})
+
+	spec := executor.Spec{
+		TargetName: "test-instances",
+		TargetType: "ec2",
+		ConnectorConfig: executor.ConnectorConfig{
+			AWS: &executor.AWSConnectorConfig{Region: "us-east-1"},
+		},
+	}
+
+	restore := executor.RestoreData{
+		Type: "ec2",
+		Data: map[string]json.RawMessage{
+			"i-stopped":           stoppedState,
+			"i-running":           runningState,
+			"i-manually-stopped":  manuallyStoppedState,
+		},
+	}
+
+	result, err := e.WakeUp(ctx, logr.Discard(), spec, restore)
+	assert.NoError(t, err)
+	assert.NotNil(t, result)
+	assert.Contains(t, result.Message, "started 1 EC2 instance(s)")
+
+	mockEC2.AssertExpectations(t)
+}

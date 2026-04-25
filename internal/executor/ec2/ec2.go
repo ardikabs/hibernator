@@ -17,7 +17,6 @@ import (
 	"github.com/aws/aws-sdk-go-v2/service/ec2/types"
 	"github.com/aws/smithy-go"
 	"github.com/go-logr/logr"
-	"github.com/samber/lo"
 
 	"github.com/ardikabs/hibernator/internal/executor"
 	"github.com/ardikabs/hibernator/pkg/awsutil"
@@ -121,9 +120,9 @@ func (e *Executor) Shutdown(ctx context.Context, log logr.Logger, spec executor.
 
 	client := e.ec2Factory(cfg)
 
-	// Find running instances to stop.
+	// Find all instances matching the selector (regardless of state).
 	log.Info("discovering EC2 instances matching selector")
-	instances, err := e.findInstancesByState(ctx, client, params.Selector, types.InstanceStateNameRunning)
+	instances, err := e.findInstances(ctx, client, params.Selector)
 	if err != nil {
 		log.Error(err, "failed to find instances")
 		return nil, fmt.Errorf("find instances: %w", err)
@@ -143,9 +142,11 @@ func (e *Executor) Shutdown(ctx context.Context, log logr.Logger, spec executor.
 	var instancesToStop []string
 	for _, inst := range instances {
 		instanceID := aws.ToString(inst.InstanceId)
-		wasRunning := inst.State.Name == types.InstanceStateNameRunning
+		actualState := inst.State.Name
+		wasRunning := actualState == types.InstanceStateNameRunning
 
 		// Store state with instanceID as key
+		// WasRunning reflects the actual state at time of capture
 		state := InstanceState{
 			InstanceID: instanceID,
 			WasRunning: wasRunning,
@@ -153,8 +154,8 @@ func (e *Executor) Shutdown(ctx context.Context, log logr.Logger, spec executor.
 
 		log.Info("instance state captured",
 			"instanceId", instanceID,
-			"state", inst.State.Name,
-			"willStop", wasRunning,
+			"actualState", actualState,
+			"wasRunning", wasRunning,
 		)
 
 		// Add to stop list if running
@@ -257,9 +258,8 @@ func (e *Executor) WakeUp(ctx context.Context, log logr.Logger, spec executor.Sp
 		}
 	}
 
-	// Re-discover current stopped instances from selector, then intersect
-	// with restore data to keep wakeup idempotent.
-	instances, err := e.findInstancesByState(ctx, client, params.Selector, types.InstanceStateNameStopped)
+	// Re-discover all current instances from selector
+	instances, err := e.findInstances(ctx, client, params.Selector)
 	if err != nil {
 		log.Error(err, "failed to find instances eligible for wakeup")
 		return nil, fmt.Errorf("find instances: %w", err)
@@ -268,14 +268,31 @@ func (e *Executor) WakeUp(ctx context.Context, log logr.Logger, spec executor.Sp
 	instancesToStart := make([]string, 0, len(instances))
 	for _, inst := range instances {
 		instanceID := aws.ToString(inst.InstanceId)
-		if _, ok := previouslyRunning[instanceID]; !ok {
+		actualState := inst.State.Name
+
+		// Only start instances that:
+		// 1. Were running before shutdown (in restore data with WasRunning=true)
+		// 2. Are currently in a startable state (stopped or stopping)
+		if _, wasRunning := previouslyRunning[instanceID]; !wasRunning {
+			continue
+		}
+
+		// Only start if the instance is actually stopped (or stopping)
+		canStart := actualState == types.InstanceStateNameStopped || actualState == types.InstanceStateNameStopping
+		if !canStart {
+			log.Info("skipping instance - not in startable state",
+				"instanceId", instanceID,
+				"actualState", actualState,
+				"wasRunning", true,
+			)
 			continue
 		}
 
 		instancesToStart = append(instancesToStart, instanceID)
 		log.Info("instance marked for start",
 			"instanceId", instanceID,
-			"state", inst.State.Name,
+			"actualState", actualState,
+			"wasRunning", true,
 		)
 	}
 
@@ -468,7 +485,7 @@ func (e *Executor) loadAWSConfig(ctx context.Context, spec executor.Spec) (aws.C
 	return awsutil.BuildAWSConfig(ctx, spec.ConnectorConfig.AWS)
 }
 
-func (e *Executor) findInstancesByState(ctx context.Context, client EC2Client, selector Selector, states ...types.InstanceStateName) ([]types.Instance, error) {
+func (e *Executor) findInstances(ctx context.Context, client EC2Client, selector Selector) ([]types.Instance, error) {
 	input := &ec2.DescribeInstancesInput{}
 
 	// Build filters
@@ -500,15 +517,15 @@ func (e *Executor) findInstancesByState(ctx context.Context, client EC2Client, s
 		input.InstanceIds = selector.InstanceIDs
 	}
 
-	if len(states) == 0 {
-		return nil, fmt.Errorf("at least one instance state is required")
-	}
-
+	// Filter out terminated instances - we only care about active instances
 	filters = append(filters, types.Filter{
 		Name: aws.String("instance-state-name"),
-		Values: lo.Map(states, func(state types.InstanceStateName, _ int) string {
-			return string(state)
-		}),
+		Values: []string{
+			string(types.InstanceStateNamePending),
+			string(types.InstanceStateNameRunning),
+			string(types.InstanceStateNameStopping),
+			string(types.InstanceStateNameStopped),
+		},
 	})
 
 	if len(filters) > 0 {
