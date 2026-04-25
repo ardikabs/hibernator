@@ -168,11 +168,12 @@ test-e2e-local: envtest ## Run E2E tests in local process via `go test`. Note: t
 	$(GOCMD) test ./test/e2e/... -v -tags=e2e -ginkgo.v
 
 E2E_PROCS ?= 4
+E2E_TIMEOUT ?= 1h
 
 .PHONY: test-e2e
-test-e2e: envtest ginkgo ## Run E2E tests in parallel via Ginkgo multi-process.
-	@echo "$(CYAN)Running E2E tests (procs=$(E2E_PROCS))...$(RESET)"
-	@KUBEBUILDER_ASSETS=$$($(ENVTEST) use -p path 2>/dev/null) $(GINKGO) --procs=$(E2E_PROCS) --tags=e2e -v ./test/e2e/...
+test-e2e: envtest ginkgo ## Run E2E tests in parallel via Ginkgo multi-process. Logs are captured and only shown on failure.
+	@echo "$(CYAN)Running E2E tests (procs=$(E2E_PROCS), timeout=$(E2E_TIMEOUT))...$(RESET)"
+	@KUBEBUILDER_ASSETS=$$($(ENVTEST) use -p path 2>/dev/null) $(GINKGO) --procs=$(E2E_PROCS) --timeout=$(E2E_TIMEOUT) --tags=e2e ./test/e2e/...
 
 .PHONY: test-e2e-focus
 test-e2e-focus: envtest ## Run E2E tests matching a specific prefix. Usage: make test-e2e-focus FOCUS="Notification"

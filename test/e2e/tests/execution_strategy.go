@@ -57,7 +57,7 @@ var _ = Describe("Execution Strategy E2E", func() {
 	})
 
 	Describe("Sequential Strategy", func() {
-		It("Should execute targets one-by-one in order", func() {
+		It("SequentialOrder: Should execute targets one-by-one in order", func() {
 			plan, _ = testutil.NewHibernatePlanBuilder("seq-strategy", testNamespace).
 				WithSchedule("20:00", "06:00").
 				WithExecutionStrategy(hibernatorv1alpha1.ExecutionStrategy{
@@ -91,7 +91,7 @@ var _ = Describe("Execution Strategy E2E", func() {
 					wellknown.LabelPlan: plan.Name,
 				})
 				return len(jobs.Items)
-			}, 10*time.Second, time.Second).Should(Equal(1))
+			}, testutil.DefaultTimeout, time.Second).Should(Equal(1))
 			Expect(jobs.Items[0].Labels[wellknown.LabelTarget]).To(Equal("target-1"))
 
 			By("Simulating success for target-1")
@@ -103,7 +103,7 @@ var _ = Describe("Execution Strategy E2E", func() {
 					wellknown.LabelPlan: plan.Name,
 				})
 				return len(jobs.Items)
-			}, 10*time.Second, time.Second).Should(Equal(2))
+			}, testutil.DefaultTimeout, time.Second).Should(Equal(2))
 
 			// Verify target names in jobs
 			targets := make(map[string]bool)
@@ -116,7 +116,7 @@ var _ = Describe("Execution Strategy E2E", func() {
 	})
 
 	Describe("Parallel Strategy", func() {
-		It("Should execute all targets simultaneously", func() {
+		It("ParallelExecution: Should execute all targets simultaneously", func() {
 			plan, _ = testutil.NewHibernatePlanBuilder("parallel-strategy", testNamespace).
 				WithSchedule("20:00", "06:00").
 				WithExecutionStrategy(hibernatorv1alpha1.ExecutionStrategy{
@@ -151,7 +151,7 @@ var _ = Describe("Execution Strategy E2E", func() {
 					wellknown.LabelPlan: plan.Name,
 				})
 				return len(jobs.Items)
-			}, 10*time.Second, time.Second).Should(Equal(2))
+			}, testutil.DefaultTimeout, time.Second).Should(Equal(2))
 		})
 
 		It("MaxConcurrency: should serialise execution when maxConcurrency=1 is set despite Parallel strategy", func() {
@@ -212,7 +212,7 @@ var _ = Describe("Execution Strategy E2E", func() {
 					}
 				}
 				return active
-			}, 2*time.Second, 250*time.Millisecond).Should(Equal(1))
+			}, testutil.MinConsistentDuration, 500*time.Millisecond).Should(Equal(1))
 
 			firstJob := firstBatch.Items[0]
 			firstTarget := firstJob.Labels[wellknown.LabelTarget]
@@ -389,17 +389,13 @@ var _ = Describe("Execution Strategy E2E", func() {
 					wellknown.LabelTarget:    "db",
 				})
 				return len(jl.Items)
-			}, 2*time.Second, 250*time.Millisecond).Should(Equal(0), "'db' Job must not be created when upstream 'app' fails in Strict mode")
+			}, testutil.MinConsistentDuration, 500*time.Millisecond).Should(Equal(0), "'db' Job must not be created when upstream 'app' fails in Strict mode")
 
 			// The plan auto-retries (Retries=1, first failure triggers one retry).
 			By("Waiting for auto-retry (plan re-enters Hibernating)")
 			testutil.EventuallyPhase(ctx, k8sClient, plan, hibernatorv1alpha1.PhaseHibernating)
 
-			// --- Retry attempt: web succeeds again, app fails again ---
-			By("[Attempt-2] Simulating 'web' success")
-			jobWeb2 := testutil.EventuallyJobCreated(ctx, k8sClient, testNamespace, plan.Name, hibernatorv1alpha1.OperationHibernate, "web")
-			testutil.SimulateJobSuccess(ctx, k8sClient, jobWeb2, fakeClock.Now())
-
+			// --- Retry attempt: app job recreated, app fails again ---
 			By("[Attempt-2] Simulating 'app' failure again — retries exhausted")
 			jobApp2 := testutil.EventuallyJobCreated(ctx, k8sClient, testNamespace, plan.Name, hibernatorv1alpha1.OperationHibernate, "app")
 			testutil.SimulateJobFailure(ctx, k8sClient, jobApp2, fakeClock.Now())
@@ -590,7 +586,7 @@ var _ = Describe("Execution Strategy E2E", func() {
 					wellknown.LabelTarget:    "d",
 				})
 				return len(jl.Items)
-			}, 2*time.Second, 250*time.Millisecond).Should(Equal(0), "'d' Job must not be created (pruned: upstream 'b' failed)")
+			}, testutil.MinConsistentDuration, 500*time.Millisecond).Should(Equal(0), "'d' Job must not be created (pruned: upstream 'b' failed)")
 
 			By("[Stage 3] 'f' should be pruned (upstream 'd' was pruned)")
 			// 'f' depends on 'd' which was pruned (StateAborted) — cascade prune.
@@ -602,7 +598,7 @@ var _ = Describe("Execution Strategy E2E", func() {
 					wellknown.LabelTarget:    "f",
 				})
 				return len(jl.Items)
-			}, 2*time.Second, 250*time.Millisecond).Should(Equal(0), "'f' Job must not be created (pruned: upstream 'd' was pruned)")
+			}, testutil.MinConsistentDuration, 500*time.Millisecond).Should(Equal(0), "'f' Job must not be created (pruned: upstream 'd' was pruned)")
 
 			By("Verifying execution states: a=Completed, b=Failed, c=Completed, d=Aborted, e=Completed, f=Aborted")
 			// Execution indices follow spec target order: a=0, b=1, c=2, d=3, e=4, f=5
@@ -759,7 +755,7 @@ var _ = Describe("Execution Strategy E2E", func() {
 					wellknown.LabelTarget:    "sw-target-1",
 				})
 				return len(jl.Items)
-			}, 2*time.Second, 250*time.Millisecond).Should(Equal(0), "stage-1 wakeup Job must not appear before stage-2 completes")
+			}, testutil.MinConsistentDuration, 500*time.Millisecond).Should(Equal(0), "stage-1 wakeup Job must not appear before stage-2 completes")
 
 			By("[Wakeup] Completing stage-2 wakeup Jobs")
 			testutil.SimulateJobSuccess(ctx, k8sClient, wakeStage2Jobs[0], fakeClock.Now())

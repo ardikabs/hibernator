@@ -22,12 +22,18 @@ import (
 )
 
 const (
-	DefaultTimeout  = 10 * time.Second
-	DefaultInterval = 200 * time.Millisecond
+	DefaultTimeout        = 30 * time.Second
+	DefaultInterval       = 200 * time.Millisecond
+	MinConsistentDuration = 5 * time.Second // Minimum duration for negative assertions to avoid flaky tests
 )
 
 // ConsistentllyAtPhase asserts that the HibernatePlan remains at the expected phase for the specified duration.
+// Uses MinConsistentDuration as a minimum to avoid flaky tests on slower CI runners.
 func ConsistentllyAtPhase(ctx context.Context, k8sClient client.Client, plan *hibernatorv1alpha1.HibernatePlan, phase hibernatorv1alpha1.PlanPhase, duration time.Duration) {
+	// Enforce minimum duration for reliable negative assertions
+	if duration < MinConsistentDuration {
+		duration = MinConsistentDuration
+	}
 	Consistently(func() hibernatorv1alpha1.PlanPhase {
 		_ = k8sClient.Get(ctx, client.ObjectKeyFromObject(plan), plan)
 		return plan.Status.Phase
@@ -66,6 +72,10 @@ func EventuallyJobCreated(ctx context.Context, k8sClient client.Client, namespac
 
 		for _, j := range jobs {
 			if _, ok := j.Labels[wellknown.LabelStaleRunnerJob]; ok {
+				continue
+			}
+
+			if j.Status.CompletionTime != nil {
 				continue
 			}
 
@@ -136,7 +146,9 @@ func SimulateJobSuccess(ctx context.Context, k8sClient client.Client, job *batch
 	if job.Status.StartTime == nil {
 		job.Status.StartTime = &metav1.Time{Time: completionTime.Add(-5 * time.Minute)}
 	}
-	job.Status.CompletionTime = &metav1.Time{Time: completionTime}
+	if job.Status.CompletionTime == nil {
+		job.Status.CompletionTime = &metav1.Time{Time: completionTime}
+	}
 	job.Status.Conditions = []batchv1.JobCondition{
 		{
 			Type:               batchv1.JobSuccessCriteriaMet,

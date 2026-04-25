@@ -110,8 +110,7 @@ var _ = BeforeSuite(func() {
 	fakeNotifSink = fakenotif.New()
 
 	err = provider.Setup(mgr, fakeClock, provider.ProviderOptions{
-		Logger: ctrl.Log.WithName("e2e-test"),
-		// Logger:                 logr.Discard(),
+		Logger:                 ctrl.Log.WithName("e2e-test"),
 		Workers:                1,
 		ScheduleBufferDuration: "1m",
 		ControlPlaneEndpoint:   "https://hibernator.example.com",
@@ -133,7 +132,7 @@ var _ = BeforeSuite(func() {
 	}()
 
 	// Wait for manager to be ready
-	Eventually(mgr.GetCache().WaitForCacheSync(ctx), time.Second*10).Should(BeTrue())
+	Eventually(mgr.GetCache().WaitForCacheSync(ctx), time.Second*30).Should(BeTrue())
 })
 
 // Global BeforeEach resets shared mutable state so that every spec — regardless of

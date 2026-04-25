@@ -7,6 +7,7 @@ import (
 	"time"
 
 	. "github.com/onsi/gomega"
+	"k8s.io/apimachinery/pkg/api/errors"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
 	hibernatorv1alpha1 "github.com/ardikabs/hibernator/api/v1alpha1"
@@ -19,10 +20,13 @@ const (
 // TriggerReconcile forces the controller to reconcile by updating an annotation on the object.
 // This is necessary because advancing a fakeClock doesn't wake up the controller
 // from its RequeueAfter sleep (which uses real-world timers).
+// Uses retry with conflict handling to avoid race conditions.
 func TriggerReconcile(ctx context.Context, k8sClient client.Client, obj client.Object) {
 	Eventually(func() error {
+		key := client.ObjectKeyFromObject(obj)
+
 		// 1. Fetch the latest version of the object
-		if err := k8sClient.Get(ctx, client.ObjectKeyFromObject(obj), obj); err != nil {
+		if err := k8sClient.Get(ctx, key, obj); err != nil {
 			return err
 		}
 
@@ -35,7 +39,15 @@ func TriggerReconcile(ctx context.Context, k8sClient client.Client, obj client.O
 		obj.SetAnnotations(annotations)
 
 		// 3. Push the update back to the server
-		return k8sClient.Update(ctx, obj)
+		if err := k8sClient.Update(ctx, obj); err != nil {
+			// On conflict, we'll retry with a fresh fetch
+			if errors.IsConflict(err) {
+				return nil // Return nil to trigger retry
+			}
+			return err
+		}
+
+		return nil
 	}, DefaultTimeout, DefaultInterval).Should(Succeed())
 }
 

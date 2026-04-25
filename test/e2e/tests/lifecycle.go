@@ -274,6 +274,17 @@ var _ = Describe("Lifecycle E2E", func() {
 		testutil.TriggerReconcile(ctx, k8sClient, plan)
 		testutil.EventuallyPhase(ctx, k8sClient, plan, hibernatorv1alpha1.PhaseHibernating)
 
+		By("[Cycle-2] Verifying first cycle job is marked stale before checking second cycle")
+		Eventually(func() bool {
+			var j batchv1.Job
+			err := k8sClient.Get(ctx, client.ObjectKeyFromObject(shutdownJob1), &j)
+			if err != nil {
+				return true // Job deleted
+			}
+			cycleID, _ := j.Labels[wellknown.LabelCycleID]
+			return cycleID != plan.Status.CurrentCycleID
+		}, testutil.DefaultTimeout, testutil.DefaultInterval).Should(BeTrue(), "first cycle job should be marked stale")
+
 		By("[Cycle-2] Verifying a fresh shutdown Job is created without conflicts from the prior cycle")
 		shutdownJob2 := testutil.EventuallyJobCreated(ctx, k8sClient, testNamespace, plan.Name, hibernatorv1alpha1.OperationHibernate, "database")
 		Expect(shutdownJob2.Name).NotTo(Equal(shutdownJob1.Name), "second cycle must create a distinct Job")
@@ -324,6 +335,6 @@ var _ = Describe("Lifecycle E2E", func() {
 				}
 			}
 			return active
-		}, 2*time.Second, 500*time.Millisecond).Should(Equal(1), "only one active Job should exist despite multiple reconcile triggers")
+		}, testutil.MinConsistentDuration, 500*time.Millisecond).Should(Equal(1), "only one active Job should exist despite multiple reconcile triggers")
 	})
 })
