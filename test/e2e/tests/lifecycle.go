@@ -103,7 +103,6 @@ var _ = Describe("Lifecycle E2E", func() {
 		// 2. Transition to Hibernation
 		By("Advancing time to hibernation window (20:01:11)")
 		fakeClock.SetTime(time.Date(2026, 2, 9, 20, 1, 11, 0, time.UTC))
-		testutil.TriggerReconcile(ctx, k8sClient, plan)
 
 		By("Verifying plan transitions to Hibernating")
 		testutil.EventuallyPhase(ctx, k8sClient, plan, hibernatorv1alpha1.PhaseHibernating)
@@ -133,7 +132,6 @@ var _ = Describe("Lifecycle E2E", func() {
 		// 3. Transition to Wakeup
 		By("Advancing time to wakeup window (Tuesday 06:01:10)")
 		fakeClock.SetTime(time.Date(2026, 2, 10, 6, 1, 10, 0, time.UTC))
-		testutil.TriggerReconcile(ctx, k8sClient, plan)
 
 		By("Verifying plan transitions to WakingUp")
 		testutil.EventuallyPhase(ctx, k8sClient, plan, hibernatorv1alpha1.PhaseWakingUp)
@@ -215,8 +213,6 @@ var _ = Describe("Lifecycle E2E", func() {
 			Target: "database",
 		})).To(Succeed())
 
-		testutil.TriggerReconcile(ctx, k8sClient, plan)
-
 		By("Verifying plan wakes up at 23:01 UTC (= 06:01 WIB — on-hours in Jakarta timezone)")
 		testutil.EventuallyPhase(ctx, k8sClient, plan, hibernatorv1alpha1.PhaseWakingUp)
 	})
@@ -249,7 +245,6 @@ var _ = Describe("Lifecycle E2E", func() {
 		// --- First cycle ---
 		By("[Cycle-1] Triggering hibernation window (Monday 20:01)")
 		fakeClock.SetTime(time.Date(2026, 3, 16, 20, 1, 10, 0, time.UTC))
-		testutil.TriggerReconcile(ctx, k8sClient, plan)
 		testutil.EventuallyPhase(ctx, k8sClient, plan, hibernatorv1alpha1.PhaseHibernating)
 
 		shutdownJob1 := testutil.EventuallyJobCreated(ctx, k8sClient, testNamespace, plan.Name, hibernatorv1alpha1.OperationHibernate, "database")
@@ -261,7 +256,6 @@ var _ = Describe("Lifecycle E2E", func() {
 
 		By("[Cycle-1] Triggering wakeup (Tuesday 06:01)")
 		fakeClock.SetTime(time.Date(2026, 3, 17, 6, 1, 10, 0, time.UTC))
-		testutil.TriggerReconcile(ctx, k8sClient, plan)
 		testutil.EventuallyPhase(ctx, k8sClient, plan, hibernatorv1alpha1.PhaseWakingUp)
 
 		wakeupJob1 := testutil.EventuallyJobCreated(ctx, k8sClient, testNamespace, plan.Name, hibernatorv1alpha1.OperationWakeUp, "database")
@@ -271,8 +265,18 @@ var _ = Describe("Lifecycle E2E", func() {
 		// --- Second cycle ---
 		By("[Cycle-2] Triggering hibernation again the following evening (Tuesday 20:01)")
 		fakeClock.SetTime(time.Date(2026, 3, 17, 20, 1, 10, 0, time.UTC))
-		testutil.TriggerReconcile(ctx, k8sClient, plan)
 		testutil.EventuallyPhase(ctx, k8sClient, plan, hibernatorv1alpha1.PhaseHibernating)
+
+		By("[Cycle-2] Verifying first cycle job is marked stale before checking second cycle")
+		Eventually(func() bool {
+			var j batchv1.Job
+			err := k8sClient.Get(ctx, client.ObjectKeyFromObject(shutdownJob1), &j)
+			if err != nil {
+				return true // Job deleted
+			}
+			cycleID, _ := j.Labels[wellknown.LabelCycleID]
+			return cycleID != plan.Status.CurrentCycleID
+		}, testutil.DefaultTimeout, testutil.DefaultInterval).Should(BeTrue(), "first cycle job should be marked stale")
 
 		By("[Cycle-2] Verifying a fresh shutdown Job is created without conflicts from the prior cycle")
 		shutdownJob2 := testutil.EventuallyJobCreated(ctx, k8sClient, testNamespace, plan.Name, hibernatorv1alpha1.OperationHibernate, "database")
@@ -324,6 +328,6 @@ var _ = Describe("Lifecycle E2E", func() {
 				}
 			}
 			return active
-		}, 2*time.Second, 500*time.Millisecond).Should(Equal(1), "only one active Job should exist despite multiple reconcile triggers")
+		}, testutil.MinConsistentDuration, 500*time.Millisecond).Should(Equal(1), "only one active Job should exist despite multiple reconcile triggers")
 	})
 })

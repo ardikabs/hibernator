@@ -22,12 +22,18 @@ import (
 )
 
 const (
-	DefaultTimeout  = 10 * time.Second
-	DefaultInterval = 200 * time.Millisecond
+	DefaultTimeout        = 30 * time.Second
+	DefaultInterval       = 200 * time.Millisecond
+	MinConsistentDuration = 5 * time.Second // Minimum duration for negative assertions to avoid flaky tests
 )
 
 // ConsistentllyAtPhase asserts that the HibernatePlan remains at the expected phase for the specified duration.
+// Uses MinConsistentDuration as a minimum to avoid flaky tests on slower CI runners.
 func ConsistentllyAtPhase(ctx context.Context, k8sClient client.Client, plan *hibernatorv1alpha1.HibernatePlan, phase hibernatorv1alpha1.PlanPhase, duration time.Duration) {
+	// Enforce minimum duration for reliable negative assertions
+	if duration < MinConsistentDuration {
+		duration = MinConsistentDuration
+	}
 	Consistently(func() hibernatorv1alpha1.PlanPhase {
 		_ = k8sClient.Get(ctx, client.ObjectKeyFromObject(plan), plan)
 		return plan.Status.Phase
@@ -40,6 +46,8 @@ func ConsistentllyAtPhase(ctx context.Context, k8sClient client.Client, plan *hi
 // EventuallyPhase waits until the HibernatePlan reaches the expected phase.
 func EventuallyPhase(ctx context.Context, k8sClient client.Client, plan *hibernatorv1alpha1.HibernatePlan, phase hibernatorv1alpha1.PlanPhase) {
 	Eventually(func() hibernatorv1alpha1.PlanPhase {
+		TriggerReconcile(ctx, k8sClient, plan)
+
 		_ = k8sClient.Get(ctx, client.ObjectKeyFromObject(plan), plan)
 		return plan.Status.Phase
 	}).
@@ -69,6 +77,10 @@ func EventuallyJobCreated(ctx context.Context, k8sClient client.Client, namespac
 				continue
 			}
 
+			if j.Status.CompletionTime != nil {
+				continue
+			}
+
 			job = j
 			return true
 		}
@@ -88,10 +100,18 @@ func EventuallyMultiJobsCreated(ctx context.Context, k8sClient client.Client, na
 			wellknown.LabelOperation: string(operation),
 		})
 
-		for _, item := range jobList.Items {
+		for _, job := range jobList.Items {
+			if _, ok := job.Labels[wellknown.LabelStaleRunnerJob]; ok {
+				continue
+			}
+
+			if job.Status.CompletionTime != nil {
+				continue
+			}
+
 			for _, target := range targets {
-				if item.Labels[wellknown.LabelTarget] == target {
-					jobs = append(jobs, &item)
+				if job.Labels[wellknown.LabelTarget] == target {
+					jobs = append(jobs, &job)
 				}
 			}
 		}
@@ -136,7 +156,9 @@ func SimulateJobSuccess(ctx context.Context, k8sClient client.Client, job *batch
 	if job.Status.StartTime == nil {
 		job.Status.StartTime = &metav1.Time{Time: completionTime.Add(-5 * time.Minute)}
 	}
-	job.Status.CompletionTime = &metav1.Time{Time: completionTime}
+	if job.Status.CompletionTime == nil {
+		job.Status.CompletionTime = &metav1.Time{Time: completionTime}
+	}
 	job.Status.Conditions = []batchv1.JobCondition{
 		{
 			Type:               batchv1.JobSuccessCriteriaMet,

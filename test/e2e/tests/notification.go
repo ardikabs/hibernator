@@ -142,7 +142,6 @@ var _ = Describe("Notification E2E", func() {
 		// ------------------------------------------------------------------ Hibernate
 		By("Advancing clock to off-hours (Monday 20:01 UTC)")
 		fakeClock.SetTime(time.Date(2026, 4, 6, 20, 1, 10, 0, time.UTC))
-		testutil.TriggerReconcile(ctx, k8sClient, plan)
 
 		By("Verifying plan transitions to Hibernating")
 		testutil.EventuallyPhase(ctx, k8sClient, plan, hibernatorv1alpha1.PhaseHibernating)
@@ -184,7 +183,6 @@ var _ = Describe("Notification E2E", func() {
 		// ------------------------------------------------------------------ Wakeup
 		By("Advancing clock to on-hours (Tuesday 07:00 UTC)")
 		fakeClock.SetTime(time.Date(2026, 4, 7, 7, 0, 0, 0, time.UTC))
-		testutil.TriggerReconcile(ctx, k8sClient, plan)
 
 		By("Verifying plan transitions to WakingUp")
 		testutil.EventuallyPhase(ctx, k8sClient, plan, hibernatorv1alpha1.PhaseWakingUp)
@@ -271,7 +269,6 @@ var _ = Describe("Notification E2E", func() {
 		// ------------------------------------------------------------------ Active → Hibernating
 		By("Advancing clock to off-hours (Monday 20:01 UTC)")
 		fakeClock.SetTime(time.Date(2026, 4, 13, 20, 1, 10, 0, time.UTC))
-		testutil.TriggerReconcile(ctx, k8sClient, plan)
 
 		By("Waiting for Hibernating phase")
 		testutil.EventuallyPhase(ctx, k8sClient, plan, hibernatorv1alpha1.PhaseHibernating)
@@ -598,7 +595,6 @@ var _ = Describe("Notification E2E", func() {
 		// ------------------------------------------------------------------ Trigger hibernation
 		By("Advancing clock to off-hours to trigger hibernation")
 		fakeClock.SetTime(time.Date(2026, 5, 4, 20, 1, 10, 0, time.UTC))
-		testutil.TriggerReconcile(ctx, k8sClient, plan)
 
 		By("Verifying plan transitions to Hibernating")
 		testutil.EventuallyPhase(ctx, k8sClient, plan, hibernatorv1alpha1.PhaseHibernating)
@@ -770,7 +766,6 @@ var _ = Describe("Notification E2E", func() {
 		// ------------------------------------------------------------------ First cycle: hibernate
 		By("Advancing clock to off-hours to trigger hibernation")
 		fakeClock.SetTime(time.Date(2026, 5, 18, 20, 1, 10, 0, time.UTC))
-		testutil.TriggerReconcile(ctx, k8sClient, plan)
 
 		By("Verifying plan transitions to Hibernating")
 		testutil.EventuallyPhase(ctx, k8sClient, plan, hibernatorv1alpha1.PhaseHibernating)
@@ -865,7 +860,6 @@ var _ = Describe("Notification E2E", func() {
 		// ------------------------------------------------------------------ Trigger hibernation
 		By("Advancing clock to off-hours to trigger hibernation")
 		fakeClock.SetTime(time.Date(2026, 6, 1, 20, 1, 10, 0, time.UTC))
-		testutil.TriggerReconcile(ctx, k8sClient, plan)
 
 		By("Verifying plan transitions to Hibernating")
 		testutil.EventuallyPhase(ctx, k8sClient, plan, hibernatorv1alpha1.PhaseHibernating)
@@ -998,7 +992,6 @@ var _ = Describe("Notification E2E", func() {
 		// ------------------------------------------------------------------ Trigger hibernation
 		By("Advancing clock to off-hours to trigger hibernation")
 		fakeClock.SetTime(time.Date(2026, 6, 15, 20, 1, 10, 0, time.UTC))
-		testutil.TriggerReconcile(ctx, k8sClient, plan)
 
 		By("Verifying plan transitions to Hibernating")
 		testutil.EventuallyPhase(ctx, k8sClient, plan, hibernatorv1alpha1.PhaseHibernating)
