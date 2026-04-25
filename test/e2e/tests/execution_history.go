@@ -95,7 +95,8 @@ var _ = Describe("Execution History E2E", func() {
 
 		By("Advancing time to off-hours and simulating successful shutdown")
 		fakeClock.SetTime(time.Date(2026, 7, 6, 20, 1, 10, 0, time.UTC))
-		testutil.TriggerReconcile(ctx, k8sClient, plan)
+
+		By("Verifying plan transitions to Hibernating")
 		testutil.EventuallyPhase(ctx, k8sClient, plan, hibernatorv1alpha1.PhaseHibernating)
 
 		hibernationJob := testutil.EventuallyJobCreated(ctx, k8sClient, testNamespace, plan.Name, hibernatorv1alpha1.OperationHibernate, "database")
@@ -335,7 +336,8 @@ var _ = Describe("Execution History E2E", func() {
 
 		By("Advancing to wakeup window")
 		fakeClock.SetTime(time.Date(2026, 7, 28, 6, 1, 10, 0, time.UTC)) // Tuesday 06:01
-		testutil.TriggerReconcile(ctx, k8sClient, plan)
+
+		By("Verifying plan transitions to WakingUp")
 		testutil.EventuallyPhase(ctx, k8sClient, plan, hibernatorv1alpha1.PhaseWakingUp)
 
 		By("Simulating wakeup Job failure")

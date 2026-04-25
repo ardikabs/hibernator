@@ -446,7 +446,6 @@ var _ = Describe("Override-Action E2E", func() {
 
 		By("Advancing clock into the hibernation window (20:05) and triggering reconcile")
 		fakeClock.SetTime(time.Date(2026, 7, 6, 20, 5, 0, 0, time.UTC))
-		testutil.TriggerReconcile(ctx, k8sClient, plan)
 
 		By("Verifying schedule resumes control: plan enters PhaseHibernating")
 		testutil.EventuallyPhase(ctx, k8sClient, plan, hibernatorv1alpha1.PhaseHibernating)

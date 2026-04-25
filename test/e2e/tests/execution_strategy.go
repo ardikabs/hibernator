@@ -81,7 +81,8 @@ var _ = Describe("Execution Strategy E2E", func() {
 
 			By("Advancing time to hibernation window")
 			fakeClock.SetTime(time.Date(2026, 2, 9, 20, 1, 10, 0, time.UTC))
-			testutil.TriggerReconcile(ctx, k8sClient, plan)
+
+			By("Verifying plan transitions to Hibernating")
 			testutil.EventuallyPhase(ctx, k8sClient, plan, hibernatorv1alpha1.PhaseHibernating)
 
 			By("Verifying target-1 Job is created and target-2 is Pending")
@@ -141,7 +142,8 @@ var _ = Describe("Execution Strategy E2E", func() {
 
 			By("Advancing time to hibernation window")
 			fakeClock.SetTime(time.Date(2026, 2, 9, 20, 1, 10, 0, time.UTC))
-			testutil.TriggerReconcile(ctx, k8sClient, plan)
+
+			By("Verifying plan transitions to Hibernating")
 			testutil.EventuallyPhase(ctx, k8sClient, plan, hibernatorv1alpha1.PhaseHibernating)
 
 			By("Verifying both Jobs are created at once")
@@ -185,7 +187,8 @@ var _ = Describe("Execution Strategy E2E", func() {
 
 			By("Advancing time to hibernation window")
 			fakeClock.SetTime(time.Date(2026, 3, 9, 20, 1, 10, 0, time.UTC))
-			testutil.TriggerReconcile(ctx, k8sClient, plan)
+
+			By("Verifying plan transitions to Hibernating")
 			testutil.EventuallyPhase(ctx, k8sClient, plan, hibernatorv1alpha1.PhaseHibernating)
 
 			By("Verifying exactly 1 Job is created first (maxConcurrency=1 prevents bursting)")
@@ -240,7 +243,7 @@ var _ = Describe("Execution Strategy E2E", func() {
 	})
 
 	Describe("DAG Strategy", func() {
-		It("Should execute targets according to dependencies (Shutting down: Web -> App -> DB, Waking up: DB -> App -> Web)", func() {
+		It("DAGExecution: Should execute targets according to dependencies (Shutting down: Web -> App -> DB, Waking up: DB -> App -> Web)", func() {
 			// Web depends on App, App depends on DB
 			plan, _ = testutil.NewHibernatePlanBuilder("dag-strategy", testNamespace).
 				WithSchedule("20:00", "06:00").
@@ -272,7 +275,8 @@ var _ = Describe("Execution Strategy E2E", func() {
 			// --- HIBERNATION (Shutdown) ---
 			By("[Shutdown] Advancing time to hibernation window")
 			fakeClock.SetTime(time.Date(2026, 2, 9, 20, 1, 10, 0, time.UTC))
-			testutil.TriggerReconcile(ctx, k8sClient, plan)
+
+			By("Verifying plan transitions to Hibernating")
 			testutil.EventuallyPhase(ctx, k8sClient, plan, hibernatorv1alpha1.PhaseHibernating)
 
 			By("[Shutdown] Verifying only 'web' Job is created first (top of DAG)")
@@ -310,7 +314,8 @@ var _ = Describe("Execution Strategy E2E", func() {
 			// --- WAKEUP (Restore) ---
 			By("[Wakeup] Advancing time to wakeup window")
 			fakeClock.SetTime(time.Date(2026, 2, 10, 6, 1, 10, 0, time.UTC))
-			testutil.TriggerReconcile(ctx, k8sClient, plan)
+
+			By("Verifying plan transitions to WakingUp")
 			testutil.EventuallyPhase(ctx, k8sClient, plan, hibernatorv1alpha1.PhaseWakingUp)
 
 			By("[Wakeup] Verifying 'db' Job is created first (reverse order)")
@@ -368,7 +373,8 @@ var _ = Describe("Execution Strategy E2E", func() {
 
 			By("Advancing time to hibernation window")
 			fakeClock.SetTime(time.Date(2026, 3, 16, 20, 1, 10, 0, time.UTC))
-			testutil.TriggerReconcile(ctx, k8sClient, plan)
+
+			By("Verifying plan transitions to Hibernating")
 			testutil.EventuallyPhase(ctx, k8sClient, plan, hibernatorv1alpha1.PhaseHibernating)
 
 			// --- First attempt: web succeeds, app fails ---
@@ -468,7 +474,8 @@ var _ = Describe("Execution Strategy E2E", func() {
 
 			By("Advancing time to hibernation window")
 			fakeClock.SetTime(time.Date(2026, 3, 16, 20, 1, 10, 0, time.UTC))
-			testutil.TriggerReconcile(ctx, k8sClient, plan)
+
+			By("Verifying plan transitions to Hibernating")
 			testutil.EventuallyPhase(ctx, k8sClient, plan, hibernatorv1alpha1.PhaseHibernating)
 
 			By("[Stage 0] Simulating 'a' success")
@@ -553,7 +560,8 @@ var _ = Describe("Execution Strategy E2E", func() {
 
 			By("Advancing time to hibernation window")
 			fakeClock.SetTime(time.Date(2026, 3, 16, 20, 1, 10, 0, time.UTC))
-			testutil.TriggerReconcile(ctx, k8sClient, plan)
+
+			By("Verifying plan transitions to Hibernating")
 			testutil.EventuallyPhase(ctx, k8sClient, plan, hibernatorv1alpha1.PhaseHibernating)
 
 			By("[Stage 0] Simulating 'a' success")
@@ -609,9 +617,6 @@ var _ = Describe("Execution Strategy E2E", func() {
 			testutil.EventuallyTargetState(ctx, k8sClient, plan, 4, hibernatorv1alpha1.StateCompleted) // e
 			testutil.EventuallyTargetState(ctx, k8sClient, plan, 5, hibernatorv1alpha1.StateAborted)   // f (aborted: upstream d aborted)
 
-			// Voluntary trigger to reflect the state changes in the plan status after job simulations
-			testutil.TriggerReconcile(ctx, k8sClient, plan)
-
 			By("Verifying plan reaches PhaseHibernated (BestEffort: partial success)")
 			testutil.EventuallyPhase(ctx, k8sClient, plan, hibernatorv1alpha1.PhaseHibernated)
 
@@ -623,7 +628,7 @@ var _ = Describe("Execution Strategy E2E", func() {
 	})
 
 	Describe("Staged Strategy", func() {
-		It("Should execute targets in stages", func() {
+		It("StagedExecution: Should execute targets in stages", func() {
 			plan, _ = testutil.NewHibernatePlanBuilder("staged-strategy", testNamespace).
 				WithSchedule("20:00", "06:00").
 				WithExecutionStrategy(hibernatorv1alpha1.ExecutionStrategy{
@@ -661,7 +666,8 @@ var _ = Describe("Execution Strategy E2E", func() {
 
 			By("Advancing time to hibernation window")
 			fakeClock.SetTime(time.Date(2026, 2, 9, 20, 1, 10, 0, time.UTC))
-			testutil.TriggerReconcile(ctx, k8sClient, plan)
+
+			By("Verifying plan transitions to Hibernating")
 			testutil.EventuallyPhase(ctx, k8sClient, plan, hibernatorv1alpha1.PhaseHibernating)
 
 			By("Verifying stage-1 Job is created")
@@ -713,7 +719,8 @@ var _ = Describe("Execution Strategy E2E", func() {
 			// --- SHUTDOWN ---
 			By("[Shutdown] Advancing time to hibernation window")
 			fakeClock.SetTime(time.Date(2026, 3, 23, 20, 1, 10, 0, time.UTC))
-			testutil.TriggerReconcile(ctx, k8sClient, plan)
+
+			By("Verifying plan transitions to Hibernating")
 			testutil.EventuallyPhase(ctx, k8sClient, plan, hibernatorv1alpha1.PhaseHibernating)
 
 			By("[Shutdown] Completing stage-1 (sw-target-1)")
@@ -740,7 +747,8 @@ var _ = Describe("Execution Strategy E2E", func() {
 			// --- WAKEUP ---
 			By("[Wakeup] Advancing clock to wakeup window")
 			fakeClock.SetTime(time.Date(2026, 3, 24, 6, 1, 10, 0, time.UTC))
-			testutil.TriggerReconcile(ctx, k8sClient, plan)
+
+			By("Verifying plan transitions to WakingUp")
 			testutil.EventuallyPhase(ctx, k8sClient, plan, hibernatorv1alpha1.PhaseWakingUp)
 
 			By("[Wakeup] Verifying stage-2 Jobs are created first (reverse order: sw-target-2 + sw-target-3)")

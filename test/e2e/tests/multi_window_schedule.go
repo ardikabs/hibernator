@@ -120,7 +120,6 @@ var _ = Describe("MultiWindow Schedule E2E", func() {
 
 		By("Advancing clock to 10:00 — inside first window (09:00-12:00)")
 		fakeClock.SetTime(time.Date(2026, 4, 6, 10, 0, 0, 0, time.UTC))
-		testutil.TriggerReconcile(ctx, k8sClient, plan)
 
 		By("Verifying plan transitions to Hibernating (first window matched)")
 		testutil.EventuallyPhase(ctx, k8sClient, plan, hibernatorv1alpha1.PhaseHibernating)
@@ -159,7 +158,6 @@ var _ = Describe("MultiWindow Schedule E2E", func() {
 
 		By("Advancing clock to 15:00 — inside second window (14:00-17:00)")
 		fakeClock.SetTime(time.Date(2026, 4, 13, 15, 0, 0, 0, time.UTC))
-		testutil.TriggerReconcile(ctx, k8sClient, plan)
 
 		By("Verifying plan transitions to Hibernating (second window matched)")
 		testutil.EventuallyPhase(ctx, k8sClient, plan, hibernatorv1alpha1.PhaseHibernating)

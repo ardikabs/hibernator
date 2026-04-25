@@ -160,7 +160,6 @@ var _ = Describe("Plan Suspension E2E", func() {
 
 		By("Advancing clock past the suspend deadline (10:05 UTC — on-hours)")
 		fakeClock.SetTime(baseTime.Add(2*time.Hour + 5*time.Minute))
-		testutil.TriggerReconcile(ctx, k8sClient, plan)
 
 		By("Verifying plan auto-resumes to Active phase after deadline")
 		testutil.EventuallyPhase(ctx, k8sClient, plan, hibernatorv1alpha1.PhaseActive)
@@ -227,7 +226,6 @@ var _ = Describe("Plan Suspension E2E", func() {
 
 		By("Advancing clock to on-hours (09:00 next day) and resuming suspension")
 		fakeClock.SetTime(time.Date(2026, 4, 21, 9, 0, 0, 0, time.UTC))
-		testutil.TriggerReconcile(ctx, k8sClient, plan)
 
 		Expect(k8sClient.Get(ctx, client.ObjectKeyFromObject(plan), plan)).To(Succeed())
 		orig = plan.DeepCopy()
@@ -289,7 +287,6 @@ var _ = Describe("Plan Suspension E2E", func() {
 
 		By("Advancing clock to 21:05 UTC — deadline has passed AND it is still inside off-hours (20:00-06:00)")
 		fakeClock.SetTime(time.Date(2026, 5, 4, 21, 5, 0, 0, time.UTC))
-		testutil.TriggerReconcile(ctx, k8sClient, plan)
 
 		By("Verifying plan transitions to Hibernating (not Active) because it is still off-hours")
 		testutil.EventuallyPhase(ctx, k8sClient, plan, hibernatorv1alpha1.PhaseHibernating)
@@ -365,7 +362,6 @@ var _ = Describe("Plan Suspension E2E", func() {
 		orig = plan.DeepCopy()
 		plan.Spec.Suspend = false
 		Expect(k8sClient.Patch(ctx, plan, client.MergeFrom(orig))).To(Succeed())
-		testutil.TriggerReconcile(ctx, k8sClient, plan)
 
 		By("Verifying plan resumes to Hibernating phase, continuing the schedule evaluation without starting from Active (clock is still off-hours)")
 		testutil.EventuallyPhase(ctx, k8sClient, plan, hibernatorv1alpha1.PhaseHibernating)
@@ -441,7 +437,6 @@ var _ = Describe("Plan Suspension E2E", func() {
 		orig = plan.DeepCopy()
 		plan.Spec.Suspend = false
 		Expect(k8sClient.Patch(ctx, plan, client.MergeFrom(orig))).To(Succeed())
-		testutil.TriggerReconcile(ctx, k8sClient, plan)
 
 		By("Verifying plan transition to PhaseActive (clock is now on-hours, different from when it was suspended)")
 		testutil.EventuallyPhase(ctx, k8sClient, plan, hibernatorv1alpha1.PhaseActive)
@@ -514,7 +509,6 @@ var _ = Describe("Plan Suspension E2E", func() {
 		orig = plan.DeepCopy()
 		plan.Spec.Suspend = false
 		Expect(k8sClient.Patch(ctx, plan, client.MergeFrom(orig))).To(Succeed())
-		testutil.TriggerReconcile(ctx, k8sClient, plan)
 
 		By("Verifying plan resumes to Hibernating phase (internally it moved from Active→Hibernating)")
 		testutil.EventuallyPhase(ctx, k8sClient, plan, hibernatorv1alpha1.PhaseHibernating)
@@ -572,7 +566,8 @@ var _ = Describe("Plan Suspension E2E", func() {
 
 		By("Advancing clock to on-hours (Tuesday 09:00) to trigger wakeup")
 		fakeClock.SetTime(time.Date(2026, 6, 9, 9, 0, 0, 0, time.UTC))
-		testutil.TriggerReconcile(ctx, k8sClient, plan)
+
+		By("Verifying plan transitions to WakingUp")
 		testutil.EventuallyPhase(ctx, k8sClient, plan, hibernatorv1alpha1.PhaseWakingUp)
 
 		By("Failing the initial wakeup Job")
@@ -611,7 +606,6 @@ var _ = Describe("Plan Suspension E2E", func() {
 		orig = plan.DeepCopy()
 		plan.Spec.Suspend = false
 		Expect(k8sClient.Patch(ctx, plan, client.MergeFrom(orig))).To(Succeed())
-		testutil.TriggerReconcile(ctx, k8sClient, plan)
 
 		By("Verifying plan routes to Hibernated (wakeup never completed, resource still hibernated)")
 		testutil.EventuallyPhase(ctx, k8sClient, plan, hibernatorv1alpha1.PhaseHibernated)

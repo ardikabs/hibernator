@@ -236,7 +236,6 @@ var _ = Describe("Error Recovery E2E", func() {
 
 		By("Advancing clock to wakeup window (Tuesday 07:00)")
 		fakeClock.SetTime(time.Date(2026, 5, 19, 7, 0, 0, 0, time.UTC))
-		testutil.TriggerReconcile(ctx, k8sClient, plan)
 
 		By("Verifying plan transitions to WakingUp and completes cycle")
 		testutil.EventuallyPhase(ctx, k8sClient, plan, hibernatorv1alpha1.PhaseWakingUp)
@@ -407,7 +406,6 @@ var _ = Describe("Error Recovery E2E", func() {
 
 		By("Advancing clock to wakeup window (Tuesday 07:00)")
 		fakeClock.SetTime(time.Date(2026, 6, 2, 7, 0, 0, 0, time.UTC))
-		testutil.TriggerReconcile(ctx, k8sClient, plan)
 
 		By("Verifying plan transitions to WakingUp")
 		testutil.EventuallyPhase(ctx, k8sClient, plan, hibernatorv1alpha1.PhaseWakingUp)

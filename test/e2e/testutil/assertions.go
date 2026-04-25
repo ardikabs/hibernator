@@ -46,6 +46,8 @@ func ConsistentllyAtPhase(ctx context.Context, k8sClient client.Client, plan *hi
 // EventuallyPhase waits until the HibernatePlan reaches the expected phase.
 func EventuallyPhase(ctx context.Context, k8sClient client.Client, plan *hibernatorv1alpha1.HibernatePlan, phase hibernatorv1alpha1.PlanPhase) {
 	Eventually(func() hibernatorv1alpha1.PlanPhase {
+		TriggerReconcile(ctx, k8sClient, plan)
+
 		_ = k8sClient.Get(ctx, client.ObjectKeyFromObject(plan), plan)
 		return plan.Status.Phase
 	}).
@@ -98,10 +100,18 @@ func EventuallyMultiJobsCreated(ctx context.Context, k8sClient client.Client, na
 			wellknown.LabelOperation: string(operation),
 		})
 
-		for _, item := range jobList.Items {
+		for _, job := range jobList.Items {
+			if _, ok := job.Labels[wellknown.LabelStaleRunnerJob]; ok {
+				continue
+			}
+
+			if job.Status.CompletionTime != nil {
+				continue
+			}
+
 			for _, target := range targets {
-				if item.Labels[wellknown.LabelTarget] == target {
-					jobs = append(jobs, &item)
+				if job.Labels[wellknown.LabelTarget] == target {
+					jobs = append(jobs, &job)
 				}
 			}
 		}
