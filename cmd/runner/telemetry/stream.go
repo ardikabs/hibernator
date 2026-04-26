@@ -1,3 +1,8 @@
+/*
+Copyright 2026 Ardika Saputro.
+Licensed under the Apache License, Version 2.0.
+*/
+
 package telemetry
 
 import (
@@ -5,8 +10,9 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/go-logr/logr"
 	streamclient "github.com/ardikabs/hibernator/internal/streaming/client"
+	"github.com/ardikabs/hibernator/pkg/logsink"
+	"github.com/go-logr/logr"
 )
 
 // Config holds the configuration needed for the telemetry streaming client.
@@ -22,15 +28,16 @@ type Config struct {
 
 // Manager wraps the streaming client to report telemetry data (progress/completion).
 type Manager struct {
-	client streamclient.StreamingClient
-	log    logr.Logger
+	client   streamclient.StreamingClient
+	log      logr.Logger
+	dualSink *logsink.DualWriteSink
 }
 
 // NewManager initializes the streaming client based on configuration.
 // Returns a Manager instance. If no endpoints are configured, it returns a Manager
 // with a nil client, which safely ignores telemetry reporting.
 func NewManager(ctx context.Context, log logr.Logger, cfg Config) (*Manager, error) {
-	log = log.WithName("streamingclient")
+	log = log.WithName("telemetry")
 	if cfg.GRPCEndpoint == "" && cfg.WebSocketEndpoint == "" && cfg.HTTPCallbackEndpoint == "" && cfg.ControlPlaneEndpoint == "" {
 		log.Info("no streaming endpoints configured, skipping streaming client")
 		return &Manager{log: log}, nil
@@ -66,9 +73,11 @@ func NewManager(ctx context.Context, log logr.Logger, cfg Config) (*Manager, err
 	return &Manager{client: client, log: log}, nil
 }
 
-// Client returns the underlying stream client if it exists.
-func (m *Manager) Client() streamclient.StreamingClient {
-	return m.client
+// GetLogger introduces a logger with DualWriteSink
+// that writes to both the original logger and the streaming client.
+func (m *Manager) GetLogger() logr.Logger {
+	m.dualSink = logsink.NewDualWriteSink(m.log.GetSink(), m.client)
+	return logr.New(m.dualSink)
 }
 
 // StartHeartbeat starts the heartbeat if the client is connected.
@@ -80,6 +89,10 @@ func (m *Manager) StartHeartbeat(interval time.Duration) {
 
 // Close closes the underlying stream client.
 func (m *Manager) Close() error {
+	if m.dualSink != nil {
+		m.dualSink.Stop()
+	}
+
 	if m.client != nil {
 		return m.client.Close()
 	}

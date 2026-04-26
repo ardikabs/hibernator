@@ -1,3 +1,8 @@
+/*
+Copyright 2026 Ardika Saputro.
+Licensed under the Apache License, Version 2.0.
+*/
+
 package state
 
 import (
@@ -17,13 +22,13 @@ import (
 // Accumulator batches incremental saves in memory before flushing to ConfigMap.
 // This reduces Kubernetes API calls from N to 1 (where N = number of resources).
 type Accumulator struct {
-	mu        sync.Mutex
-	state     map[string]any // Accumulated state captured from live API calls
-	log       logr.Logger
-	k8sClient client.Client
-	namespace string
-	plan      string
-	target    string
+	mu         sync.Mutex
+	state      map[string]any // Accumulated state captured from live API calls
+	log        logr.Logger
+	k8sClient  client.Client
+	namespace  string
+	plan       string
+	target     string
 	targetType string
 }
 

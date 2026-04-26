@@ -1,3 +1,8 @@
+/*
+Copyright 2026 Ardika Saputro.
+Licensed under the Apache License, Version 2.0.
+*/
+
 package app
 
 import (
@@ -19,7 +24,6 @@ import (
 	"github.com/ardikabs/hibernator/cmd/runner/telemetry"
 	"github.com/ardikabs/hibernator/internal/executor"
 	"github.com/ardikabs/hibernator/internal/restore"
-	"github.com/ardikabs/hibernator/pkg/logsink"
 )
 
 var scheme = runtime.NewScheme()
@@ -31,12 +35,11 @@ func init() {
 
 // runner encapsulates the execution context and dependencies.
 type runner struct {
-	cfg          *Config
-	log          logr.Logger
-	logSink      *logsink.DualWriteSink // For graceful shutdown
-	k8sClient    client.Client
-	streamMgr    *telemetry.Manager
-	registry     *executor.Registry
+	cfg           *Config
+	log           logr.Logger
+	k8sClient     client.Client
+	telemetryMgr  *telemetry.Manager
+	registry      *executor.Registry
 	configBuilder *metadata.ConfigBuilder
 }
 
@@ -59,18 +62,12 @@ func newRunner(ctx context.Context, log logr.Logger, cfg *Config) (*runner, erro
 		UseTLS:               cfg.UseTLS,
 	}
 
-	streamMgr, err := telemetry.NewManager(ctx, log, streamCfg)
+	telemetryMgr, err := telemetry.NewManager(ctx, r.log, streamCfg)
 	if err != nil {
 		log.Error(err, "failed to initialize streaming client, continuing without streaming")
 	}
-	r.streamMgr = streamMgr
-
-	// Wrap logger with DualWriteSink for automatic log streaming
-	if streamMgr != nil && streamMgr.Client() != nil {
-		sender := &streamingLogSender{client: streamMgr.Client()}
-		r.logSink = logsink.NewDualWriteSink(log.GetSink(), sender)
-		r.log = logr.New(r.logSink)
-	}
+	r.telemetryMgr = telemetryMgr
+	r.log = telemetryMgr.GetLogger()
 
 	// Build Kubernetes client
 	restCfg, err := config.GetConfig()
@@ -96,14 +93,10 @@ func newRunner(ctx context.Context, log logr.Logger, cfg *Config) (*runner, erro
 
 // close cleans up runner resources.
 func (r *runner) close() {
-	// Stop log sink first to drain remaining logs
-	if r.logSink != nil {
-		r.logSink.Stop()
-	}
 	// Then close streaming client
-	if r.streamMgr != nil {
-		if err := r.streamMgr.Close(); err != nil {
-			r.log.Error(err, "failed to close streaming client")
+	if r.telemetryMgr != nil {
+		if err := r.telemetryMgr.Close(); err != nil {
+			r.log.Error(err, "failed to close telemetry manager")
 		}
 	}
 }
@@ -123,13 +116,13 @@ func (r *runner) run(ctx context.Context) (*executor.Result, error) {
 	log.Info("starting runner")
 
 	// Start heartbeat if streaming is available
-	if r.streamMgr != nil {
-		r.streamMgr.StartHeartbeat(30 * time.Second)
+	if r.telemetryMgr != nil {
+		r.telemetryMgr.StartHeartbeat(30 * time.Second)
 	}
 
 	// Report progress: initializing
-	if r.streamMgr != nil {
-		r.streamMgr.ReportProgress(ctx, "initializing", 10, "Loading executors")
+	if r.telemetryMgr != nil {
+		r.telemetryMgr.ReportProgress(ctx, "initializing", 10, "Loading executors")
 	}
 
 	// Get the executor
@@ -150,8 +143,8 @@ func (r *runner) run(ctx context.Context) (*executor.Result, error) {
 	}
 
 	// Report progress: building spec
-	if r.streamMgr != nil {
-		r.streamMgr.ReportProgress(ctx, "preparing", 20, "Building executor spec")
+	if r.telemetryMgr != nil {
+		r.telemetryMgr.ReportProgress(ctx, "preparing", 20, "Building executor spec")
 	}
 
 	// Build executor spec from connector
@@ -162,8 +155,8 @@ func (r *runner) run(ctx context.Context) (*executor.Result, error) {
 	}
 
 	// Validate the spec
-	if r.streamMgr != nil {
-		r.streamMgr.ReportProgress(ctx, "validating", 30, "Validating executor spec")
+	if r.telemetryMgr != nil {
+		r.telemetryMgr.ReportProgress(ctx, "validating", 30, "Validating executor spec")
 	}
 	if err := exec.Validate(*spec); err != nil {
 		r.log.Error(err, "spec validation failed")
@@ -171,8 +164,8 @@ func (r *runner) run(ctx context.Context) (*executor.Result, error) {
 	}
 
 	// Report progress: executing
-	if r.streamMgr != nil {
-		r.streamMgr.ReportProgress(ctx, "executing", 50, fmt.Sprintf("Executing %s operation", cfg.Operation))
+	if r.telemetryMgr != nil {
+		r.telemetryMgr.ReportProgress(ctx, "executing", 50, fmt.Sprintf("Executing %s operation", cfg.Operation))
 	}
 
 	// Execute the operation
@@ -183,15 +176,15 @@ func (r *runner) run(ctx context.Context) (*executor.Result, error) {
 		if cfg.Operation == "shutdown" {
 			r.log.Error(err, "shutdown failed")
 		}
-		if r.streamMgr != nil {
-			r.streamMgr.ReportCompletion(ctx, false, err.Error(), result.ElapsedMs)
+		if r.telemetryMgr != nil {
+			r.telemetryMgr.ReportCompletion(ctx, false, err.Error(), result.ElapsedMs)
 		}
 		return nil, err
 	}
 
 	// Report progress: finalizing
-	if r.streamMgr != nil {
-		r.streamMgr.ReportProgress(ctx, "finalizing", 90, "Finalizing operation")
+	if r.telemetryMgr != nil {
+		r.telemetryMgr.ReportProgress(ctx, "finalizing", 90, "Finalizing operation")
 	}
 
 	// Wake-up success: mark target as restored for cleanup coordination
@@ -210,8 +203,8 @@ func (r *runner) run(ctx context.Context) (*executor.Result, error) {
 
 	// Report completion to controller (status only, no restore data payload)
 	// The controller reads restore data from ConfigMap during wake-up
-	if r.streamMgr != nil {
-		r.streamMgr.ReportCompletion(ctx, true, "", result.ElapsedMs)
+	if r.telemetryMgr != nil {
+		r.telemetryMgr.ReportCompletion(ctx, true, "", result.ElapsedMs)
 	}
 
 	return result, nil
