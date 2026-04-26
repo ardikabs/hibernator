@@ -206,7 +206,7 @@ func TestRunner_Shutdown_NoOp_WritesEmptyRestorePoint(t *testing.T) {
 
 	rd := readRestoreData(t, r.k8sClient)
 	assert.True(t, rd.IsLive, "empty restore point should be marked IsLive")
-	assert.Nil(t, rd.State, "empty restore point should have nil State")
+	assert.Empty(t, rd.State, "empty restore point should have empty State")
 }
 
 // TestRunner_Wakeup_ReadsRestorePoint verifies that the runner loads restore

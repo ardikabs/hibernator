@@ -73,9 +73,13 @@ func NewManager(ctx context.Context, log logr.Logger, cfg Config) (*Manager, err
 	return &Manager{client: client, log: log}, nil
 }
 
-// GetLogger introduces a logger with DualWriteSink
-// that writes to both the original logger and the streaming client.
-func (m *Manager) GetLogger() logr.Logger {
+// WithTelemetrySink returns a logger that writes to both the original sink
+// and the telemetry streaming client via DualWriteSink. This ensures logs
+// are both recorded locally and streamed to the control plane.
+//
+// Use this instead of the original logger when you need telemetry coverage.
+// The returned logger is a new instance; the original logger is unchanged.
+func (m *Manager) WithTelemetrySink() logr.Logger {
 	m.dualSink = logsink.NewDualWriteSink(m.log.GetSink(), m.client)
 	return logr.New(m.dualSink)
 }

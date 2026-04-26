@@ -87,11 +87,11 @@ func newExecutorFactoryRegistry() *executorFactoryRegistry {
 
 // resolveEnabledExecutors returns the set of enabled executor types,
 // considering environment overrides.
-func (r *executorFactoryRegistry) resolveEnabledExecutors() map[string]bool {
-	enabled := make(map[string]bool, len(r.registrations))
+func (f *executorFactoryRegistry) resolveEnabledExecutors() map[string]bool {
+	enabled := make(map[string]bool, len(f.registrations))
 
 	// Start with default settings
-	for name, reg := range r.registrations {
+	for name, reg := range f.registrations {
 		enabled[name] = reg.defaultEnabled
 	}
 
@@ -104,7 +104,7 @@ func (r *executorFactoryRegistry) resolveEnabledExecutors() map[string]bool {
 		// Enable only the specified executors
 		for _, name := range strings.Split(envValue, ",") {
 			name = strings.TrimSpace(name)
-			if _, exists := r.registrations[name]; exists {
+			if _, exists := f.registrations[name]; exists {
 				enabled[name] = true
 			}
 		}
@@ -114,11 +114,11 @@ func (r *executorFactoryRegistry) resolveEnabledExecutors() map[string]bool {
 }
 
 // registerTo populates the executor.Registry with enabled executors.
-func (r *executorFactoryRegistry) registerTo(registry *executor.Registry, log logr.Logger) {
-	enabled := r.resolveEnabledExecutors()
+func (f *executorFactoryRegistry) registerTo(registry *executor.Registry, log logr.Logger) {
+	enabled := f.resolveEnabledExecutors()
 
 	var registered []string
-	for name, reg := range r.registrations {
+	for name, reg := range f.registrations {
 		if enabled[name] {
 			registry.Register(reg.factory())
 			registered = append(registered, name)

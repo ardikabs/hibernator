@@ -67,7 +67,7 @@ func newRunner(ctx context.Context, log logr.Logger, cfg *Config) (*runner, erro
 		log.Error(err, "failed to initialize telemetry manager, continuing without telemetry")
 	} else {
 		r.telemetryMgr = telemetryMgr
-		r.log = telemetryMgr.GetLogger()
+		r.log = telemetryMgr.WithTelemetrySink()
 	}
 
 	// Build Kubernetes client
