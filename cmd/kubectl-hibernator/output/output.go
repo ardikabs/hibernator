@@ -159,11 +159,6 @@ func FromContext(ctx context.Context) Formatter {
 // via the output formatter instead of Cobra's default handler.
 func WrapRunE(fn func(ctx context.Context, args []string) error) func(*cobra.Command, []string) error {
 	return func(cmd *cobra.Command, args []string) error {
-		err := fn(cmd.Context(), args)
-		if err != nil {
-			out := FromContext(cmd.Context())
-			out.Error("%v", err)
-		}
-		return err
+		return fn(cmd.Context(), args)
 	}
 }
