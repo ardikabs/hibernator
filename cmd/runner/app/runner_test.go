@@ -180,7 +180,8 @@ func TestRunner_Shutdown_WritesRestorePoint(t *testing.T) {
 	}
 	r := newTestRunner(baseConfig("shutdown", "fake"), fakeExec)
 
-	_, runErr := r.run(context.Background()); require.NoError(t, runErr)
+	_, runErr := r.run(context.Background())
+	require.NoError(t, runErr)
 
 	assert.True(t, fakeExec.shutdownCalled)
 
@@ -199,7 +200,8 @@ func TestRunner_Shutdown_NoOp_WritesEmptyRestorePoint(t *testing.T) {
 	fakeExec := &fakeExecutor{typeVal: "fake"}
 	r := newTestRunner(baseConfig("shutdown", "fake"), fakeExec)
 
-	_, runErr := r.run(context.Background()); require.NoError(t, runErr)
+	_, runErr := r.run(context.Background())
+	require.NoError(t, runErr)
 	assert.True(t, fakeExec.shutdownCalled)
 
 	rd := readRestoreData(t, r.k8sClient)
@@ -216,7 +218,8 @@ func TestRunner_Wakeup_ReadsRestorePoint(t *testing.T) {
 	fakeExec := &fakeExecutor{typeVal: "fake"}
 	r := newTestRunner(baseConfig("wakeup", "fake"), fakeExec, restoreCM(t, state))
 
-	_, runErr := r.run(context.Background()); require.NoError(t, runErr)
+	_, runErr := r.run(context.Background())
+	require.NoError(t, runErr)
 
 	assert.True(t, fakeExec.wakeupCalled)
 	assert.True(t, fakeExec.receivedRestore.IsLive)
@@ -232,7 +235,8 @@ func TestRunner_Wakeup_EmptyRestorePoint_Succeeds(t *testing.T) {
 	// Pre-seed the empty restore point that a no-op shutdown would have written.
 	r := newTestRunner(baseConfig("wakeup", "fake"), fakeExec, restoreCM(t, nil))
 
-	_, runErr := r.run(context.Background()); require.NoError(t, runErr)
+	_, runErr := r.run(context.Background())
+	require.NoError(t, runErr)
 
 	assert.True(t, fakeExec.wakeupCalled)
 	assert.Empty(t, fakeExec.receivedRestore.Data,

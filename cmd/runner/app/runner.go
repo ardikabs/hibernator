@@ -51,8 +51,8 @@ func newRunner(ctx context.Context, log logr.Logger, cfg *Config) (*runner, erro
 		registry: executor.NewRegistry(),
 	}
 
-	// Initialize streaming client (non-fatal if unavailable)
-	streamCfg := telemetry.Config{
+	// Initialize telemetry config (non-fatal if unavailable)
+	telemetryCfg := telemetry.Config{
 		GRPCEndpoint:         cfg.GRPCEndpoint,
 		WebSocketEndpoint:    cfg.WebSocketEndpoint,
 		HTTPCallbackEndpoint: cfg.HTTPCallbackEndpoint,
@@ -62,12 +62,13 @@ func newRunner(ctx context.Context, log logr.Logger, cfg *Config) (*runner, erro
 		UseTLS:               cfg.UseTLS,
 	}
 
-	telemetryMgr, err := telemetry.NewManager(ctx, r.log, streamCfg)
+	telemetryMgr, err := telemetry.NewManager(ctx, r.log, telemetryCfg)
 	if err != nil {
-		log.Error(err, "failed to initialize streaming client, continuing without streaming")
+		log.Error(err, "failed to initialize telemetry manager, continuing without telemetry")
+	} else {
+		r.telemetryMgr = telemetryMgr
+		r.log = telemetryMgr.GetLogger()
 	}
-	r.telemetryMgr = telemetryMgr
-	r.log = telemetryMgr.GetLogger()
 
 	// Build Kubernetes client
 	restCfg, err := config.GetConfig()

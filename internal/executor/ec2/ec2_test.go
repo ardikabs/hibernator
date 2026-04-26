@@ -585,9 +585,9 @@ func TestWakeUp_SkipsAlreadyRunningInstances(t *testing.T) {
 	restore := executor.RestoreData{
 		Type: "ec2",
 		Data: map[string]json.RawMessage{
-			"i-stopped":           stoppedState,
-			"i-running":           runningState,
-			"i-manually-stopped":  manuallyStoppedState,
+			"i-stopped":          stoppedState,
+			"i-running":          runningState,
+			"i-manually-stopped": manuallyStoppedState,
 		},
 	}
 
