@@ -445,7 +445,7 @@ func (s *state) getTerminationMessageFromPod(ctx context.Context, job *batchv1.J
 // buildExecutionPlan creates a scheduler.ExecutionPlan from the plan's strategy.
 func (s *state) buildExecutionPlan(plan *hibernatorv1alpha1.HibernatePlan, reverse bool) (scheduler.ExecutionPlan, error) {
 	strategy := plan.Spec.Execution.Strategy
-	maxConcurrency := ptr.Deref(strategy.MaxConcurrency, 1)
+	maxConcurrency := ptr.Deref(strategy.MaxConcurrency, 0)
 
 	targets := lo.Map(plan.Spec.Targets, func(t hibernatorv1alpha1.Target, _ int) string {
 		return t.Name

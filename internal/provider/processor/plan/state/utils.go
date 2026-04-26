@@ -280,7 +280,7 @@ func findOrAppendCycle(st *hibernatorv1alpha1.HibernatePlanStatus, cycleID strin
 // pruneCycleHistory keeps only the most recent 5 cycles in the plan status history to prevent unbounded growth
 func pruneCycleHistory(st *hibernatorv1alpha1.HibernatePlanStatus) {
 	if len(st.ExecutionHistory) > wellknown.MaxCycleHistorySize {
-		st.ExecutionHistory = st.ExecutionHistory[len(st.ExecutionHistory)-5:]
+		st.ExecutionHistory = st.ExecutionHistory[len(st.ExecutionHistory)-wellknown.MaxCycleHistorySize:]
 	}
 }
 
