@@ -451,7 +451,7 @@ func TestShutdown_CapturesAllStatesButOnlyStopsRunning(t *testing.T) {
 	mockEC2 := &mocks.EC2Client{}
 
 	savedRestoreData := make(map[string]InstanceState)
-	saveFunc := func(key string, value any, isLive bool) error {
+	saveFunc := func(key string, value any) error {
 		if state, ok := value.(InstanceState); ok {
 			savedRestoreData[key] = state
 		}
@@ -505,7 +505,7 @@ func TestShutdown_CapturesAllStatesButOnlyStopsRunning(t *testing.T) {
 		ConnectorConfig: executor.ConnectorConfig{
 			AWS: &executor.AWSConnectorConfig{Region: "us-east-1"},
 		},
-		SaveRestoreData: saveFunc,
+		ReportStateCallback: saveFunc,
 	}
 
 	_, err := e.Shutdown(ctx, logr.Discard(), spec)
@@ -585,9 +585,9 @@ func TestWakeUp_SkipsAlreadyRunningInstances(t *testing.T) {
 	restore := executor.RestoreData{
 		Type: "ec2",
 		Data: map[string]json.RawMessage{
-			"i-stopped":           stoppedState,
-			"i-running":           runningState,
-			"i-manually-stopped":  manuallyStoppedState,
+			"i-stopped":          stoppedState,
+			"i-running":          runningState,
+			"i-manually-stopped": manuallyStoppedState,
 		},
 	}
 

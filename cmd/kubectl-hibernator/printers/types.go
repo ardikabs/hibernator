@@ -190,18 +190,18 @@ type ExceptionReferenceJSON struct {
 
 // ExecutionCycleJSON represents a single hibernation cycle in the execution history.
 type ExecutionCycleJSON struct {
-	CycleID           string                        `json:"cycleId"`
+	CycleID           string                         `json:"cycleId"`
 	ShutdownExecution *ExecutionOperationSummaryJSON `json:"shutdownExecution,omitempty"`
 	WakeupExecution   *ExecutionOperationSummaryJSON `json:"wakeupExecution,omitempty"`
 }
 
 // ExecutionOperationSummaryJSON represents a shutdown or wakeup operation summary.
 type ExecutionOperationSummaryJSON struct {
-	Operation    string                      `json:"operation"`
-	StartTime    string                      `json:"startTime"`
-	EndTime      string                      `json:"endTime,omitempty"`
-	Success      bool                        `json:"success"`
-	ErrorMessage string                      `json:"errorMessage,omitempty"`
+	Operation     string                      `json:"operation"`
+	StartTime     string                      `json:"startTime"`
+	EndTime       string                      `json:"endTime,omitempty"`
+	Success       bool                        `json:"success"`
+	ErrorMessage  string                      `json:"errorMessage,omitempty"`
 	TargetResults []TargetExecutionResultJSON `json:"targetResults,omitempty"`
 }
 

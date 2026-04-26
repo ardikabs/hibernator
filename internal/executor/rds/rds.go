@@ -255,7 +255,7 @@ func (e *Executor) Shutdown(ctx context.Context, log logr.Logger, spec executor.
 		instanceID := aws.ToString(inst.DBInstanceIdentifier)
 		log.Info("processing DB instance", "instanceId", instanceID)
 
-		outcome, err := e.stopInstance(ctx, log, client, instanceID, params.SnapshotBeforeStop, params, spec.SaveRestoreData)
+		outcome, err := e.stopInstance(ctx, log, client, instanceID, params.SnapshotBeforeStop, params, spec.ReportStateCallback)
 		if err != nil {
 			log.Error(err, "failed to stop instance", "instanceId", instanceID)
 			return nil, fmt.Errorf("stop instance %s: %w", instanceID, err)
@@ -274,7 +274,7 @@ func (e *Executor) Shutdown(ctx context.Context, log logr.Logger, spec executor.
 		clusterID := aws.ToString(cluster.DBClusterIdentifier)
 		log.Info("processing DB cluster", "clusterId", clusterID)
 
-		outcome, err := e.stopCluster(ctx, log, client, clusterID, params.SnapshotBeforeStop, params, spec.SaveRestoreData)
+		outcome, err := e.stopCluster(ctx, log, client, clusterID, params.SnapshotBeforeStop, params, spec.ReportStateCallback)
 		if err != nil {
 			log.Error(err, "failed to stop cluster", "clusterId", clusterID)
 			return nil, fmt.Errorf("stop cluster %s: %w", clusterID, err)
@@ -506,7 +506,7 @@ func (e *Executor) loadAWSConfig(ctx context.Context, spec executor.Spec) (aws.C
 	return awsutil.BuildAWSConfig(ctx, spec.ConnectorConfig.AWS)
 }
 
-func (e *Executor) stopInstance(ctx context.Context, log logr.Logger, client RDSClient, instanceId string, snapshotBeforeStop bool, params Parameters, callback executor.SaveRestoreDataFunc) (operationOutcome, error) {
+func (e *Executor) stopInstance(ctx context.Context, log logr.Logger, client RDSClient, instanceId string, snapshotBeforeStop bool, params Parameters, callback executor.ReportStateCallback) (operationOutcome, error) {
 	// Get instance info
 	desc, err := client.DescribeDBInstances(ctx, &rds.DescribeDBInstancesInput{
 		DBInstanceIdentifier: aws.String(instanceId),
@@ -589,10 +589,9 @@ func (e *Executor) stopInstance(ctx context.Context, log logr.Logger, client RDS
 	}
 
 	// Incremental save: persist this instance's restore data immediately.
-	// isLive=true because hibernator captured this state directly from the DescribeDBInstances API call.
 	if callback != nil {
 		key := "instance:" + state.InstanceId
-		if err := callback(key, state, true); err != nil {
+		if err := callback(key, state); err != nil {
 			log.Error(err, "failed to save restore data incrementally", "instanceId", instanceId)
 			// Continue processing - save at end as fallback
 		}
@@ -612,7 +611,7 @@ func (e *Executor) stopInstance(ctx context.Context, log logr.Logger, client RDS
 	return operationOutcomeApplied, nil
 }
 
-func (e *Executor) stopCluster(ctx context.Context, log logr.Logger, client RDSClient, clusterId string, snapshotBeforeStop bool, params Parameters, callback executor.SaveRestoreDataFunc) (operationOutcome, error) {
+func (e *Executor) stopCluster(ctx context.Context, log logr.Logger, client RDSClient, clusterId string, snapshotBeforeStop bool, params Parameters, callback executor.ReportStateCallback) (operationOutcome, error) {
 	// Get cluster info
 	desc, err := client.DescribeDBClusters(ctx, &rds.DescribeDBClustersInput{
 		DBClusterIdentifier: aws.String(clusterId),
@@ -693,10 +692,9 @@ func (e *Executor) stopCluster(ctx context.Context, log logr.Logger, client RDSC
 	}
 
 	// Incremental save: persist this cluster's restore data immediately.
-	// isLive=true because hibernator captured this state directly from the DescribeDBClusters API call.
 	if callback != nil {
 		key := "cluster:" + state.ClusterId
-		if err := callback(key, state, true); err != nil {
+		if err := callback(key, state); err != nil {
 			log.Error(err, "failed to save restore data incrementally", "clusterId", clusterId)
 			// Continue processing - save at end as fallback
 		}

@@ -76,7 +76,7 @@ func TestManager_Save(t *testing.T) {
 	}
 }
 
-func TestManager_SaveOrPreserve_NoExisting(t *testing.T) {
+func TestManager_SaveState_NoExisting(t *testing.T) {
 	scheme := runtime.NewScheme()
 	_ = corev1.AddToScheme(scheme)
 
@@ -94,16 +94,15 @@ func TestManager_SaveOrPreserve_NoExisting(t *testing.T) {
 		Executor:  "rds",
 		Version:   1,
 		CreatedAt: metav1.Now(),
-		IsLive:    true,
 		State: map[string]interface{}{
 			"instanceId": "db-1",
 			"status":     "available",
 		},
 	}
 
-	err := mgr.SaveOrPreserve(ctx, namespace, planName, targetName, data)
+	err := mgr.SaveState(ctx, namespace, planName, targetName, data, 3)
 	if err != nil {
-		t.Fatalf("SaveOrPreserve() error = %v", err)
+		t.Fatalf("SaveState() error = %v", err)
 	}
 
 	// Verify data was saved
@@ -114,15 +113,12 @@ func TestManager_SaveOrPreserve_NoExisting(t *testing.T) {
 	if loaded == nil {
 		t.Fatal("Load() returned nil")
 	}
-	if !loaded.IsLive {
-		t.Error("Expected IsLive=true for new data")
-	}
 	if loaded.State["instanceId"] != "db-1" {
 		t.Errorf("Expected instanceId=db-1, got %v", loaded.State["instanceId"])
 	}
 }
 
-func TestManager_SaveOrPreserve_HighQualityPreserved(t *testing.T) {
+func TestManager_SaveState_StalenessHousekeeping(t *testing.T) {
 	scheme := runtime.NewScheme()
 	_ = corev1.AddToScheme(scheme)
 
@@ -133,196 +129,81 @@ func TestManager_SaveOrPreserve_HighQualityPreserved(t *testing.T) {
 	namespace := "test-ns"
 	planName := "test-plan"
 	targetName := "test-target"
+	maxStaleCount := 3
 
-	// Save initial high-quality data
-	initialData := &Data{
-		Target:    targetName,
-		Executor:  "rds",
-		Version:   1,
-		CreatedAt: metav1.Now(),
-		IsLive:    true, // High quality
-		State: map[string]interface{}{
-			"instanceId": "db-1",
-			"replicas":   float64(3),
-		},
-	}
-
-	err := mgr.SaveOrPreserve(ctx, namespace, planName, targetName, initialData)
-	if err != nil {
-		t.Fatalf("SaveOrPreserve() initial save error = %v", err)
-	}
-
-	// Try to overwrite with low-quality data
-	lowQualityData := &Data{
-		Target:    targetName,
-		Executor:  "rds",
-		Version:   2,
-		CreatedAt: metav1.Now(),
-		IsLive:    false, // Low quality
-		State: map[string]interface{}{
-			"instanceId": "db-2", // Different value
-			"replicas":   float64(0),
-		},
-	}
-
-	err = mgr.SaveOrPreserve(ctx, namespace, planName, targetName, lowQualityData)
-	if err != nil {
-		t.Fatalf("SaveOrPreserve() second save error = %v", err)
-	}
-
-	// Verify high-quality data was preserved
-	loaded, err := mgr.Load(ctx, namespace, planName, targetName)
-	if err != nil {
-		t.Fatalf("Load() error = %v", err)
-	}
-	if loaded == nil {
-		t.Fatal("Load() returned nil")
-	}
-	if !loaded.IsLive {
-		t.Error("Expected IsLive=true (high quality preserved)")
-	}
-	if loaded.State["instanceId"] != "db-1" {
-		t.Errorf("Expected instanceId=db-1 (preserved), got %v", loaded.State["instanceId"])
-	}
-	if loaded.State["replicas"] != float64(3) {
-		t.Errorf("Expected replicas=3 (preserved), got %v", loaded.State["replicas"])
-	}
-}
-
-func TestManager_SaveOrPreserve_LowQualityUpgraded(t *testing.T) {
-	scheme := runtime.NewScheme()
-	_ = corev1.AddToScheme(scheme)
-
-	fakeClient := fake.NewClientBuilder().WithScheme(scheme).Build()
-	mgr := NewManager(fakeClient)
-
-	ctx := context.Background()
-	namespace := "test-ns"
-	planName := "test-plan"
-	targetName := "test-target"
-
-	// Save initial low-quality data
-	initialData := &Data{
-		Target:    targetName,
-		Executor:  "ec2",
-		Version:   1,
-		CreatedAt: metav1.Now(),
-		IsLive:    false, // Low quality
-		State: map[string]interface{}{
-			"instanceId": "i-stopped",
-			"state":      "stopped",
-		},
-	}
-
-	err := mgr.SaveOrPreserve(ctx, namespace, planName, targetName, initialData)
-	if err != nil {
-		t.Fatalf("SaveOrPreserve() initial save error = %v", err)
-	}
-
-	// Upgrade with high-quality data
-	highQualityData := &Data{
-		Target:    targetName,
-		Executor:  "ec2",
-		Version:   2,
-		CreatedAt: metav1.Now(),
-		IsLive:    true, // High quality
-		State: map[string]interface{}{
-			"instanceId": "i-running",
-			"state":      "running",
-		},
-	}
-
-	err = mgr.SaveOrPreserve(ctx, namespace, planName, targetName, highQualityData)
-	if err != nil {
-		t.Fatalf("SaveOrPreserve() upgrade error = %v", err)
-	}
-
-	// Verify data was upgraded
-	loaded, err := mgr.Load(ctx, namespace, planName, targetName)
-	if err != nil {
-		t.Fatalf("Load() error = %v", err)
-	}
-	if loaded == nil {
-		t.Fatal("Load() returned nil")
-	}
-	if !loaded.IsLive {
-		t.Error("Expected IsLive=true (upgraded)")
-	}
-	if loaded.State["instanceId"] != "i-running" {
-		t.Errorf("Expected instanceId=i-running (upgraded), got %v", loaded.State["instanceId"])
-	}
-	if loaded.State["state"] != "running" {
-		t.Errorf("Expected state=running (upgraded), got %v", loaded.State["state"])
-	}
-}
-
-func TestManager_SaveOrPreserve_PerKeyMerge(t *testing.T) {
-	scheme := runtime.NewScheme()
-	_ = corev1.AddToScheme(scheme)
-
-	fakeClient := fake.NewClientBuilder().WithScheme(scheme).Build()
-	mgr := NewManager(fakeClient)
-
-	ctx := context.Background()
-	namespace := "test-ns"
-	planName := "test-plan"
-	targetName := "test-target"
-
-	// Save initial high-quality data with keys A and B
+	// Initial save: keys A and B
 	initialData := &Data{
 		Target:    targetName,
 		Executor:  "eks",
 		Version:   1,
 		CreatedAt: metav1.Now(),
-		IsLive:    true,
 		State: map[string]interface{}{
-			"keyA": "valueA-live",
-			"keyB": "valueB-live",
+			"keyA": "valA",
+			"keyB": "valB",
 		},
 	}
 
-	err := mgr.SaveOrPreserve(ctx, namespace, planName, targetName, initialData)
+	err := mgr.SaveState(ctx, namespace, planName, targetName, initialData, maxStaleCount)
 	if err != nil {
-		t.Fatalf("SaveOrPreserve() initial save error = %v", err)
+		t.Fatalf("SaveState() initial error = %v", err)
 	}
 
-	// Add new key C with low-quality data (should preserve A and B, add C)
-	newData := &Data{
+	// Second cycle: only report B and add C. A becomes stale (count=1)
+	cycle2Data := &Data{
 		Target:    targetName,
 		Executor:  "eks",
-		Version:   2,
+		Version:   1,
 		CreatedAt: metav1.Now(),
-		IsLive:    false,
 		State: map[string]interface{}{
-			"keyA": "valueA-new", // Should be ignored (existing is high-quality)
-			"keyC": "valueC-new", // Should be added (new key)
+			"keyB": "valB2",
+			"keyC": "valC",
 		},
 	}
 
-	err = mgr.SaveOrPreserve(ctx, namespace, planName, targetName, newData)
+	err = mgr.SaveState(ctx, namespace, planName, targetName, cycle2Data, maxStaleCount)
 	if err != nil {
-		t.Fatalf("SaveOrPreserve() merge error = %v", err)
+		t.Fatalf("SaveState() cycle 2 error = %v", err)
 	}
 
-	// Verify per-key merge logic
-	loaded, err := mgr.Load(ctx, namespace, planName, targetName)
-	if err != nil {
-		t.Fatalf("Load() error = %v", err)
+	loaded, _ := mgr.Load(ctx, namespace, planName, targetName)
+	if loaded.StaleCounts["keyA"] != 1 {
+		t.Errorf("Expected keyA StaleCount=1, got %v", loaded.StaleCounts["keyA"])
 	}
-	if loaded == nil {
-		t.Fatal("Load() returned nil")
+	if loaded.State["keyA"] != "valA" {
+		t.Errorf("Expected keyA value to be preserved")
 	}
-	if !loaded.IsLive {
-		t.Error("Expected IsLive=true (best quality wins)")
+	if loaded.State["keyB"] != "valB2" {
+		t.Errorf("Expected keyB to be updated")
 	}
-	if loaded.State["keyA"] != "valueA-live" {
-		t.Errorf("Expected keyA=valueA-live (preserved), got %v", loaded.State["keyA"])
+
+	// Third cycle: report nothing. A (count=2), B (count=1), C (count=1)
+	cycle3Data := &Data{Target: targetName, Executor: "eks", State: map[string]interface{}{}}
+	_ = mgr.SaveState(ctx, namespace, planName, targetName, cycle3Data, maxStaleCount)
+
+	loaded, _ = mgr.Load(ctx, namespace, planName, targetName)
+	if loaded.StaleCounts["keyA"] != 2 {
+		t.Errorf("Expected keyA StaleCount=2")
 	}
-	if loaded.State["keyB"] != "valueB-live" {
-		t.Errorf("Expected keyB=valueB-live (preserved), got %v", loaded.State["keyB"])
+	if loaded.StaleCounts["keyB"] != 1 {
+		t.Errorf("Expected keyB StaleCount=1")
 	}
-	if loaded.State["keyC"] != "valueC-new" {
-		t.Errorf("Expected keyC=valueC-new (added), got %v", loaded.State["keyC"])
+
+	// Fourth cycle: report C. C is no longer stale, A becomes evicted, B (count=2)
+	cycle4Data := &Data{Target: targetName, Executor: "eks", State: map[string]interface{}{"keyC": "valC4"}}
+	_ = mgr.SaveState(ctx, namespace, planName, targetName, cycle4Data, maxStaleCount)
+
+	loaded, _ = mgr.Load(ctx, namespace, planName, targetName)
+	if _, exists := loaded.State["keyA"]; exists {
+		t.Errorf("Expected keyA to be evicted, but it still exists")
+	}
+	if _, exists := loaded.StaleCounts["keyC"]; exists {
+		t.Errorf("Expected keyC to have StaleCount cleared")
+	}
+	if loaded.State["keyC"] != "valC4" {
+		t.Errorf("Expected keyC to be updated to valC4")
+	}
+	if loaded.StaleCounts["keyB"] != 2 {
+		t.Errorf("Expected keyB StaleCount=2")
 	}
 }
 
@@ -338,13 +219,12 @@ func TestManager_MarkTargetRestored(t *testing.T) {
 	planName := "test-plan"
 	targetName := "test-target"
 
-	// Save initial data with IsLive=true
+	// Save initial data
 	data := &Data{
 		Target:    targetName,
 		Executor:  "rds",
 		Version:   1,
 		CreatedAt: metav1.Now(),
-		IsLive:    true,
 		State: map[string]interface{}{
 			"instanceId": "db-1",
 		},
@@ -374,16 +254,13 @@ func TestManager_MarkTargetRestored(t *testing.T) {
 		t.Errorf("Expected annotation %s=true, got %v", annotationKey, cm.Annotations[annotationKey])
 	}
 
-	// Verify IsLive was reset to false
+	// Verify state remains preserved
 	loaded, err := mgr.Load(ctx, namespace, planName, targetName)
 	if err != nil {
 		t.Fatalf("Load() error = %v", err)
 	}
 	if loaded == nil {
 		t.Fatal("Load() returned nil")
-	}
-	if loaded.IsLive {
-		t.Error("Expected IsLive=false after marking as restored")
 	}
 	if loaded.State["instanceId"] != "db-1" {
 		t.Errorf("Expected state preserved, got %v", loaded.State["instanceId"])
@@ -428,7 +305,6 @@ func TestManager_MarkAllTargetsRestored(t *testing.T) {
 			Executor:  "eks",
 			Version:   1,
 			CreatedAt: metav1.Now(),
-			IsLive:    true,
 			State:     map[string]interface{}{"key": "value"},
 		}
 		err := mgr.Save(ctx, namespace, planName, target, data)
@@ -498,7 +374,6 @@ func TestManager_UnlockRestoreData(t *testing.T) {
 			Executor:  "eks",
 			Version:   1,
 			CreatedAt: metav1.Now(),
-			IsLive:    true,
 			State:     map[string]interface{}{"key": "value"},
 		}
 		err := mgr.Save(ctx, namespace, planName, target, data)
@@ -570,7 +445,6 @@ func TestManager_HasRestoreData(t *testing.T) {
 		Executor:  "eks",
 		Version:   1,
 		CreatedAt: metav1.Now(),
-		IsLive:    true,
 		State:     map[string]interface{}{"key": "value"},
 	}
 	err = mgr.Save(ctx, namespace, planName, "test-target", data)

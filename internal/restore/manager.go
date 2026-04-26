@@ -60,6 +60,9 @@ type Data struct {
 
 	// State contains executor-specific restore state.
 	State map[string]any `json:"state,omitempty"`
+
+	// StaleCounts tracks consecutive hibernation cycles where a resource was not reported by the executor.
+	StaleCounts map[string]int `json:"staleCounts,omitempty"`
 }
 
 // configMapName generates the ConfigMap name for a plan's restore data.
@@ -216,20 +219,21 @@ func (m *Manager) Load(ctx context.Context, namespace, planName, targetName stri
 	return &data, nil
 }
 
-// SaveOrPreserve saves restore data with quality-aware preservation and merge logic.
-// Quality rules:
-//   - If existing data has IsLive=true and new has IsLive=false, preserves existing keys
-//   - If same quality or new is better, merges new keys into existing state
+// SaveState saves the reported state from the current shutdown cycle and performs
+// staleness housekeeping in a single operation.
 //
-// Merge logic:
-//   - New keys are added to existing State map
-//   - Existing keys are preserved if existing IsLive=true and new IsLive=false
-//   - Existing keys are overwritten if new IsLive=true or same quality
-func (m *Manager) SaveOrPreserve(ctx context.Context, namespace, planName, targetName string, data *Data) error {
-	// Check if restore data already exists
+// Logic:
+//  1. Keys present in reportedState: update their value and clear any StaleCount.
+//  2. Existing keys missing from reportedState: increment their StaleCount.
+//     If StaleCount >= maxStaleCount, the key is evicted from the state entirely.
+//  3. The result is saved in a single API call.
+//
+// This replaces the previous SaveOrPreserve + HousekeepStaleResources two-step pattern.
+func (m *Manager) SaveState(ctx context.Context, namespace, planName, targetName string, data *Data, maxStaleCount int) error {
+	// Load existing data to merge with
 	existing, err := m.Load(ctx, namespace, planName, targetName)
 	if err != nil {
-		return fmt.Errorf("check existing restore data: %w", err)
+		return fmt.Errorf("load existing restore data: %w", err)
 	}
 
 	if existing == nil {
@@ -237,49 +241,52 @@ func (m *Manager) SaveOrPreserve(ctx context.Context, namespace, planName, targe
 		return m.Save(ctx, namespace, planName, targetName, data)
 	}
 
-	// Merge logic: combine existing and new state maps
-	existingIsLive := existing.IsLive
-	newIsLive := data.IsLive
-
-	// Determine which quality to use for final result
-	finalIsLive := existingIsLive || newIsLive // Best quality wins
-
-	// Merge State maps
+	// Build merged state
 	mergedState := make(map[string]any)
+	staleCounts := make(map[string]int)
 
-	// First, copy all existing state
-	for key, value := range existing.State {
-		mergedState[key] = value
+	// Copy existing stale counts
+	for k, v := range existing.StaleCounts {
+		staleCounts[k] = v
 	}
 
-	// Then, merge new state based on quality rules
-	for key, newValue := range data.State {
-		existingValue, existsInOld := existing.State[key]
+	// Process reported keys: update value and clear stale count
+	for key, value := range data.State {
+		mergedState[key] = value
+		delete(staleCounts, key)
+	}
 
-		if !existsInOld {
-			// New key not in existing → always add
-			mergedState[key] = newValue
-		} else if existingIsLive && !newIsLive {
-			// Existing key is high-quality, new is low-quality → preserve existing
-			mergedState[key] = existingValue
-		} else {
-			// New is same/better quality → overwrite
-			mergedState[key] = newValue
+	// Process existing keys not reported this cycle
+	for key, value := range existing.State {
+		if _, reported := data.State[key]; !reported {
+			// Not reported this cycle — increment stale counter
+			staleCounts[key]++
+			if staleCounts[key] >= maxStaleCount {
+				// Evict: exceeded grace period
+				delete(staleCounts, key)
+			} else {
+				// Keep existing value until eviction
+				mergedState[key] = value
+			}
 		}
 	}
 
-	// Create merged data with best quality and combined state
-	mergedData := &Data{
-		Target:     data.Target,
-		Executor:   data.Executor,
-		Version:    data.Version,
-		CreatedAt:  data.CreatedAt,
-		IsLive:     finalIsLive,
-		CapturedAt: data.CapturedAt,
-		State:      mergedState,
+	// Clean up empty staleCounts map
+	if len(staleCounts) == 0 {
+		staleCounts = nil
 	}
 
-	// Save merged data
+	mergedData := &Data{
+		Target:      data.Target,
+		Executor:    data.Executor,
+		Version:     data.Version,
+		CreatedAt:   data.CreatedAt,
+		IsLive:      true,
+		CapturedAt:  data.CapturedAt,
+		State:       mergedState,
+		StaleCounts: staleCounts,
+	}
+
 	return m.Save(ctx, namespace, planName, targetName, mergedData)
 }
 

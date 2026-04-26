@@ -7,17 +7,11 @@ package app
 
 import (
 	"context"
-	"encoding/base64"
 	"encoding/json"
 	"fmt"
-	"sync"
 	"time"
 
-	"github.com/aws/aws-sdk-go-v2/aws"
-	"github.com/aws/aws-sdk-go-v2/service/eks"
 	"github.com/go-logr/logr"
-	corev1 "k8s.io/api/core/v1"
-	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	utilruntime "k8s.io/apimachinery/pkg/util/runtime"
 	clientgoscheme "k8s.io/client-go/kubernetes/scheme"
@@ -25,11 +19,11 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client/config"
 
 	hibernatorv1alpha1 "github.com/ardikabs/hibernator/api/v1alpha1"
+	"github.com/ardikabs/hibernator/cmd/runner/metadata"
+	"github.com/ardikabs/hibernator/cmd/runner/state"
+	"github.com/ardikabs/hibernator/cmd/runner/telemetry"
 	"github.com/ardikabs/hibernator/internal/executor"
 	"github.com/ardikabs/hibernator/internal/restore"
-	streamclient "github.com/ardikabs/hibernator/internal/streaming/client"
-	"github.com/ardikabs/hibernator/pkg/awsutil"
-	"github.com/ardikabs/hibernator/pkg/logsink"
 )
 
 var scheme = runtime.NewScheme()
@@ -41,12 +35,12 @@ func init() {
 
 // runner encapsulates the execution context and dependencies.
 type runner struct {
-	cfg          *Config
-	log          logr.Logger
-	logSink      *logsink.DualWriteSink // For graceful shutdown
-	k8sClient    client.Client
-	streamClient streamclient.StreamingClient
-	registry     *executor.Registry
+	cfg           *Config
+	log           logr.Logger
+	k8sClient     client.Client
+	telemetryMgr  *telemetry.Manager
+	registry      *executor.Registry
+	configBuilder *metadata.ConfigBuilder
 }
 
 // newRunner creates a new runner instance.
@@ -57,19 +51,23 @@ func newRunner(ctx context.Context, log logr.Logger, cfg *Config) (*runner, erro
 		registry: executor.NewRegistry(),
 	}
 
-	// Initialize streaming client (non-fatal if unavailable)
-	streamClient, err := initStreamingClient(ctx, log, cfg)
-	if err != nil {
-		log.Error(err, "failed to initialize streaming client, continuing without streaming")
+	// Initialize telemetry config (non-fatal if unavailable)
+	telemetryCfg := telemetry.Config{
+		GRPCEndpoint:         cfg.GRPCEndpoint,
+		WebSocketEndpoint:    cfg.WebSocketEndpoint,
+		HTTPCallbackEndpoint: cfg.HTTPCallbackEndpoint,
+		ControlPlaneEndpoint: cfg.ControlPlaneEndpoint,
+		ExecutionID:          cfg.ExecutionID,
+		TokenPath:            cfg.TokenPath,
+		UseTLS:               cfg.UseTLS,
 	}
 
-	// Wrap logger with DualWriteSink for automatic log streaming
-	if streamClient != nil {
-		r.streamClient = streamClient
-
-		sender := &streamingLogSender{client: streamClient}
-		r.logSink = logsink.NewDualWriteSink(log.GetSink(), sender)
-		r.log = logr.New(r.logSink)
+	telemetryMgr, err := telemetry.NewManager(ctx, r.log, telemetryCfg)
+	if err != nil {
+		log.Error(err, "failed to initialize telemetry manager, continuing without telemetry")
+	} else {
+		r.telemetryMgr = telemetryMgr
+		r.log = telemetryMgr.WithTelemetrySink()
 	}
 
 	// Build Kubernetes client
@@ -85,6 +83,7 @@ func newRunner(ctx context.Context, log logr.Logger, cfg *Config) (*runner, erro
 		return nil, fmt.Errorf("create k8s client: %w", err)
 	}
 	r.k8sClient = k8sClient
+	r.configBuilder = metadata.NewConfigBuilder(k8sClient, r.log)
 
 	// Register executors
 	factory := newExecutorFactoryRegistry()
@@ -95,14 +94,10 @@ func newRunner(ctx context.Context, log logr.Logger, cfg *Config) (*runner, erro
 
 // close cleans up runner resources.
 func (r *runner) close() {
-	// Stop log sink first to drain remaining logs
-	if r.logSink != nil {
-		r.logSink.Stop()
-	}
 	// Then close streaming client
-	if r.streamClient != nil {
-		if err := r.streamClient.Close(); err != nil {
-			r.log.Error(err, "failed to close streaming client")
+	if r.telemetryMgr != nil {
+		if err := r.telemetryMgr.Close(); err != nil {
+			r.log.Error(err, "failed to close telemetry manager")
 		}
 	}
 }
@@ -122,12 +117,14 @@ func (r *runner) run(ctx context.Context) (*executor.Result, error) {
 	log.Info("starting runner")
 
 	// Start heartbeat if streaming is available
-	if r.streamClient != nil {
-		r.streamClient.StartHeartbeat(30 * time.Second)
+	if r.telemetryMgr != nil {
+		r.telemetryMgr.StartHeartbeat(30 * time.Second)
 	}
 
 	// Report progress: initializing
-	r.reportProgress(ctx, "initializing", 10, "Loading executors")
+	if r.telemetryMgr != nil {
+		r.telemetryMgr.ReportProgress(ctx, "initializing", 10, "Loading executors")
+	}
 
 	// Get the executor
 	exec, ok := r.registry.Get(cfg.TargetType)
@@ -147,7 +144,9 @@ func (r *runner) run(ctx context.Context) (*executor.Result, error) {
 	}
 
 	// Report progress: building spec
-	r.reportProgress(ctx, "preparing", 20, "Building executor spec")
+	if r.telemetryMgr != nil {
+		r.telemetryMgr.ReportProgress(ctx, "preparing", 20, "Building executor spec")
+	}
 
 	// Build executor spec from connector
 	spec, flusher, err := r.buildExecutorSpec(ctx, params)
@@ -157,14 +156,18 @@ func (r *runner) run(ctx context.Context) (*executor.Result, error) {
 	}
 
 	// Validate the spec
-	r.reportProgress(ctx, "validating", 30, "Validating executor spec")
+	if r.telemetryMgr != nil {
+		r.telemetryMgr.ReportProgress(ctx, "validating", 30, "Validating executor spec")
+	}
 	if err := exec.Validate(*spec); err != nil {
 		r.log.Error(err, "spec validation failed")
 		return nil, fmt.Errorf("validate spec: %w", err)
 	}
 
 	// Report progress: executing
-	r.reportProgress(ctx, "executing", 50, fmt.Sprintf("Executing %s operation", cfg.Operation))
+	if r.telemetryMgr != nil {
+		r.telemetryMgr.ReportProgress(ctx, "executing", 50, fmt.Sprintf("Executing %s operation", cfg.Operation))
+	}
 
 	// Execute the operation
 	result, err := r.executeOperation(ctx, exec, spec, flusher)
@@ -174,12 +177,16 @@ func (r *runner) run(ctx context.Context) (*executor.Result, error) {
 		if cfg.Operation == "shutdown" {
 			r.log.Error(err, "shutdown failed")
 		}
-		r.reportCompletion(ctx, false, err.Error(), result.ElapsedMs)
+		if r.telemetryMgr != nil {
+			r.telemetryMgr.ReportCompletion(ctx, false, err.Error(), result.ElapsedMs)
+		}
 		return nil, err
 	}
 
 	// Report progress: finalizing
-	r.reportProgress(ctx, "finalizing", 90, "Finalizing operation")
+	if r.telemetryMgr != nil {
+		r.telemetryMgr.ReportProgress(ctx, "finalizing", 90, "Finalizing operation")
+	}
 
 	// Wake-up success: mark target as restored for cleanup coordination
 	if cfg.Operation == "wakeup" {
@@ -197,7 +204,9 @@ func (r *runner) run(ctx context.Context) (*executor.Result, error) {
 
 	// Report completion to controller (status only, no restore data payload)
 	// The controller reads restore data from ConfigMap during wake-up
-	r.reportCompletion(ctx, true, "", result.ElapsedMs)
+	if r.telemetryMgr != nil {
+		r.telemetryMgr.ReportCompletion(ctx, true, "", result.ElapsedMs)
+	}
 
 	return result, nil
 }
@@ -234,7 +243,7 @@ func (r *runner) executeOperation(ctx context.Context, exec executor.Executor, s
 			executorResult = result
 		}
 	case "wakeup":
-		rd, err := r.loadRestoreData(ctx)
+		rd, err := state.LoadRestoreData(ctx, r.k8sClient, r.log, r.cfg.Namespace, r.cfg.Plan, r.cfg.Target)
 		if err != nil {
 			operationErr = fmt.Errorf("load restore data: %w", err)
 			break
@@ -284,482 +293,18 @@ func (r *runner) buildExecutorSpec(ctx context.Context, params map[string]any) (
 	// Add incremental save callback for shutdown operations
 	var flusher func() error
 	if r.cfg.Operation == "shutdown" {
-		spec.SaveRestoreData, flusher = r.createSaveRestoreDataCallback(ctx)
+		callback, flush := state.NewReportStateHandlers(ctx, r.k8sClient, r.log, r.cfg.Namespace, r.cfg.Plan, r.cfg.Target, r.cfg.TargetType)
+		spec.ReportStateCallback = callback
+		flusher = flush
 	}
 
-	switch r.cfg.ConnectorKind {
-	case "CloudProvider":
-		if err := r.loadCloudProviderConfig(ctx, spec); err != nil {
+	if r.cfg.ConnectorKind == "CloudProvider" || r.cfg.ConnectorKind == "K8SCluster" {
+		connectorCfg, err := r.configBuilder.BuildConnectorConfig(ctx, r.cfg.ConnectorKind, r.cfg.ConnectorNamespace, r.cfg.ConnectorName)
+		if err != nil {
 			return nil, nil, err
 		}
-	case "K8SCluster":
-		if err := r.loadK8SClusterConfig(ctx, spec); err != nil {
-			return nil, nil, err
-		}
+		spec.ConnectorConfig = connectorCfg
 	}
 
 	return spec, flusher, nil
-}
-
-const (
-	awsAccessKeyIDKey     = "AWS_ACCESS_KEY_ID"
-	awsSecretAccessKeyKey = "AWS_SECRET_ACCESS_KEY"
-	awsSessionToken       = "AWS_SESSION_TOKEN"
-	kubeconfigKey         = "kubeconfig"
-)
-
-func resolveNamespace(defaultNamespace, override string) string {
-	if override != "" {
-		return override
-	}
-	return defaultNamespace
-}
-
-// loadCloudProviderConfig populates the spec with CloudProvider configuration.
-func (r *runner) loadCloudProviderConfig(ctx context.Context, spec *executor.Spec) error {
-	provider, err := r.getCloudProvider(ctx, r.cfg.ConnectorNamespace, r.cfg.ConnectorName)
-	if err != nil {
-		return err
-	}
-
-	awsCfg, err := r.buildAWSConnectorConfig(ctx, &provider)
-	if err != nil {
-		return err
-	}
-
-	spec.ConnectorConfig.AWS = awsCfg
-	return nil
-}
-
-func (r *runner) getCloudProvider(ctx context.Context, namespace, name string) (hibernatorv1alpha1.CloudProvider, error) {
-	var provider hibernatorv1alpha1.CloudProvider
-	key := client.ObjectKey{
-		Namespace: namespace,
-		Name:      name,
-	}
-	if err := r.k8sClient.Get(ctx, key, &provider); err != nil {
-		return provider, fmt.Errorf("get CloudProvider: %w", err)
-	}
-	return provider, nil
-}
-
-func (r *runner) buildAWSConnectorConfig(ctx context.Context, provider *hibernatorv1alpha1.CloudProvider) (*executor.AWSConnectorConfig, error) {
-	if provider.Spec.Type != hibernatorv1alpha1.CloudProviderAWS {
-		return nil, fmt.Errorf("unsupported cloud provider type: %s", provider.Spec.Type)
-	}
-	if provider.Spec.AWS == nil {
-		return nil, fmt.Errorf("AWS config is required")
-	}
-
-	awsCfg := &executor.AWSConnectorConfig{
-		Region:    provider.Spec.AWS.Region,
-		AccountID: provider.Spec.AWS.AccountId,
-	}
-
-	// AssumeRoleArn is now at AWS spec level (cross-cutting for both auth methods)
-	if provider.Spec.AWS.AssumeRoleArn != "" {
-		awsCfg.AssumeRoleArn = provider.Spec.AWS.AssumeRoleArn
-	}
-
-	if provider.Spec.AWS.Auth.Static != nil {
-		ref := provider.Spec.AWS.Auth.Static.SecretRef
-		secretNamespace := resolveNamespace(provider.Namespace, ref.Namespace)
-		secret, err := r.getSecret(ctx, secretNamespace, ref.Name)
-		if err != nil {
-			return nil, err
-		}
-
-		accessKeyID := string(secret.Data[awsAccessKeyIDKey])
-		secretAccessKey := string(secret.Data[awsSecretAccessKeyKey])
-		if accessKeyID == "" || secretAccessKey == "" {
-			return nil, fmt.Errorf("AWS static credentials must include %s and %s", awsAccessKeyIDKey, awsSecretAccessKeyKey)
-		}
-
-		awsCfg.AccessKeyID = accessKeyID
-		awsCfg.SecretAccessKey = secretAccessKey
-
-		session, ok := secret.Data[awsSessionToken]
-		if ok {
-			awsCfg.SessionToken = string(session)
-		}
-	}
-
-	return awsCfg, nil
-}
-
-func (r *runner) getSecret(ctx context.Context, namespace, name string) (*corev1.Secret, error) {
-	var secret corev1.Secret
-	key := client.ObjectKey{
-		Namespace: namespace,
-		Name:      name,
-	}
-	if err := r.k8sClient.Get(ctx, key, &secret); err != nil {
-		return nil, fmt.Errorf("get Secret %s/%s: %w", namespace, name, err)
-	}
-	return &secret, nil
-}
-
-// loadK8SClusterConfig populates the spec with K8SCluster configuration.
-func (r *runner) loadK8SClusterConfig(ctx context.Context, spec *executor.Spec) error {
-	var cluster hibernatorv1alpha1.K8SCluster
-	key := client.ObjectKey{
-		Namespace: r.cfg.ConnectorNamespace,
-		Name:      r.cfg.ConnectorName,
-	}
-	if err := r.k8sClient.Get(ctx, key, &cluster); err != nil {
-		return fmt.Errorf("get K8SCluster: %w", err)
-	}
-
-	if cluster.Spec.EKS != nil && cluster.Spec.K8S != nil {
-		return fmt.Errorf("spec.eks and spec.k8s are mutually exclusive")
-	}
-
-	if cluster.Spec.EKS != nil {
-		if cluster.Spec.ProviderRef == nil {
-			return fmt.Errorf("providerRef is required for EKS clusters")
-		}
-
-		providerNamespace := resolveNamespace(cluster.Namespace, cluster.Spec.ProviderRef.Namespace)
-		provider, err := r.getCloudProvider(ctx, providerNamespace, cluster.Spec.ProviderRef.Name)
-		if err != nil {
-			return err
-		}
-
-		awsCfg, err := r.buildAWSConnectorConfig(ctx, &provider)
-		if err != nil {
-			return err
-		}
-
-		if cluster.Spec.EKS.Region != "" {
-			awsCfg.Region = cluster.Spec.EKS.Region
-		}
-
-		awsSDKConfig, err := awsutil.BuildAWSConfig(ctx, awsCfg)
-		if err != nil {
-			return err
-		}
-
-		eksClient := eks.NewFromConfig(awsSDKConfig)
-		clusterInfo, err := eksClient.DescribeCluster(ctx, &eks.DescribeClusterInput{
-			Name: aws.String(cluster.Spec.EKS.Name),
-		})
-		if err != nil {
-			return fmt.Errorf("describe EKS cluster: %w", err)
-		}
-
-		if clusterInfo.Cluster == nil {
-			return fmt.Errorf("EKS cluster %s not found", cluster.Spec.EKS.Name)
-		}
-
-		endpoint := aws.ToString(clusterInfo.Cluster.Endpoint)
-		if endpoint == "" {
-			return fmt.Errorf("EKS cluster endpoint not available")
-		}
-
-		caData := aws.ToString(clusterInfo.Cluster.CertificateAuthority.Data)
-		if caData == "" {
-			return fmt.Errorf("EKS cluster certificate authority data missing")
-		}
-
-		decodedCA, err := base64.StdEncoding.DecodeString(caData)
-		if err != nil {
-			return fmt.Errorf("decode EKS certificate authority data: %w", err)
-		}
-
-		spec.ConnectorConfig.K8S = &executor.K8SConnectorConfig{
-			ClusterName:     cluster.Spec.EKS.Name,
-			Region:          cluster.Spec.EKS.Region,
-			ClusterEndpoint: endpoint,
-			ClusterCAData:   decodedCA,
-			UseEKSToken:     true,
-			AWS:             awsCfg,
-		}
-		return nil
-	}
-
-	if cluster.Spec.K8S != nil {
-		if cluster.Spec.K8S.InCluster {
-			spec.ConnectorConfig.K8S = &executor.K8SConnectorConfig{}
-			return nil
-		}
-
-		if cluster.Spec.K8S.KubeconfigRef != nil {
-			ref := cluster.Spec.K8S.KubeconfigRef
-			secretNamespace := resolveNamespace(cluster.Namespace, ref.Namespace)
-			secret, err := r.getSecret(ctx, secretNamespace, ref.Name)
-			if err != nil {
-				return err
-			}
-			kubeconfigBytes := secret.Data[kubeconfigKey]
-			if len(kubeconfigBytes) == 0 {
-				return fmt.Errorf("kubeconfig secret %s/%s missing %s key", secretNamespace, ref.Name, kubeconfigKey)
-			}
-
-			spec.ConnectorConfig.K8S = &executor.K8SConnectorConfig{
-				Kubeconfig: kubeconfigBytes,
-			}
-			return nil
-		}
-
-		return fmt.Errorf("kubeconfigRef or inCluster must be specified for K8S access")
-	}
-
-	if cluster.Spec.GKE != nil {
-		spec.ConnectorConfig.K8S = &executor.K8SConnectorConfig{
-			ClusterName: cluster.Spec.GKE.Name,
-			Region:      cluster.Spec.GKE.Location,
-		}
-	}
-
-	return nil
-}
-
-// restoreDataAccumulator batches incremental saves in memory before flushing to ConfigMap.
-// This reduces Kubernetes API calls from N*2 to 1 (where N = number of resources).
-type restoreDataAccumulator struct {
-	mu          sync.Mutex
-	liveKeys    map[string]any // Actual state captured via API (isLive=true)
-	nonLiveKeys map[string]any // Cached/unknown state (isLive=false)
-	log         logr.Logger
-}
-
-// add accumulates a key-value pair in memory with per-key quality tracking.
-func (a *restoreDataAccumulator) add(key string, value any, isLive bool) error {
-	a.mu.Lock()
-	defer a.mu.Unlock()
-
-	// Track quality per key by storing in separate maps
-	if isLive {
-		a.liveKeys[key] = value
-		// Remove from nonLive if it was there (quality upgrade)
-		delete(a.nonLiveKeys, key)
-	} else {
-		// Only add to nonLive if NOT already in live (preserve higher quality)
-		if _, existsInLive := a.liveKeys[key]; !existsInLive {
-			a.nonLiveKeys[key] = value
-		}
-	}
-
-	a.log.V(1).Info("restore data accumulated in memory",
-		"key", key,
-		"isLive", isLive,
-		"totalLiveKeys", len(a.liveKeys),
-		"totalNonLiveKeys", len(a.nonLiveKeys),
-	)
-	return nil
-}
-
-// flush saves all accumulated data to ConfigMap in separate batches by quality.
-// This preserves per-key quality information during merge while batching API calls.
-//
-// If no data was accumulated (executor performed a no-op shutdown), an empty-state
-// restore point is written so that a subsequent wakeup can proceed without error.
-// An empty restore point is valid: the executor had nothing to capture, and wakeup
-// will receive an empty State map which it should handle as a no-op.
-func (a *restoreDataAccumulator) flush(ctx context.Context, rm *restore.Manager, namespace, plan, target, executorType string) error {
-	a.mu.Lock()
-	defer a.mu.Unlock()
-
-	log := a.log.WithValues("plan", fmt.Sprintf("%s/%s", namespace, plan), "target", target)
-
-	totalKeys := len(a.liveKeys) + len(a.nonLiveKeys)
-	if totalKeys == 0 {
-		// Executor performed a no-op shutdown — nothing was captured. Write an
-		// empty restore point so wakeup does not fail with "no restore data found".
-		log.Info("executor captured no restore data; writing empty restore point")
-		emptyData := &restore.Data{
-			Target:     target,
-			Executor:   executorType,
-			Version:    1,
-			CreatedAt:  metav1.Now(),
-			IsLive:     true,
-			CapturedAt: time.Now().Format(time.RFC3339),
-			State:      nil,
-		}
-		return rm.SaveOrPreserve(ctx, namespace, plan, target, emptyData)
-	}
-
-	// Flush high-quality (isLive=true) keys first
-	if len(a.liveKeys) > 0 {
-		liveData := &restore.Data{
-			Target:     target,
-			Executor:   executorType,
-			Version:    1,
-			CreatedAt:  metav1.Now(),
-			IsLive:     true,
-			CapturedAt: time.Now().Format(time.RFC3339),
-			State:      a.liveKeys,
-		}
-
-		if err := rm.SaveOrPreserve(ctx, namespace, plan, target, liveData); err != nil {
-			return fmt.Errorf("flush live keys to ConfigMap: %w", err)
-		}
-
-		log.Info("restore data (live) flushed to ConfigMap",
-			"liveKeys", len(a.liveKeys))
-	}
-
-	// Flush low-quality (isLive=false) keys
-	if len(a.nonLiveKeys) > 0 {
-		nonLiveData := &restore.Data{
-			Target:     target,
-			Executor:   executorType,
-			Version:    1,
-			CreatedAt:  metav1.Now(),
-			IsLive:     false,
-			CapturedAt: time.Now().Format(time.RFC3339),
-			State:      a.nonLiveKeys,
-		}
-
-		if err := rm.SaveOrPreserve(ctx, namespace, plan, target, nonLiveData); err != nil {
-			return fmt.Errorf("flush non-live keys to ConfigMap: %w", err)
-		}
-
-		log.Info("restore data (non-live) flushed to ConfigMap",
-			"nonLiveKeys", len(a.nonLiveKeys))
-	}
-
-	return nil
-}
-
-// createSaveRestoreDataCallback returns a callback function and flush function for batched persistence.
-// The callback accumulates saves in memory; flush writes accumulated data in two API calls (live + non-live).
-// This reduces API calls significantly (1000 resources: 2000 calls → 2 calls) while preserving per-key quality.
-func (r *runner) createSaveRestoreDataCallback(ctx context.Context) (executor.SaveRestoreDataFunc, func() error) {
-	accumulator := &restoreDataAccumulator{
-		liveKeys:    make(map[string]any),
-		nonLiveKeys: make(map[string]any),
-		log:         r.log,
-	}
-
-	// Callback: accumulate in memory (no API call)
-	callback := func(key string, value any, isLive bool) error {
-		return accumulator.add(key, value, isLive)
-	}
-
-	// Flush function: save all accumulated data at once
-	flush := func() error {
-		rm := restore.NewManager(r.k8sClient)
-		return accumulator.flush(ctx, rm, r.cfg.Namespace, r.cfg.Plan, r.cfg.Target, r.cfg.TargetType)
-	}
-
-	return callback, flush
-}
-
-// loadRestoreData retrieves restore data from ConfigMap.
-func (r *runner) loadRestoreData(ctx context.Context) (*executor.RestoreData, error) {
-	log := r.log.WithValues("plan", fmt.Sprintf("%s/%s", r.cfg.Namespace, r.cfg.Plan), "target", r.cfg.Target)
-
-	restoreMgr := restore.NewManager(r.k8sClient)
-
-	data, err := restoreMgr.Load(ctx, r.cfg.Namespace, r.cfg.Plan, r.cfg.Target)
-	if err != nil {
-		return nil, fmt.Errorf("load from ConfigMap: %w", err)
-	}
-
-	if data == nil {
-		return nil, fmt.Errorf("no restore data found for plan=%s target=%s", r.cfg.Plan, r.cfg.Target)
-	}
-
-	// Convert state map to unified map[string]json.RawMessage format
-	transormedData := make(map[string]json.RawMessage)
-	for key, value := range data.State {
-		valueBytes, err := json.Marshal(value)
-		if err != nil {
-			return nil, fmt.Errorf("marshal state value for key %s: %w", key, err)
-		}
-		transormedData[key] = valueBytes
-	}
-
-	if len(transormedData) == 0 {
-		log.Info("restore point exists but contains no state (no-op shutdown); wakeup will proceed with empty restore data")
-	}
-
-	return &executor.RestoreData{
-		Type:   data.Executor,
-		Data:   transormedData,
-		IsLive: data.IsLive,
-	}, nil
-}
-
-// ----------------------------------------------------------------------------
-// Streaming Helpers
-// ----------------------------------------------------------------------------
-
-// initStreamingClient initializes the streaming client based on configuration.
-func initStreamingClient(ctx context.Context, log logr.Logger, cfg *Config) (streamclient.StreamingClient, error) {
-	log = log.WithName("streamingclient")
-	if cfg.GRPCEndpoint == "" && cfg.WebSocketEndpoint == "" && cfg.HTTPCallbackEndpoint == "" && cfg.ControlPlaneEndpoint == "" {
-		log.Info("no streaming endpoints configured, skipping streaming client")
-		return nil, nil
-	}
-
-	grpcEndpoint := cfg.GRPCEndpoint
-	webSocketEndpoint := cfg.WebSocketEndpoint
-	httpCallbackEndpoint := cfg.HTTPCallbackEndpoint
-
-	clientCfg := streamclient.ClientConfig{
-		Type:         streamclient.ClientTypeAuto,
-		GRPCAddress:  grpcEndpoint,
-		WebSocketURL: webSocketEndpoint,
-		WebhookURL:   httpCallbackEndpoint,
-		ExecutionID:  cfg.ExecutionID,
-		TokenPath:    cfg.TokenPath,
-		UseTLS:       cfg.UseTLS,
-		Timeout:      30 * time.Second,
-		Log:          log,
-	}
-
-	client, err := streamclient.NewClient(clientCfg)
-	if err != nil {
-		return nil, fmt.Errorf("create streaming client: %w", err)
-	}
-
-	if err := client.Connect(ctx); err != nil {
-		return nil, fmt.Errorf("connect to streaming server: %w", err)
-	}
-
-	log.Info("streaming client connected",
-		"grpcEndpoint", grpcEndpoint,
-		"webSocketEndpoint", webSocketEndpoint,
-		"httpCallbackEndpoint", httpCallbackEndpoint,
-	)
-
-	return client, nil
-}
-
-// reportProgress reports execution progress via streaming client.
-func (r *runner) reportProgress(ctx context.Context, phase string, percent int32, message string) {
-	// Always log to stdout (via DualWriteSink which also streams)
-	r.log.Info("progress",
-		"phase", phase,
-		"percent", percent,
-		"message", message,
-	)
-
-	// Report progress separately via ReportProgress RPC
-	if r.streamClient != nil {
-		if err := r.streamClient.ReportProgress(ctx, phase, percent, message); err != nil {
-			r.log.Info("failed to report progress", "error", err.Error())
-
-		}
-	}
-}
-
-// reportCompletion reports execution completion via streaming client.
-// Note: Restore data is persisted directly to ConfigMap, not sent via streaming.
-func (r *runner) reportCompletion(ctx context.Context, success bool, errorMsg string, durationMs int64) {
-	// Always log to stdout
-	r.log.Info("completion",
-		"success", success,
-		"durationMs", durationMs,
-		"errorMessage", errorMsg,
-	)
-
-	// Stream to control plane if available
-	if r.streamClient != nil {
-		if err := r.streamClient.ReportCompletion(ctx, success, errorMsg, durationMs); err != nil {
-			r.log.Info("failed to report completion", "error", err.Error())
-		}
-	}
 }

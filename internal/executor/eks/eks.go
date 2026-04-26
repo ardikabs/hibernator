@@ -211,7 +211,7 @@ func (e *Executor) Shutdown(ctx context.Context, log logr.Logger, spec executor.
 			"nodeGroup", ngName,
 		)
 
-		outcome, err := e.scaleNodeGroupToZero(ctx, log, eksClient, k8sClient, clusterName, ngName, params, spec.SaveRestoreData)
+		outcome, err := e.scaleNodeGroupToZero(ctx, log, eksClient, k8sClient, clusterName, ngName, params, spec.ReportStateCallback)
 		if err != nil {
 			log.Error(err, "failed to scale node group",
 				"clusterName", clusterName,
@@ -416,7 +416,7 @@ func (e *Executor) listNodeGroups(ctx context.Context, client EKSClient, cluster
 	return out.Nodegroups, nil
 }
 
-func (e *Executor) scaleNodeGroupToZero(ctx context.Context, log logr.Logger, eksClient EKSClient, k8sClient K8SClient, clusterName, ngName string, params Parameters, callback executor.SaveRestoreDataFunc) (operationOutcome, error) {
+func (e *Executor) scaleNodeGroupToZero(ctx context.Context, log logr.Logger, eksClient EKSClient, k8sClient K8SClient, clusterName, ngName string, params Parameters, callback executor.ReportStateCallback) (operationOutcome, error) {
 	// Get current state
 	desc, err := eksClient.DescribeNodegroup(ctx, &eks.DescribeNodegroupInput{
 		ClusterName:   aws.String(clusterName),
@@ -488,9 +488,8 @@ func (e *Executor) scaleNodeGroupToZero(ctx context.Context, log logr.Logger, ek
 	}
 
 	// Incremental save: persist this node group's restore data immediately.
-	// isLive=true because hibernator captured this state directly from the DescribeNodegroup API call.
 	if callback != nil {
-		if err := callback(ngName, state, true); err != nil {
+		if err := callback(ngName, state); err != nil {
 			log.Error(err, "failed to save restore data incrementally", "nodeGroup", ngName)
 			// Continue processing - save at end as fallback
 		}
