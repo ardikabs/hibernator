@@ -118,8 +118,8 @@ func (e *Executor) Shutdown(ctx context.Context, log logr.Logger, spec executor.
 	}
 
 	// Incremental save: persist this instance's restore data immediately
-	if spec.SaveRestoreData != nil {
-		if err := spec.SaveRestoreData(spec.TargetName, state, true); err != nil {
+	if spec.ReportStateCallback != nil {
+		if err := spec.ReportStateCallback(spec.TargetName, state); err != nil {
 			log.Error(err, "failed to save restore data incrementally", "target", spec.TargetName)
 			// Continue processing - save at end as fallback
 		}

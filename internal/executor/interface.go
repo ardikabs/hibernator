@@ -40,17 +40,17 @@ type RestoreData struct {
 	IsLive bool `json:"isLive"`
 }
 
-// SaveRestoreDataFunc is a callback for incremental restore data persistence.
-// Executors can call this after each successful sub-resource operation to save
+// ReportStateCallback is a callback for incremental restore data persistence.
+// Executors call this after each successful sub-resource operation to save
 // restore data incrementally, preventing data loss on partial failures.
+// Any data reported through this callback is inherently "live" — the executor
+// just captured it from the actual cloud/cluster API.
+//
 // Parameters:
 //
 //	key: Resource-specific key (e.g., instanceID, nodeGroupName)
 //	value: Resource state (will be JSON-marshaled by callback implementation)
-//	isLive: Whether data was captured from actual resource state via API (true) or is
-//	        cached/unknown (false). True indicates hibernator directly observed the
-//	        resource state, false indicates data may be stale or from incomplete lifecycle.
-type SaveRestoreDataFunc func(key string, value interface{}, isLive bool) error
+type ReportStateCallback func(key string, value interface{}) error
 
 // Spec holds target execution parameters.
 type Spec struct {
@@ -62,10 +62,10 @@ type Spec struct {
 	Parameters json.RawMessage
 	// ConnectorConfig holds resolved connector configuration.
 	ConnectorConfig ConnectorConfig
-	// SaveRestoreData is an optional callback for incremental persistence.
+	// ReportStateCallback is an optional callback for incremental persistence.
 	// If provided, executors should call this after each successful sub-resource
 	// operation to enable partial-success data preservation.
-	SaveRestoreData SaveRestoreDataFunc
+	ReportStateCallback ReportStateCallback
 }
 
 // ConnectorConfig holds resolved connector settings.
@@ -104,7 +104,7 @@ type Executor interface {
 	Validate(spec Spec) error
 
 	// Shutdown performs the hibernation operation.
-	// Restore data should be saved incrementally via spec.SaveRestoreData callback.
+	// Restore data should be saved incrementally via spec.ReportStateCallback.
 	// Returns a Result with a summary message on success.
 	Shutdown(ctx context.Context, log logr.Logger, spec Spec) (*Result, error)
 

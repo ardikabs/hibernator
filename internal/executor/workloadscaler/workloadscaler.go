@@ -210,7 +210,7 @@ func (e *Executor) Shutdown(ctx context.Context, log logr.Logger, spec executor.
 				return nil, fmt.Errorf("resolve GVR for %s: %w", kind, err)
 			}
 
-			counts, err := e.scaleDownWorkloads(ctx, log, client, ns, gvr, params.WorkloadSelector, params, spec.SaveRestoreData)
+			counts, err := e.scaleDownWorkloads(ctx, log, client, ns, gvr, params.WorkloadSelector, params, spec.ReportStateCallback)
 			if err != nil {
 				return nil, fmt.Errorf("scale down %s in namespace %s: %w", kind, ns, err)
 			}
@@ -398,7 +398,7 @@ func (e *Executor) scaleDownWorkloads(ctx context.Context,
 	gvr schema.GroupVersionResource,
 	workloadSelector *metav1.LabelSelector,
 	params executorparams.WorkloadScalerParameters,
-	callback executor.SaveRestoreDataFunc) (operationStats, error) {
+	callback executor.ReportStateCallback) (operationStats, error) {
 
 	// Convert label selector to Kubernetes labels.Selector
 	selector, err := metav1.LabelSelectorAsSelector(workloadSelector)
@@ -511,9 +511,8 @@ func (e *Executor) scaleDownWorkloads(ctx context.Context,
 		}
 
 		// Incremental save: persist this workload's restore data immediately.
-		// isLive=true because hibernator captured this state directly from the GetScale API call.
 		if callback != nil {
-			if err := callback(key, state, true); err != nil {
+			if err := callback(key, state); err != nil {
 				log.Error(err, "failed to save restore data incrementally", "workload", key)
 				// Continue processing - save at end as fallback
 			}

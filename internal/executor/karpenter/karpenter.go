@@ -177,7 +177,7 @@ func (e *Executor) Shutdown(ctx context.Context, log logr.Logger, spec executor.
 	// Process each NodePool
 	for _, nodePoolName := range targetNodePools {
 		log.Info("scaling down NodePool", "nodePool", nodePoolName)
-		outcome, err := e.scaleDownNodePool(ctx, log, client, nodePoolName, params, spec.SaveRestoreData)
+		outcome, err := e.scaleDownNodePool(ctx, log, client, nodePoolName, params, spec.ReportStateCallback)
 		if err != nil {
 			log.Error(err, "failed to scale down NodePool", "nodePool", nodePoolName)
 			return nil, fmt.Errorf("scale down NodePool %s: %w", nodePoolName, err)
@@ -358,7 +358,7 @@ type NodePoolState struct {
 // scaleDownNodePool deletes the NodePool to remove all managed nodes.
 // Returns: (state, existed, error)
 // - existed: true if NodePool was found and deleted, false if already NotFound
-func (e *Executor) scaleDownNodePool(ctx context.Context, log logr.Logger, client Client, nodePoolName string, params executorparams.KarpenterParameters, callback executor.SaveRestoreDataFunc) (operationOutcome, error) {
+func (e *Executor) scaleDownNodePool(ctx context.Context, log logr.Logger, client Client, nodePoolName string, params executorparams.KarpenterParameters, callback executor.ReportStateCallback) (operationOutcome, error) {
 	nodePoolGVR := schema.GroupVersionResource{
 		Group:    "karpenter.sh",
 		Version:  "v1",
@@ -416,7 +416,7 @@ func (e *Executor) scaleDownNodePool(ctx context.Context, log logr.Logger, clien
 
 	// Incremental save: persist this NodePool's restore data immediately
 	if callback != nil {
-		if err := callback(nodePoolName, state, true); err != nil {
+		if err := callback(nodePoolName, state); err != nil {
 			log.Error(err, "failed to save restore data incrementally", "nodePool", nodePoolName)
 			// Continue processing - save at end as fallback
 		}
