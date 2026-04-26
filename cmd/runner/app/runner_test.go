@@ -46,7 +46,7 @@ type fakeExecutor struct {
 	shutdownErr error
 	wakeupErr   error
 
-	// restoreKeysToEmit: if non-nil, Shutdown will call spec.SaveRestoreData
+	// restoreKeysToEmit: if non-nil, Shutdown will call spec.ReportStateCallback
 	// once per entry, simulating an executor that emits restore state.
 	restoreKeysToEmit map[string]any
 
@@ -61,9 +61,9 @@ func (f *fakeExecutor) Validate(_ executor.Spec) error { return f.validateErr }
 
 func (f *fakeExecutor) Shutdown(_ context.Context, _ logr.Logger, spec executor.Spec) (*executor.Result, error) {
 	f.shutdownCalled = true
-	if spec.SaveRestoreData != nil {
+	if spec.ReportStateCallback != nil {
 		for k, v := range f.restoreKeysToEmit {
-			if err := spec.SaveRestoreData(k, v, true); err != nil {
+			if err := spec.ReportStateCallback(k, v); err != nil {
 				return nil, fmt.Errorf("save restore data for %s: %w", k, err)
 			}
 		}
@@ -169,7 +169,7 @@ func readRestoreData(t *testing.T, fc client.Client) restore.Data {
 // ----------------------------------------------------------------------------
 
 // TestRunner_Shutdown_WritesRestorePoint verifies that when an executor emits
-// restore keys via spec.SaveRestoreData, flush persists them to a ConfigMap.
+// restore keys via spec.ReportStateCallback, flush persists them to a ConfigMap.
 func TestRunner_Shutdown_WritesRestorePoint(t *testing.T) {
 	fakeExec := &fakeExecutor{
 		typeVal: "fake",
@@ -191,7 +191,7 @@ func TestRunner_Shutdown_WritesRestorePoint(t *testing.T) {
 }
 
 // TestRunner_Shutdown_NoOp_WritesEmptyRestorePoint verifies that when an
-// executor never calls spec.SaveRestoreData, flush still writes an empty but
+// executor never calls spec.ReportStateCallback, flush still writes an empty but
 // valid restore point.  This prevents a subsequent wakeup from failing with
 // "no restore data found".
 func TestRunner_Shutdown_NoOp_WritesEmptyRestorePoint(t *testing.T) {
