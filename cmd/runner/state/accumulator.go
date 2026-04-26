@@ -9,7 +9,6 @@ import (
 	"context"
 	"fmt"
 	"sync"
-	"time"
 
 	"github.com/go-logr/logr"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -83,13 +82,14 @@ func (a *Accumulator) flush(ctx context.Context) error {
 
 	const maxStaleCount = 3
 
+	now := metav1.Now()
 	data := &restore.Data{
 		Target:     a.target,
 		Executor:   a.targetType,
 		Version:    1,
-		CreatedAt:  metav1.Now(),
+		CreatedAt:  now,
 		IsLive:     true,
-		CapturedAt: time.Now().Format(time.RFC3339),
+		CapturedAt: &now,
 		State:      a.state, // may be nil/empty for no-op shutdown
 	}
 

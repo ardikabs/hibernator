@@ -9,6 +9,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"time"
 
 	"github.com/ardikabs/hibernator/internal/wellknown"
 	corev1 "k8s.io/api/core/v1"
@@ -47,22 +48,70 @@ type Data struct {
 	// Version is a monotonic version for optimistic concurrency.
 	Version int64 `json:"version"`
 
-	// CreatedAt is when the restore data was created.
-	CreatedAt metav1.Time `json:"createdAt"`
-
 	// IsLive indicates if the restore data was captured from a running/active state.
 	// true = high quality (resources were running), false = low quality (resources already shutdown).
 	// IsLive resets to false when wakening from hibernation.
 	IsLive bool `json:"isLive"`
 
-	// CapturedAt is the ISO8601 timestamp when the restore data was captured by the executor.
-	CapturedAt string `json:"capturedAt,omitempty"`
+	// CreatedAt is when the restore data was created.
+	// This is set once when the restore data entry is first created and never changes.
+	CreatedAt metav1.Time `json:"createdAt"`
+
+	// CapturedAt is when the state was last captured/updated by the executor.
+	// This changes each time the state is updated during a hibernation cycle.
+	// When a target is first initialized without state, this will be nil.
+	CapturedAt *metav1.Time `json:"capturedAt,omitempty"`
 
 	// State contains executor-specific restore state.
 	State map[string]any `json:"state,omitempty"`
 
 	// StaleCounts tracks consecutive hibernation cycles where a resource was not reported by the executor.
 	StaleCounts map[string]int `json:"staleCounts,omitempty"`
+}
+
+// UnmarshalJSON implements custom JSON unmarshaling for backward compatibility.
+// It handles both old string format and new metav1.Time format for CapturedAt.
+func (d *Data) UnmarshalJSON(data []byte) error {
+	type DataAlias Data
+	aux := &struct {
+		CapturedAt interface{} `json:"capturedAt,omitempty"`
+		*DataAlias
+	}{
+		DataAlias: (*DataAlias)(d),
+	}
+
+	if err := json.Unmarshal(data, &aux); err != nil {
+		return err
+	}
+
+	// Handle CapturedAt backward compatibility
+	if aux.CapturedAt != nil {
+		switch v := aux.CapturedAt.(type) {
+		case string:
+			// Old format: parse string timestamp
+			if v != "" {
+				t, err := time.Parse(time.RFC3339, v)
+				if err != nil {
+					// Try alternative formats
+					t, err = time.Parse("2006-01-02T15:04:05Z", v)
+					if err != nil {
+						return fmt.Errorf("parse capturedAt string: %w", err)
+					}
+				}
+				mt := metav1.NewTime(t)
+				d.CapturedAt = &mt
+			}
+		case map[string]interface{}:
+			// New format: metav1.Time object
+			if sec, ok := v["seconds"].(float64); ok {
+				t := time.Unix(int64(sec), 0)
+				mt := metav1.NewTime(t)
+				d.CapturedAt = &mt
+			}
+		}
+	}
+
+	return nil
 }
 
 // configMapName generates the ConfigMap name for a plan's restore data.
@@ -280,9 +329,9 @@ func (m *Manager) SaveState(ctx context.Context, namespace, planName, targetName
 		Target:      data.Target,
 		Executor:    data.Executor,
 		Version:     data.Version,
-		CreatedAt:   data.CreatedAt,
 		IsLive:      true,
-		CapturedAt:  data.CapturedAt,
+		CreatedAt:   existing.CreatedAt, // Preserve original creation time
+		CapturedAt:  data.CapturedAt,    // Update to latest capture time
 		State:       mergedState,
 		StaleCounts: staleCounts,
 	}

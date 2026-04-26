@@ -132,13 +132,26 @@ func (p *JSONPrinter) printRestoreShowJSON(cm corev1.ConfigMap) (any, error) {
 		}
 
 		resourceCount := len(data.State)
+		staleCount := 0
+		for _, count := range data.StaleCounts {
+			if count > 0 {
+				staleCount++
+			}
+		}
+
+		capturedAtStr := ""
+		if data.CapturedAt != nil {
+			capturedAtStr = data.CapturedAt.Format(time.RFC3339)
+		}
+
 		output.RestorePoints = append(output.RestorePoints, RestorePointData{
-			Target:        data.Target,
-			Executor:      data.Executor,
-			IsLive:        data.IsLive,
-			CapturedAt:    data.CapturedAt,
-			ResourceCount: resourceCount,
-			CreatedAt:     data.CreatedAt.Format("2006-01-02T15:04:05Z"),
+			Target:         data.Target,
+			Executor:       data.Executor,
+			IsLive:         data.IsLive,
+			CapturedAt:     capturedAtStr,
+			ResourceCount:  resourceCount,
+			StaleResources: staleCount,
+			CreatedAt:      data.CreatedAt.Format("2006-01-02T15:04:05Z"),
 		})
 		output.TotalResources += resourceCount
 	}
@@ -322,7 +335,9 @@ func (p *JSONPrinter) restoreDetailToJSON(out *RestoreDetailOutput) RestoreDetai
 	result.Executor = data.Executor
 	result.IsLive = data.IsLive
 	result.CreatedAt = data.CreatedAt.Format(time.RFC3339)
-	result.CapturedAt = data.CapturedAt
+	if data.CapturedAt != nil {
+		result.CapturedAt = data.CapturedAt.Format(time.RFC3339)
+	}
 
 	return result
 }
@@ -333,13 +348,7 @@ func (p *JSONPrinter) restoreResourcesToJSON(out *RestoreResourcesOutput) Restor
 	}
 
 	for _, val := range out.ConfigMap.Data {
-		var data struct {
-			Target     string                 `json:"target"`
-			Executor   string                 `json:"executor"`
-			IsLive     bool                   `json:"isLive"`
-			CapturedAt string                 `json:"capturedAt"`
-			State      map[string]interface{} `json:"state"`
-		}
+		var data restore.Data
 		if err := json.Unmarshal([]byte(val), &data); err != nil {
 			continue
 		}
@@ -348,13 +357,25 @@ func (p *JSONPrinter) restoreResourcesToJSON(out *RestoreResourcesOutput) Restor
 			continue
 		}
 
-		for resourceID := range data.State {
+		capturedAtStr := ""
+		if data.CapturedAt != nil {
+			capturedAtStr = data.CapturedAt.Format(time.RFC3339)
+		}
+
+		for resourceID, state := range data.State {
+			staleCount := 0
+			if data.StaleCounts != nil {
+				staleCount = data.StaleCounts[resourceID]
+			}
+
 			result.Resources = append(result.Resources, RestoreResourceJSON{
 				ResourceID: resourceID,
 				Target:     data.Target,
 				Executor:   data.Executor,
 				IsLive:     data.IsLive,
-				CapturedAt: data.CapturedAt,
+				CapturedAt: capturedAtStr,
+				StaleCount: staleCount,
+				State:      state.(map[string]any),
 			})
 		}
 	}
