@@ -37,23 +37,27 @@ Only resources in their demanded state are captured and managed by hibernator. R
 When a resource is first captured during a hibernation cycle:
 
 1. **Intent is locked**: The `wasRunning` or `wasScaled` value is preserved indefinitely
-2. **Cycle tracking**: An internal `_managedByCycleID` field marks which cycle first captured the resource
-3. **Immutable intent**: On subsequent hibernation attempts (retries), the original intent is preserved even if the resource's current state has changed
+2. **Cycle tracking**: A `managedByCycleIDs` map tracks which cycle first captured each resource
+3. **Session preservation**: On subsequent hibernation attempts with the **same cycle ID** (retries), the original intent is preserved even if the resource's current state has changed
+4. **Fresh session**: A **different cycle ID** starts fresh — only resources currently in demanded state are tracked
 
 This ensures that:
-- **Retry safety**: If shutdown fails and user retries, the original intent from the first capture is preserved
-- **Consistency**: Once hibernator decides a resource should be managed, that decision persists until successful wakeup
-- **Idempotency**: Multiple shutdown attempts don't corrupt restore data
+- **Retry safety**: If shutdown fails and user retries with the same cycle ID, the original intent is preserved
+- **Consistency**: Once hibernator decides a resource should be managed, that decision persists until successful wakeup (within the same session)
+- **Clean slate**: New hibernation operations (different cycle ID) get fresh tracking without stale data
 
 ### Stale Resource Eviction
 
 If a resource is not reported for 3 consecutive hibernation cycles:
 
 1. The resource is evicted from restore data
-2. The `_managedByCycleID` marker is cleared
+2. The resource is removed from `managedByCycleIDs` tracking
 3. On the next hibernation, the resource can be freshly captured
 
 This prevents permanently retaining data for deleted or unmanageable resources while allowing temporary absences (e.g., API failures) without data loss.
+
+!!! note
+    The `managedByCycleIDs` tracking is stored separately from resource state and is not visible in the resource data itself. It is used internally for idempotency and session management.
 
 ### Edge Case Handling
 
@@ -63,10 +67,20 @@ This prevents permanently retaining data for deleted or unmanageable resources w
 - Hibernator's contract is: *"restore to the captured intent, but tolerate reality"*
 
 **Example EC2 flow:**
+
 ```
-Cycle 1 (abc123): Instance is running → captured with wasRunning=true
-Retry (def456):   Shutdown blocked, instance still running → wasRunning=true preserved
-WakeUp (ghi789):  Instance may be running/stopped/terminated → executor handles each case
+Cycle "hib-001" (first attempt):
+  Instance running → captured with wasRunning=true, tracked in managedByCycleIDs
+
+Retry "hib-001" (user restarts same operation):
+  Instance still running → wasRunning=true preserved (same cycle ID)
+  Instance stopped → marker preserved, state unchanged (user responsibility)
+
+New cycle "hib-002" (fresh hibernation):
+  Instance running → fresh capture with new cycle ID
+  Instance stopped → not tracked (different cycle ID, not in demanded state)
+
+WakeUp: Instance restored based on captured intent
 ```
 
 ## How Executors Run
