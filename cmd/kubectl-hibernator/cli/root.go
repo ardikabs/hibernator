@@ -6,9 +6,6 @@ Licensed under the Apache License, Version 2.0.
 package cli
 
 import (
-	"context"
-	"os"
-
 	"github.com/spf13/cobra"
 	"k8s.io/apimachinery/pkg/runtime"
 	clientgoscheme "k8s.io/client-go/kubernetes/scheme"
@@ -27,7 +24,6 @@ import (
 	"github.com/ardikabs/hibernator/cmd/kubectl-hibernator/cli/suspend"
 	"github.com/ardikabs/hibernator/cmd/kubectl-hibernator/cli/version"
 	"github.com/ardikabs/hibernator/cmd/kubectl-hibernator/common"
-	"github.com/ardikabs/hibernator/cmd/kubectl-hibernator/output"
 )
 
 var scheme = runtime.NewScheme()
@@ -63,12 +59,7 @@ Then use as:
   kubectl hibernator restart my-plan
   kubectl hibernator logs my-plan`,
 		PersistentPreRunE: func(cmd *cobra.Command, args []string) error {
-			if err := cmd.ValidateRequiredFlags(); err != nil {
-				output.FromContext(cmd.Context()).Error(err.Error())
-				return err
-			}
-
-			return nil
+			return cmd.ValidateRequiredFlags()
 		},
 		SilenceUsage:  true,
 		SilenceErrors: true,
@@ -92,8 +83,5 @@ Then use as:
 	cmd.AddCommand(restore.NewCommand(opts))
 	cmd.AddCommand(notification.NewCommand(opts))
 	cmd.AddCommand(logs.NewCommand(opts))
-
-	out := output.NewFormatter(os.Stdout, os.Stderr)
-	cmd.SetContext(output.WithFormatter(context.Background(), out))
 	return cmd
 }

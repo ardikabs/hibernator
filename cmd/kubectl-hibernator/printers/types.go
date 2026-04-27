@@ -172,11 +172,13 @@ type RestoreResourcesJSON struct {
 }
 
 type RestoreResourceJSON struct {
-	ResourceID string `json:"resourceId"`
-	Target     string `json:"target"`
-	Executor   string `json:"executor"`
-	IsLive     bool   `json:"isLive"`
-	CapturedAt string `json:"capturedAt,omitempty"`
+	ResourceID  string         `json:"resourceId"`
+	Target      string         `json:"target"`
+	Executor    string         `json:"executor"`
+	IsLive      bool           `json:"isLive"`
+	CapturedAt  string         `json:"capturedAt,omitempty"`
+	StaleCount  int            `json:"staleCount,omitempty"`
+	State       map[string]any `json:"state,omitempty"`
 }
 
 type ExceptionReferenceJSON struct {
@@ -224,12 +226,13 @@ type RestoreShowJSONOutput struct {
 }
 
 type RestorePointData struct {
-	Target        string `json:"target"`
-	Executor      string `json:"executor"`
-	IsLive        bool   `json:"isLive"`
-	CapturedAt    string `json:"capturedAt,omitempty"`
-	ResourceCount int    `json:"resourceCount"`
-	CreatedAt     string `json:"createdAt,omitempty"`
+	Target         string `json:"target"`
+	Executor       string `json:"executor"`
+	IsLive         bool   `json:"isLive"`
+	CapturedAt     string `json:"capturedAt,omitempty"`
+	ResourceCount  int    `json:"resourceCount"`
+	StaleResources int    `json:"staleResources,omitempty"`
+	CreatedAt      string `json:"createdAt,omitempty"`
 }
 
 // --- Notification types ---
@@ -344,4 +347,5 @@ type RestoreResource struct {
 	Executor   string `json:"executor"`
 	IsLive     bool   `json:"isLive"`
 	CapturedAt string `json:"capturedAt,omitempty"`
+	StaleCount int    `json:"staleCount,omitempty"`
 }

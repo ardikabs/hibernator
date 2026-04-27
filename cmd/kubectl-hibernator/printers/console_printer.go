@@ -328,7 +328,7 @@ func (p *ConsolePrinter) printSchedule(out *ScheduleOutput, w io.Writer) error {
 
 // printRestorePoint renders a summary table of all restore-point targets for `kubectl-hibernator restore show`.
 func (p *ConsolePrinter) printRestorePoint(cm corev1.ConfigMap, w io.Writer) error {
-	var totalResources int
+	var totalResources, totalStale int
 	var points []RestorePointData
 
 	for _, val := range cm.Data {
@@ -338,15 +338,29 @@ func (p *ConsolePrinter) printRestorePoint(cm corev1.ConfigMap, w io.Writer) err
 		}
 
 		resourceCount := len(data.State)
+		staleCount := 0
+		for _, count := range data.StaleCounts {
+			if count > 0 {
+				staleCount++
+			}
+		}
+
+		capturedAtStr := "-"
+		if data.CapturedAt != nil {
+			capturedAtStr = data.CapturedAt.Format("2006-01-02 15:04:05")
+		}
+
 		points = append(points, RestorePointData{
-			Target:        data.Target,
-			Executor:      data.Executor,
-			IsLive:        data.IsLive,
-			CapturedAt:    data.CapturedAt,
-			ResourceCount: resourceCount,
-			CreatedAt:     data.CreatedAt.Format("2006-01-02 15:04:05"),
+			Target:         data.Target,
+			Executor:       data.Executor,
+			IsLive:         data.IsLive,
+			ResourceCount:  resourceCount,
+			StaleResources: staleCount,
+			CreatedAt:      data.CreatedAt.Format("2006-01-02 15:04:05"),
+			CapturedAt:     capturedAtStr,
 		})
 		totalResources += resourceCount
+		totalStale += staleCount
 	}
 
 	tw := newTextWriter(w)
@@ -359,17 +373,24 @@ func (p *ConsolePrinter) printRestorePoint(cm corev1.ConfigMap, w io.Writer) err
 
 	// Summary header
 	tw.row("Total Resources:", totalResources)
+	if totalStale > 0 {
+		tw.row("Stale Resources:", totalStale)
+	}
 	tw.newline()
 
 	// Table of restore points by target
-	tw.header("Target", "Executor", "Live", "Resources", "Captured At")
+	tw.header("Target", "Executor", "Live", "Resources", "Stale", "Captured At")
 
 	for _, pt := range points {
 		live := "no"
 		if pt.IsLive {
 			live = "yes"
 		}
-		tw.row(pt.Target, pt.Executor, live, pt.ResourceCount, pt.CapturedAt)
+		staleStr := "-"
+		if pt.StaleResources > 0 {
+			staleStr = fmt.Sprintf("%d", pt.StaleResources)
+		}
+		tw.row(pt.Target, pt.Executor, live, pt.ResourceCount, staleStr, pt.CapturedAt)
 	}
 
 	return tw.flush()
@@ -391,14 +412,23 @@ func (p *ConsolePrinter) printRestoreResources(out *RestoreResourcesOutput, w io
 			continue
 		}
 
-		// Extract resource IDs from state
+		// Extract resource IDs from state with stale counts
+		capturedAtStr := "-"
+		if data.CapturedAt != nil {
+			capturedAtStr = data.CapturedAt.Format("2006-01-02 15:04:05")
+		}
 		for resourceID := range data.State {
+			staleCount := 0
+			if data.StaleCounts != nil {
+				staleCount = data.StaleCounts[resourceID]
+			}
 			resources = append(resources, RestoreResource{
 				ResourceID: resourceID,
 				Target:     data.Target,
 				Executor:   data.Executor,
 				IsLive:     data.IsLive,
-				CapturedAt: data.CapturedAt,
+				CapturedAt: capturedAtStr,
+				StaleCount: staleCount,
 			})
 		}
 	}
@@ -413,14 +443,18 @@ func (p *ConsolePrinter) printRestoreResources(out *RestoreResourcesOutput, w io
 	}
 
 	tw.newline()
-	tw.header("Resource ID", "Target", "Executor", "Live", "Captured At")
+	tw.header("Resource ID", "Target", "Executor", "Live", "Stale", "Captured At")
 
 	for _, r := range resources {
 		live := "no"
 		if r.IsLive {
 			live = "yes"
 		}
-		tw.row(r.ResourceID, r.Target, r.Executor, live, r.CapturedAt)
+		stale := "no"
+		if r.StaleCount > 0 {
+			stale = "yes"
+		}
+		tw.row(r.ResourceID, r.Target, r.Executor, live, stale, r.CapturedAt)
 	}
 
 	return tw.flush()
@@ -443,8 +477,8 @@ func (p *ConsolePrinter) printRestoreDetail(out *RestoreDetailOutput, w io.Write
 	tw.line("Metadata:")
 	tw.row("  Live:", data.IsLive)
 	tw.row("  Created At:", data.CreatedAt.Format(time.RFC3339))
-	if data.CapturedAt != "" {
-		tw.row("  Captured At:", data.CapturedAt)
+	if data.CapturedAt != nil {
+		tw.row("  Captured At:", data.CapturedAt.Format(time.RFC3339))
 	}
 	tw.newline()
 
