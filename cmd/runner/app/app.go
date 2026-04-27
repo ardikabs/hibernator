@@ -30,6 +30,7 @@ type Config struct {
 	Plan                 string        // HibernatePlan name
 	Namespace            string        // HibernatePlan namespace
 	ExecutionID          string        // Unique execution identifier
+	CycleID              string        // Current execution cycle ID for intent tracking
 	TargetParams         string        // JSON-encoded target parameters
 	ConnectorKind        string        // Connector kind (CloudProvider, K8SCluster)
 	ConnectorName        string        // Connector name
@@ -65,6 +66,7 @@ func ParseFlags() *Config {
 	// Environment variable overrides
 	envMappings := map[string]*string{
 		"HIBERNATOR_EXECUTION_ID":           &cfg.ExecutionID,
+		"HIBERNATOR_CYCLE_ID":               &cfg.CycleID,
 		"HIBERNATOR_CONTROL_PLANE_ENDPOINT": &cfg.ControlPlaneEndpoint,
 		"HIBERNATOR_GRPC_ENDPOINT":          &cfg.GRPCEndpoint,
 		"HIBERNATOR_WEBSOCKET_ENDPOINT":     &cfg.WebSocketEndpoint,

@@ -9,6 +9,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"maps"
 	"time"
 
 	"github.com/ardikabs/hibernator/internal/wellknown"
@@ -67,6 +68,11 @@ type Data struct {
 
 	// StaleCounts tracks consecutive hibernation cycles where a resource was not reported by the executor.
 	StaleCounts map[string]int `json:"staleCounts,omitempty"`
+
+	// ManagedByCycleIDs tracks which execution cycle first captured each resource in demanded state.
+	// This is used for intent preservation - resources marked with a cycle ID have their
+	// wasRunning/wasScaled intent preserved across hibernation retries.
+	ManagedByCycleIDs map[string]string `json:"managedByCycleIDs,omitempty"`
 }
 
 // UnmarshalJSON implements custom JSON unmarshaling for backward compatibility.
@@ -273,12 +279,15 @@ func (m *Manager) Load(ctx context.Context, namespace, planName, targetName stri
 //
 // Logic:
 //  1. Keys present in reportedState: update their value and clear any StaleCount.
+//     Resources in demanded state (wasRunning=true or wasScaled=true) are marked
+//     with the current cycleID in ManagedByCycleIDs.
 //  2. Existing keys missing from reportedState: increment their StaleCount.
-//     If StaleCount >= maxStaleCount, the key is evicted from the state entirely.
+//     If StaleCount >= maxStaleCount, the key is evicted from the state entirely
+//     and removed from ManagedByCycleIDs.
 //  3. The result is saved in a single API call.
 //
 // This replaces the previous SaveOrPreserve + HousekeepStaleResources two-step pattern.
-func (m *Manager) SaveState(ctx context.Context, namespace, planName, targetName string, data *Data, maxStaleCount int) error {
+func (m *Manager) SaveState(ctx context.Context, namespace, planName, targetName string, data *Data, maxStaleCount int, cycleID string) error {
 	// Load existing data to merge with
 	existing, err := m.Load(ctx, namespace, planName, targetName)
 	if err != nil {
@@ -286,57 +295,108 @@ func (m *Manager) SaveState(ctx context.Context, namespace, planName, targetName
 	}
 
 	if existing == nil {
-		// No existing data, save as-is
+		// No existing data, mark demanded state resources with cycle ID and save
+		data.ManagedByCycleIDs = make(map[string]string)
+		if data.State != nil {
+			for key, value := range data.State {
+				if stateMap, ok := value.(map[string]any); ok {
+					// Only mark resources in demanded state with current cycle ID
+					if isDemandedState(stateMap) {
+						data.ManagedByCycleIDs[key] = cycleID
+					}
+				}
+			}
+		}
 		return m.Save(ctx, namespace, planName, targetName, data)
 	}
 
 	// Build merged state
 	mergedState := make(map[string]any)
-	staleCounts := make(map[string]int)
+
+	// Preserve existing ManagedByCycleIDs - allows same-cycle-id restart preservation
+	managedByCycleIDs := make(map[string]string)
+	maps.Copy(managedByCycleIDs, existing.ManagedByCycleIDs)
 
 	// Copy existing stale counts
-	for k, v := range existing.StaleCounts {
-		staleCounts[k] = v
-	}
+	staleCounts := make(map[string]int)
+	maps.Copy(staleCounts, existing.StaleCounts)
 
-	// Process reported keys: update value and clear stale count
-	for key, value := range data.State {
-		mergedState[key] = value
+	// Process reported keys: store new value and update cycleID tracking
+	for key, newValue := range data.State {
+		// Reset stale count for reported keys
 		delete(staleCounts, key)
+
+		// Determine cycle ID handling based on current state
+		existingCycleID, wasPreviouslyTracked := existing.ManagedByCycleIDs[key]
+
+		if stateMap, ok := newValue.(map[string]any); ok {
+			if isDemandedState(stateMap) {
+				// Resource is in demanded state - update state and cycle ID
+				mergedState[key] = newValue
+				managedByCycleIDs[key] = cycleID
+			} else if wasPreviouslyTracked && existingCycleID == cycleID {
+				// Same cycle ID restart: preserve existing marker and state (user responsibility)
+				// Resource was previously marked in this session, preserve both marker and state
+				managedByCycleIDs[key] = existingCycleID
+				mergedState[key] = existing.State[key]
+			} else {
+				// Not previously marked or different cycle ID - use new value but don't mark
+				mergedState[key] = newValue
+			}
+		}
 	}
 
 	// Process existing keys not reported this cycle
 	for key, value := range existing.State {
 		if _, reported := data.State[key]; !reported {
-			// Not reported this cycle — increment stale counter
+			// Not reported this cycle — increment stale counter (for observability)
 			staleCounts[key]++
+			delete(managedByCycleIDs, key) // Drop from marker immediately if not reported
+
 			if staleCounts[key] >= maxStaleCount {
 				// Evict: exceeded grace period
 				delete(staleCounts, key)
+				// Don't add to mergedState - resource is evicted
+				continue
 			} else {
-				// Keep existing value until eviction
+				// Keep existing value until eviction (for observability)
 				mergedState[key] = value
 			}
 		}
 	}
 
-	// Clean up empty staleCounts map
+	// Clean up empty maps
 	if len(staleCounts) == 0 {
 		staleCounts = nil
 	}
+	if len(managedByCycleIDs) == 0 {
+		managedByCycleIDs = nil
+	}
 
 	mergedData := &Data{
-		Target:      data.Target,
-		Executor:    data.Executor,
-		Version:     data.Version,
-		IsLive:      true,
-		CreatedAt:   existing.CreatedAt, // Preserve original creation time
-		CapturedAt:  data.CapturedAt,    // Update to latest capture time
-		State:       mergedState,
-		StaleCounts: staleCounts,
+		Target:            data.Target,
+		Executor:          data.Executor,
+		Version:           data.Version,
+		IsLive:            true,
+		CreatedAt:         existing.CreatedAt, // Preserve original creation time
+		CapturedAt:        data.CapturedAt,    // Update to latest capture time
+		State:             mergedState,
+		StaleCounts:       staleCounts,
+		ManagedByCycleIDs: managedByCycleIDs,
 	}
 
 	return m.Save(ctx, namespace, planName, targetName, mergedData)
+}
+
+// isDemandedState checks if a resource is in demanded state (wasRunning=true or wasScaled=true)
+func isDemandedState(state map[string]any) bool {
+	if wasRunning, ok := state["wasRunning"].(bool); ok && wasRunning {
+		return true
+	}
+	if wasScaled, ok := state["wasScaled"].(bool); ok && wasScaled {
+		return true
+	}
+	return false
 }
 
 // MarkTargetRestored marks a target as successfully restored.

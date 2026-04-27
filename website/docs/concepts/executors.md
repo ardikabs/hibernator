@@ -14,6 +14,61 @@ Every executor implements three operations:
 
 Executors own **idempotency** — calling Shutdown on an already-stopped resource or WakeUp on an already-running resource must succeed without side effects.
 
+## Intent Preservation Contract
+
+Hibernator implements a **first-capture-wins** intent preservation strategy to handle retries and partial failures during shutdown operations.
+
+### Demanded State
+
+Each executor defines a **demanded state** — the condition that qualifies a resource for hibernator management:
+
+| Executor | Demanded State | Intent Field |
+|----------|---------------|--------------|
+| **EC2** | Instance state is `running` | `wasRunning` |
+| **EKS** | Node group `desiredSize > 0` | `wasScaled` |
+| **RDS** | DB instance/cluster status is `available` | `wasRunning` |
+| **Karpenter** | NodePool exists | (full spec captured) |
+| **WorkloadScaler** | Workload `replicas > 0` | `wasScaled` |
+
+Only resources in their demanded state are captured and managed by hibernator. Resources not in demanded state are observed passively.
+
+### First-Capture-Wins Semantics
+
+When a resource is first captured during a hibernation cycle:
+
+1. **Intent is locked**: The `wasRunning` or `wasScaled` value is preserved indefinitely
+2. **Cycle tracking**: An internal `_managedByCycleID` field marks which cycle first captured the resource
+3. **Immutable intent**: On subsequent hibernation attempts (retries), the original intent is preserved even if the resource's current state has changed
+
+This ensures that:
+- **Retry safety**: If shutdown fails and user retries, the original intent from the first capture is preserved
+- **Consistency**: Once hibernator decides a resource should be managed, that decision persists until successful wakeup
+- **Idempotency**: Multiple shutdown attempts don't corrupt restore data
+
+### Stale Resource Eviction
+
+If a resource is not reported for 3 consecutive hibernation cycles:
+
+1. The resource is evicted from restore data
+2. The `_managedByCycleID` marker is cleared
+3. On the next hibernation, the resource can be freshly captured
+
+This prevents permanently retaining data for deleted or unmanageable resources while allowing temporary absences (e.g., API failures) without data loss.
+
+### Edge Case Handling
+
+**Resource state changes between hibernation and wakeup:**
+- If a resource is manually stopped/deleted after hibernation, the executor skips it during wakeup
+- The executor handles "resource not found" or "already in desired state" gracefully
+- Hibernator's contract is: *"restore to the captured intent, but tolerate reality"*
+
+**Example EC2 flow:**
+```
+Cycle 1 (abc123): Instance is running → captured with wasRunning=true
+Retry (def456):   Shutdown blocked, instance still running → wasRunning=true preserved
+WakeUp (ghi789):  Instance may be running/stopped/terminated → executor handles each case
+```
+
 ## How Executors Run
 
 Executors do not run inside the controller. Instead, the controller creates an isolated **Runner Job** for each target. The runner:

@@ -172,13 +172,14 @@ type RestoreResourcesJSON struct {
 }
 
 type RestoreResourceJSON struct {
-	ResourceID  string         `json:"resourceId"`
-	Target      string         `json:"target"`
-	Executor    string         `json:"executor"`
-	IsLive      bool           `json:"isLive"`
-	CapturedAt  string         `json:"capturedAt,omitempty"`
-	StaleCount  int            `json:"staleCount,omitempty"`
-	State       map[string]any `json:"state,omitempty"`
+	ResourceID        string         `json:"resourceId"`
+	Target            string         `json:"target"`
+	Executor          string         `json:"executor"`
+	IsLive            bool           `json:"isLive"`
+	CapturedAt        string         `json:"capturedAt,omitempty"`
+	StaleCount        int            `json:"staleCount,omitempty"`
+	ManagedByCycleID  string         `json:"managedByCycleId,omitempty"`
+	State             map[string]any `json:"state,omitempty"`
 }
 
 type ExceptionReferenceJSON struct {
@@ -342,10 +343,11 @@ type NotifSendDryRunJSON struct {
 }
 
 type RestoreResource struct {
-	ResourceID string `json:"resourceId"`
-	Target     string `json:"target"`
-	Executor   string `json:"executor"`
-	IsLive     bool   `json:"isLive"`
-	CapturedAt string `json:"capturedAt,omitempty"`
-	StaleCount int    `json:"staleCount,omitempty"`
+	ResourceID       string `json:"resourceId"`
+	Target           string `json:"target"`
+	Executor         string `json:"executor"`
+	IsLive           bool   `json:"isLive"`
+	CapturedAt       string `json:"capturedAt,omitempty"`
+	StaleCount       int    `json:"staleCount,omitempty"`
+	ManagedByCycleID string `json:"managedByCycleId,omitempty"`
 }

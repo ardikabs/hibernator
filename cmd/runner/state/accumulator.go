@@ -29,11 +29,13 @@ type Accumulator struct {
 	plan       string
 	target     string
 	targetType string
+	cycleID    string // Current execution cycle ID for intent tracking
 }
 
 // NewReportStateHandlers creates an internal accumulator and returns the corresponding ReportStateCallback
 // and flush functions. The callback accumulates saves in memory; flush writes accumulated data in a single API call.
-func NewReportStateHandlers(ctx context.Context, k8sClient client.Client, log logr.Logger, namespace, plan, target, targetType string) (executor.ReportStateCallback, func() error) {
+// The cycleID parameter is used to track which execution cycle first captured each resource's intent.
+func NewReportStateHandlers(ctx context.Context, k8sClient client.Client, log logr.Logger, namespace, plan, target, targetType, cycleID string) (executor.ReportStateCallback, func() error) {
 	acc := &Accumulator{
 		state:      make(map[string]any),
 		log:        log,
@@ -42,6 +44,7 @@ func NewReportStateHandlers(ctx context.Context, k8sClient client.Client, log lo
 		plan:       plan,
 		target:     target,
 		targetType: targetType,
+		cycleID:    cycleID,
 	}
 
 	callback := func(key string, value any) error {
@@ -94,7 +97,7 @@ func (a *Accumulator) flush(ctx context.Context) error {
 	}
 
 	rm := restore.NewManager(a.k8sClient)
-	if err := rm.SaveState(ctx, a.namespace, a.plan, a.target, data, maxStaleCount); err != nil {
+	if err := rm.SaveState(ctx, a.namespace, a.plan, a.target, data, maxStaleCount, a.cycleID); err != nil {
 		return fmt.Errorf("save state to ConfigMap: %w", err)
 	}
 
