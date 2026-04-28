@@ -9,24 +9,19 @@ package rds
 import (
 	"context"
 	"encoding/json"
-	"errors"
 	"fmt"
 	"strings"
 	"sync"
 	"sync/atomic"
-	"time"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/service/rds"
-	rdsTypes "github.com/aws/aws-sdk-go-v2/service/rds/types"
 	"github.com/aws/aws-sdk-go-v2/service/sts"
-	"github.com/aws/smithy-go"
 	"github.com/go-logr/logr"
 
 	"github.com/ardikabs/hibernator/internal/executor"
 	"github.com/ardikabs/hibernator/pkg/awsutil"
 	"github.com/ardikabs/hibernator/pkg/executorparams"
-	"github.com/ardikabs/hibernator/pkg/waiter"
 )
 
 const (
@@ -37,32 +32,42 @@ const (
 // Parameters is an alias for the shared RDS parameter type.
 type Parameters = executorparams.RDSParameters
 
-// RestoreState holds RDS restore data.
-type RestoreState struct {
-	Instances []DBInstanceState `json:"instances,omitempty"`
-	Clusters  []DBClusterState  `json:"clusters,omitempty"`
-}
-
 // DBInstanceState holds state for a single DB instance.
 type DBInstanceState struct {
-	InstanceId   string `json:"instanceId"`
-	WasRunning   bool   `json:"wasRunning"` // true if running when hibernator saw it (restore on wakeup), false if already stopped
-	SnapshotId   string `json:"snapshotId,omitempty"`
-	InstanceType string `json:"instanceType,omitempty"`
+	InstanceId   string           `json:"instanceId"`
+	WasRunning   bool             `json:"wasRunning"` // true if running when hibernator saw it (restore on wakeup), false if already stopped
+	SnapshotId   string           `json:"snapshotId,omitempty"`
+	InstanceType string           `json:"instanceType,omitempty"`
+	Outcome      operationOutcome `json:"-"` // Result of the operation (not persisted)
 }
+
+// WasResourceRunning returns whether the instance was running
+func (s DBInstanceState) WasResourceRunning() bool { return s.WasRunning }
+
+// GetOutcome returns the operation outcome
+func (s DBInstanceState) GetOutcome() operationOutcome { return s.Outcome }
 
 // DBClusterState holds state for a single DB cluster.
 type DBClusterState struct {
-	ClusterId  string `json:"clusterId"`
-	WasRunning bool   `json:"wasRunning"` // true if running when hibernator saw it (restore on wakeup), false if already stopped
-	SnapshotId string `json:"snapshotId,omitempty"`
+	ClusterId  string           `json:"clusterId"`
+	WasRunning bool             `json:"wasRunning"` // true if running when hibernator saw it (restore on wakeup), false if already stopped
+	SnapshotId string           `json:"snapshotId,omitempty"`
+	Outcome    operationOutcome `json:"-"` // Result of the operation (not persisted)
 }
+
+// WasResourceRunning returns whether the cluster was running
+func (s DBClusterState) WasResourceRunning() bool { return s.WasRunning }
+
+// GetOutcome returns the operation outcome
+func (s DBClusterState) GetOutcome() operationOutcome { return s.Outcome }
 
 type operationOutcome string
 
 const (
-	operationOutcomeApplied      operationOutcome = "applied"
-	operationOutcomeSkippedStale operationOutcome = "skipped_stale"
+	operationOutcomeUnknown      operationOutcome = ""           // Zero value, indicates uninitialized or parsed state
+	operationOutcomeApplied      operationOutcome = "applied"    // Operation was successfully applied
+	operationOutcomeSkippedStale operationOutcome = "skipped"    // Resource was in stale state, operation skipped
+	operationOutcomePending      operationOutcome = "pending"    // Resource needs async processing
 )
 
 type operationStats struct {
@@ -70,17 +75,21 @@ type operationStats struct {
 	applied      int
 	skippedStale int
 	skippedKey   int
+	pending      int
 }
 
-func formatShutdownMessage(stats operationStats) string {
+func formatShutdownMessage(stats *operationStats) string {
 	msg := fmt.Sprintf("stopped %d RDS resource(s)", stats.applied)
-	return appendCountSegment(msg, "skipped", stats.skippedStale, "stale resource")
+	msg = appendCountSegment(msg, "skipped", stats.skippedStale, "stale resource")
+	msg = appendCountSegment(msg, "pending", stats.pending, "resource awaiting state transition")
+	return msg
 }
 
-func formatWakeUpMessage(stats operationStats) string {
+func formatWakeUpMessage(stats *operationStats) string {
 	msg := fmt.Sprintf("started %d RDS resource(s)", stats.applied)
 	msg = appendCountSegment(msg, "skipped", stats.skippedStale, "stale resource")
 	msg = appendCountSegment(msg, "skipped", stats.skippedKey, "unrecognized restore key")
+	msg = appendCountSegment(msg, "pending", stats.pending, "resource awaiting state transition")
 	return msg
 }
 
@@ -88,19 +97,17 @@ func appendCountSegment(msg, action string, count int, noun string) string {
 	if count <= 0 {
 		return msg
 	}
-
 	return fmt.Sprintf("%s, %s %d %s(s)", msg, action, count, noun)
 }
 
-// Executor implements the RDS hibernation logic.
+// Executor implements the RDS hibernation logic using strategy pattern.
 type Executor struct {
 	rdsFactory      RDSClientFactory
 	stsFactory      STSClientFactory
 	awsConfigLoader AWSConfigLoader
-
-	waitinglistForInstances []string
-	waitinglistForClusters  []string
-	completionWg            sync.WaitGroup
+	registry        *strategyRegistry
+	trackers        map[ResourceType]*resourceTracker
+	completionWg    sync.WaitGroup
 }
 
 // RDSClientFactory is a function type for creating RDS clients.
@@ -121,16 +128,25 @@ func New() *Executor {
 		stsFactory: func(cfg aws.Config) STSClient {
 			return sts.NewFromConfig(cfg)
 		},
+		registry: newStrategyRegistry(),
+		trackers: map[ResourceType]*resourceTracker{
+			ResourceTypeInstance: newResourceTracker(),
+			ResourceTypeCluster:  newResourceTracker(),
+		},
 	}
 }
 
 // NewWithClients creates a new RDS executor with injected client factories.
-// This is useful for testing with mock clients.
 func NewWithClients(rdsFactory RDSClientFactory, stsFactory STSClientFactory, awsConfigLoader AWSConfigLoader) *Executor {
 	return &Executor{
 		rdsFactory:      rdsFactory,
 		stsFactory:      stsFactory,
 		awsConfigLoader: awsConfigLoader,
+		registry:        newStrategyRegistry(),
+		trackers: map[ResourceType]*resourceTracker{
+			ResourceTypeInstance: newResourceTracker(),
+			ResourceTypeCluster:  newResourceTracker(),
+		},
 	}
 }
 
@@ -181,160 +197,53 @@ func (e *Executor) Validate(spec executor.Spec) error {
 func (e *Executor) Shutdown(ctx context.Context, log logr.Logger, spec executor.Spec) (*executor.Result, error) {
 	log = log.WithName("rds").WithValues("target", spec.TargetName, "targetType", spec.TargetType)
 	log.Info("executor starting shutdown")
-	e.waitinglistForInstances = nil
-	e.waitinglistForClusters = nil
+
+	// Reset trackers
+	for _, tracker := range e.trackers {
+		tracker.Reset()
+	}
 
 	params, err := e.parseParams(spec.Parameters)
 	if err != nil {
 		return nil, fmt.Errorf("parse parameters: %w", err)
 	}
 
-	log.Info("parameters parsed",
-		"hasTagSelector", len(params.Selector.Tags) > 0,
-		"hasExcludeTagSelector", len(params.Selector.ExcludeTags) > 0,
-		"hasInstanceIDs", len(params.Selector.InstanceIds) > 0,
-		"hasClusterIDs", len(params.Selector.ClusterIds) > 0,
-		"includeAll", params.Selector.IncludeAll,
-		"snapshotBeforeStop", params.SnapshotBeforeStop,
-	)
-
 	cfg, err := e.loadAWSConfig(ctx, spec)
 	if err != nil {
-		log.Error(err, "failed to load AWS config")
 		return nil, fmt.Errorf("load AWS config: %w", err)
 	}
 
 	client := e.rdsFactory(cfg)
-	stats := operationStats{}
+	stats := new(operationStats)
 
 	// Determine which resource types to discover
-	var discoverInstances, discoverClusters bool
+	discoverInstances, discoverClusters := e.determineResourceTypes(params)
 
-	// For intent-based selection (explicit IDs), resource types are implicit
-	if len(params.Selector.InstanceIds) > 0 || len(params.Selector.ClusterIds) > 0 {
-		discoverInstances = len(params.Selector.InstanceIds) > 0
-		discoverClusters = len(params.Selector.ClusterIds) > 0
-	} else {
-		// For dynamic discovery (tags/excludeTags/includeAll), must be explicitly enabled (opt-out)
-		// Default bool zero value is false (no-op)
-		discoverInstances = params.Selector.DiscoverInstances
-		discoverClusters = params.Selector.DiscoverClusters
-	}
-
-	var instances []rdsTypes.DBInstance
-	var clusters []rdsTypes.DBCluster
-
-	// Discover DB instances (only if relevant to selector)
+	// Process instances
 	if discoverInstances {
-		log.Info("discovering DB instances matching selector")
-		var err error
-		instances, err = e.findDBInstances(ctx, log, client, params.Selector)
-		if err != nil {
-			log.Error(err, "failed to find DB instances")
-			return nil, fmt.Errorf("find DB instances: %w", err)
+		if err := e.processResources(ctx, log, client, params, spec.ReportStateCallback, ResourceTypeInstance, stats); err != nil {
+			return nil, err
 		}
-		log.Info("DB instances discovered", "totalInstances", len(instances))
-		stats.processed += len(instances)
 	}
 
-	// Discover DB clusters (only if relevant to selector)
+	// Process clusters
 	if discoverClusters {
-		log.Info("discovering DB clusters matching selector")
-		var err error
-		clusters, err = e.findDBClusters(ctx, log, client, params.Selector)
-		if err != nil {
-			log.Error(err, "failed to find DB clusters")
-			return nil, fmt.Errorf("find DB clusters: %w", err)
-		}
-		log.Info("DB clusters discovered", "totalClusters", len(clusters))
-		stats.processed += len(clusters)
-	}
-
-	// Stop DB instances
-	for _, inst := range instances {
-		instanceID := aws.ToString(inst.DBInstanceIdentifier)
-		log.Info("processing DB instance", "instanceId", instanceID)
-
-		outcome, err := e.stopInstance(ctx, log, client, instanceID, params.SnapshotBeforeStop, params, spec.ReportStateCallback)
-		if err != nil {
-			log.Error(err, "failed to stop instance", "instanceId", instanceID)
-			return nil, fmt.Errorf("stop instance %s: %w", instanceID, err)
-		}
-
-		switch outcome {
-		case operationOutcomeApplied:
-			stats.applied++
-		case operationOutcomeSkippedStale:
-			stats.skippedStale++
+		if err := e.processResources(ctx, log, client, params, spec.ReportStateCallback, ResourceTypeCluster, stats); err != nil {
+			return nil, err
 		}
 	}
 
-	// Stop DB clusters
-	for _, cluster := range clusters {
-		clusterID := aws.ToString(cluster.DBClusterIdentifier)
-		log.Info("processing DB cluster", "clusterId", clusterID)
-
-		outcome, err := e.stopCluster(ctx, log, client, clusterID, params.SnapshotBeforeStop, params, spec.ReportStateCallback)
-		if err != nil {
-			log.Error(err, "failed to stop cluster", "clusterId", clusterID)
-			return nil, fmt.Errorf("stop cluster %s: %w", clusterID, err)
-		}
-
-		switch outcome {
-		case operationOutcomeApplied:
-			stats.applied++
-		case operationOutcomeSkippedStale:
-			stats.skippedStale++
-		}
-	}
-
-	// Wait for all stopping operations to complete if configured
+	// Handle await completion
 	msg := formatShutdownMessage(stats)
-
 	if params.AwaitCompletion.Enabled {
-		timeout := params.AwaitCompletion.Timeout
-		if timeout == "" {
-			timeout = DefaultWaitTimeout
-		}
-
-		var timedOut atomic.Int32
-
-		for _, inst := range e.waitinglistForInstances {
-			e.completionWg.Add(1)
-			go func(id string) {
-				defer e.completionWg.Done()
-				if err := e.waitForInstanceStopped(ctx, log, client, id, timeout); err != nil {
-					timedOut.Add(1)
-					log.Error(err, "failed to wait for RDS instance stopped", "instanceId", id)
-				}
-			}(inst)
-		}
-
-		for _, cluster := range e.waitinglistForClusters {
-			e.completionWg.Add(1)
-			go func(id string) {
-				defer e.completionWg.Done()
-				if err := e.waitForClusterStopped(ctx, log, client, id, timeout); err != nil {
-					timedOut.Add(1)
-					log.Error(err, "failed to wait for Aurora cluster stopped", "clusterId", id)
-				}
-			}(cluster)
-		}
-
-		e.completionWg.Wait()
-
-		total := len(e.waitinglistForInstances) + len(e.waitinglistForClusters)
-		if failed := int(timedOut.Load()); failed > 0 {
-			msg += fmt.Sprintf("; %d of %d resource(s) not yet stopped after %s timeout", failed, total, timeout)
-		} else {
-			msg += "; all resources confirmed stopped"
-		}
+		msg = e.handleShutdownAwaitCompletion(ctx, log, client, params, msg, stats)
 	}
 
 	log.Info("shutdown completed",
 		"processed", stats.processed,
 		"stopped", stats.applied,
 		"skippedStale", stats.skippedStale,
+		"pending", stats.pending,
 	)
 
 	return &executor.Result{Message: msg}, nil
@@ -344,134 +253,40 @@ func (e *Executor) Shutdown(ctx context.Context, log logr.Logger, spec executor.
 func (e *Executor) WakeUp(ctx context.Context, log logr.Logger, spec executor.Spec, restore executor.RestoreData) (*executor.Result, error) {
 	log = log.WithName("rds").WithValues("target", spec.TargetName, "targetType", spec.TargetType)
 	log.Info("executor starting wakeup")
-	e.waitinglistForInstances = nil
-	e.waitinglistForClusters = nil
+
+	// Reset trackers
+	for _, tracker := range e.trackers {
+		tracker.Reset()
+	}
 
 	if len(restore.Data) == 0 {
-		log.Info("no restore data available, wakeup operation is no-op")
 		return &executor.Result{Message: "wakeup completed for RDS (no restore data)"}, nil
 	}
 
-	// Parse parameters
 	params, err := e.parseParams(spec.Parameters)
 	if err != nil {
-		log.Error(err, "failed to parse parameters")
 		return nil, fmt.Errorf("parse parameters: %w", err)
 	}
 
-	log.Info("restore state loaded", "resourceCount", len(restore.Data))
-
 	cfg, err := e.loadAWSConfig(ctx, spec)
 	if err != nil {
-		log.Error(err, "failed to load AWS config")
 		return nil, fmt.Errorf("load AWS config: %w", err)
 	}
 
 	client := e.rdsFactory(cfg)
-	stats := operationStats{processed: len(restore.Data)}
+	stats := &operationStats{processed: len(restore.Data)}
 
-	// Iterate over all resources in restore data
+	// Process each resource in restore data
 	for key, stateBytes := range restore.Data {
-		// Parse key to determine resource type
-		if strings.HasPrefix(key, "instance:") {
-			instanceID := strings.TrimPrefix(key, "instance:")
-			var state DBInstanceState
-			if err := json.Unmarshal(stateBytes, &state); err != nil {
-				log.Error(err, "failed to unmarshal instance state", "instanceId", instanceID)
-				return nil, fmt.Errorf("unmarshal instance state %s: %w", instanceID, err)
-			}
-
-			if state.WasRunning {
-				log.Info("starting RDS instance", "instanceId", state.InstanceId)
-				outcome, err := e.startInstance(ctx, log, client, state.InstanceId, params)
-				if err != nil {
-					log.Error(err, "failed to start instance", "instanceId", state.InstanceId)
-					return nil, fmt.Errorf("start instance %s: %w", state.InstanceId, err)
-				}
-				switch outcome {
-				case operationOutcomeApplied:
-					stats.applied++
-				case operationOutcomeSkippedStale:
-					stats.skippedStale++
-				}
-				log.Info("instance started successfully", "instanceId", state.InstanceId)
-			} else {
-				stats.skippedStale++
-				log.Info("instance was already stopped before hibernation, skipping start", "instanceId", state.InstanceId)
-			}
-
-		} else if strings.HasPrefix(key, "cluster:") {
-			clusterID := strings.TrimPrefix(key, "cluster:")
-			var state DBClusterState
-			if err := json.Unmarshal(stateBytes, &state); err != nil {
-				log.Error(err, "failed to unmarshal cluster state", "clusterId", clusterID)
-				return nil, fmt.Errorf("unmarshal cluster state %s: %w", clusterID, err)
-			}
-
-			if state.WasRunning {
-				log.Info("starting RDS cluster", "clusterId", state.ClusterId)
-				outcome, err := e.startCluster(ctx, log, client, state.ClusterId, params)
-				if err != nil {
-					log.Error(err, "failed to start cluster", "clusterId", state.ClusterId)
-					return nil, fmt.Errorf("start cluster %s: %w", state.ClusterId, err)
-				}
-				switch outcome {
-				case operationOutcomeApplied:
-					stats.applied++
-				case operationOutcomeSkippedStale:
-					stats.skippedStale++
-				}
-				log.Info("cluster started successfully", "clusterId", state.ClusterId)
-			} else {
-				stats.skippedStale++
-				log.Info("cluster was already stopped before hibernation, skipping start", "clusterId", state.ClusterId)
-			}
-		} else {
-			stats.skippedKey++
-			log.Info("unknown resource type in restore data, skipping", "key", key)
+		if err := e.restoreResource(ctx, log, client, params, key, stateBytes, stats); err != nil {
+			return nil, err
 		}
 	}
 
+	// Handle await completion
 	msg := formatWakeUpMessage(stats)
-
 	if params.AwaitCompletion.Enabled {
-		timeout := params.AwaitCompletion.Timeout
-		if timeout == "" {
-			timeout = DefaultWaitTimeout
-		}
-
-		var timedOut atomic.Int32
-
-		for _, inst := range e.waitinglistForInstances {
-			e.completionWg.Add(1)
-			go func(id string) {
-				defer e.completionWg.Done()
-				if err := e.waitForInstanceAvailable(ctx, log, client, id, timeout); err != nil {
-					timedOut.Add(1)
-					log.Error(err, "failed to wait for RDS instance available", "instanceId", id)
-				}
-			}(inst)
-		}
-
-		for _, clust := range e.waitinglistForClusters {
-			e.completionWg.Add(1)
-			go func(id string) {
-				defer e.completionWg.Done()
-				if err := e.waitForClusterAvailable(ctx, log, client, id, timeout); err != nil {
-					timedOut.Add(1)
-					log.Error(err, "failed to wait for RDS cluster available", "clusterId", id)
-				}
-			}(clust)
-		}
-
-		e.completionWg.Wait()
-
-		total := len(e.waitinglistForInstances) + len(e.waitinglistForClusters)
-		if failed := int(timedOut.Load()); failed > 0 {
-			msg += fmt.Sprintf("; %d of %d resource(s) not yet available after %s timeout", failed, total, timeout)
-		} else {
-			msg += "; all resources confirmed available"
-		}
+		msg = e.handleWakeupAwaitCompletion(ctx, log, client, params, msg, stats)
 	}
 
 	log.Info("wakeup completed",
@@ -479,8 +294,306 @@ func (e *Executor) WakeUp(ctx context.Context, log logr.Logger, spec executor.Sp
 		"started", stats.applied,
 		"skippedStale", stats.skippedStale,
 		"skippedUnknownKey", stats.skippedKey,
+		"pending", stats.pending,
 	)
+
 	return &executor.Result{Message: msg}, nil
+}
+
+// determineResourceTypes determines which resource types to discover based on params
+func (e *Executor) determineResourceTypes(params Parameters) (instances, clusters bool) {
+	// For intent-based selection (explicit IDs), resource types are implicit
+	if len(params.Selector.InstanceIds) > 0 || len(params.Selector.ClusterIds) > 0 {
+		return len(params.Selector.InstanceIds) > 0, len(params.Selector.ClusterIds) > 0
+	}
+	// For dynamic discovery, use explicit flags
+	return params.Selector.DiscoverInstances, params.Selector.DiscoverClusters
+}
+
+// processResources discovers and stops resources of the given type
+func (e *Executor) processResources(ctx context.Context, log logr.Logger, client RDSClient, params Parameters, callback executor.ReportStateCallback, resourceType ResourceType, stats *operationStats) error {
+	strategy, ok := e.registry.Get(resourceType)
+	if !ok {
+		return fmt.Errorf("unknown resource type: %s", resourceType)
+	}
+
+	// Discover resources
+	log.Info("discovering resources", "resourceType", resourceType)
+	ids, err := strategy.Discover(ctx, log, client, params.Selector)
+	if err != nil {
+		return fmt.Errorf("discover %s: %w", resourceType, err)
+	}
+	log.Info("resources discovered", "resourceType", resourceType, "count", len(ids))
+	stats.processed += len(ids)
+
+	// Process each resource
+	tracker := e.trackers[resourceType]
+	for _, id := range ids {
+		log.Info("processing resource", "resourceType", resourceType, "id", id)
+
+		// Execute stop operation and get the result state
+		resultState, err := strategy.Stop(ctx, log, client, id, params.SnapshotBeforeStop, params, callback)
+		if err != nil {
+			log.Error(err, "failed to stop resource", "resourceType", resourceType, "id", id)
+			return fmt.Errorf("stop %s %s: %w", resourceType, id, err)
+		}
+
+		switch resultState.GetOutcome() {
+		case operationOutcomeApplied:
+			stats.applied++
+			tracker.AddToWaitingList(id)
+		case operationOutcomeSkippedStale:
+			stats.skippedStale++
+		case operationOutcomePending:
+			stats.pending++
+			tracker.AddToPendingList(id, params.SnapshotBeforeStop)
+		default:
+			// This should not happen - log warning for debugging
+			log.Error(nil, "unexpected operation outcome",
+				"outcome", resultState.GetOutcome(),
+				"resourceType", resourceType,
+				"id", id)
+		}
+	}
+
+	return nil
+}
+
+// restoreResource restores a single resource from restore data
+func (e *Executor) restoreResource(ctx context.Context, log logr.Logger, client RDSClient, params Parameters, key string, stateBytes json.RawMessage, stats *operationStats) error {
+	var resourceType ResourceType
+	var id string
+
+	if strings.HasPrefix(key, "instance:") {
+		resourceType = ResourceTypeInstance
+		id = strings.TrimPrefix(key, "instance:")
+	} else if strings.HasPrefix(key, "cluster:") {
+		resourceType = ResourceTypeCluster
+		id = strings.TrimPrefix(key, "cluster:")
+	} else {
+		stats.skippedKey++
+		log.Info("unknown resource type in restore data, skipping", "key", key)
+		return nil
+	}
+
+	strategy, ok := e.registry.Get(resourceType)
+	if !ok {
+		return fmt.Errorf("unknown resource type: %s", resourceType)
+	}
+
+	// Parse the persisted state from restore data
+	persistedState, err := strategy.ParseState(stateBytes)
+	if err != nil {
+		return fmt.Errorf("unmarshal %s state %s: %w", resourceType, id, err)
+	}
+
+	// Check if the resource was running before hibernation
+	if !persistedState.WasResourceRunning() {
+		stats.skippedStale++
+		log.Info("resource was already stopped before hibernation, skipping start",
+			"resourceType", resourceType, "id", id)
+		return nil
+	}
+
+	log.Info("starting resource", "resourceType", resourceType, "id", id)
+	// Execute start operation and get the result state
+	resultState, err := strategy.Start(ctx, log, client, id, params)
+	if err != nil {
+		return fmt.Errorf("start %s %s: %w", resourceType, id, err)
+	}
+
+	tracker := e.trackers[resourceType]
+	switch resultState.GetOutcome() {
+	case operationOutcomeApplied:
+		stats.applied++
+		tracker.AddToWaitingList(id)
+		log.Info("resource started successfully", "resourceType", resourceType, "id", id)
+	case operationOutcomeSkippedStale:
+		stats.skippedStale++
+	case operationOutcomePending:
+		stats.pending++
+		tracker.AddToPendingList(id, false)
+	default:
+		// This should not happen - log warning for debugging
+		log.Error(nil, "unexpected operation outcome",
+			"outcome", resultState.GetOutcome(),
+			"resourceType", resourceType,
+			"id", id)
+	}
+
+	return nil
+}
+
+// handleShutdownAwaitCompletion handles the await completion logic for shutdown
+// All resources (pending and waiting) share the same timeout window concurrently.
+// For pending resources: wait for available → stop → wait for stopped (all in one goroutine)
+// For waiting resources: just wait for stopped
+func (e *Executor) handleShutdownAwaitCompletion(ctx context.Context, log logr.Logger, client RDSClient, params Parameters, msg string, stats *operationStats) string {
+	timeout := params.AwaitCompletion.Timeout
+	if timeout == "" {
+		timeout = DefaultWaitTimeout
+	}
+
+	var timedOut atomic.Int32
+	var pendingFailed atomic.Int32
+	var pendingApplied atomic.Int32
+
+	// Start all operations concurrently - both pending and waiting share the same timeout window
+	for resourceType, tracker := range e.trackers {
+		strategy, _ := e.registry.Get(resourceType)
+
+		// Process pending resources: complete full lifecycle in one goroutine
+		for _, pending := range tracker.getAllPending() {
+			e.completionWg.Add(1)
+			go func(p pendingResource, s ResourceStrategy, rt ResourceType) {
+				defer e.completionWg.Done()
+
+				// Wait for resource to become available
+				if err := s.WaitForAvailable(ctx, log, client, p.id, timeout); err != nil {
+					pendingFailed.Add(1)
+					log.Error(err, "failed to wait for resource to become available", "resourceType", rt, "id", p.id)
+					return
+				}
+
+				// Stop the resource
+				stopState, err := s.Stop(ctx, log, client, p.id, p.snapshotBefore, params, nil)
+				if err != nil {
+					pendingFailed.Add(1)
+					log.Error(err, "failed to stop pending resource", "resourceType", rt, "id", p.id)
+					return
+				}
+
+				if stopState.GetOutcome() == operationOutcomeApplied {
+					pendingApplied.Add(1)
+					// Continue to wait for the resource to reach stopped state
+					if err := s.WaitForStopped(ctx, log, client, p.id, timeout); err != nil {
+						timedOut.Add(1)
+						log.Error(err, "failed to wait for pending resource stopped", "resourceType", rt, "id", p.id)
+					}
+				}
+			}(pending, strategy, resourceType)
+		}
+
+		// Process waiting resources: just wait for stopped
+		for _, id := range tracker.getAllWaitingIDs() {
+			e.completionWg.Add(1)
+			go func(resourceID string, s ResourceStrategy, rt ResourceType) {
+				defer e.completionWg.Done()
+				if err := s.WaitForStopped(ctx, log, client, resourceID, timeout); err != nil {
+					timedOut.Add(1)
+					log.Error(err, "failed to wait for resource stopped", "resourceType", rt, "id", resourceID)
+				}
+			}(id, strategy, resourceType)
+		}
+	}
+
+	// Wait for ALL operations to complete (both pending and waiting)
+	e.completionWg.Wait()
+
+	totalOperations := 0
+	for _, tracker := range e.trackers {
+		totalOperations += len(tracker.getAllWaitingIDs()) + len(tracker.getAllPending())
+	}
+
+	if failed := int(timedOut.Load()); failed > 0 {
+		msg += fmt.Sprintf("; %d of %d resource(s) not yet stopped after %s timeout", failed, totalOperations, timeout)
+	} else {
+		msg += "; all resources confirmed stopped"
+	}
+
+	// Update stats for pending resources that were processed
+	if pendingCount := int(pendingApplied.Load()); pendingCount > 0 {
+		stats.applied += pendingCount
+		stats.pending -= pendingCount
+	}
+
+	return msg
+}
+
+// handleWakeupAwaitCompletion handles the await completion logic for wakeup
+// All resources (pending and waiting) share the same timeout window concurrently.
+// For pending resources: wait for stopped → start → wait for available (all in one goroutine)
+// For waiting resources: just wait for available
+func (e *Executor) handleWakeupAwaitCompletion(ctx context.Context, log logr.Logger, client RDSClient, params Parameters, msg string, stats *operationStats) string {
+	timeout := params.AwaitCompletion.Timeout
+	if timeout == "" {
+		timeout = DefaultWaitTimeout
+	}
+
+	var timedOut atomic.Int32
+	var pendingFailed atomic.Int32
+	var pendingApplied atomic.Int32
+
+	// Start all operations concurrently - both pending and waiting share the same timeout window
+	for resourceType, tracker := range e.trackers {
+		strategy, _ := e.registry.Get(resourceType)
+
+		// Process pending resources: complete full lifecycle in one goroutine
+		for _, pending := range tracker.getAllPending() {
+			e.completionWg.Add(1)
+			go func(p pendingResource, s ResourceStrategy, rt ResourceType) {
+				defer e.completionWg.Done()
+
+				// Wait for resource to become stopped
+				if err := s.WaitForStopped(ctx, log, client, p.id, timeout); err != nil {
+					pendingFailed.Add(1)
+					log.Error(err, "failed to wait for resource to become stopped", "resourceType", rt, "id", p.id)
+					return
+				}
+
+				// Start the resource
+				startState, err := s.Start(ctx, log, client, p.id, params)
+				if err != nil {
+					pendingFailed.Add(1)
+					log.Error(err, "failed to start pending resource", "resourceType", rt, "id", p.id)
+					return
+				}
+
+				if startState.GetOutcome() == operationOutcomeApplied {
+					pendingApplied.Add(1)
+					// Continue to wait for the resource to reach available state
+					if err := s.WaitForAvailable(ctx, log, client, p.id, timeout); err != nil {
+						timedOut.Add(1)
+						log.Error(err, "failed to wait for pending resource available", "resourceType", rt, "id", p.id)
+					}
+				}
+			}(pending, strategy, resourceType)
+		}
+
+		// Process waiting resources: just wait for available
+		for _, id := range tracker.getAllWaitingIDs() {
+			e.completionWg.Add(1)
+			go func(resourceID string, s ResourceStrategy, rt ResourceType) {
+				defer e.completionWg.Done()
+				if err := s.WaitForAvailable(ctx, log, client, resourceID, timeout); err != nil {
+					timedOut.Add(1)
+					log.Error(err, "failed to wait for resource available", "resourceType", rt, "id", resourceID)
+				}
+			}(id, strategy, resourceType)
+		}
+	}
+
+	// Wait for ALL operations to complete (both pending and waiting)
+	e.completionWg.Wait()
+
+	totalOperations := 0
+	for _, tracker := range e.trackers {
+		totalOperations += len(tracker.getAllWaitingIDs()) + len(tracker.getAllPending())
+	}
+
+	if failed := int(timedOut.Load()); failed > 0 {
+		msg += fmt.Sprintf("; %d of %d resource(s) not yet available after %s timeout", failed, totalOperations, timeout)
+	} else {
+		msg += "; all resources confirmed available"
+	}
+
+	// Update stats for pending resources that were processed
+	if pendingCount := int(pendingApplied.Load()); pendingCount > 0 {
+		stats.applied += pendingCount
+		stats.pending -= pendingCount
+	}
+
+	return msg
 }
 
 func (e *Executor) parseParams(raw json.RawMessage) (Parameters, error) {
@@ -498,638 +611,8 @@ func (e *Executor) loadAWSConfig(ctx context.Context, spec executor.Spec) (aws.C
 	if e.awsConfigLoader != nil {
 		return e.awsConfigLoader(ctx, spec)
 	}
-
 	if spec.ConnectorConfig.AWS == nil {
 		return aws.Config{}, fmt.Errorf("AWS connector config is required")
 	}
-
 	return awsutil.BuildAWSConfig(ctx, spec.ConnectorConfig.AWS)
-}
-
-func (e *Executor) stopInstance(ctx context.Context, log logr.Logger, client RDSClient, instanceId string, snapshotBeforeStop bool, params Parameters, callback executor.ReportStateCallback) (operationOutcome, error) {
-	// Get instance info
-	desc, err := client.DescribeDBInstances(ctx, &rds.DescribeDBInstancesInput{
-		DBInstanceIdentifier: aws.String(instanceId),
-	})
-	if err != nil {
-		var apiErr smithy.APIError
-		if errors.As(err, &apiErr) {
-			switch apiErr.ErrorCode() {
-			case "DBInstanceNotFound":
-				log.Info("instance not found, skipping ...", "instanceId", instanceId)
-				return operationOutcomeSkippedStale, nil
-			}
-		}
-		return "", err
-	}
-
-	if len(desc.DBInstances) == 0 {
-		return "", fmt.Errorf("instance %s not found", instanceId)
-	}
-
-	instance := desc.DBInstances[0]
-	state := DBInstanceState{
-		InstanceId:   instanceId,
-		InstanceType: aws.ToString(instance.DBInstanceClass),
-	}
-
-	status := aws.ToString(instance.DBInstanceStatus)
-
-	switch status {
-	case "available":
-		state.WasRunning = true
-
-		// Create snapshot if requested
-		if snapshotBeforeStop {
-			snapshotId := fmt.Sprintf("%s-hibernate-%d", instanceId, time.Now().Unix())
-			log.Info("creating DB snapshot before stop", "instanceId", instanceId, "snapshotId", snapshotId)
-			_, err := client.CreateDBSnapshot(ctx, &rds.CreateDBSnapshotInput{
-				DBInstanceIdentifier: aws.String(instanceId),
-				DBSnapshotIdentifier: aws.String(snapshotId),
-			})
-			if err != nil {
-				return "", fmt.Errorf("create snapshot: %w", err)
-			}
-			state.SnapshotId = snapshotId
-
-			// Wait for snapshot to be available
-			waiter := rds.NewDBSnapshotAvailableWaiter(client)
-			log.Info("waiting for snapshot to be available", "snapshotId", snapshotId)
-			if err := waiter.Wait(ctx, &rds.DescribeDBSnapshotsInput{
-				DBSnapshotIdentifier: aws.String(snapshotId),
-			}, 30*time.Minute); err != nil {
-				return "", fmt.Errorf("wait for snapshot: %w", err)
-			}
-			log.Info("snapshot available", "snapshotId", snapshotId)
-		}
-
-		// Stop instance
-		log.Info("stopping DB instance", "instanceId", instanceId)
-		if _, err = client.StopDBInstance(ctx, &rds.StopDBInstanceInput{
-			DBInstanceIdentifier: aws.String(instanceId),
-		}); err != nil {
-			var apiErr smithy.APIError
-			if errors.As(err, &apiErr) {
-				switch apiErr.ErrorCode() {
-				case "DBInstanceNotFound":
-					log.Info("instance not found, skipping ...", "instanceId", instanceId)
-					return operationOutcomeSkippedStale, nil
-				}
-			}
-			return "", err
-		}
-	case "stopped":
-		state.WasRunning = false
-		log.Info("instance is already stopped", "instanceId", instanceId)
-	default:
-		log.Info("instance is in a status that cannot be stopped, skipping stop ...",
-			"instanceId", instanceId, "status", status)
-		return operationOutcomeSkippedStale, nil
-
-	}
-
-	// Incremental save: persist this instance's restore data immediately.
-	if callback != nil {
-		key := "instance:" + state.InstanceId
-		if err := callback(key, state); err != nil {
-			log.Error(err, "failed to save restore data incrementally", "instanceId", instanceId)
-			// Continue processing - save at end as fallback
-		}
-	}
-
-	log.Info("instance processed successfully",
-		"instanceId", instanceId,
-		"wasRunning", state.WasRunning,
-		"snapshotCreated", state.SnapshotId != "",
-	)
-
-	// Add to waiting list for awaiting completion if configured
-	if params.AwaitCompletion.Enabled {
-		e.waitinglistForInstances = append(e.waitinglistForInstances, instanceId)
-	}
-
-	return operationOutcomeApplied, nil
-}
-
-func (e *Executor) stopCluster(ctx context.Context, log logr.Logger, client RDSClient, clusterId string, snapshotBeforeStop bool, params Parameters, callback executor.ReportStateCallback) (operationOutcome, error) {
-	// Get cluster info
-	desc, err := client.DescribeDBClusters(ctx, &rds.DescribeDBClustersInput{
-		DBClusterIdentifier: aws.String(clusterId),
-	})
-	if err != nil {
-		var apiErr smithy.APIError
-		if errors.As(err, &apiErr) {
-			switch apiErr.ErrorCode() {
-			case "DBClusterNotFoundFault":
-				log.Info("cluster not found, skipping ...", "clusterId", clusterId)
-				return operationOutcomeSkippedStale, nil
-			}
-		}
-		return "", err
-	}
-
-	if len(desc.DBClusters) == 0 {
-		return "", fmt.Errorf("cluster %s not found", clusterId)
-	}
-
-	cluster := desc.DBClusters[0]
-	state := DBClusterState{
-		ClusterId: clusterId,
-	}
-
-	status := aws.ToString(cluster.Status)
-
-	switch status {
-	case "available":
-		state.WasRunning = true
-
-		// Create snapshot if requested
-		if snapshotBeforeStop {
-			snapshotId := fmt.Sprintf("%s-hibernate-%d", clusterId, time.Now().Unix())
-			log.Info("creating DB cluster snapshot before stop", "clusterId", clusterId, "snapshotId", snapshotId)
-			_, err := client.CreateDBClusterSnapshot(ctx, &rds.CreateDBClusterSnapshotInput{
-				DBClusterIdentifier:         aws.String(clusterId),
-				DBClusterSnapshotIdentifier: aws.String(snapshotId),
-			})
-			if err != nil {
-				return "", fmt.Errorf("create cluster snapshot: %w", err)
-			}
-			state.SnapshotId = snapshotId
-
-			// Wait for snapshot
-			waiter := rds.NewDBClusterSnapshotAvailableWaiter(client)
-			log.Info("waiting for cluster snapshot to be available", "snapshotId", snapshotId)
-			if err := waiter.Wait(ctx, &rds.DescribeDBClusterSnapshotsInput{
-				DBClusterSnapshotIdentifier: aws.String(snapshotId),
-			}, 30*time.Minute); err != nil {
-				return "", fmt.Errorf("wait for cluster snapshot: %w", err)
-			}
-			log.Info("cluster snapshot available", "snapshotId", snapshotId)
-		}
-
-		// Stop cluster
-		log.Info("stopping DB cluster", "clusterId", clusterId)
-		if _, err = client.StopDBCluster(ctx, &rds.StopDBClusterInput{
-			DBClusterIdentifier: aws.String(clusterId),
-		}); err != nil {
-			var apiErr smithy.APIError
-			if errors.As(err, &apiErr) {
-				switch apiErr.ErrorCode() {
-				case "DBClusterNotFoundFault":
-					log.Info("cluster not found, skipping ...", "clusterId", clusterId)
-					return operationOutcomeSkippedStale, nil
-				}
-			}
-			return "", err
-		}
-	case "stopped":
-		state.WasRunning = false
-		log.Info("cluster is already stopped", "clusterId", clusterId)
-	default:
-		log.Info("cluster is in a status that cannot be stopped, skipping stop ...",
-			"clusterId", clusterId, "status", status)
-		return operationOutcomeSkippedStale, nil
-	}
-
-	// Incremental save: persist this cluster's restore data immediately.
-	if callback != nil {
-		key := "cluster:" + state.ClusterId
-		if err := callback(key, state); err != nil {
-			log.Error(err, "failed to save restore data incrementally", "clusterId", clusterId)
-			// Continue processing - save at end as fallback
-		}
-	}
-
-	log.Info("cluster processed successfully",
-		"clusterId", clusterId,
-		"wasRunning", state.WasRunning,
-		"snapshotCreated", state.SnapshotId != "",
-	)
-
-	// Add to waiting list for awaiting completion if configured
-	if params.AwaitCompletion.Enabled {
-		e.waitinglistForClusters = append(e.waitinglistForClusters, clusterId)
-	}
-
-	return operationOutcomeApplied, nil
-}
-
-func (e *Executor) startInstance(ctx context.Context, log logr.Logger, client RDSClient, instanceId string, params Parameters) (operationOutcome, error) {
-	// Check current status
-	desc, err := client.DescribeDBInstances(ctx, &rds.DescribeDBInstancesInput{
-		DBInstanceIdentifier: aws.String(instanceId),
-	})
-	if err != nil {
-		var apiErr smithy.APIError
-		if errors.As(err, &apiErr) {
-			switch apiErr.ErrorCode() {
-			case "DBInstanceNotFound":
-				log.Info("instance not found, skipping ...", "instanceId", instanceId)
-				return operationOutcomeSkippedStale, nil
-			}
-		}
-		return "", err
-	}
-
-	if len(desc.DBInstances) == 0 {
-		return "", fmt.Errorf("instance %s not found", instanceId)
-	}
-
-	status := aws.ToString(desc.DBInstances[0].DBInstanceStatus)
-	if status == "available" {
-		// Instance is already running, no action needed
-		log.Info("instance is already running", "instanceId", instanceId)
-		return operationOutcomeSkippedStale, nil
-	}
-
-	if status != "stopped" {
-		// For now we simplify it that only RDS in "stopped" status can be started.
-		// In practice, there are some other statuses that can be started (e.g. incompatible-network),
-		// but we would need to do more complex handling to determine if start is valid in those cases (e.g. only certain instance types, only non-SQLServer engines).
-		// For simplicity, we only allow starting from "stopped" status for now, and we can expand support later if needed.
-		// As of now here are following statuses that are startable:
-		// stopped, inaccessible-encryption-credentials-recoverable, incompatible-network (only valid for non-SqlServer instances)
-
-		log.Info("instance is in a status that cannot be started, skipping start ...",
-			"instanceId", instanceId, "status", status)
-		return operationOutcomeSkippedStale, nil
-	}
-
-	_, err = client.StartDBInstance(ctx, &rds.StartDBInstanceInput{
-		DBInstanceIdentifier: aws.String(instanceId),
-	})
-
-	if err != nil {
-		var apiErr smithy.APIError
-		if errors.As(err, &apiErr) {
-			switch apiErr.ErrorCode() {
-			case "DBInstanceNotFound":
-				log.Info("instance not found, skipping ...", "instanceId", instanceId)
-				return operationOutcomeSkippedStale, nil
-			}
-		}
-		return "", err
-	}
-
-	// Add to waiting list for awaiting completion if configured
-	if params.AwaitCompletion.Enabled {
-		e.waitinglistForInstances = append(e.waitinglistForInstances, instanceId)
-	}
-
-	return operationOutcomeApplied, nil
-}
-
-func (e *Executor) startCluster(ctx context.Context, log logr.Logger, client RDSClient, clusterId string, params Parameters) (operationOutcome, error) {
-	// Check current status
-	desc, err := client.DescribeDBClusters(ctx, &rds.DescribeDBClustersInput{
-		DBClusterIdentifier: aws.String(clusterId),
-	})
-	if err != nil {
-		var apiErr smithy.APIError
-		if errors.As(err, &apiErr) {
-			switch apiErr.ErrorCode() {
-			case "DBClusterNotFoundFault":
-				log.Info("cluster not found, skipping ...", "clusterId", clusterId)
-				return operationOutcomeSkippedStale, nil
-			}
-		}
-		return "", err
-	}
-
-	if len(desc.DBClusters) == 0 {
-		return "", fmt.Errorf("cluster %s not found", clusterId)
-	}
-
-	status := aws.ToString(desc.DBClusters[0].Status)
-	if status == "available" {
-		// Cluster is already running, no action needed
-		log.Info("cluster is already running", "clusterId", clusterId)
-		return operationOutcomeSkippedStale, nil
-	}
-
-	if status != "stopped" {
-		// Only "stopped" clusters can be started
-		log.Info("cluster is in a status that cannot be started, skipping start ...",
-			"clusterId", clusterId, "status", status)
-		return operationOutcomeSkippedStale, nil
-	}
-
-	_, err = client.StartDBCluster(ctx, &rds.StartDBClusterInput{
-		DBClusterIdentifier: aws.String(clusterId),
-	})
-	if err != nil {
-		var apiErr smithy.APIError
-		if errors.As(err, &apiErr) {
-			switch apiErr.ErrorCode() {
-			case "DBClusterNotFoundFault":
-				log.Info("cluster not found, skipping ...", "clusterId", clusterId)
-				return operationOutcomeSkippedStale, nil
-			}
-		}
-		return "", err
-	}
-
-	// Wait for cluster to be available if configured
-	if params.AwaitCompletion.Enabled {
-		e.waitinglistForClusters = append(e.waitinglistForClusters, clusterId)
-	}
-
-	return operationOutcomeApplied, nil
-}
-
-// findDBInstances discovers DB instances matching the selector.
-func (e *Executor) findDBInstances(ctx context.Context, log logr.Logger, client RDSClient, selector executorparams.RDSSelector) ([]rdsTypes.DBInstance, error) {
-	var instances []rdsTypes.DBInstance
-
-	// If explicit instance IDs provided, fetch them directly
-	if len(selector.InstanceIds) > 0 {
-		for _, instanceID := range selector.InstanceIds {
-			desc, err := client.DescribeDBInstances(ctx, &rds.DescribeDBInstancesInput{
-				DBInstanceIdentifier: aws.String(instanceID),
-			})
-			if err != nil {
-				log.Error(err, "failed to describe instance", "instanceId", instanceID)
-				return nil, fmt.Errorf("describe instance %s: %w", instanceID, err)
-			}
-			if len(desc.DBInstances) > 0 {
-				instances = append(instances, desc.DBInstances...)
-			}
-		}
-		return instances, nil
-	}
-
-	// Otherwise, discover all instances and apply tag filtering
-	log.Info("listing all DB instances in account/region")
-	result, err := client.DescribeDBInstances(ctx, &rds.DescribeDBInstancesInput{})
-	if err != nil {
-		return nil, fmt.Errorf("describe DB instances: %w", err)
-	}
-
-	// If includeAll, skip tag fetching and include everything
-	if selector.IncludeAll {
-		log.Info("including all DB instances (includeAll=true)", "count", len(result.DBInstances))
-		return result.DBInstances, nil
-	}
-
-	// Apply tag-based filtering
-	for _, inst := range result.DBInstances {
-		instanceID := aws.ToString(inst.DBInstanceIdentifier)
-
-		// Get tags for tag-based filtering
-		instanceARN := aws.ToString(inst.DBInstanceArn)
-		tagsResp, err := client.ListTagsForResource(ctx, &rds.ListTagsForResourceInput{
-			ResourceName: aws.String(instanceARN),
-		})
-		if err != nil {
-			log.Error(err, "failed to list tags for instance", "instanceId", instanceID)
-			return nil, fmt.Errorf("list tags for instance %s: %w", instanceID, err)
-		}
-
-		instanceTags := make(map[string]string)
-		for _, tag := range tagsResp.TagList {
-			instanceTags[aws.ToString(tag.Key)] = aws.ToString(tag.Value)
-		}
-
-		if strings.HasPrefix(instanceID, "aws-restore-") {
-			log.Info("skipping instance that appears to be an AWS-managed restore job resource", "instanceId", instanceID)
-			continue
-		}
-
-		// Apply tag filtering
-		if len(selector.Tags) > 0 {
-			// Include instances matching tags
-			if e.matchesTags(instanceTags, selector.Tags) {
-				instances = append(instances, inst)
-				log.Info("instance included (tags match)", "instanceId", instanceID, "tags", instanceTags)
-			}
-		} else if len(selector.ExcludeTags) > 0 {
-			// Include instances NOT matching excludeTags
-			if !e.matchesTags(instanceTags, selector.ExcludeTags) {
-				instances = append(instances, inst)
-				log.Info("instance included (excludeTags don't match)", "instanceId", instanceID, "tags", instanceTags)
-			}
-		}
-	}
-
-	return instances, nil
-}
-
-// findDBClusters discovers DB clusters matching the selector.
-func (e *Executor) findDBClusters(ctx context.Context, log logr.Logger, client RDSClient, selector executorparams.RDSSelector) ([]rdsTypes.DBCluster, error) {
-	var clusters []rdsTypes.DBCluster
-
-	// If explicit cluster IDs provided, fetch them directly
-	if len(selector.ClusterIds) > 0 {
-		for _, clusterID := range selector.ClusterIds {
-			desc, err := client.DescribeDBClusters(ctx, &rds.DescribeDBClustersInput{
-				DBClusterIdentifier: aws.String(clusterID),
-			})
-			if err != nil {
-				log.Error(err, "failed to describe cluster", "clusterId", clusterID)
-				return nil, fmt.Errorf("describe cluster %s: %w", clusterID, err)
-			}
-			if len(desc.DBClusters) > 0 {
-				clusters = append(clusters, desc.DBClusters...)
-			}
-		}
-		return clusters, nil
-	}
-
-	// Otherwise, discover all clusters and apply tag filtering
-	log.Info("listing all DB clusters in account/region")
-	result, err := client.DescribeDBClusters(ctx, &rds.DescribeDBClustersInput{})
-	if err != nil {
-		return nil, fmt.Errorf("describe DB clusters: %w", err)
-	}
-
-	// If includeAll, skip tag fetching and include everything
-	if selector.IncludeAll {
-		log.Info("including all DB clusters (includeAll=true)", "count", len(result.DBClusters))
-		return result.DBClusters, nil
-	}
-
-	// Apply tag-based filtering
-	for _, cluster := range result.DBClusters {
-		clusterID := aws.ToString(cluster.DBClusterIdentifier)
-
-		// Get tags for tag-based filtering
-		clusterARN := aws.ToString(cluster.DBClusterArn)
-		tagsResp, err := client.ListTagsForResource(ctx, &rds.ListTagsForResourceInput{
-			ResourceName: aws.String(clusterARN),
-		})
-		if err != nil {
-			log.Error(err, "failed to list tags for cluster", "clusterId", clusterID)
-			return nil, fmt.Errorf("list tags for cluster %s: %w", clusterID, err)
-		}
-
-		clusterTags := make(map[string]string)
-		for _, tag := range tagsResp.TagList {
-			clusterTags[aws.ToString(tag.Key)] = aws.ToString(tag.Value)
-		}
-
-		// Apply tag filtering
-		if len(selector.Tags) > 0 {
-			// Include clusters matching tags
-			if e.matchesTags(clusterTags, selector.Tags) {
-				clusters = append(clusters, cluster)
-				log.Info("cluster included (tags match)", "clusterId", clusterID, "tags", clusterTags)
-			}
-		} else if len(selector.ExcludeTags) > 0 {
-			// Include clusters NOT matching excludeTags
-			if !e.matchesTags(clusterTags, selector.ExcludeTags) {
-				clusters = append(clusters, cluster)
-				log.Info("cluster included (excludeTags don't match)", "clusterId", clusterID, "tags", clusterTags)
-			}
-		}
-	}
-
-	return clusters, nil
-}
-
-// matchesTags checks if resource tags match the selector tags.
-// If selector tag value is empty string, matches any resource with that key.
-// If selector tag value is non-empty, matches only exact key=value.
-func (e *Executor) matchesTags(resourceTags map[string]string, selectorTags map[string]string) bool {
-	for key, value := range selectorTags {
-		resourceValue, hasKey := resourceTags[key]
-		if !hasKey {
-			// Resource doesn't have this key
-			return false
-		}
-		if value != "" && resourceValue != value {
-			// Selector specifies a value, but it doesn't match
-			return false
-		}
-		// If value == "", we only check key existence (already verified above)
-	}
-	return true
-}
-
-// waitForInstanceStopped waits for a DB instance to reach stopped state.
-func (e *Executor) waitForInstanceStopped(ctx context.Context, log logr.Logger, client RDSClient, instanceID string, timeout string) error {
-	if timeout == "" {
-		timeout = DefaultWaitTimeout
-	}
-
-	w, err := waiter.NewWaiter(ctx, log, timeout)
-	if err != nil {
-		return err
-	}
-
-	description := fmt.Sprintf("DB instance %s to stop", instanceID)
-	return w.Poll(description, func() (bool, string, error) {
-		desc, err := client.DescribeDBInstances(ctx, &rds.DescribeDBInstancesInput{
-			DBInstanceIdentifier: aws.String(instanceID),
-		})
-		if err != nil {
-			return false, "", err
-		}
-
-		if len(desc.DBInstances) == 0 {
-			return false, "", fmt.Errorf("instance %s not found", instanceID)
-		}
-
-		status := aws.ToString(desc.DBInstances[0].DBInstanceStatus)
-		done := status == "stopped"
-		statusStr := fmt.Sprintf("status=%s", status)
-
-		return done, statusStr, nil
-	})
-}
-
-// waitForInstanceAvailable waits for a DB instance to reach available state.
-func (e *Executor) waitForInstanceAvailable(ctx context.Context, log logr.Logger, client RDSClient, instanceId string, timeout string) error {
-	log.Info("waiting for RDS instance to be available",
-		"instanceId", instanceId,
-		"timeout", timeout,
-	)
-
-	w, err := waiter.NewWaiter(ctx, log, timeout)
-	if err != nil {
-		return err
-	}
-
-	description := fmt.Sprintf("DB instance %s to be available", instanceId)
-	return w.Poll(description, func() (bool, string, error) {
-		desc, err := client.DescribeDBInstances(ctx, &rds.DescribeDBInstancesInput{
-			DBInstanceIdentifier: aws.String(instanceId),
-		})
-		if err != nil {
-			return false, "", err
-		}
-
-		if len(desc.DBInstances) == 0 {
-			return false, "", fmt.Errorf("instance %s not found", instanceId)
-		}
-
-		status := aws.ToString(desc.DBInstances[0].DBInstanceStatus)
-		done := status == "available"
-		statusStr := fmt.Sprintf("status=%s", status)
-
-		return done, statusStr, nil
-	})
-}
-
-// waitForClusterStopped waits for a DB cluster to reach stopped state.
-func (e *Executor) waitForClusterStopped(ctx context.Context, log logr.Logger, client RDSClient, clusterID string, timeout string) error {
-	if timeout == "" {
-		timeout = DefaultWaitTimeout
-	}
-
-	w, err := waiter.NewWaiter(ctx, log, timeout)
-	if err != nil {
-		return err
-	}
-
-	description := fmt.Sprintf("DB cluster %s to stop", clusterID)
-	return w.Poll(description, func() (bool, string, error) {
-		desc, err := client.DescribeDBClusters(ctx, &rds.DescribeDBClustersInput{
-			DBClusterIdentifier: aws.String(clusterID),
-		})
-		if err != nil {
-			return false, "", err
-		}
-
-		if len(desc.DBClusters) == 0 {
-			return false, "", fmt.Errorf("cluster %s not found", clusterID)
-		}
-
-		status := aws.ToString(desc.DBClusters[0].Status)
-		done := status == "stopped"
-		statusStr := fmt.Sprintf("status=%s", status)
-
-		return done, statusStr, nil
-	})
-}
-
-// waitForClusterAvailable waits for a DB cluster to reach available state.
-func (e *Executor) waitForClusterAvailable(ctx context.Context, log logr.Logger, client RDSClient, clusterId string, timeout string) error {
-	log.Info("waiting for DB cluster to be available",
-		"clusterId", clusterId,
-		"timeout", timeout,
-	)
-	w, err := waiter.NewWaiter(ctx, log, timeout)
-	if err != nil {
-		return err
-	}
-
-	description := fmt.Sprintf("DB cluster %s to be available", clusterId)
-	return w.Poll(description, func() (bool, string, error) {
-		desc, err := client.DescribeDBClusters(ctx, &rds.DescribeDBClustersInput{
-			DBClusterIdentifier: aws.String(clusterId),
-		})
-		if err != nil {
-			return false, "", err
-		}
-
-		if len(desc.DBClusters) == 0 {
-			return false, "", fmt.Errorf("cluster %s not found", clusterId)
-		}
-
-		status := aws.ToString(desc.DBClusters[0].Status)
-		done := status == "available"
-		statusStr := fmt.Sprintf("status=%s", status)
-
-		return done, statusStr, nil
-	})
 }
