@@ -360,6 +360,10 @@ func (s *state) updateExecutionStatuses(ctx context.Context,
 					duration := exec.FinishedAt.Sub(exec.StartedAt.Time).Seconds()
 					metrics.ExecutionDuration.WithLabelValues(s.Key.String(), string(operation), exec.Executor, status).Observe(duration)
 				}
+
+				// Mark job as stale immediately upon reaching terminal state.
+				// This prevents the job from being re-associated on restart.
+				go s.markJobAsStale(ctx, log, &job)
 			}
 
 			if execID, ok := job.Labels[wellknown.LabelExecutionID]; ok {
@@ -440,6 +444,26 @@ func (s *state) getTerminationMessageFromPod(ctx context.Context, job *batchv1.J
 		}
 	}
 	return ""
+}
+
+// markJobAsStale patches the job with the stale label to prevent it from being
+// re-associated with execution status on restart. This is called asynchronously
+// when a job reaches a terminal state (Completed or Failed).
+func (s *state) markJobAsStale(ctx context.Context, log logr.Logger, job *batchv1.Job) {
+	patch := client.MergeFrom(job.DeepCopy())
+
+	if job.Labels == nil {
+		job.Labels = make(map[string]string)
+	}
+
+	job.Labels[wellknown.LabelStaleRunnerJob] = "true"
+	job.Labels[wellknown.LabelStaleReasonRunnerJob] = "terminal-state-reached"
+
+	if err := s.Patch(ctx, job, patch); err != nil {
+		log.Error(err, "failed to mark job as stale", "job", job.Name)
+	} else {
+		log.V(1).Info("marked job as stale", "job", job.Name)
+	}
 }
 
 // buildExecutionPlan creates a scheduler.ExecutionPlan from the plan's strategy.
@@ -575,20 +599,20 @@ func (s *state) createRunnerJob(ctx context.Context, log logr.Logger, clk clock.
 								"--target-type", target.Type,
 								"--plan", plan.Name,
 							},
-						Env: []corev1.EnvVar{
-							{Name: "POD_NAMESPACE", Value: plan.Namespace},
-							{Name: "HIBERNATOR_EXECUTION_ID", Value: executionID},
-							{Name: "HIBERNATOR_CYCLE_ID", Value: plan.Status.CurrentCycleID},
-							{Name: "HIBERNATOR_CONTROL_PLANE_ENDPOINT", Value: infra.ControlPlaneEndpoint},
-							{Name: "HIBERNATOR_USE_TLS", Value: "false"},
-							{Name: "HIBERNATOR_GRPC_ENDPOINT", Value: fmt.Sprintf("%s:9444", infra.ControlPlaneEndpoint)},
-							{Name: "HIBERNATOR_WEBSOCKET_ENDPOINT", Value: fmt.Sprintf("ws://%s:8082", infra.ControlPlaneEndpoint)},
-							{Name: "HIBERNATOR_HTTP_CALLBACK_ENDPOINT", Value: fmt.Sprintf("http://%s:8082", infra.ControlPlaneEndpoint)},
-							{Name: "HIBERNATOR_TARGET_PARAMS", Value: string(paramsJSON)},
-							{Name: "HIBERNATOR_CONNECTOR_KIND", Value: target.ConnectorRef.Kind},
-							{Name: "HIBERNATOR_CONNECTOR_NAME", Value: target.ConnectorRef.Name},
-							{Name: "HIBERNATOR_CONNECTOR_NAMESPACE", Value: connectorNamespace},
-						},
+							Env: []corev1.EnvVar{
+								{Name: "POD_NAMESPACE", Value: plan.Namespace},
+								{Name: "HIBERNATOR_EXECUTION_ID", Value: executionID},
+								{Name: "HIBERNATOR_CYCLE_ID", Value: plan.Status.CurrentCycleID},
+								{Name: "HIBERNATOR_CONTROL_PLANE_ENDPOINT", Value: infra.ControlPlaneEndpoint},
+								{Name: "HIBERNATOR_USE_TLS", Value: "false"},
+								{Name: "HIBERNATOR_GRPC_ENDPOINT", Value: fmt.Sprintf("%s:9444", infra.ControlPlaneEndpoint)},
+								{Name: "HIBERNATOR_WEBSOCKET_ENDPOINT", Value: fmt.Sprintf("ws://%s:8082", infra.ControlPlaneEndpoint)},
+								{Name: "HIBERNATOR_HTTP_CALLBACK_ENDPOINT", Value: fmt.Sprintf("http://%s:8082", infra.ControlPlaneEndpoint)},
+								{Name: "HIBERNATOR_TARGET_PARAMS", Value: string(paramsJSON)},
+								{Name: "HIBERNATOR_CONNECTOR_KIND", Value: target.ConnectorRef.Kind},
+								{Name: "HIBERNATOR_CONNECTOR_NAME", Value: target.ConnectorRef.Name},
+								{Name: "HIBERNATOR_CONNECTOR_NAMESPACE", Value: connectorNamespace},
+							},
 							VolumeMounts: []corev1.VolumeMount{
 								{
 									Name:      "stream-token",
