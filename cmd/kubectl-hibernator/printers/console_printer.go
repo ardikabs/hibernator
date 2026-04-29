@@ -339,8 +339,8 @@ func (p *ConsolePrinter) printRestorePoint(cm corev1.ConfigMap, w io.Writer) err
 
 		resourceCount := len(data.State)
 		staleCount := 0
-		for _, count := range data.StaleCounts {
-			if count > 0 {
+		for _, status := range data.Status {
+			if status.StaleCount > 0 {
 				staleCount++
 			}
 		}
@@ -413,27 +413,23 @@ func (p *ConsolePrinter) printRestoreResources(out *RestoreResourcesOutput, w io
 		}
 
 		// Extract resource IDs from state with stale counts and cycle ID
-		capturedAtStr := "-"
-		if data.CapturedAt != nil {
-			capturedAtStr = data.CapturedAt.Format("2006-01-02 15:04:05")
-		}
 		for resourceID := range data.State {
 			staleCount := 0
-			if data.StaleCounts != nil {
-				staleCount = data.StaleCounts[resourceID]
-			}
-			managedByCycleID := ""
-			if data.ManagedByCycleIDs != nil {
-				managedByCycleID = data.ManagedByCycleIDs[resourceID]
+			reportedAtStr := "-"
+			if data.Status != nil {
+				staleCount = data.Status[resourceID].StaleCount
+				if data.Status[resourceID].LastReportedAt != nil {
+					reportedAtStr = data.Status[resourceID].LastReportedAt.Format("2006-01-02 15:04:05")
+				}
 			}
 			resources = append(resources, RestoreResource{
-				ResourceID:       resourceID,
-				Target:           data.Target,
-				Executor:         data.Executor,
-				IsLive:           data.IsLive,
-				CapturedAt:       capturedAtStr,
-				StaleCount:       staleCount,
-				ManagedByCycleID: managedByCycleID,
+				ResourceID: resourceID,
+				Target:     data.Target,
+				Executor:   data.Executor,
+				IsLive:     data.IsLive,
+				ReportedAt: reportedAtStr,
+				StaleCount: staleCount,
+				CycleID:    data.CycleID,
 			})
 		}
 	}
@@ -448,7 +444,7 @@ func (p *ConsolePrinter) printRestoreResources(out *RestoreResourcesOutput, w io
 	}
 
 	tw.newline()
-	tw.header("Resource ID", "Target", "Executor", "Live", "Stale", "Cycle", "Captured At")
+	tw.header("Resource ID", "Target", "Executor", "Live", "Stale", "Cycle", "Reported At")
 
 	for _, r := range resources {
 		live := "no"
@@ -460,10 +456,10 @@ func (p *ConsolePrinter) printRestoreResources(out *RestoreResourcesOutput, w io
 			stale = "yes"
 		}
 		cycleID := "-"
-		if r.ManagedByCycleID != "" {
-			cycleID = r.ManagedByCycleID
+		if r.CycleID != "" {
+			cycleID = r.CycleID
 		}
-		tw.row(r.ResourceID, r.Target, r.Executor, live, stale, cycleID, r.CapturedAt)
+		tw.row(r.ResourceID, r.Target, r.Executor, live, stale, cycleID, r.ReportedAt)
 	}
 
 	return tw.flush()

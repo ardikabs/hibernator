@@ -68,14 +68,14 @@ func (s *overrideActionState) Handle(ctx context.Context) (StateResult, error) {
 		switch plan.Status.Phase {
 		case hibernatorv1alpha1.PhaseActive:
 			log.Info("manual override: forcing hibernation, transitioning to Hibernating")
-			return s.transitionToHibernating(log)
+			return s.transitionToHibernating(ctx, log)
 
 		case hibernatorv1alpha1.PhaseHibernated:
 			if restart, err := s.consumeRestart(ctx, plan); err != nil {
 				return StateResult{}, err
 			} else if restart {
 				log.Info("restart: re-triggering hibernation executor")
-				return s.transitionToHibernating(log)
+				return s.transitionToHibernating(ctx, log)
 			}
 			// Target already reached — stay quiet until the user removes the annotations.
 			log.V(1).Info("manual override: plan is already Hibernated; " +

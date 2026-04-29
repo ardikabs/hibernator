@@ -40,9 +40,9 @@ func LoadRestoreData(ctx context.Context, k8sClient client.Client, log logr.Logg
 	transformedData := make(map[string]json.RawMessage)
 	staleSkipped := 0
 	for key, value := range data.State {
-		if count, isStale := data.StaleCounts[key]; isStale && count > 0 {
+		if status, hasStatus := data.Status[key]; hasStatus && status.StaleCount > 0 {
 			staleSkipped++
-			log.Info("excluding stale key from restore data", "key", key, "staleCount", count)
+			log.Info("excluding stale key from restore data", "key", key, "staleCount", status.StaleCount)
 			continue
 		}
 

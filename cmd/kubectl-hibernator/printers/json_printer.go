@@ -133,8 +133,8 @@ func (p *JSONPrinter) printRestoreShowJSON(cm corev1.ConfigMap) (any, error) {
 
 		resourceCount := len(data.State)
 		staleCount := 0
-		for _, count := range data.StaleCounts {
-			if count > 0 {
+		for _, status := range data.Status {
+			if status.StaleCount > 0 {
 				staleCount++
 			}
 		}
@@ -364,14 +364,8 @@ func (p *JSONPrinter) restoreResourcesToJSON(out *RestoreResourcesOutput) Restor
 
 		for resourceID, state := range data.State {
 			staleCount := 0
-			if data.StaleCounts != nil {
-				staleCount = data.StaleCounts[resourceID]
-			}
-
-			// Get the cycle ID that managed this resource (if any)
-			managedByCycleID := ""
-			if data.ManagedByCycleIDs != nil {
-				managedByCycleID = data.ManagedByCycleIDs[resourceID]
+			if data.Status != nil {
+				staleCount = data.Status[resourceID].StaleCount
 			}
 
 			result.Resources = append(result.Resources, RestoreResourceJSON{
@@ -381,7 +375,7 @@ func (p *JSONPrinter) restoreResourcesToJSON(out *RestoreResourcesOutput) Restor
 				IsLive:           data.IsLive,
 				CapturedAt:       capturedAtStr,
 				StaleCount:       staleCount,
-				ManagedByCycleID: managedByCycleID,
+				ManagedByCycleID: data.CycleID,
 				State:            state.(map[string]any),
 			})
 		}

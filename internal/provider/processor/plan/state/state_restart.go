@@ -52,7 +52,7 @@ func (s *restartState) Handle(ctx context.Context) (StateResult, error) {
 			return StateResult{}, nil
 		}
 		log.Info("restart: re-triggering hibernation executor based on CurrentOperation")
-		return s.transitionToHibernating(log)
+		return s.transitionToHibernating(ctx, log)
 
 	case hibernatorv1alpha1.OperationWakeUp:
 		if plan.Status.Phase != hibernatorv1alpha1.PhaseActive {
