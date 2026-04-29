@@ -412,7 +412,7 @@ func (p *ConsolePrinter) printRestoreResources(out *RestoreResourcesOutput, w io
 			continue
 		}
 
-		// Extract resource IDs from state with stale counts
+		// Extract resource IDs from state with stale counts and cycle ID
 		capturedAtStr := "-"
 		if data.CapturedAt != nil {
 			capturedAtStr = data.CapturedAt.Format("2006-01-02 15:04:05")
@@ -422,13 +422,18 @@ func (p *ConsolePrinter) printRestoreResources(out *RestoreResourcesOutput, w io
 			if data.StaleCounts != nil {
 				staleCount = data.StaleCounts[resourceID]
 			}
+			managedByCycleID := ""
+			if data.ManagedByCycleIDs != nil {
+				managedByCycleID = data.ManagedByCycleIDs[resourceID]
+			}
 			resources = append(resources, RestoreResource{
-				ResourceID: resourceID,
-				Target:     data.Target,
-				Executor:   data.Executor,
-				IsLive:     data.IsLive,
-				CapturedAt: capturedAtStr,
-				StaleCount: staleCount,
+				ResourceID:       resourceID,
+				Target:           data.Target,
+				Executor:         data.Executor,
+				IsLive:           data.IsLive,
+				CapturedAt:       capturedAtStr,
+				StaleCount:       staleCount,
+				ManagedByCycleID: managedByCycleID,
 			})
 		}
 	}
@@ -443,7 +448,7 @@ func (p *ConsolePrinter) printRestoreResources(out *RestoreResourcesOutput, w io
 	}
 
 	tw.newline()
-	tw.header("Resource ID", "Target", "Executor", "Live", "Stale", "Captured At")
+	tw.header("Resource ID", "Target", "Executor", "Live", "Stale", "Cycle", "Captured At")
 
 	for _, r := range resources {
 		live := "no"
@@ -454,7 +459,11 @@ func (p *ConsolePrinter) printRestoreResources(out *RestoreResourcesOutput, w io
 		if r.StaleCount > 0 {
 			stale = "yes"
 		}
-		tw.row(r.ResourceID, r.Target, r.Executor, live, stale, r.CapturedAt)
+		cycleID := "-"
+		if r.ManagedByCycleID != "" {
+			cycleID = r.ManagedByCycleID
+		}
+		tw.row(r.ResourceID, r.Target, r.Executor, live, stale, cycleID, r.CapturedAt)
 	}
 
 	return tw.flush()

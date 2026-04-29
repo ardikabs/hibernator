@@ -293,7 +293,7 @@ func (r *runner) buildExecutorSpec(ctx context.Context, params map[string]any) (
 	// Add incremental save callback for shutdown operations
 	var flusher func() error
 	if r.cfg.Operation == "shutdown" {
-		callback, flush := state.NewReportStateHandlers(ctx, r.k8sClient, r.log, r.cfg.Namespace, r.cfg.Plan, r.cfg.Target, r.cfg.TargetType)
+		callback, flush := state.NewReportStateHandlers(ctx, r.k8sClient, r.log, r.cfg.Namespace, r.cfg.Plan, r.cfg.Target, r.cfg.TargetType, r.cfg.CycleID)
 		spec.ReportStateCallback = callback
 		flusher = flush
 	}

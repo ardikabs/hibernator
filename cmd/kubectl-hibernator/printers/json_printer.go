@@ -368,14 +368,21 @@ func (p *JSONPrinter) restoreResourcesToJSON(out *RestoreResourcesOutput) Restor
 				staleCount = data.StaleCounts[resourceID]
 			}
 
+			// Get the cycle ID that managed this resource (if any)
+			managedByCycleID := ""
+			if data.ManagedByCycleIDs != nil {
+				managedByCycleID = data.ManagedByCycleIDs[resourceID]
+			}
+
 			result.Resources = append(result.Resources, RestoreResourceJSON{
-				ResourceID: resourceID,
-				Target:     data.Target,
-				Executor:   data.Executor,
-				IsLive:     data.IsLive,
-				CapturedAt: capturedAtStr,
-				StaleCount: staleCount,
-				State:      state.(map[string]any),
+				ResourceID:       resourceID,
+				Target:           data.Target,
+				Executor:         data.Executor,
+				IsLive:           data.IsLive,
+				CapturedAt:       capturedAtStr,
+				StaleCount:       staleCount,
+				ManagedByCycleID: managedByCycleID,
+				State:            state.(map[string]any),
 			})
 		}
 	}

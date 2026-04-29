@@ -14,6 +14,75 @@ Every executor implements three operations:
 
 Executors own **idempotency** — calling Shutdown on an already-stopped resource or WakeUp on an already-running resource must succeed without side effects.
 
+## Intent Preservation Contract
+
+Hibernator implements a **first-capture-wins** intent preservation strategy to handle retries and partial failures during shutdown operations.
+
+### Demanded State
+
+Each executor defines a **demanded state** — the condition that qualifies a resource for hibernator management:
+
+| Executor | Demanded State | Intent Field |
+|----------|---------------|--------------|
+| **EC2** | Instance state is `running` | `wasRunning` |
+| **EKS** | Node group `desiredSize > 0` | `wasScaled` |
+| **RDS** | DB instance/cluster status is `available` | `wasRunning` |
+| **Karpenter** | NodePool exists | (full spec captured) |
+| **WorkloadScaler** | Workload `replicas > 0` | `wasScaled` |
+
+Only resources in their demanded state are captured and managed by hibernator. Resources not in demanded state are observed passively.
+
+### First-Capture-Wins Semantics
+
+When a resource is first captured during a hibernation cycle:
+
+1. **Intent is locked**: The `wasRunning` or `wasScaled` value is preserved indefinitely
+2. **Cycle tracking**: A `managedByCycleIDs` map tracks which cycle first captured each resource
+3. **Session preservation**: On subsequent hibernation attempts with the **same cycle ID** (retries), the original intent is preserved even if the resource's current state has changed
+4. **Fresh session**: A **different cycle ID** starts fresh — only resources currently in demanded state are tracked
+
+This ensures that:
+- **Retry safety**: If shutdown fails and user retries with the same cycle ID, the original intent is preserved
+- **Consistency**: Once hibernator decides a resource should be managed, that decision persists until successful wakeup (within the same session)
+- **Clean slate**: New hibernation operations (different cycle ID) get fresh tracking without stale data
+
+### Stale Resource Eviction
+
+If a resource is not reported for 3 consecutive hibernation cycles:
+
+1. The resource is evicted from restore data
+2. The resource is removed from `managedByCycleIDs` tracking
+3. On the next hibernation, the resource can be freshly captured
+
+This prevents permanently retaining data for deleted or unmanageable resources while allowing temporary absences (e.g., API failures) without data loss.
+
+!!! note
+    The `managedByCycleIDs` tracking is stored separately from resource state and is not visible in the resource data itself. It is used internally for idempotency and session management.
+
+### Edge Case Handling
+
+**Resource state changes between hibernation and wakeup:**
+- If a resource is manually stopped/deleted after hibernation, the executor skips it during wakeup
+- The executor handles "resource not found" or "already in desired state" gracefully
+- Hibernator's contract is: *"restore to the captured intent, but tolerate reality"*
+
+**Example EC2 flow:**
+
+```
+Cycle "hib-001" (first attempt):
+  Instance running → captured with wasRunning=true, tracked in managedByCycleIDs
+
+Retry "hib-001" (user restarts same operation):
+  Instance still running → wasRunning=true preserved (same cycle ID)
+  Instance stopped → marker preserved, state unchanged (user responsibility)
+
+New cycle "hib-002" (fresh hibernation):
+  Instance running → fresh capture with new cycle ID
+  Instance stopped → not tracked (different cycle ID, not in demanded state)
+
+WakeUp: Instance restored based on captured intent
+```
+
 ## How Executors Run
 
 Executors do not run inside the controller. Instead, the controller creates an isolated **Runner Job** for each target. The runner:
