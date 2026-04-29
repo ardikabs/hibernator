@@ -43,7 +43,7 @@ func (state *idleState) Handle(ctx context.Context) (StateResult, error) {
 	case hibernatorv1alpha1.PhaseActive:
 		if shouldHibernate {
 			log.Info("schedule indicates hibernation, transitioning to Hibernating")
-			return state.transitionToHibernating(log)
+			return state.transitionToHibernating(ctx, log)
 		}
 
 		log.V(1).Info("schedule indicates active period, no transition needed")
@@ -64,9 +64,20 @@ func (state *idleState) Handle(ctx context.Context) (StateResult, error) {
 
 // transitionToHibernating initialises the shutdown operation, queues a status update,
 // and returns Requeue so the worker immediately drives the Hibernating phase handler.
-func (state *idleState) transitionToHibernating(log logr.Logger) (StateResult, error) {
+func (state *idleState) transitionToHibernating(ctx context.Context, log logr.Logger) (StateResult, error) {
 	plan := state.plan()
-	cycleID := uuid.New().String()[:8]
+
+	// For idempotent restart: reuse cycle ID from existing live restore data if available.
+	// This ensures that if the runner restarts mid-operation, the same cycle ID is used
+	// and the ManagedByCycleIDs markers remain valid for preserving already-processed state.
+	cycleID := state.getExistingCycleIDForHibernation(ctx, log, plan)
+	if cycleID == "" {
+		cycleID = uuid.New().String()[:8]
+		log.V(1).Info("generated new cycle ID for hibernation", "cycleID", cycleID)
+	} else {
+		log.V(1).Info("reusing existing cycle ID from live restore data", "cycleID", cycleID)
+	}
+
 	now := state.Clock.Now()
 
 	executions := make([]hibernatorv1alpha1.ExecutionStatus, len(plan.Spec.Targets))
@@ -140,4 +151,29 @@ func (state *idleState) transitionToWakingUp(log logr.Logger) (StateResult, erro
 
 	log.V(1).Info("queued transition to WakingUp", "cycleID", plan.Status.CurrentCycleID)
 	return StateResult{Requeue: true}, nil
+}
+
+// getExistingCycleIDForHibernation checks if there's existing live restore data for any target
+// in the plan and returns the cycle ID from that data. This enables idempotent restarts by
+// reusing the same cycle ID when the runner restarts mid-hibernation.
+// Returns empty string if no live restore data exists.
+func (state *idleState) getExistingCycleIDForHibernation(ctx context.Context, log logr.Logger, plan *hibernatorv1alpha1.HibernatePlan) string {
+	if state.RestoreManager == nil {
+		return ""
+	}
+
+	for _, target := range plan.Spec.Targets {
+		data, err := state.RestoreManager.Load(ctx, plan.Namespace, plan.Name, target.Name)
+		if err != nil {
+			log.V(1).Error(err, "failed to load restore data for cycle ID check",
+				"target", target.Name)
+			continue
+		}
+		// Found live data with active cycle ID - reuse it for idempotent restart
+		if data != nil && data.IsLive && data.CycleID != "" {
+			return data.CycleID
+		}
+	}
+
+	return ""
 }

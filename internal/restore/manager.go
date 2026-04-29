@@ -9,7 +9,6 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"maps"
 
 	"github.com/ardikabs/hibernator/internal/wellknown"
 	"github.com/go-logr/logr"
@@ -42,6 +41,18 @@ func NewManager(c client.Client, log logr.Logger) *Manager {
 	return &Manager{client: c, log: log}
 }
 
+// ResourceStatus tracks per-resource metadata for staleness tracking and future extensions.
+type ResourceStatus struct {
+	// StaleCount tracks consecutive hibernation cycles where this resource was not reported.
+	// When this reaches maxStaleCount, the resource is evicted from State.
+	StaleCount int `json:"staleCount,omitempty"`
+
+	// LastReportedAt records when this resource was last reported by the executor.
+	// Used for same-cycle restart detection: if nil, resource hasn't been reported in this cycle.
+	// If set, the existing state is preserved during restart unless the new state is demanded.
+	LastReportedAt *metav1.Time `json:"lastReportedAt,omitempty"`
+}
+
 // Data represents restore metadata for a target.
 type Data struct {
 	// Target is the target name.
@@ -58,6 +69,12 @@ type Data struct {
 	// IsLive resets to false when wakening from hibernation.
 	IsLive bool `json:"isLive"`
 
+	// CycleID identifies the hibernation execution cycle that created this restore data.
+	// This is set during transitionToHibernating and cleared when all targets are restored.
+	// It enables idempotent restart - when a runner restarts, the same cycle ID is reused
+	// from existing live restore data, allowing ManagedByCycleIDs comparisons to work correctly.
+	CycleID string `json:"cycleID,omitempty"`
+
 	// CreatedAt is when the restore data was created.
 	// This is set once when the restore data entry is first created and never changes.
 	CreatedAt metav1.Time `json:"createdAt"`
@@ -68,15 +85,13 @@ type Data struct {
 	CapturedAt *metav1.Time `json:"capturedAt,omitempty"`
 
 	// State contains executor-specific restore state.
+	// Key is the resource identifier (e.g., "instance:i-123", "default/Deployment/app").
 	State map[string]any `json:"state,omitempty"`
 
-	// StaleCounts tracks consecutive hibernation cycles where a resource was not reported by the executor.
-	StaleCounts map[string]int `json:"staleCounts,omitempty"`
-
-	// ManagedByCycleIDs tracks which execution cycle first captured each resource in demanded state.
-	// This is used for intent preservation - resources marked with a cycle ID have their
-	// wasRunning/wasScaled intent preserved across hibernation retries.
-	ManagedByCycleIDs map[string]string `json:"managedByCycleIDs,omitempty"`
+	// Status contains per-resource metadata for staleness tracking and other attributes.
+	// Key matches State keys. This separation allows State to contain only executor-specific
+	// data while Status holds hibernator-internal metadata.
+	Status map[string]ResourceStatus `json:"status,omitempty"`
 }
 
 // configMapName generates the ConfigMap name for a plan's restore data.
@@ -148,60 +163,6 @@ func (m *Manager) PrepareRestorePoint(ctx context.Context, namespace, planName s
 	return m.client.Update(ctx, cm)
 }
 
-// Save persists restore data for a target.
-func (m *Manager) Save(ctx context.Context, namespace, planName, targetName string, data *Data) error {
-	cmName := configMapName(planName)
-
-	// Get or create the ConfigMap
-	cm := &corev1.ConfigMap{}
-	err := m.client.Get(ctx, types.NamespacedName{
-		Namespace: namespace,
-		Name:      cmName,
-	}, cm)
-
-	if apierrors.IsNotFound(err) {
-		// Create new ConfigMap
-		cm = &corev1.ConfigMap{
-			ObjectMeta: metav1.ObjectMeta{
-				Name:      cmName,
-				Namespace: namespace,
-				Labels: map[string]string{
-					wellknown.LabelPlan: planName,
-				},
-			},
-			Data: make(map[string]string),
-		}
-	} else if err != nil {
-		return fmt.Errorf("get restore configmap: %w", err)
-	}
-
-	patch := client.MergeFrom(cm.DeepCopy())
-
-	// Serialize data
-	dataBytes, err := json.Marshal(data)
-	if err != nil {
-		return fmt.Errorf("marshal restore data: %w", err)
-	}
-
-	// Check size
-	if len(dataBytes) > MaxConfigMapSize {
-		return fmt.Errorf("restore data too large (%d bytes), max %d", len(dataBytes), MaxConfigMapSize)
-	}
-
-	// Store with target-specific key
-	key := fmt.Sprintf("%s.json", targetName)
-	if cm.Data == nil {
-		cm.Data = make(map[string]string)
-	}
-	cm.Data[key] = string(dataBytes)
-
-	if cm.ResourceVersion == "" {
-		return m.client.Create(ctx, cm)
-	}
-
-	return m.client.Patch(ctx, cm, patch)
-}
-
 // Load retrieves restore data for a target.
 func (m *Manager) Load(ctx context.Context, namespace, planName, targetName string) (*Data, error) {
 	cmName := configMapName(planName)
@@ -231,143 +192,6 @@ func (m *Manager) Load(ctx context.Context, namespace, planName, targetName stri
 	}
 
 	return &data, nil
-}
-
-// SaveState saves the reported state from the current shutdown cycle and performs
-// staleness housekeeping in a single operation.
-//
-// Logic:
-//  1. Keys present in reportedState: update their value and clear any StaleCount.
-//     Resources in demanded state (wasRunning=true or wasScaled=true) are marked
-//     with the current cycleID in ManagedByCycleIDs.
-//  2. Existing keys missing from reportedState: increment their StaleCount.
-//     If StaleCount >= maxStaleCount, the key is evicted from the state entirely
-//     and removed from ManagedByCycleIDs.
-//  3. The result is saved in a single API call.
-//
-// This replaces the previous SaveOrPreserve + HousekeepStaleResources two-step pattern.
-func (m *Manager) SaveState(ctx context.Context, namespace, planName, targetName string, data *Data, maxStaleCount int, cycleID string) error {
-	// Load existing data to merge with
-	existing, err := m.Load(ctx, namespace, planName, targetName)
-	if err != nil {
-		return fmt.Errorf("load existing restore data: %w", err)
-	}
-
-	if existing == nil {
-		// No existing data, mark demanded state resources with cycle ID and save
-		data.ManagedByCycleIDs = make(map[string]string)
-		if data.State != nil {
-			for key, value := range data.State {
-				// Normal path: value is map[string]any, check for demanded state
-				if stateMap, ok := value.(map[string]any); ok && isDemandedState(stateMap) {
-					data.ManagedByCycleIDs[key] = cycleID
-					continue
-				}
-				// Fallback path: value is not map[string]any - log warning
-				if _, ok := value.(map[string]any); !ok {
-					m.log.Info("WARNING: restore state value is not map[string]any, accumulator may not have converted it properly",
-						"key", key,
-						"type", fmt.Sprintf("%T", value),
-						"value", value,
-					)
-				}
-			}
-		}
-		return m.Save(ctx, namespace, planName, targetName, data)
-	}
-
-	// Build merged state
-	mergedState := make(map[string]any)
-
-	// Preserve existing ManagedByCycleIDs - allows same-cycle-id restart preservation
-	managedByCycleIDs := make(map[string]string)
-	maps.Copy(managedByCycleIDs, existing.ManagedByCycleIDs)
-
-	// Copy existing stale counts
-	staleCounts := make(map[string]int)
-	maps.Copy(staleCounts, existing.StaleCounts)
-
-	// Process reported keys: store new value and update cycleID tracking
-	for key, newValue := range data.State {
-		// Reset stale count for reported keys
-		delete(staleCounts, key)
-
-		// Determine cycle ID handling based on current state
-		existingCycleID, wasPreviouslyTracked := existing.ManagedByCycleIDs[key]
-
-		// Normal path: value is map[string]any, check for demanded state
-		if stateMap, ok := newValue.(map[string]any); ok {
-			if isDemandedState(stateMap) {
-				// Resource is in demanded state - update state and cycle ID
-				mergedState[key] = newValue
-				managedByCycleIDs[key] = cycleID
-				continue
-			}
-
-			// Not in demanded state, check for same-cycle preservation
-			if wasPreviouslyTracked && existingCycleID == cycleID {
-				// Same cycle ID restart: preserve existing marker and state (user responsibility)
-				// Resource was previously marked in this session, preserve both marker and state
-				managedByCycleIDs[key] = existingCycleID
-				mergedState[key] = existing.State[key]
-				continue
-			}
-
-			// Not in demanded state and not same-cycle - use new value but don't mark
-			mergedState[key] = newValue
-			continue
-		}
-
-		// Fallback path: value is not map[string]any, pass through as-is
-		// This handles edge cases where accumulator didn't convert the value
-		m.log.Info("WARNING: restore state value is not map[string]any, accumulator may not have converted it properly",
-			"key", key,
-			"type", fmt.Sprintf("%T", newValue),
-			"value", newValue,
-		)
-		mergedState[key] = newValue
-	}
-
-	// Process existing keys not reported this cycle
-	for key, value := range existing.State {
-		if _, reported := data.State[key]; !reported {
-			// Not reported this cycle — increment stale counter (for observability)
-			staleCounts[key]++
-			delete(managedByCycleIDs, key) // Drop from marker immediately if not reported
-
-			if staleCounts[key] >= maxStaleCount {
-				// Evict: exceeded grace period
-				delete(staleCounts, key)
-				// Don't add to mergedState - resource is evicted
-				continue
-			} else {
-				// Keep existing value until eviction (for observability)
-				mergedState[key] = value
-			}
-		}
-	}
-
-	// Clean up empty maps
-	if len(staleCounts) == 0 {
-		staleCounts = nil
-	}
-	if len(managedByCycleIDs) == 0 {
-		managedByCycleIDs = nil
-	}
-
-	mergedData := &Data{
-		Target:            data.Target,
-		Executor:          data.Executor,
-		Version:           data.Version,
-		IsLive:            true,
-		CreatedAt:         existing.CreatedAt, // Preserve original creation time
-		CapturedAt:        data.CapturedAt,    // Update to latest capture time
-		State:             mergedState,
-		StaleCounts:       staleCounts,
-		ManagedByCycleIDs: managedByCycleIDs,
-	}
-
-	return m.Save(ctx, namespace, planName, targetName, mergedData)
 }
 
 // isDemandedState checks if a resource is in demanded state (wasRunning=true or wasScaled=true)
@@ -407,14 +231,13 @@ func (m *Manager) MarkTargetRestored(ctx context.Context, namespace, planName, t
 	annotationKey := wellknown.AnnotationRestoredPrefix + targetName
 	cm.Annotations[annotationKey] = "true"
 
-	// Reset IsLive flag for this target's data after successful restore
+	// Reset IsLive flag and clear CycleID for this target's data after successful restore
 	key := fmt.Sprintf("%s.json", targetName)
 	if val, ok := cm.Data[key]; ok {
 		var data Data
 		if err := json.Unmarshal([]byte(val), &data); err == nil {
 			// Mark data as consumed - next hibernation should capture fresh live state
 			data.IsLive = false
-
 			if dataBytes, err := json.Marshal(&data); err == nil {
 				cm.Data[key] = string(dataBytes)
 			}
@@ -453,7 +276,7 @@ func (m *Manager) MarkAllTargetsRestored(ctx context.Context, namespace, planNam
 	return true, nil
 }
 
-// UnlockRestoreData clears all restored-* annotations without deleting ConfigMap data.
+// UnlockRestoreData clears all restored-* annotations and resets CycleID for all targets.
 // This unlocks the restore data for the next hibernation cycle.
 func (m *Manager) UnlockRestoreData(ctx context.Context, namespace, planName string) error {
 	cmName := configMapName(planName)
@@ -477,6 +300,21 @@ func (m *Manager) UnlockRestoreData(ctx context.Context, namespace, planName str
 		for key := range cm.Annotations {
 			if len(key) > len(wellknown.AnnotationRestoredPrefix) && key[:len(wellknown.AnnotationRestoredPrefix)] == wellknown.AnnotationRestoredPrefix {
 				delete(cm.Annotations, key)
+			}
+		}
+	}
+
+	// Clear CycleID from all target data to mark restoration as complete
+	for key, val := range cm.Data {
+		var data Data
+		if err := json.Unmarshal([]byte(val), &data); err == nil && data.CycleID != "" {
+			m.log.V(1).Info("clearing CycleID after successful restoration",
+				"target", data.Target,
+				"clearedCycleID", data.CycleID,
+			)
+			data.CycleID = ""
+			if dataBytes, err := json.Marshal(&data); err == nil {
+				cm.Data[key] = string(dataBytes)
 			}
 		}
 	}

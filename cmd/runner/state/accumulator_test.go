@@ -93,13 +93,13 @@ func TestAccumulator_StructConversion(t *testing.T) {
 	require.Equal(t, "i-87654321", state2Data["instanceId"])
 	require.Equal(t, false, state2Data["wasRunning"])
 
-	// Verify ManagedByCycleIDs tracking works correctly
-	// wasRunning=true resources should be tracked
-	require.NotNil(t, data.ManagedByCycleIDs, "ManagedByCycleIDs should be initialized")
-	require.Equal(t, "cycle-001", data.ManagedByCycleIDs["instance:i-12345678"],
-		"Demanded state resource (wasRunning=true) should be tracked")
-	require.Empty(t, data.ManagedByCycleIDs["instance:i-87654321"],
-		"Non-demanded state resource should NOT be tracked")
+	// Verify CycleID is set at data level
+	require.Equal(t, "cycle-001", data.CycleID,
+		"CycleID should be set at data level for the target")
+	// Verify Status entries exist for both resources
+	require.NotNil(t, data.Status, "Status map should be initialized")
+	require.Contains(t, data.Status, "instance:i-12345678", "Demanded resource should have status")
+	require.Contains(t, data.Status, "instance:i-87654321", "Non-demanded resource should also have status")
 }
 
 // TestAccumulator_MapStringAnyPassthrough verifies that map[string]any values
@@ -145,7 +145,7 @@ func TestAccumulator_MapStringAnyPassthrough(t *testing.T) {
 	require.Equal(t, true, stateData["wasScaled"])
 
 	// Verify tracking
-	require.Equal(t, "cycle-001", data.ManagedByCycleIDs["default/Deployment/web-app"])
+	require.Equal(t, "cycle-001", data.CycleID)
 }
 
 // TestAccumulator_StaleCountsAccumulation verifies that stale counts work correctly
@@ -182,16 +182,16 @@ func TestAccumulator_StaleCountsAccumulation(t *testing.T) {
 	_ = json.Unmarshal([]byte(cm.Data["test-target.json"]), &data)
 
 	// i-2 should have stale count of 1
-	require.Equal(t, 1, data.StaleCounts["i-2"], "Missing resource should have stale count of 1")
+	require.Equal(t, 1, data.Status["i-2"].StaleCount, "Missing resource should have stale count of 1")
 	// i-1 should not be in stale counts
-	require.Empty(t, data.StaleCounts["i-1"], "Reported resource should not be in stale counts")
+	require.Empty(t, data.Status["i-1"].StaleCount, "Reported resource should not be in stale counts")
 
 	// Both should still be in state
 	require.NotNil(t, data.State["i-1"])
 	require.NotNil(t, data.State["i-2"])
 
-	// i-2 should not be in ManagedByCycleIDs since it wasn't reported this cycle
-	require.Empty(t, data.ManagedByCycleIDs["i-2"])
+	// CycleID should be updated to the new cycle
+	require.Equal(t, "cycle-002", data.CycleID, "CycleID should be updated to current cycle")
 }
 
 // TestAccumulator_BackwardCompatibility verifies that accumulator works with
@@ -216,8 +216,9 @@ func TestAccumulator_BackwardCompatibility(t *testing.T) {
 				"wasRunning": true,
 			},
 		},
-		ManagedByCycleIDs: map[string]string{
-			"old-instance": "cycle-old",
+		CycleID: "cycle-old",
+		Status: map[string]restore.ResourceStatus{
+			"old-instance": {},
 		},
 	}
 
@@ -257,13 +258,13 @@ func TestAccumulator_BackwardCompatibility(t *testing.T) {
 	require.NotNil(t, data.State["new-instance"])
 
 	// Old instance should be marked stale (not reported this cycle)
-	require.Equal(t, 1, data.StaleCounts["old-instance"])
+	require.Equal(t, 1, data.Status["old-instance"].StaleCount)
 
-	// New instance should be tracked with new cycle
-	require.Equal(t, "cycle-new", data.ManagedByCycleIDs["new-instance"])
+	// New instance should have StaleCount=0 (reported this cycle)
+	require.Equal(t, 0, data.Status["new-instance"].StaleCount)
 
-	// Old instance should NOT be in ManagedByCycleIDs (dropped when not reported)
-	require.Empty(t, data.ManagedByCycleIDs["old-instance"])
+	// CycleID should be updated to new cycle
+	require.Equal(t, "cycle-new", data.CycleID)
 }
 
 // TestAccumulator_NoOpShutdown verifies that an empty flush (no resources added)

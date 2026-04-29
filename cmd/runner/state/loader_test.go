@@ -29,14 +29,19 @@ func schemeWithRestore() *runtime.Scheme {
 
 func restoreCMWithStaleKeys(t *testing.T, state map[string]any, staleCounts map[string]int) *corev1.ConfigMap {
 	t.Helper()
+	// Convert staleCounts map to Status map
+	status := make(map[string]restore.ResourceStatus)
+	for key, count := range staleCounts {
+		status[key] = restore.ResourceStatus{StaleCount: count}
+	}
 	data := restore.Data{
-		Target:      "my-target",
-		Executor:    "eks",
-		Version:     1,
-		CreatedAt:   metav1.Now(),
-		IsLive:      true,
-		State:       state,
-		StaleCounts: staleCounts,
+		Target:    "my-target",
+		Executor:  "eks",
+		Version:   1,
+		CreatedAt: metav1.Now(),
+		IsLive:    true,
+		State:     state,
+		Status:    status,
 	}
 	dataBytes, err := json.Marshal(data)
 	require.NoError(t, err)

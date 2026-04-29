@@ -93,7 +93,7 @@ func runDrop(ctx context.Context, opts *restorePointOptions, planName string) er
 
 		// Remove the resource ID from state and tracking
 		delete(data.State, opts.resourceID)
-		delete(data.ManagedByCycleIDs, opts.resourceID)
+		delete(data.Status, opts.resourceID)
 
 		// Update ConfigMap
 		dataBytes, err := json.Marshal(&data)
