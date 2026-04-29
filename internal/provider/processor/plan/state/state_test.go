@@ -65,7 +65,7 @@ func buildTestConfig(c client.Client) *Config {
 			PlanStatuses:      newCaptureUpdater[*hibernatorv1alpha1.HibernatePlan](64),
 			ExceptionStatuses: newCaptureUpdater[*hibernatorv1alpha1.ScheduleException](16),
 		},
-		RestoreManager: restore.NewManager(c),
+		RestoreManager: restore.NewManager(c, logr.Discard()),
 		Callbacks: StateCallbacks{
 			OnJobMissing: func(target string) bool { return false },
 			OnJobFound:   func(target string) {},

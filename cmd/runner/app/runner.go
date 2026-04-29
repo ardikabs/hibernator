@@ -190,7 +190,7 @@ func (r *runner) run(ctx context.Context) (*executor.Result, error) {
 
 	// Wake-up success: mark target as restored for cleanup coordination
 	if cfg.Operation == "wakeup" {
-		rm := restore.NewManager(r.k8sClient)
+		rm := restore.NewManager(r.k8sClient, r.log)
 		if err := rm.MarkTargetRestored(ctx, r.cfg.Namespace, r.cfg.Plan, r.cfg.Target); err != nil {
 			// Non-fatal: continue even if marking fails
 			r.log.Error(err, "failed to mark target as restored (non-fatal)")

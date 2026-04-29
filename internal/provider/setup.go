@@ -74,7 +74,7 @@ func Setup(mgr ctrl.Manager, clk clock.Clock, opts ProviderOptions) error {
 		return fmt.Errorf("unable to register field indexes: %w", err)
 	}
 
-	restoreMgr := restore.NewManager(mgr.GetClient())
+	restoreMgr := restore.NewManager(mgr.GetClient(), opts.Logger)
 	planner := scheduler.NewPlanner()
 	schedEvaluator := scheduler.NewScheduleEvaluator(clk, scheduler.WithScheduleBuffer(opts.ScheduleBufferDuration))
 

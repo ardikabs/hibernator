@@ -71,7 +71,7 @@ func newPlanReconciler(clk *clocktesting.FakeClock, objs ...client.Object) (*Pla
 		Scheme:            scheme,
 		Resources:         resources,
 		ScheduleEvaluator: scheduler.NewScheduleEvaluator(clk),
-		RestoreManager:    restore.NewManager(fakeClient),
+		RestoreManager:    restore.NewManager(fakeClient, logr.Discard()),
 		Planner:           scheduler.NewPlanner(),
 	}
 	return r, resources

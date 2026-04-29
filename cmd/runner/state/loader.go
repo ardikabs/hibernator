@@ -24,7 +24,7 @@ import (
 func LoadRestoreData(ctx context.Context, k8sClient client.Client, log logr.Logger, namespace, plan, target string) (*executor.RestoreData, error) {
 	log = log.WithValues("plan", fmt.Sprintf("%s/%s", namespace, plan), "target", target)
 
-	restoreMgr := restore.NewManager(k8sClient)
+	restoreMgr := restore.NewManager(k8sClient, log)
 
 	data, err := restoreMgr.Load(ctx, namespace, plan, target)
 	if err != nil {

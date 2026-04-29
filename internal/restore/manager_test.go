@@ -11,6 +11,7 @@ import (
 	"testing"
 
 	"github.com/ardikabs/hibernator/internal/wellknown"
+	"github.com/go-logr/logr"
 	"github.com/stretchr/testify/require"
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -24,7 +25,7 @@ func TestManager_Save(t *testing.T) {
 	_ = corev1.AddToScheme(scheme)
 
 	fakeClient := fake.NewClientBuilder().WithScheme(scheme).Build()
-	mgr := NewManager(fakeClient)
+	mgr := NewManager(fakeClient, logr.Discard())
 
 	ctx := context.Background()
 	namespace := "test-ns"
@@ -83,7 +84,7 @@ func TestManager_SaveState_NoExisting(t *testing.T) {
 	_ = corev1.AddToScheme(scheme)
 
 	fakeClient := fake.NewClientBuilder().WithScheme(scheme).Build()
-	mgr := NewManager(fakeClient)
+	mgr := NewManager(fakeClient, logr.Discard())
 
 	ctx := context.Background()
 	namespace := "test-ns"
@@ -134,6 +135,141 @@ func TestManager_SaveState_NoExisting(t *testing.T) {
 	require.Equal(t, "cycle-1", loaded.ManagedByCycleIDs["i-87654321"])
 }
 
+// TestManager_SaveState_FirstSave_WithoutTrackingFields verifies that on first save
+// (when no existing data), staleCounts and managedByCycleIDs are properly initialized
+// even when not explicitly provided in the input data.
+func TestManager_SaveState_FirstSave_WithoutTrackingFields(t *testing.T) {
+	scheme := runtime.NewScheme()
+	_ = corev1.AddToScheme(scheme)
+
+	fakeClient := fake.NewClientBuilder().WithScheme(scheme).Build()
+	mgr := NewManager(fakeClient, logr.Discard())
+
+	ctx := context.Background()
+	namespace := "test-ns"
+	planName := "test-plan"
+	targetName := "test-target"
+
+	now := metav1.Now()
+	// First save with data that doesn't have staleCounts and managedByCycleIDs
+	// This simulates what accumulator.go does
+	data := &Data{
+		Target:     targetName,
+		Executor:   "rds",
+		Version:    1,
+		CreatedAt:  now,
+		CapturedAt: &now,
+		IsLive:     true,
+		State: map[string]interface{}{
+			"i-123": map[string]interface{}{
+				"instanceId": "i-123",
+				"wasRunning": true,
+			},
+			"i-456": map[string]interface{}{
+				"instanceId": "i-456",
+				"wasRunning": false, // Not in demanded state
+			},
+		},
+		// Note: StaleCounts and ManagedByCycleIDs are nil (not set)
+	}
+
+	err := mgr.SaveState(ctx, namespace, planName, targetName, data, 3, "cycle-1")
+	require.NoError(t, err)
+
+	// Load and verify
+	loaded, err := mgr.Load(ctx, namespace, planName, targetName)
+	require.NoError(t, err)
+	require.NotNil(t, loaded)
+
+	// Both fields should be nil since there are no stale resources and
+	// managedByCycleIDs only contains resources in demanded state
+	require.Nil(t, loaded.StaleCounts, "StaleCounts should be nil on first save with no stale resources")
+	require.NotNil(t, loaded.ManagedByCycleIDs, "ManagedByCycleIDs should be initialized")
+	require.Equal(t, "cycle-1", loaded.ManagedByCycleIDs["i-123"], "Demanded state resource should be tracked")
+	require.Empty(t, loaded.ManagedByCycleIDs["i-456"], "Non-demanded state resource should NOT be tracked")
+}
+
+// TestManager_SaveState_BackwardCompatibility_NoTrackingFields verifies backward compatibility
+// with existing restore data that doesn't have staleCounts and managedByCycleIDs fields.
+func TestManager_SaveState_BackwardCompatibility_NoTrackingFields(t *testing.T) {
+	scheme := runtime.NewScheme()
+	_ = corev1.AddToScheme(scheme)
+
+	fakeClient := fake.NewClientBuilder().WithScheme(scheme).Build()
+	mgr := NewManager(fakeClient, logr.Discard())
+
+	ctx := context.Background()
+	namespace := "test-ns"
+	planName := "test-plan"
+	targetName := "test-target"
+
+	// Simulate old-format data without tracking fields by using raw JSON
+	oldFormatJSON := `{
+		"target": "test-target",
+		"executor": "rds",
+		"version": 1,
+		"isLive": true,
+		"createdAt": "2024-01-01T00:00:00Z",
+		"state": {
+			"i-123": {"instanceId": "i-123", "wasRunning": true}
+		}
+	}`
+
+	// Create ConfigMap with old-format data
+	cm := &corev1.ConfigMap{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      configMapName(planName),
+			Namespace: namespace,
+			Labels: map[string]string{
+				wellknown.LabelPlan: planName,
+			},
+		},
+		Data: map[string]string{
+			fmt.Sprintf("%s.json", targetName): oldFormatJSON,
+		},
+	}
+	err := fakeClient.Create(ctx, cm)
+	require.NoError(t, err)
+
+	// Now do a new save - this should handle missing fields gracefully
+	now := metav1.Now()
+	newData := &Data{
+		Target:     targetName,
+		Executor:   "rds",
+		Version:    2,
+		CreatedAt:  now,
+		CapturedAt: &now,
+		IsLive:     true,
+		State: map[string]interface{}{
+			"i-123": map[string]interface{}{
+				"instanceId": "i-123",
+				"wasRunning": true,
+			},
+			"i-new": map[string]interface{}{
+				"instanceId": "i-new",
+				"wasRunning": true,
+			},
+		},
+	}
+
+	err = mgr.SaveState(ctx, namespace, planName, targetName, newData, 3, "cycle-2")
+	require.NoError(t, err)
+
+	// Load and verify backward compatibility
+	loaded, err := mgr.Load(ctx, namespace, planName, targetName)
+	require.NoError(t, err)
+	require.NotNil(t, loaded)
+
+	// Verify both old and new resources are present
+	require.NotNil(t, loaded.State["i-123"], "Old resource should be preserved")
+	require.NotNil(t, loaded.State["i-new"], "New resource should be added")
+
+	// Verify tracking fields are now properly initialized
+	require.NotNil(t, loaded.ManagedByCycleIDs, "ManagedByCycleIDs should be initialized after merge")
+	require.Equal(t, "cycle-2", loaded.ManagedByCycleIDs["i-123"])
+	require.Equal(t, "cycle-2", loaded.ManagedByCycleIDs["i-new"])
+}
+
 // TestManager_SaveState_StalenessHousekeeping comprehensively tests staleness tracking and eviction:
 // 1. Resources accumulate stale counts when not reported
 // 2. Stale counts are cleared when resources are reported again
@@ -145,7 +281,7 @@ func TestManager_SaveState_StalenessHousekeeping(t *testing.T) {
 	_ = corev1.AddToScheme(scheme)
 
 	fakeClient := fake.NewClientBuilder().WithScheme(scheme).Build()
-	mgr := NewManager(fakeClient)
+	mgr := NewManager(fakeClient, logr.Discard())
 
 	ctx := context.Background()
 	namespace := "test-ns"
@@ -463,7 +599,7 @@ func TestManager_SaveState_IdempotencyAndStaleness(t *testing.T) {
 	_ = corev1.AddToScheme(scheme)
 
 	fakeClient := fake.NewClientBuilder().WithScheme(scheme).Build()
-	mgr := NewManager(fakeClient)
+	mgr := NewManager(fakeClient, logr.Discard())
 
 	ctx := context.Background()
 	namespace := "test-ns"
@@ -691,7 +827,7 @@ func TestManager_SaveState_ManagedByCycleIDEdgeCases(t *testing.T) {
 	_ = corev1.AddToScheme(scheme)
 
 	fakeClient := fake.NewClientBuilder().WithScheme(scheme).Build()
-	mgr := NewManager(fakeClient)
+	mgr := NewManager(fakeClient, logr.Discard())
 
 	ctx := context.Background()
 	namespace := "test-ns"
@@ -994,7 +1130,7 @@ func TestManager_MarkTargetRestored(t *testing.T) {
 	_ = corev1.AddToScheme(scheme)
 
 	fakeClient := fake.NewClientBuilder().WithScheme(scheme).Build()
-	mgr := NewManager(fakeClient)
+	mgr := NewManager(fakeClient, logr.Discard())
 
 	ctx := context.Background()
 	namespace := "test-ns"
@@ -1054,7 +1190,7 @@ func TestManager_MarkTargetRestored_NoConfigMap(t *testing.T) {
 	_ = corev1.AddToScheme(scheme)
 
 	fakeClient := fake.NewClientBuilder().WithScheme(scheme).Build()
-	mgr := NewManager(fakeClient)
+	mgr := NewManager(fakeClient, logr.Discard())
 
 	ctx := context.Background()
 	namespace := "test-ns"
@@ -1073,7 +1209,7 @@ func TestManager_MarkAllTargetsRestored(t *testing.T) {
 	_ = corev1.AddToScheme(scheme)
 
 	fakeClient := fake.NewClientBuilder().WithScheme(scheme).Build()
-	mgr := NewManager(fakeClient)
+	mgr := NewManager(fakeClient, logr.Discard())
 
 	ctx := context.Background()
 	namespace := "test-ns"
@@ -1142,7 +1278,7 @@ func TestManager_UnlockRestoreData(t *testing.T) {
 	_ = corev1.AddToScheme(scheme)
 
 	fakeClient := fake.NewClientBuilder().WithScheme(scheme).Build()
-	mgr := NewManager(fakeClient)
+	mgr := NewManager(fakeClient, logr.Discard())
 
 	ctx := context.Background()
 	namespace := "test-ns"
@@ -1206,7 +1342,7 @@ func TestManager_HasRestoreData(t *testing.T) {
 	_ = corev1.AddToScheme(scheme)
 
 	fakeClient := fake.NewClientBuilder().WithScheme(scheme).Build()
-	mgr := NewManager(fakeClient)
+	mgr := NewManager(fakeClient, logr.Discard())
 
 	ctx := context.Background()
 	namespace := "test-ns"
