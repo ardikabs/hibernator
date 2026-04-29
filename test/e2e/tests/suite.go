@@ -106,7 +106,7 @@ var _ = BeforeSuite(func() {
 	Expect(err).NotTo(HaveOccurred())
 
 	fakeClock = clocktesting.NewFakeClock(time.Now())
-	restoreManager = restore.NewManager(mgr.GetClient())
+	restoreManager = restore.NewManager(mgr.GetClient(), ctrl.Log.WithName("restore"))
 	fakeNotifSink = fakenotif.New()
 
 	err = provider.Setup(mgr, fakeClock, provider.ProviderOptions{

@@ -10,9 +10,9 @@ import (
 	"encoding/json"
 	"fmt"
 	"maps"
-	"time"
 
 	"github.com/ardikabs/hibernator/internal/wellknown"
+	"github.com/go-logr/logr"
 	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -31,11 +31,15 @@ const (
 // Manager handles restore data persistence using ConfigMaps.
 type Manager struct {
 	client client.Client
+	log    logr.Logger
 }
 
 // NewManager creates a new restore data manager.
-func NewManager(c client.Client) *Manager {
-	return &Manager{client: c}
+func NewManager(c client.Client, log logr.Logger) *Manager {
+	if log.GetSink() == nil {
+		log = logr.Discard()
+	}
+	return &Manager{client: c, log: log}
 }
 
 // Data represents restore metadata for a target.
@@ -73,51 +77,6 @@ type Data struct {
 	// This is used for intent preservation - resources marked with a cycle ID have their
 	// wasRunning/wasScaled intent preserved across hibernation retries.
 	ManagedByCycleIDs map[string]string `json:"managedByCycleIDs,omitempty"`
-}
-
-// UnmarshalJSON implements custom JSON unmarshaling for backward compatibility.
-// It handles both old string format and new metav1.Time format for CapturedAt.
-func (d *Data) UnmarshalJSON(data []byte) error {
-	type DataAlias Data
-	aux := &struct {
-		CapturedAt interface{} `json:"capturedAt,omitempty"`
-		*DataAlias
-	}{
-		DataAlias: (*DataAlias)(d),
-	}
-
-	if err := json.Unmarshal(data, &aux); err != nil {
-		return err
-	}
-
-	// Handle CapturedAt backward compatibility
-	if aux.CapturedAt != nil {
-		switch v := aux.CapturedAt.(type) {
-		case string:
-			// Old format: parse string timestamp
-			if v != "" {
-				t, err := time.Parse(time.RFC3339, v)
-				if err != nil {
-					// Try alternative formats
-					t, err = time.Parse("2006-01-02T15:04:05Z", v)
-					if err != nil {
-						return fmt.Errorf("parse capturedAt string: %w", err)
-					}
-				}
-				mt := metav1.NewTime(t)
-				d.CapturedAt = &mt
-			}
-		case map[string]interface{}:
-			// New format: metav1.Time object
-			if sec, ok := v["seconds"].(float64); ok {
-				t := time.Unix(int64(sec), 0)
-				mt := metav1.NewTime(t)
-				d.CapturedAt = &mt
-			}
-		}
-	}
-
-	return nil
 }
 
 // configMapName generates the ConfigMap name for a plan's restore data.
@@ -299,11 +258,18 @@ func (m *Manager) SaveState(ctx context.Context, namespace, planName, targetName
 		data.ManagedByCycleIDs = make(map[string]string)
 		if data.State != nil {
 			for key, value := range data.State {
-				if stateMap, ok := value.(map[string]any); ok {
-					// Only mark resources in demanded state with current cycle ID
-					if isDemandedState(stateMap) {
-						data.ManagedByCycleIDs[key] = cycleID
-					}
+				// Normal path: value is map[string]any, check for demanded state
+				if stateMap, ok := value.(map[string]any); ok && isDemandedState(stateMap) {
+					data.ManagedByCycleIDs[key] = cycleID
+					continue
+				}
+				// Fallback path: value is not map[string]any - log warning
+				if _, ok := value.(map[string]any); !ok {
+					m.log.Info("WARNING: restore state value is not map[string]any, accumulator may not have converted it properly",
+						"key", key,
+						"type", fmt.Sprintf("%T", value),
+						"value", value,
+					)
 				}
 			}
 		}
@@ -329,21 +295,37 @@ func (m *Manager) SaveState(ctx context.Context, namespace, planName, targetName
 		// Determine cycle ID handling based on current state
 		existingCycleID, wasPreviouslyTracked := existing.ManagedByCycleIDs[key]
 
+		// Normal path: value is map[string]any, check for demanded state
 		if stateMap, ok := newValue.(map[string]any); ok {
 			if isDemandedState(stateMap) {
 				// Resource is in demanded state - update state and cycle ID
 				mergedState[key] = newValue
 				managedByCycleIDs[key] = cycleID
-			} else if wasPreviouslyTracked && existingCycleID == cycleID {
+				continue
+			}
+
+			// Not in demanded state, check for same-cycle preservation
+			if wasPreviouslyTracked && existingCycleID == cycleID {
 				// Same cycle ID restart: preserve existing marker and state (user responsibility)
 				// Resource was previously marked in this session, preserve both marker and state
 				managedByCycleIDs[key] = existingCycleID
 				mergedState[key] = existing.State[key]
-			} else {
-				// Not previously marked or different cycle ID - use new value but don't mark
-				mergedState[key] = newValue
+				continue
 			}
+
+			// Not in demanded state and not same-cycle - use new value but don't mark
+			mergedState[key] = newValue
+			continue
 		}
+
+		// Fallback path: value is not map[string]any, pass through as-is
+		// This handles edge cases where accumulator didn't convert the value
+		m.log.Info("WARNING: restore state value is not map[string]any, accumulator may not have converted it properly",
+			"key", key,
+			"type", fmt.Sprintf("%T", newValue),
+			"value", newValue,
+		)
+		mergedState[key] = newValue
 	}
 
 	// Process existing keys not reported this cycle

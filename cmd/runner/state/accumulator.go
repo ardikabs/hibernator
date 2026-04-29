@@ -7,6 +7,7 @@ package state
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"sync"
 
@@ -59,17 +60,54 @@ func NewReportStateHandlers(ctx context.Context, k8sClient client.Client, log lo
 }
 
 // add accumulates a key-value pair in memory.
+// Converts struct values to map[string]any to ensure compatibility with restore manager.
 func (a *Accumulator) add(key string, value any) error {
 	a.mu.Lock()
 	defer a.mu.Unlock()
 
-	a.state[key] = value
+	// Convert struct to map[string]any if needed
+	// This ensures compatibility with restore.Manager.SaveState() which expects map[string]any
+	mapValue, err := normalizeStateValue(value)
+	if err != nil {
+		a.log.Error(err, "when converting state, therefore we keep it as-is",
+			"target", a.target,
+			"targetType", a.targetType,
+			"key", key,
+			"type", fmt.Sprintf("%T", value),
+			"value", value)
+		a.state[key] = value
+	} else {
+		a.state[key] = mapValue
+	}
 
 	a.log.V(1).Info("restore data accumulated in memory",
 		"key", key,
 		"totalKeys", len(a.state),
 	)
 	return nil
+}
+
+// normalizeStateValue converts a value to map[string]any for consistent state representation.
+// If the value is already a map[string]any, it returns it as-is.
+// Otherwise, it marshals to JSON and unmarshals to map[string]any.
+func normalizeStateValue(value any) (map[string]any, error) {
+	// Fast path: already a map[string]any
+	if m, ok := value.(map[string]any); ok {
+		return m, nil
+	}
+
+	// Convert via JSON marshal/unmarshal
+	jsonBytes, err := json.Marshal(value)
+	if err != nil {
+		return nil, fmt.Errorf("marshal value: %w", err)
+	}
+
+	var result map[string]any
+	if err := json.Unmarshal(jsonBytes, &result); err != nil {
+		return nil, fmt.Errorf("unmarshal to map: %w", err)
+	}
+
+	return result, nil
 }
 
 // flush saves all accumulated data to ConfigMap via SaveState, which performs
@@ -96,7 +134,7 @@ func (a *Accumulator) flush(ctx context.Context) error {
 		State:      a.state, // may be nil/empty for no-op shutdown
 	}
 
-	rm := restore.NewManager(a.k8sClient)
+	rm := restore.NewManager(a.k8sClient, log)
 	if err := rm.SaveState(ctx, a.namespace, a.plan, a.target, data, maxStaleCount, a.cycleID); err != nil {
 		return fmt.Errorf("save state to ConfigMap: %w", err)
 	}
