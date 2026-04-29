@@ -274,8 +274,8 @@ var _ = Describe("Lifecycle E2E", func() {
 			if err != nil {
 				return true // Job deleted
 			}
-			cycleID, _ := j.Labels[wellknown.LabelCycleID]
-			return cycleID != plan.Status.CurrentCycleID
+			_, ok := j.Labels[wellknown.LabelStaleRunnerJob]
+			return ok
 		}, testutil.DefaultTimeout, testutil.DefaultInterval).Should(BeTrue(), "first cycle job should be marked stale")
 
 		By("[Cycle-2] Verifying a fresh shutdown Job is created without conflicts from the prior cycle")
