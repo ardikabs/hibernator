@@ -39,8 +39,8 @@ func TestWaitForInstanceStopped_AlreadyStopped(t *testing.T) {
 			},
 		}, nil)
 
-	e := &Executor{}
-	err := e.waitForInstanceStopped(ctx, logr.Discard(), mockRDS, "db-1", "5s")
+	strategy := &instanceStrategy{}
+	err := strategy.WaitForStopped(ctx, logr.Discard(), mockRDS, "db-1", "5s")
 	assert.NoError(t, err)
 	mockRDS.AssertExpectations(t)
 }
@@ -60,9 +60,9 @@ func TestWaitForInstanceStopped_DefaultTimeout(t *testing.T) {
 			},
 		}, nil)
 
-	e := &Executor{}
+	strategy := &instanceStrategy{}
 	// empty timeout → picks up DefaultWaitTimeout constant
-	err := e.waitForInstanceStopped(ctx, logr.Discard(), mockRDS, "db-1", "")
+	err := strategy.WaitForStopped(ctx, logr.Discard(), mockRDS, "db-1", "")
 	assert.NoError(t, err)
 }
 
@@ -70,8 +70,8 @@ func TestWaitForInstanceStopped_InvalidTimeout(t *testing.T) {
 	ctx := context.Background()
 	mockRDS := &mocks.RDSClient{}
 
-	e := &Executor{}
-	err := e.waitForInstanceStopped(ctx, logr.Discard(), mockRDS, "db-1", "not-a-duration")
+	strategy := &instanceStrategy{}
+	err := strategy.WaitForStopped(ctx, logr.Discard(), mockRDS, "db-1", "not-a-duration")
 	assert.Error(t, err)
 	assert.Contains(t, err.Error(), "invalid timeout format")
 }
@@ -83,8 +83,8 @@ func TestWaitForInstanceStopped_DescribeError(t *testing.T) {
 	mockRDS.On("DescribeDBInstances", mock.Anything, mock.Anything).
 		Return((*awsrds.DescribeDBInstancesOutput)(nil), assert.AnError)
 
-	e := &Executor{}
-	err := e.waitForInstanceStopped(ctx, logr.Discard(), mockRDS, "db-1", "5s")
+	strategy := &instanceStrategy{}
+	err := strategy.WaitForStopped(ctx, logr.Discard(), mockRDS, "db-1", "5s")
 	assert.Error(t, err)
 	mockRDS.AssertExpectations(t)
 }
@@ -98,8 +98,8 @@ func TestWaitForInstanceStopped_InstanceNotFound(t *testing.T) {
 			DBInstances: []types.DBInstance{},
 		}, nil)
 
-	e := &Executor{}
-	err := e.waitForInstanceStopped(ctx, logr.Discard(), mockRDS, "db-1", "5s")
+	strategy := &instanceStrategy{}
+	err := strategy.WaitForStopped(ctx, logr.Discard(), mockRDS, "db-1", "5s")
 	assert.Error(t, err)
 	assert.Contains(t, err.Error(), "not found")
 }
@@ -120,8 +120,8 @@ func TestWaitForInstanceAvailable_AlreadyAvailable(t *testing.T) {
 			},
 		}, nil)
 
-	e := &Executor{}
-	err := e.waitForInstanceAvailable(ctx, logr.Discard(), mockRDS, "db-1", "5s")
+	strategy := &instanceStrategy{}
+	err := strategy.WaitForAvailable(ctx, logr.Discard(), mockRDS, "db-1", "5s")
 	assert.NoError(t, err)
 	mockRDS.AssertExpectations(t)
 }
@@ -130,8 +130,8 @@ func TestWaitForInstanceAvailable_InvalidTimeout(t *testing.T) {
 	ctx := context.Background()
 	mockRDS := &mocks.RDSClient{}
 
-	e := &Executor{}
-	err := e.waitForInstanceAvailable(ctx, logr.Discard(), mockRDS, "db-1", "bad-timeout")
+	strategy := &instanceStrategy{}
+	err := strategy.WaitForAvailable(ctx, logr.Discard(), mockRDS, "db-1", "bad-timeout")
 	assert.Error(t, err)
 	assert.Contains(t, err.Error(), "invalid timeout format")
 }
@@ -143,8 +143,8 @@ func TestWaitForInstanceAvailable_DescribeError(t *testing.T) {
 	mockRDS.On("DescribeDBInstances", mock.Anything, mock.Anything).
 		Return((*awsrds.DescribeDBInstancesOutput)(nil), assert.AnError)
 
-	e := &Executor{}
-	err := e.waitForInstanceAvailable(ctx, logr.Discard(), mockRDS, "db-1", "5s")
+	strategy := &instanceStrategy{}
+	err := strategy.WaitForAvailable(ctx, logr.Discard(), mockRDS, "db-1", "5s")
 	assert.Error(t, err)
 	mockRDS.AssertExpectations(t)
 }
@@ -158,8 +158,8 @@ func TestWaitForInstanceAvailable_InstanceNotFound(t *testing.T) {
 			DBInstances: []types.DBInstance{},
 		}, nil)
 
-	e := &Executor{}
-	err := e.waitForInstanceAvailable(ctx, logr.Discard(), mockRDS, "db-1", "5s")
+	strategy := &instanceStrategy{}
+	err := strategy.WaitForAvailable(ctx, logr.Discard(), mockRDS, "db-1", "5s")
 	assert.Error(t, err)
 	assert.Contains(t, err.Error(), "not found")
 }
@@ -180,8 +180,8 @@ func TestWaitForClusterStopped_AlreadyStopped(t *testing.T) {
 			},
 		}, nil)
 
-	e := &Executor{}
-	err := e.waitForClusterStopped(ctx, logr.Discard(), mockRDS, "cluster-1", "5s")
+	strategy := &clusterStrategy{}
+	err := strategy.WaitForStopped(ctx, logr.Discard(), mockRDS, "cluster-1", "5s")
 	assert.NoError(t, err)
 	mockRDS.AssertExpectations(t)
 }
@@ -200,8 +200,8 @@ func TestWaitForClusterStopped_DefaultTimeout(t *testing.T) {
 			},
 		}, nil)
 
-	e := &Executor{}
-	err := e.waitForClusterStopped(ctx, logr.Discard(), mockRDS, "cluster-1", "")
+	strategy := &clusterStrategy{}
+	err := strategy.WaitForStopped(ctx, logr.Discard(), mockRDS, "cluster-1", "")
 	assert.NoError(t, err)
 }
 
@@ -209,8 +209,8 @@ func TestWaitForClusterStopped_InvalidTimeout(t *testing.T) {
 	ctx := context.Background()
 	mockRDS := &mocks.RDSClient{}
 
-	e := &Executor{}
-	err := e.waitForClusterStopped(ctx, logr.Discard(), mockRDS, "cluster-1", "bad-timeout")
+	strategy := &clusterStrategy{}
+	err := strategy.WaitForStopped(ctx, logr.Discard(), mockRDS, "cluster-1", "bad-timeout")
 	assert.Error(t, err)
 	assert.Contains(t, err.Error(), "invalid timeout format")
 }
@@ -222,8 +222,8 @@ func TestWaitForClusterStopped_DescribeError(t *testing.T) {
 	mockRDS.On("DescribeDBClusters", mock.Anything, mock.Anything).
 		Return((*awsrds.DescribeDBClustersOutput)(nil), assert.AnError)
 
-	e := &Executor{}
-	err := e.waitForClusterStopped(ctx, logr.Discard(), mockRDS, "cluster-1", "5s")
+	strategy := &clusterStrategy{}
+	err := strategy.WaitForStopped(ctx, logr.Discard(), mockRDS, "cluster-1", "5s")
 	assert.Error(t, err)
 	mockRDS.AssertExpectations(t)
 }
@@ -237,8 +237,8 @@ func TestWaitForClusterStopped_ClusterNotFound(t *testing.T) {
 			DBClusters: []types.DBCluster{},
 		}, nil)
 
-	e := &Executor{}
-	err := e.waitForClusterStopped(ctx, logr.Discard(), mockRDS, "cluster-1", "5s")
+	strategy := &clusterStrategy{}
+	err := strategy.WaitForStopped(ctx, logr.Discard(), mockRDS, "cluster-1", "5s")
 	assert.Error(t, err)
 	assert.Contains(t, err.Error(), "not found")
 }
@@ -259,8 +259,8 @@ func TestWaitForClusterAvailable_AlreadyAvailable(t *testing.T) {
 			},
 		}, nil)
 
-	e := &Executor{}
-	err := e.waitForClusterAvailable(ctx, logr.Discard(), mockRDS, "cluster-1", "5s")
+	strategy := &clusterStrategy{}
+	err := strategy.WaitForAvailable(ctx, logr.Discard(), mockRDS, "cluster-1", "5s")
 	assert.NoError(t, err)
 	mockRDS.AssertExpectations(t)
 }
@@ -269,8 +269,8 @@ func TestWaitForClusterAvailable_InvalidTimeout(t *testing.T) {
 	ctx := context.Background()
 	mockRDS := &mocks.RDSClient{}
 
-	e := &Executor{}
-	err := e.waitForClusterAvailable(ctx, logr.Discard(), mockRDS, "cluster-1", "bad-timeout")
+	strategy := &clusterStrategy{}
+	err := strategy.WaitForAvailable(ctx, logr.Discard(), mockRDS, "cluster-1", "bad-timeout")
 	assert.Error(t, err)
 	assert.Contains(t, err.Error(), "invalid timeout format")
 }
@@ -282,8 +282,8 @@ func TestWaitForClusterAvailable_DescribeError(t *testing.T) {
 	mockRDS.On("DescribeDBClusters", mock.Anything, mock.Anything).
 		Return((*awsrds.DescribeDBClustersOutput)(nil), assert.AnError)
 
-	e := &Executor{}
-	err := e.waitForClusterAvailable(ctx, logr.Discard(), mockRDS, "cluster-1", "5s")
+	strategy := &clusterStrategy{}
+	err := strategy.WaitForAvailable(ctx, logr.Discard(), mockRDS, "cluster-1", "5s")
 	assert.Error(t, err)
 	mockRDS.AssertExpectations(t)
 }
@@ -297,8 +297,8 @@ func TestWaitForClusterAvailable_ClusterNotFound(t *testing.T) {
 			DBClusters: []types.DBCluster{},
 		}, nil)
 
-	e := &Executor{}
-	err := e.waitForClusterAvailable(ctx, logr.Discard(), mockRDS, "cluster-1", "5s")
+	strategy := &clusterStrategy{}
+	err := strategy.WaitForAvailable(ctx, logr.Discard(), mockRDS, "cluster-1", "5s")
 	assert.Error(t, err)
 	assert.Contains(t, err.Error(), "not found")
 }

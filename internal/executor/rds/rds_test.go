@@ -813,48 +813,6 @@ func TestShutdown_DynamicDiscovery_TagKeyOnly(t *testing.T) {
 	mockRDS.AssertExpectations(t)
 }
 
-func TestRestoreState_JSON(t *testing.T) {
-	state := RestoreState{
-		Instances: []DBInstanceState{
-			{
-				InstanceId:   "db-instance-1",
-				SnapshotId:   "snap-123",
-				WasRunning:   true,
-				InstanceType: "db.t3.medium",
-			},
-		},
-	}
-
-	data, err := json.Marshal(state)
-	assert.NoError(t, err)
-
-	var decoded RestoreState
-	err = json.Unmarshal(data, &decoded)
-	assert.NoError(t, err)
-	assert.Len(t, decoded.Instances, 1)
-	assert.Equal(t, "db-instance-1", decoded.Instances[0].InstanceId)
-	assert.Equal(t, "snap-123", decoded.Instances[0].SnapshotId)
-	assert.True(t, decoded.Instances[0].WasRunning)
-	assert.Equal(t, "db.t3.medium", decoded.Instances[0].InstanceType)
-
-	clusterState := RestoreState{
-		Clusters: []DBClusterState{
-			{
-				ClusterId:  "aurora-cluster-1",
-				WasRunning: true,
-			},
-		},
-	}
-
-	data, err = json.Marshal(clusterState)
-	assert.NoError(t, err)
-
-	err = json.Unmarshal(data, &decoded)
-	assert.NoError(t, err)
-	assert.Len(t, decoded.Clusters, 1)
-	assert.Equal(t, "aurora-cluster-1", decoded.Clusters[0].ClusterId)
-}
-
 func TestParameters_JSON(t *testing.T) {
 	params := Parameters{
 		SnapshotBeforeStop: true,
@@ -882,18 +840,18 @@ func TestExecutorType_Constant(t *testing.T) {
 }
 
 func TestFormatMessages(t *testing.T) {
-	shutdownNoStale := formatShutdownMessage(operationStats{applied: 4, skippedStale: 0})
+	shutdownNoStale := formatShutdownMessage(&operationStats{applied: 4, skippedStale: 0})
 	assert.Equal(t, "stopped 4 RDS resource(s)", shutdownNoStale)
 
-	shutdownWithStale := formatShutdownMessage(operationStats{applied: 4, skippedStale: 1})
+	shutdownWithStale := formatShutdownMessage(&operationStats{applied: 4, skippedStale: 1})
 	assert.Equal(t, "stopped 4 RDS resource(s), skipped 1 stale resource(s)", shutdownWithStale)
 
-	wakeupNoSkips := formatWakeUpMessage(operationStats{applied: 5, skippedStale: 0, skippedKey: 0})
+	wakeupNoSkips := formatWakeUpMessage(&operationStats{applied: 5, skippedStale: 0, skippedKey: 0})
 	assert.Equal(t, "started 5 RDS resource(s)", wakeupNoSkips)
 
-	wakeupWithStale := formatWakeUpMessage(operationStats{applied: 5, skippedStale: 2, skippedKey: 0})
+	wakeupWithStale := formatWakeUpMessage(&operationStats{applied: 5, skippedStale: 2, skippedKey: 0})
 	assert.Equal(t, "started 5 RDS resource(s), skipped 2 stale resource(s)", wakeupWithStale)
 
-	wakeupWithAllSkips := formatWakeUpMessage(operationStats{applied: 5, skippedStale: 2, skippedKey: 1})
+	wakeupWithAllSkips := formatWakeUpMessage(&operationStats{applied: 5, skippedStale: 2, skippedKey: 1})
 	assert.Equal(t, "started 5 RDS resource(s), skipped 2 stale resource(s), skipped 1 unrecognized restore key(s)", wakeupWithAllSkips)
 }
