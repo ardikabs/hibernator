@@ -27,6 +27,14 @@ import (
 // ConsolePrinter handles table-like output for various resources
 type ConsolePrinter struct{}
 
+// localTimeFormat is the format used for displaying timestamps in local timezone
+const localTimeFormat = "2006-01-02 15:04:05"
+
+// formatLocalTime converts a time.Time to local timezone and formats it
+func formatLocalTime(t time.Time) string {
+	return t.Local().Format(localTimeFormat)
+}
+
 func (p *ConsolePrinter) PrintObj(obj interface{}, w io.Writer) error {
 	switch v := obj.(type) {
 	case hibernatorv1alpha1.HibernatePlan:
@@ -85,7 +93,7 @@ func (p *ConsolePrinter) printPlan(plan hibernatorv1alpha1.HibernatePlan, w io.W
 
 	tw.line("Name:       %s", plan.Name)
 	tw.line("Namespace:  %s", plan.Namespace)
-	tw.line("Created:    %s", plan.CreationTimestamp.Format("2006-01-02 15:04:05"))
+	tw.line("Created:    %s (%s)", formatLocalTime(plan.CreationTimestamp.Time), time.Local.String())
 	tw.newline()
 
 	// Schedule
@@ -183,7 +191,7 @@ func (p *ConsolePrinter) printStatus(out *StatusOutput, w io.Writer) error {
 		tw.line("  Error:       %s", plan.Status.ErrorMessage)
 		tw.line("  Retry Count: %d/%d", plan.Status.RetryCount, ptr.Deref(plan.Spec.Behavior.Retries, wellknown.DefaultRecoveryMaxRetryAttempts))
 		if plan.Status.LastRetryTime != nil {
-			tw.line("  Last Retry:  %s (%s ago)", plan.Status.LastRetryTime.Format(time.RFC3339), HumanDuration(time.Since(plan.Status.LastRetryTime.Time)))
+			tw.line("  Last Retry:  %s (%s ago) [%s]", formatLocalTime(plan.Status.LastRetryTime.Time), HumanDuration(time.Since(plan.Status.LastRetryTime.Time)), time.Local.String())
 		}
 		tw.newline()
 	}
@@ -202,10 +210,10 @@ func (p *ConsolePrinter) printStatus(out *StatusOutput, w io.Writer) error {
 				tw.row("  ", "  ", "Message:", exec.Message)
 			}
 			if exec.StartedAt != nil {
-				tw.row("  ", "  ", "Started:", exec.StartedAt.Format(time.RFC3339))
+				tw.row("  ", "  ", "Started:", formatLocalTime(exec.StartedAt.Time))
 			}
 			if exec.FinishedAt != nil {
-				tw.row("  ", "  ", "Finished:", exec.FinishedAt.Format(time.RFC3339))
+				tw.row("  ", "  ", "Finished:", formatLocalTime(exec.FinishedAt.Time))
 			}
 		}
 	}
@@ -249,9 +257,9 @@ func (p *ConsolePrinter) printOperationSummary(tw *textWriter, op *hibernatorv1a
 
 	toTitle := cases.Title(language.English, cases.Compact)
 
-	tw.text("    %s: %s (StartedAt: %s", toTitle.String(string(op.Operation)), successStr, op.StartTime.Format(time.RFC3339))
+	tw.text("    %s: %s (StartedAt: %s", toTitle.String(string(op.Operation)), successStr, formatLocalTime(op.StartTime.Time))
 	if op.EndTime != nil {
-		tw.text(", FinishedAt: %s", op.EndTime.Format(time.RFC3339))
+		tw.text(", FinishedAt: %s", formatLocalTime(op.EndTime.Time))
 	}
 	if op.ErrorMessage != "" {
 		tw.text(", Error: %s", op.ErrorMessage)
@@ -287,8 +295,8 @@ func (p *ConsolePrinter) printSchedule(out *ScheduleOutput, w io.Writer) error {
 
 	tw.line("Current State:")
 	tw.line("  State:              %s", result.CurrentState)
-	tw.line("  Next Hibernate:     %s (%s)", result.NextHibernateTime.Format(time.RFC3339), HumanDuration(time.Until(result.NextHibernateTime)))
-	tw.line("  Next WakeUp:        %s (%s)", result.NextWakeUpTime.Format(time.RFC3339), HumanDuration(time.Until(result.NextWakeUpTime)))
+	tw.line("  Next Hibernate:     %s (%s) [%s]", formatLocalTime(result.NextHibernateTime), HumanDuration(time.Until(result.NextHibernateTime)), time.Local.String())
+	tw.line("  Next WakeUp:        %s (%s) [%s]", formatLocalTime(result.NextWakeUpTime), HumanDuration(time.Until(result.NextWakeUpTime)), time.Local.String())
 	tw.newline()
 
 	if len(events) > 0 {
@@ -304,7 +312,7 @@ func (p *ConsolePrinter) printSchedule(out *ScheduleOutput, w io.Writer) error {
 			if in == 0 {
 				in = time.Until(ev.Time)
 			}
-			evtw.row("", ev.Operation, ev.Time.Format(time.RFC3339), HumanDuration(in))
+			evtw.row("", ev.Operation, formatLocalTime(ev.Time), HumanDuration(in))
 		}
 
 		evtw.newline()
@@ -314,7 +322,7 @@ func (p *ConsolePrinter) printSchedule(out *ScheduleOutput, w io.Writer) error {
 		tw.line("Active Exceptions:")
 		for _, ex := range exceptions {
 			tw.line("  - %s (type=%s, until=%s, state=%s)",
-				ex.Name, ex.Type, ex.ValidUntil.Format(time.RFC3339), ex.State)
+				ex.Name, ex.Type, formatLocalTime(ex.ValidUntil.Time), ex.State)
 		}
 		tw.newline()
 	}
@@ -345,9 +353,9 @@ func (p *ConsolePrinter) printRestorePoint(cm corev1.ConfigMap, w io.Writer) err
 			}
 		}
 
-		capturedAtStr := "-"
+		var capturedAt int64
 		if data.CapturedAt != nil {
-			capturedAtStr = data.CapturedAt.Format("2006-01-02 15:04:05")
+			capturedAt = formatUnixTime(data.CapturedAt.Time)
 		}
 
 		points = append(points, RestorePointData{
@@ -356,8 +364,8 @@ func (p *ConsolePrinter) printRestorePoint(cm corev1.ConfigMap, w io.Writer) err
 			IsLive:         data.IsLive,
 			ResourceCount:  resourceCount,
 			StaleResources: staleCount,
-			CreatedAt:      data.CreatedAt.Format("2006-01-02 15:04:05"),
-			CapturedAt:     capturedAtStr,
+			CreatedAt:      formatUnixTime(data.CreatedAt.Time),
+			CapturedAt:     capturedAt,
 		})
 		totalResources += resourceCount
 		totalStale += staleCount
@@ -379,7 +387,7 @@ func (p *ConsolePrinter) printRestorePoint(cm corev1.ConfigMap, w io.Writer) err
 	tw.newline()
 
 	// Table of restore points by target
-	tw.header("Target", "Executor", "Live", "Resources", "Stale", "Captured At")
+	tw.header("Target", "Executor", "Live", "Resources", "Stale", fmt.Sprintf("Captured At (%s)", time.Local.String()))
 
 	for _, pt := range points {
 		live := "no"
@@ -390,7 +398,9 @@ func (p *ConsolePrinter) printRestorePoint(cm corev1.ConfigMap, w io.Writer) err
 		if pt.StaleResources > 0 {
 			staleStr = fmt.Sprintf("%d", pt.StaleResources)
 		}
-		tw.row(pt.Target, pt.Executor, live, pt.ResourceCount, staleStr, pt.CapturedAt)
+
+		capturedAtStr := time.Unix(pt.CapturedAt, 0)
+		tw.row(pt.Target, pt.Executor, live, pt.ResourceCount, staleStr, formatLocalTime(capturedAtStr))
 	}
 
 	return tw.flush()
@@ -419,7 +429,7 @@ func (p *ConsolePrinter) printRestoreResources(out *RestoreResourcesOutput, w io
 			if data.Status != nil {
 				staleCount = data.Status[resourceID].StaleCount
 				if data.Status[resourceID].LastReportedAt != nil {
-					reportedAtStr = data.Status[resourceID].LastReportedAt.Format("2006-01-02 15:04:05")
+					reportedAtStr = formatLocalTime(data.Status[resourceID].LastReportedAt.Time)
 				}
 			}
 			resources = append(resources, RestoreResource{
@@ -444,7 +454,7 @@ func (p *ConsolePrinter) printRestoreResources(out *RestoreResourcesOutput, w io
 	}
 
 	tw.newline()
-	tw.header("Resource ID", "Target", "Executor", "Live", "Stale", "Cycle", "Reported At")
+	tw.header("Resource ID", "Target", "Executor", "Live", "Stale", "Cycle", fmt.Sprintf("Reported At (%s)", time.Local.String()))
 
 	for _, r := range resources {
 		live := "no"
@@ -481,10 +491,14 @@ func (p *ConsolePrinter) printRestoreDetail(out *RestoreDetailOutput, w io.Write
 
 	tw.line("Metadata:")
 	tw.row("  Live:", data.IsLive)
-	tw.row("  Created At:", data.CreatedAt.Format(time.RFC3339))
+	tw.row("  Created At:", formatLocalTime(data.CreatedAt.Time))
 	if data.CapturedAt != nil {
-		tw.row("  Captured At:", data.CapturedAt.Format(time.RFC3339))
+		tw.row("  Captured At:", formatLocalTime(data.CapturedAt.Time))
 	}
+	if status, ok := data.Status[out.ResourceID]; ok && status.LastReportedAt != nil {
+		tw.row("  Reported At:", formatLocalTime(status.LastReportedAt.Time))
+	}
+
 	tw.newline()
 
 	tw.line("Resource State:")
@@ -534,7 +548,7 @@ func (p *ConsolePrinter) printNotifDescribe(out *NotifDescribeOutput, w io.Write
 
 	tw.line("Name:       %s", notif.Name)
 	tw.line("Namespace:  %s", notif.Namespace)
-	tw.line("Created:    %s", notif.CreationTimestamp.Format("2006-01-02 15:04:05"))
+	tw.line("Created:    %s (%s)", formatLocalTime(notif.CreationTimestamp.Time), time.Local.String())
 
 	if len(notif.Labels) > 0 {
 		tw.line("Labels:")
@@ -602,10 +616,10 @@ func (p *ConsolePrinter) printNotifDescribe(out *NotifDescribeOutput, w io.Write
 	}
 
 	if notif.Status.LastDeliveryTime != nil {
-		tw.line("  Last Delivery: %s (%s ago)", notif.Status.LastDeliveryTime.Format(time.RFC3339), HumanDuration(time.Since(notif.Status.LastDeliveryTime.Time)))
+		tw.line("  Last Delivery: %s (%s ago) [%s]", formatLocalTime(notif.Status.LastDeliveryTime.Time), HumanDuration(time.Since(notif.Status.LastDeliveryTime.Time)), time.Local.String())
 	}
 	if notif.Status.LastFailureTime != nil {
-		tw.line("  Last Failure:  %s (%s ago)", notif.Status.LastFailureTime.Format(time.RFC3339), HumanDuration(time.Since(notif.Status.LastFailureTime.Time)))
+		tw.line("  Last Failure:  %s (%s ago) [%s]", formatLocalTime(notif.Status.LastFailureTime.Time), HumanDuration(time.Since(notif.Status.LastFailureTime.Time)), time.Local.String())
 	}
 
 	if len(notif.Status.SinkStatuses) > 0 {
@@ -619,7 +633,7 @@ func (p *ConsolePrinter) printNotifDescribe(out *NotifDescribeOutput, w io.Write
 			if ss.Success {
 				status = "[OK]"
 			}
-			tw.line("    %s %s (%s/%s %s %s) at %s", status, ss.SinkName, ss.PlanRef.Namespace, ss.PlanRef.Name, ss.Operation, ss.CycleID, ss.TransitionTimestamp.Format(time.RFC3339))
+			tw.line("    %s %s (%s/%s %s %s) at %s", status, ss.SinkName, ss.PlanRef.Namespace, ss.PlanRef.Name, ss.Operation, ss.CycleID, formatLocalTime(ss.TransitionTimestamp.Time))
 			if ss.Message != "" {
 				tw.line("        %s", ss.Message)
 			}

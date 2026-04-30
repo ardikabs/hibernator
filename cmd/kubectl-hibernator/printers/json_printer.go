@@ -21,6 +21,11 @@ import (
 // JSONPrinter handles JSON output for various resources with context-relevant information.
 type JSONPrinter struct{}
 
+// formatUnixTime returns the Unix timestamp (seconds since epoch) for JSON output
+func formatUnixTime(t time.Time) int64 {
+	return t.Unix()
+}
+
 func (p *JSONPrinter) PrintObj(obj interface{}, w io.Writer) error {
 	var output interface{}
 	var err error
@@ -67,7 +72,7 @@ func (p *JSONPrinter) planToJSON(plan hibernatorv1alpha1.HibernatePlan) PlanJSON
 	out := PlanJSON{
 		Name:      plan.Name,
 		Namespace: plan.Namespace,
-		Created:   plan.CreationTimestamp.Format(time.RFC3339),
+		Created:   formatUnixTime(plan.CreationTimestamp.Time),
 		Schedule: PlanScheduleJSON{
 			Timezone: plan.Spec.Schedule.Timezone,
 			OffHours: make([]OffHourWindowJSON, len(plan.Spec.Schedule.OffHours)),
@@ -139,19 +144,19 @@ func (p *JSONPrinter) printRestoreShowJSON(cm corev1.ConfigMap) (any, error) {
 			}
 		}
 
-		capturedAtStr := ""
+		var capturedAt int64
 		if data.CapturedAt != nil {
-			capturedAtStr = data.CapturedAt.Format(time.RFC3339)
+			capturedAt = formatUnixTime(data.CapturedAt.Time)
 		}
 
 		output.RestorePoints = append(output.RestorePoints, RestorePointData{
 			Target:         data.Target,
 			Executor:       data.Executor,
 			IsLive:         data.IsLive,
-			CapturedAt:     capturedAtStr,
 			ResourceCount:  resourceCount,
 			StaleResources: staleCount,
-			CreatedAt:      data.CreatedAt.Format("2006-01-02T15:04:05Z"),
+			CreatedAt:      formatUnixTime(data.CreatedAt.Time),
+			CapturedAt:     capturedAt,
 		})
 		output.TotalResources += resourceCount
 	}
@@ -179,7 +184,7 @@ func (p *JSONPrinter) buildStatusJSON(plan hibernatorv1alpha1.HibernatePlan) Pla
 	}
 
 	if plan.Status.LastRetryTime != nil {
-		status.LastRetryTime = plan.Status.LastRetryTime.Format(time.RFC3339)
+		status.LastRetryTime = formatUnixTime(plan.Status.LastRetryTime.Time)
 	}
 
 	for _, exec := range plan.Status.Executions {
@@ -190,10 +195,10 @@ func (p *JSONPrinter) buildStatusJSON(plan hibernatorv1alpha1.HibernatePlan) Pla
 			Message:  exec.Message,
 		}
 		if exec.StartedAt != nil {
-			e.StartedAt = exec.StartedAt.Format(time.RFC3339)
+			e.StartedAt = formatUnixTime(exec.StartedAt.Time)
 		}
 		if exec.FinishedAt != nil {
-			e.FinishedAt = exec.FinishedAt.Format(time.RFC3339)
+			e.FinishedAt = formatUnixTime(exec.FinishedAt.Time)
 		}
 		status.Executions = append(status.Executions, e)
 	}
@@ -202,12 +207,12 @@ func (p *JSONPrinter) buildStatusJSON(plan hibernatorv1alpha1.HibernatePlan) Pla
 		ref := ExceptionReferenceJSON{
 			Name:       exc.Name,
 			Type:       string(exc.Type),
-			ValidFrom:  exc.ValidFrom.Format(time.RFC3339),
-			ValidUntil: exc.ValidUntil.Format(time.RFC3339),
+			ValidFrom:  formatUnixTime(exc.ValidFrom.Time),
+			ValidUntil: formatUnixTime(exc.ValidUntil.Time),
 			State:      string(exc.State),
 		}
 		if exc.AppliedAt != nil {
-			ref.AppliedAt = exc.AppliedAt.Format(time.RFC3339)
+			ref.AppliedAt = formatUnixTime(exc.AppliedAt.Time)
 		}
 		status.ExceptionReferences = append(status.ExceptionReferences, ref)
 	}
@@ -229,12 +234,12 @@ func (p *JSONPrinter) buildStatusJSON(plan hibernatorv1alpha1.HibernatePlan) Pla
 func (p *JSONPrinter) operationSummaryToJSON(op *hibernatorv1alpha1.ExecutionOperationSummary) *ExecutionOperationSummaryJSON {
 	s := &ExecutionOperationSummaryJSON{
 		Operation:    string(op.Operation),
-		StartTime:    op.StartTime.Format(time.RFC3339),
+		StartTime:    formatUnixTime(op.StartTime.Time),
 		Success:      op.Success,
 		ErrorMessage: op.ErrorMessage,
 	}
 	if op.EndTime != nil {
-		s.EndTime = op.EndTime.Format(time.RFC3339)
+		s.EndTime = formatUnixTime(op.EndTime.Time)
 	}
 	for _, tr := range op.TargetResults {
 		r := TargetExecutionResultJSON{
@@ -245,10 +250,10 @@ func (p *JSONPrinter) operationSummaryToJSON(op *hibernatorv1alpha1.ExecutionOpe
 			Message:     tr.Message,
 		}
 		if tr.StartedAt != nil {
-			r.StartedAt = tr.StartedAt.Format(time.RFC3339)
+			r.StartedAt = formatUnixTime(tr.StartedAt.Time)
 		}
 		if tr.FinishedAt != nil {
-			r.FinishedAt = tr.FinishedAt.Format(time.RFC3339)
+			r.FinishedAt = formatUnixTime(tr.FinishedAt.Time)
 		}
 		s.TargetResults = append(s.TargetResults, r)
 	}
@@ -294,8 +299,8 @@ func (p *JSONPrinter) scheduleToJSON(out *ScheduleOutput) (ScheduleJSON, error) 
 	if evalResult, ok := out.Result.(*scheduler.EvaluationResult); ok {
 		result.State = ScheduleStateJSON{
 			Current:       string(evalResult.CurrentState),
-			NextHibernate: evalResult.NextHibernateTime.Format(time.RFC3339),
-			NextWakeUp:    evalResult.NextWakeUpTime.Format(time.RFC3339),
+			NextHibernate: formatUnixTime(evalResult.NextHibernateTime),
+			NextWakeUp:    formatUnixTime(evalResult.NextWakeUpTime),
 		}
 	}
 
@@ -303,12 +308,12 @@ func (p *JSONPrinter) scheduleToJSON(out *ScheduleOutput) (ScheduleJSON, error) 
 		ref := ExceptionReferenceJSON{
 			Name:       exc.Name,
 			Type:       string(exc.Type),
-			ValidFrom:  exc.ValidFrom.Format(time.RFC3339),
-			ValidUntil: exc.ValidUntil.Format(time.RFC3339),
+			ValidFrom:  formatUnixTime(exc.ValidFrom.Time),
+			ValidUntil: formatUnixTime(exc.ValidUntil.Time),
 			State:      string(exc.State),
 		}
 		if exc.AppliedAt != nil {
-			ref.AppliedAt = exc.AppliedAt.Format(time.RFC3339)
+			ref.AppliedAt = formatUnixTime(exc.AppliedAt.Time)
 		}
 		result.Exceptions = append(result.Exceptions, ref)
 	}
@@ -334,9 +339,9 @@ func (p *JSONPrinter) restoreDetailToJSON(out *RestoreDetailOutput) RestoreDetai
 	result.Target = data.Target
 	result.Executor = data.Executor
 	result.IsLive = data.IsLive
-	result.CreatedAt = data.CreatedAt.Format(time.RFC3339)
+	result.CreatedAt = formatUnixTime(data.CreatedAt.Time)
 	if data.CapturedAt != nil {
-		result.CapturedAt = data.CapturedAt.Format(time.RFC3339)
+		result.CapturedAt = formatUnixTime(data.CapturedAt.Time)
 	}
 
 	return result
@@ -357,9 +362,9 @@ func (p *JSONPrinter) restoreResourcesToJSON(out *RestoreResourcesOutput) Restor
 			continue
 		}
 
-		capturedAtStr := ""
+		var capturedAtUnix int64 = 0
 		if data.CapturedAt != nil {
-			capturedAtStr = data.CapturedAt.Format(time.RFC3339)
+			capturedAtUnix = formatUnixTime(data.CapturedAt.Time)
 		}
 
 		for resourceID, state := range data.State {
@@ -369,14 +374,14 @@ func (p *JSONPrinter) restoreResourcesToJSON(out *RestoreResourcesOutput) Restor
 			}
 
 			result.Resources = append(result.Resources, RestoreResourceJSON{
-				ResourceID:       resourceID,
-				Target:           data.Target,
-				Executor:         data.Executor,
-				IsLive:           data.IsLive,
-				CapturedAt:       capturedAtStr,
-				StaleCount:       staleCount,
-				ManagedByCycleID: data.CycleID,
-				State:            state.(map[string]any),
+				ResourceID: resourceID,
+				Target:     data.Target,
+				Executor:   data.Executor,
+				IsLive:     data.IsLive,
+				CapturedAt: capturedAtUnix,
+				StaleCount: staleCount,
+				CycleID:    data.CycleID,
+				State:      state.(map[string]any),
 			})
 		}
 	}
@@ -412,10 +417,10 @@ func (p *JSONPrinter) notifListToJSON(out *NotifListOutput) NotifListJSON {
 		}
 
 		if notif.Status.LastDeliveryTime != nil {
-			entry.LastDelivery = notif.Status.LastDeliveryTime.Format(time.RFC3339)
+			entry.LastDelivery = formatUnixTime(notif.Status.LastDeliveryTime.Time)
 		}
 		if notif.Status.LastFailureTime != nil {
-			entry.LastFailure = notif.Status.LastFailureTime.Format(time.RFC3339)
+			entry.LastFailure = formatUnixTime(notif.Status.LastFailureTime.Time)
 		}
 
 		result.Items[i] = entry
@@ -458,7 +463,7 @@ func (p *JSONPrinter) notifDescribeToJSON(out *NotifDescribeOutput) NotifDescrib
 		sinkStatuses = append(sinkStatuses, NotifSinkStatusJSON{
 			Name:      ss.SinkName,
 			Success:   ss.Success,
-			Timestamp: ss.TransitionTimestamp.Format(time.RFC3339),
+			Timestamp: formatUnixTime(ss.TransitionTimestamp.Time),
 			Message:   ss.Message,
 		})
 	}
@@ -466,7 +471,7 @@ func (p *JSONPrinter) notifDescribeToJSON(out *NotifDescribeOutput) NotifDescrib
 	result := NotifDescribeJSON{
 		Name:      notif.Name,
 		Namespace: notif.Namespace,
-		Created:   notif.CreationTimestamp.Format(time.RFC3339),
+		Created:   formatUnixTime(notif.CreationTimestamp.Time),
 		Labels:    notif.Labels,
 		Selector:  notif.Spec.Selector.MatchLabels,
 		Events:    events,
@@ -478,10 +483,10 @@ func (p *JSONPrinter) notifDescribeToJSON(out *NotifDescribeOutput) NotifDescrib
 	}
 
 	if notif.Status.LastDeliveryTime != nil {
-		result.Status.LastDelivery = notif.Status.LastDeliveryTime.Format(time.RFC3339)
+		result.Status.LastDelivery = formatUnixTime(notif.Status.LastDeliveryTime.Time)
 	}
 	if notif.Status.LastFailureTime != nil {
-		result.Status.LastFailure = notif.Status.LastFailureTime.Format(time.RFC3339)
+		result.Status.LastFailure = formatUnixTime(notif.Status.LastFailureTime.Time)
 	}
 
 	if out.PlanMatch != nil {
