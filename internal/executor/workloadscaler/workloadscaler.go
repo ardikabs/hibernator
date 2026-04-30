@@ -408,7 +408,7 @@ func (e *Executor) scaleDownWorkloads(ctx context.Context,
 
 	log.Info("scaling down workloads",
 		"namespace", namespace,
-		"resource", gvr.Resource,
+		"resource", gvr.String(),
 		"selector", selector.String(),
 	)
 
@@ -435,8 +435,11 @@ func (e *Executor) scaleDownWorkloads(ctx context.Context,
 		if err != nil {
 			if apierrors.IsNotFound(err) {
 				stats.skippedStale++
+				log.Info("resource does not support the scale subresource, skipping", "name", item.GetName(), "namespace", namespace, "resource", gvr.String())
+			} else {
+				log.Info("failed to get scale subresource, skipping", "namespace", namespace, "name", item.GetName(), "kind", item.GetKind())
 			}
-			log.Info("failed to get scale subresource, skipping", "namespace", namespace, "name", item.GetName(), "kind", item.GetKind())
+
 			continue
 		}
 
@@ -445,13 +448,6 @@ func (e *Executor) scaleDownWorkloads(ctx context.Context,
 		if err != nil {
 			return operationStats{}, fmt.Errorf("get replicas from scale for %s/%s: %w", item.GetKind(), item.GetName(), err)
 		}
-		if !found {
-			// Skip if scale object doesn't have spec.replicas
-			continue
-		}
-
-		// Determine if this is a voluntary action (already at 0) or needs scaling
-		wasScaled := replicas > 0
 
 		// Store current state with key = namespace/kind/name
 		key := fmt.Sprintf("%s/%s/%s", item.GetNamespace(), item.GetKind(), item.GetName())
@@ -463,13 +459,13 @@ func (e *Executor) scaleDownWorkloads(ctx context.Context,
 			Namespace: item.GetNamespace(),
 			Name:      item.GetName(),
 			Replicas:  int32(replicas),
-			WasScaled: wasScaled,
+			WasScaled: found,
 		}
 		stateBytes, _ := json.Marshal(state)
 		statesMap[key] = stateBytes
 
 		// Scale to zero only if not already at zero
-		if wasScaled {
+		if found {
 			// Scale to zero by updating scale.spec.replicas
 			if err := unstructured.SetNestedField(scaleObj.Object, int64(0), "spec", "replicas"); err != nil {
 				return operationStats{}, fmt.Errorf("set replicas to zero in scale for %s/%s: %w", item.GetKind(), item.GetName(), err)
@@ -479,8 +475,8 @@ func (e *Executor) scaleDownWorkloads(ctx context.Context,
 			_, err = client.UpdateScale(ctx, gvr, namespace, scaleObj)
 			if err != nil {
 				if apierrors.IsNotFound(err) {
-					log.Info("resource not found, skipping", "namespace", namespace, "name", item.GetName(), "kind", item.GetKind())
 					stats.skippedStale++
+					log.Info("resource not found, skipping", "namespace", namespace, "name", item.GetName(), "kind", item.GetKind())
 
 					// Skip resources that no longer exist
 					continue
