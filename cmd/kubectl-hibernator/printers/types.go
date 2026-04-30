@@ -78,15 +78,15 @@ type ScheduleJSON struct {
 
 type ScheduleStateJSON struct {
 	Current       string `json:"current"`
-	NextHibernate string `json:"nextHibernate"`
-	NextWakeUp    string `json:"nextWakeUp"`
+	NextHibernate int64  `json:"nextHibernate"`
+	NextWakeUp    int64  `json:"nextWakeUp"`
 }
 
 // PlanJSON represents the JSON output for a single HibernatePlan (describe command).
 type PlanJSON struct {
 	Name      string `json:"name"`
 	Namespace string `json:"namespace"`
-	Created   string `json:"created"`
+	Created   int64  `json:"created"`
 
 	Schedule  PlanScheduleJSON  `json:"schedule"`
 	Behavior  PlanBehaviorJSON  `json:"behavior"`
@@ -138,7 +138,7 @@ type PlanStatusJSON struct {
 	CurrentOperation    string                   `json:"currentOperation,omitempty"`
 	ErrorMessage        string                   `json:"errorMessage,omitempty"`
 	RetryCount          int32                    `json:"retryCount,omitempty"`
-	LastRetryTime       string                   `json:"lastRetryTime,omitempty"`
+	LastRetryTime       int64                    `json:"lastRetryTime,omitempty"`
 	Executions          []ExecutionStatusJSON    `json:"executions,omitempty"`
 	ExecutionHistory    []ExecutionCycleJSON     `json:"executionHistory,omitempty"`
 	ExceptionReferences []ExceptionReferenceJSON `json:"exceptionReferences,omitempty"`
@@ -149,8 +149,8 @@ type ExecutionStatusJSON struct {
 	State      string `json:"state"`
 	Attempts   int32  `json:"attempts,omitempty"`
 	Message    string `json:"message,omitempty"`
-	StartedAt  string `json:"startedAt,omitempty"`
-	FinishedAt string `json:"finishedAt,omitempty"`
+	StartedAt  int64  `json:"startedAt,omitempty"`
+	FinishedAt int64  `json:"finishedAt,omitempty"`
 }
 
 // RestoreDetailJSON represents the JSON output for restore detail command.
@@ -161,8 +161,8 @@ type RestoreDetailJSON struct {
 	ResourceID string         `json:"resourceId"`
 	Executor   string         `json:"executor"`
 	IsLive     bool           `json:"isLive"`
-	CreatedAt  string         `json:"createdAt,omitempty"`
-	CapturedAt string         `json:"capturedAt,omitempty"`
+	CreatedAt  int64          `json:"createdAt,omitempty"`
+	CapturedAt int64          `json:"capturedAt,omitempty"`
 	State      map[string]any `json:"state"`
 }
 
@@ -172,23 +172,23 @@ type RestoreResourcesJSON struct {
 }
 
 type RestoreResourceJSON struct {
-	ResourceID       string         `json:"resourceId"`
-	Target           string         `json:"target"`
-	Executor         string         `json:"executor"`
-	IsLive           bool           `json:"isLive"`
-	CapturedAt       string         `json:"capturedAt,omitempty"`
-	StaleCount       int            `json:"staleCount,omitempty"`
-	ManagedByCycleID string         `json:"managedByCycleId,omitempty"`
-	State            map[string]any `json:"state,omitempty"`
+	ResourceID string         `json:"resourceId"`
+	Target     string         `json:"target"`
+	Executor   string         `json:"executor"`
+	IsLive     bool           `json:"isLive"`
+	CapturedAt int64          `json:"capturedAt,omitempty"`
+	StaleCount int            `json:"staleCount,omitempty"`
+	CycleID    string         `json:"cycleID,omitempty"`
+	State      map[string]any `json:"state,omitempty"`
 }
 
 type ExceptionReferenceJSON struct {
 	Name       string `json:"name"`
 	Type       string `json:"type"`
-	ValidFrom  string `json:"validFrom"`
-	ValidUntil string `json:"validUntil"`
+	ValidFrom  int64  `json:"validFrom"`
+	ValidUntil int64  `json:"validUntil"`
 	State      string `json:"state"`
-	AppliedAt  string `json:"appliedAt,omitempty"`
+	AppliedAt  int64  `json:"appliedAt,omitempty"`
 }
 
 // ExecutionCycleJSON represents a single hibernation cycle in the execution history.
@@ -201,8 +201,8 @@ type ExecutionCycleJSON struct {
 // ExecutionOperationSummaryJSON represents a shutdown or wakeup operation summary.
 type ExecutionOperationSummaryJSON struct {
 	Operation     string                      `json:"operation"`
-	StartTime     string                      `json:"startTime"`
-	EndTime       string                      `json:"endTime,omitempty"`
+	StartTime     int64                       `json:"startTime"`
+	EndTime       int64                       `json:"endTime,omitempty"`
 	Success       bool                        `json:"success"`
 	ErrorMessage  string                      `json:"errorMessage,omitempty"`
 	TargetResults []TargetExecutionResultJSON `json:"targetResults,omitempty"`
@@ -214,8 +214,8 @@ type TargetExecutionResultJSON struct {
 	State       string `json:"state"`
 	Attempts    int32  `json:"attempts"`
 	ExecutionID string `json:"executionId,omitempty"`
-	StartedAt   string `json:"startedAt,omitempty"`
-	FinishedAt  string `json:"finishedAt,omitempty"`
+	StartedAt   int64  `json:"startedAt,omitempty"`
+	FinishedAt  int64  `json:"finishedAt,omitempty"`
 	Message     string `json:"message,omitempty"`
 }
 
@@ -230,10 +230,10 @@ type RestorePointData struct {
 	Target         string `json:"target"`
 	Executor       string `json:"executor"`
 	IsLive         bool   `json:"isLive"`
-	CapturedAt     string `json:"capturedAt,omitempty"`
 	ResourceCount  int    `json:"resourceCount"`
 	StaleResources int    `json:"staleResources,omitempty"`
-	CreatedAt      string `json:"createdAt,omitempty"`
+	CreatedAt      int64  `json:"createdAt,omitempty"`
+	CapturedAt     int64  `json:"capturedAt,omitempty"`
 }
 
 // --- Notification types ---
@@ -275,8 +275,8 @@ type NotifListItemJSON struct {
 	Events       []string `json:"events"`
 	Sinks        []string `json:"sinks"`
 	WatchedPlans int      `json:"watchedPlans"`
-	LastDelivery string   `json:"lastDelivery,omitempty"`
-	LastFailure  string   `json:"lastFailure,omitempty"`
+	LastDelivery int64    `json:"lastDelivery,omitempty"`
+	LastFailure  int64    `json:"lastFailure,omitempty"`
 	Age          string   `json:"age"`
 }
 
@@ -289,7 +289,7 @@ type NotifListJSON struct {
 type NotifDescribeJSON struct {
 	Name      string              `json:"name"`
 	Namespace string              `json:"namespace"`
-	Created   string              `json:"created"`
+	Created   int64               `json:"created"`
 	Labels    map[string]string   `json:"labels,omitempty"`
 	Selector  map[string]string   `json:"selector"`
 	Events    []string            `json:"events"`
@@ -309,8 +309,8 @@ type NotifSinkJSON struct {
 // NotifStatusJSON represents notification status in JSON output.
 type NotifStatusJSON struct {
 	WatchedPlans []NotifWatchedPlanJSON `json:"watchedPlans,omitempty"`
-	LastDelivery string                 `json:"lastDelivery,omitempty"`
-	LastFailure  string                 `json:"lastFailure,omitempty"`
+	LastDelivery int64                  `json:"lastDelivery,omitempty"`
+	LastFailure  int64                  `json:"lastFailure,omitempty"`
 	SinkStatuses []NotifSinkStatusJSON  `json:"sinkStatuses,omitempty"`
 }
 
@@ -324,7 +324,7 @@ type NotifWatchedPlanJSON struct {
 type NotifSinkStatusJSON struct {
 	Name      string `json:"name"`
 	Success   bool   `json:"success"`
-	Timestamp string `json:"timestamp"`
+	Timestamp int64  `json:"timestamp"`
 	Message   string `json:"message,omitempty"`
 }
 
