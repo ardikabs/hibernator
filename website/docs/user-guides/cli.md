@@ -214,7 +214,30 @@ kubectl hibernator logs my-plan --level error
 
 ### `restore`
 
-Manage restore points — the captured resource state during hibernation that is used to restore resources during wakeup. Restore data is stored in a ConfigMap named `restore-data-<plan-name>`.
+Manage restore points — the captured resource state during hibernation that is used to restore resources during wakeup. Restore data is stored in a ConfigMap named `hibernator-restore-<plan-name>`.
+
+#### Understanding Restore Point Timestamps
+
+Restore point data contains two important timestamps that serve different purposes:
+
+| Timestamp | Description |
+|-----------|-------------|
+| **Captured At** | The timestamp when the hibernator captured and initiated the save operation to the ConfigMap. This tracks when the data was captured from the hibernator's perspective. |
+| **Reported At** | The time when the executor callback was triggered for a specific resource (via `ReportStateCallback`). This tracks when each resource's state was initially reported during the shutdown process. |
+
+**Key Differences:**
+- **Captured At** is set per-target when the hibernator initiates the ConfigMap update. It serves as a historical marker for auditing and freshness checks.
+- **Reported At** is set per-resource when the executor reports the state (via callback) during the shutdown process. Multiple resources may be reported at different times within the same hibernation cycle.
+- **Reported At** is used for idempotency tracking — it helps determine if a resource has already been reported in the current hibernation cycle.
+- **Captured At** tracks when the hibernator captured the data, useful for historical analysis and determining data freshness.
+
+**Example Flow:**
+```
+Hibernation Cycle:
+  1. Executor discovers resource A → Reports state → Reported At = T1
+  2. Executor discovers resource B → Reports state → Reported At = T2
+  3. Hibernator captures and initiates save to ConfigMap → Captured At = T3
+```
 
 #### `restore list`
 

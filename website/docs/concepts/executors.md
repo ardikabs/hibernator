@@ -99,7 +99,68 @@ Each runner gets an ephemeral ServiceAccount with the minimum permissions needed
 
 During shutdown, executors capture metadata about the resource's current state (e.g., replica counts, scaling configs, instance IDs). This metadata is stored as JSON in a ConfigMap and used during wakeup to restore the resource to its exact pre-hibernation configuration.
 
-The restore data ConfigMap is namespaced as `restore-data-{plan-name}` with keys formatted as `{executor}_{target-name}`.
+The restore data ConfigMap is named `hibernator-restore-{plan-name}` with keys formatted as `{target-name}.json`.
+
+### Restore Data Timestamps
+
+Each restore point entry contains timestamps that track different phases of the capture process:
+
+#### Captured At
+- **Meaning**: The timestamp when the hibernator captured and initiated the save operation to the ConfigMap
+- **Set when**: When the accumulated data is ready to be persisted (just before the ConfigMap update)
+- **Granularity**: Per-target (all resources in the target share the same CapturedAt)
+- **Use case**: Historical tracking of when data was captured; audit and freshness checks from hibernator's perspective
+
+#### Reported At (LastReportedAt)
+- **Meaning**: The timestamp when a specific resource's state was reported by the executor via callback
+- **Set when**: During `SaveState` when the executor reports each resource's state
+- **Granularity**: Per-resource (each resource has its own ReportedAt)
+- **Use case**: Track idempotency within a hibernation cycle; detect stale resources
+
+### Timestamp Flow Example
+
+```
+Hibernation Cycle "cycle-001":
+
+  Executor Shutdown:
+    ├─ 10:00:00 → Discovers resource "app-server" → reports state
+    │             LastReportedAt["app-server"] = 10:00:00
+    ├─ 10:00:05 → Discovers resource "worker-1" → reports state
+    │             LastReportedAt["worker-1"] = 10:00:05
+    └─ 10:00:10 → Flush to ConfigMap completes successfully
+                  CapturedAt = 10:00:10 (for entire target)
+
+  On Retry (same cycle ID):
+    ├─ 10:05:00 → "app-server" already reported → preserves original state
+    │             LastReportedAt["app-server"] stays 10:00:00
+    └─ 10:05:10 → New resources reported → updated LastReportedAt
+                  CapturedAt = 10:05:10 (updated on successful save)
+```
+
+### Data Structure
+
+Each target's restore data includes:
+
+```json
+{
+  "target": "my-cluster",
+  "executor": "eks",
+  "version": 1,
+  "isLive": true,
+  "cycleID": "cycle-001",
+  "createdAt": "2026-04-30T10:00:00Z",
+  "capturedAt": "2026-04-30T10:00:10Z",
+  "state": {
+    "app-nodes": { "desired": 3, "min": 1, "max": 5 }
+  },
+  "status": {
+    "app-nodes": {
+      "staleCount": 0,
+      "lastReportedAt": "2026-04-30T10:00:00Z"
+    }
+  }
+}
+```
 
 ## Built-in Executors
 
