@@ -91,10 +91,24 @@ func (m *Manager) SaveState(ctx context.Context, namespace, planName, targetName
 	}
 
 	now := metav1.Now()
+	data.CapturedAt = &now
+
+	// Initialize Status map if nil (backward compatibility)
+	// When called from accumulator, Status will be pre-populated with LastReportedAt
+	// When called directly (tests, legacy code), we initialize with current time
+	if data.Status == nil {
+		data.Status = make(map[string]ResourceStatus)
+	}
+	// Ensure all keys in State have a corresponding Status entry
+	for key := range data.State {
+		if _, exists := data.Status[key]; !exists {
+			data.Status[key] = ResourceStatus{LastReportedAt: &now}
+		}
+	}
 
 	// No existing data - save with the provided cycle ID
 	if existing == nil {
-		return m.saveInitialState(data, cycleID, now, namespace, planName, targetName, ctx)
+		return m.saveNewState(data, cycleID, namespace, planName, targetName, ctx)
 	}
 
 	// Build merged state and status using strategies
@@ -106,12 +120,13 @@ func (m *Manager) SaveState(ctx context.Context, namespace, planName, targetName
 	// Process reported keys from this cycle
 	for key, newValue := range data.State {
 		mergeCtx := &stateMergeContext{
-			key:         key,
-			newValue:    newValue,
-			existing:    existing,
-			isSameCycle: isSameCycle,
-			now:         now,
-			log:         m.log,
+			key:            key,
+			newValue:       newValue,
+			existing:       existing,
+			incomingStatus: data.Status, // Pass the incoming status from accumulator
+			isSameCycle:    isSameCycle,
+			now:            now,
+			log:            m.log,
 		}
 
 		strategy := selector.selectStrategy(mergeCtx)
@@ -124,22 +139,12 @@ func (m *Manager) SaveState(ctx context.Context, namespace, planName, targetName
 			}
 		}
 
-		mergedStatus[key] = strategy.prepareStatus(mergeCtx)
+		mergedStatus[key] = strategy.setStatus(mergeCtx)
 	}
 
 	// Process existing keys not reported this cycle (staleness handling)
 	m.handleStaleResources(existing, data, maxStaleCount, mergedState, mergedStatus)
 	return m.saveMergedData(data, existing, cycleID, mergedState, mergedStatus, namespace, planName, targetName, ctx)
-}
-
-// saveInitialState handles the first save when no existing data exists.
-func (m *Manager) saveInitialState(data *Data, cycleID string, now metav1.Time, namespace, planName, targetName string, ctx context.Context) error {
-	data.CycleID = cycleID
-	data.Status = make(map[string]ResourceStatus)
-	for key := range data.State {
-		data.Status[key] = ResourceStatus{LastReportedAt: &now}
-	}
-	return m.Save(ctx, namespace, planName, targetName, data)
 }
 
 // normalizeStateValue ensures the state value is in the correct format.
@@ -181,7 +186,18 @@ func (m *Manager) handleStaleResources(existing, data *Data, maxStaleCount int, 
 	}
 }
 
+// saveNewState handles the first save when no existing data exists.
+// Data should already have Status with LastReportedAt and CapturedAt set by the caller.
+func (m *Manager) saveNewState(data *Data, cycleID string, namespace, planName, targetName string, ctx context.Context) error {
+	data.CycleID = cycleID
+
+	// Status and CapturedAt should already be set by the accumulator
+	return m.Save(ctx, namespace, planName, targetName, data)
+}
+
 // saveMergedData persists the merged state to storage.
+// CapturedAt should already be set by the caller (accumulator) to indicate
+// when the data was ready to be persisted.
 func (m *Manager) saveMergedData(data, existing *Data, cycleID string, mergedState map[string]any, mergedStatus map[string]ResourceStatus, namespace, planName, targetName string, ctx context.Context) error {
 	if len(mergedStatus) == 0 {
 		mergedStatus = nil
@@ -194,7 +210,7 @@ func (m *Manager) saveMergedData(data, existing *Data, cycleID string, mergedSta
 		IsLive:     true,
 		CycleID:    cycleID,
 		CreatedAt:  existing.CreatedAt,
-		CapturedAt: data.CapturedAt,
+		CapturedAt: data.CapturedAt, // Set by accumulator when flush is called
 		State:      mergedState,
 		Status:     mergedStatus,
 	}

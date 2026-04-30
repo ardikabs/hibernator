@@ -23,7 +23,8 @@ import (
 // This reduces Kubernetes API calls from N to 1 (where N = number of resources).
 type Accumulator struct {
 	mu         sync.Mutex
-	state      map[string]any // Accumulated state captured from live API calls
+	state      map[string]any         // Accumulated state captured from live API calls
+	reportedAt map[string]metav1.Time // Tracks when each resource was reported (callback invoked)
 	log        logr.Logger
 	k8sClient  client.Client
 	namespace  string
@@ -39,6 +40,7 @@ type Accumulator struct {
 func NewReportStateHandlers(ctx context.Context, k8sClient client.Client, log logr.Logger, namespace, plan, target, targetType, cycleID string) (executor.ReportStateCallback, func() error) {
 	acc := &Accumulator{
 		state:      make(map[string]any),
+		reportedAt: make(map[string]metav1.Time),
 		log:        log,
 		k8sClient:  k8sClient,
 		namespace:  namespace,
@@ -59,11 +61,16 @@ func NewReportStateHandlers(ctx context.Context, k8sClient client.Client, log lo
 	return callback, flush
 }
 
-// add accumulates a key-value pair in memory.
+// add accumulates a key-value pair in memory and records when the callback was invoked.
+// The reportedAt timestamp tracks when the executor triggered the ReportStateCallback for this resource.
 // Converts struct values to map[string]any to ensure compatibility with restore manager.
 func (a *Accumulator) add(key string, value any) error {
 	a.mu.Lock()
 	defer a.mu.Unlock()
+
+	// Record when this resource was reported (callback invoked)
+	// This is the "Reported At" time - when the executor reported this resource's state
+	a.reportedAt[key] = metav1.Now()
 
 	// Convert struct to map[string]any if needed
 	// This ensures compatibility with restore.Manager.SaveState() which expects map[string]any
@@ -113,6 +120,9 @@ func normalizeStateValue(value any) (map[string]any, error) {
 // flush saves all accumulated data to ConfigMap via SaveState, which performs
 // merge and staleness housekeeping in a single API call.
 //
+// CapturedAt is set here just before calling SaveState, indicating when the data
+// was ready to be persisted (after all callbacks have been received).
+//
 // If no data was accumulated (executor performed a no-op shutdown), an empty-state
 // restore point is written so that a subsequent wakeup can proceed without error.
 func (a *Accumulator) flush(ctx context.Context) error {
@@ -124,14 +134,22 @@ func (a *Accumulator) flush(ctx context.Context) error {
 	const maxStaleCount = 3
 
 	now := metav1.Now()
+
+	// Build Status map with LastReportedAt for each resource
+	// LastReportedAt reflects when the callback was invoked (tracked in add())
+	status := make(map[string]restore.ResourceStatus)
+	for key, reportedTime := range a.reportedAt {
+		status[key] = restore.ResourceStatus{LastReportedAt: &reportedTime}
+	}
+
 	data := &restore.Data{
-		Target:     a.target,
-		Executor:   a.targetType,
-		Version:    1,
-		CreatedAt:  now,
-		IsLive:     true,
-		CapturedAt: &now,
-		State:      a.state, // may be nil/empty for no-op shutdown
+		Target:    a.target,
+		Executor:  a.targetType,
+		Version:   1,
+		CreatedAt: now,
+		IsLive:    true,
+		State:     a.state, // may be nil/empty for no-op shutdown
+		Status:    status,  // Pre-populated with LastReportedAt for each resource
 	}
 
 	rm := restore.NewManager(a.k8sClient, log)

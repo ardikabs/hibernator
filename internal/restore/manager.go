@@ -47,7 +47,8 @@ type ResourceStatus struct {
 	// When this reaches maxStaleCount, the resource is evicted from State.
 	StaleCount int `json:"staleCount,omitempty"`
 
-	// LastReportedAt records when this resource was last reported by the executor.
+	// LastReportedAt records when this resource was last reported by the executor via callback.
+	// This is set when SaveState is invoked and indicates when the executor triggered the state report.
 	// Used for same-cycle restart detection: if nil, resource hasn't been reported in this cycle.
 	// If set, the existing state is preserved during restart unless the new state is demanded.
 	LastReportedAt *metav1.Time `json:"lastReportedAt,omitempty"`
@@ -79,8 +80,10 @@ type Data struct {
 	// This is set once when the restore data entry is first created and never changes.
 	CreatedAt metav1.Time `json:"createdAt"`
 
-	// CapturedAt is when the state was last captured/updated by the executor.
-	// This changes each time the state is updated during a hibernation cycle.
+	// CapturedAt tracks when the restore ConfigMap was updated for this target.
+	// This timestamp indicates when the hibernator captured and initiated the save operation,
+	// regardless of the write outcome. It serves as a historical marker for when the data
+	// was captured from the hibernator's perspective, useful for auditing and freshness checks.
 	// When a target is first initialized without state, this will be nil.
 	CapturedAt *metav1.Time `json:"capturedAt,omitempty"`
 
