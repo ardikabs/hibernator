@@ -48,8 +48,10 @@ type Options struct {
 	MetricsAddr             string
 	ProbeAddr               string
 	EnableLeaderElection    bool
-	RunnerImage             string
+	LeaderElectionNamespace string
 	ControlPlaneEndpoint    string
+	ControlPlaneNamespace   string
+	RunnerImage             string
 	RunnerServiceAccount    string
 	GRPCServerAddr          string
 	WebSocketServerAddr     string
@@ -57,7 +59,6 @@ type Options struct {
 	WebhookCertDir          string
 	Workers                 int
 	SyncPeriod              time.Duration
-	LeaderElectionNamespace string
 	ScheduleBufferDuration  string
 }
 
@@ -72,12 +73,16 @@ func ParseFlags() Options {
 	flag.BoolVar(&opts.EnableLeaderElection, "leader-elect", envutil.GetBool("LEADER_ELECTION_ENABLED", true),
 		"Enable leader election for controller manager. "+
 			"Enabling this will ensure there is only one active controller manager.")
+	flag.StringVar(&opts.LeaderElectionNamespace, "leader-election-namespace", envutil.GetString("LEADER_ELECTION_NAMESPACE", "hibernator-system"),
+		"The namespace in which the leader election resource will be created.")
 	flag.StringVar(&opts.RunnerImage, "runner-image", envutil.GetString("RUNNER_IMAGE", "ghcr.io/ardikabs/hibernator-runner:latest"),
 		"The runner container image to use for execution jobs.")
-	flag.StringVar(&opts.ControlPlaneEndpoint, "control-plane-endpoint", envutil.GetString("CONTROL_PLANE_ENDPOINT", ""),
-		"The endpoint for runner streaming callbacks.")
 	flag.StringVar(&opts.RunnerServiceAccount, "runner-service-account", "hibernator-runner",
 		"The ServiceAccount name used by runner pods.")
+	flag.StringVar(&opts.ControlPlaneEndpoint, "control-plane-endpoint", envutil.GetString("CONTROL_PLANE_ENDPOINT", ""),
+		"The endpoint for runner streaming callbacks.")
+	flag.StringVar(&opts.ControlPlaneNamespace, "control-plane-namespace", envutil.GetString("CONTROL_PLANE_NAMESPACE", "hibernator-system"),
+		"The endpoint for runner streaming callbacks.")
 	flag.StringVar(&opts.GRPCServerAddr, "grpc-server-address", ":9444",
 		"The address for the gRPC streaming server.")
 	flag.StringVar(&opts.WebSocketServerAddr, "websocket-server-address", ":8082",
@@ -90,8 +95,6 @@ func ParseFlags() Options {
 		"The number of concurrent reconcile workers. Controls MaxConcurrentReconciles for controllers.")
 	flag.DurationVar(&opts.SyncPeriod, "sync-period", envutil.GetDuration("SYNC_PERIOD", 10*time.Hour),
 		"The minimum interval at which watched resources are reconciled. Default is 10 hours.")
-	flag.StringVar(&opts.LeaderElectionNamespace, "leader-election-namespace", envutil.GetString("LEADER_ELECTION_NAMESPACE", "hibernator-system"),
-		"The namespace in which the leader election resource will be created.")
 	flag.StringVar(&opts.ScheduleBufferDuration, "schedule-buffer-duration", envutil.GetString("SCHEDULE_BUFFER_DURATION", "1m"),
 		"The buffer duration added to schedule evaluation windows. Defaults to 1m (1-minute) buffer duration to allow full-day operation both for shutdown and wakeup.")
 
@@ -172,9 +175,11 @@ func Run(opts Options) error {
 	// Start streaming servers if enabled
 	if opts.EnableStreaming {
 		if err := streaming.SetupStreamingServerWithManager(mgr, streaming.Options{
-			GRPCAddr:      opts.GRPCServerAddr,
-			WebSocketAddr: opts.WebSocketServerAddr,
-			Clock:         clk,
+			GRPCAddr:                      opts.GRPCServerAddr,
+			WebSocketAddr:                 opts.WebSocketServerAddr,
+			Clock:                         clk,
+			RunnerServiceAccount:          opts.RunnerServiceAccount,
+			RunnerServiceAccountNamespace: opts.ControlPlaneNamespace,
 		}); err != nil {
 			setupLog.Error(err, "unable to initialize streaming servers")
 			return err

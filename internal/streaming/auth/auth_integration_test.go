@@ -28,7 +28,7 @@ import (
 
 func TestNewTokenValidator_NotNil(t *testing.T) {
 	fakeClient := k8sfake.NewSimpleClientset()
-	v := NewTokenValidator(fakeClient, logr.Discard())
+	v := NewTokenValidator(fakeClient, logr.Discard(), "hibernator-runner", "hibernator-system")
 	if v == nil {
 		t.Fatal("NewTokenValidator returned nil")
 	}
@@ -38,13 +38,19 @@ func TestNewTokenValidator_NotNil(t *testing.T) {
 	if v.clientset == nil {
 		t.Error("clientset should not be nil")
 	}
+	if v.expectedServiceAccount != "hibernator-runner" {
+		t.Errorf("expectedServiceAccount = %q, want %q", v.expectedServiceAccount, "hibernator-runner")
+	}
+	if v.expectedNamespace != "hibernator-system" {
+		t.Errorf("expectedNamespace = %q, want %q", v.expectedNamespace, "hibernator-system")
+	}
 }
 
 // ---- ValidateToken ----
 
 func TestValidateToken_EmptyToken(t *testing.T) {
 	fakeClient := k8sfake.NewSimpleClientset()
-	v := NewTokenValidator(fakeClient, logr.Discard())
+	v := NewTokenValidator(fakeClient, logr.Discard(), "hibernator-runner", "hibernator-system")
 
 	result := v.ValidateToken(context.Background(), "")
 	if result.Valid {
@@ -57,7 +63,7 @@ func TestValidateToken_EmptyToken(t *testing.T) {
 
 func TestValidateToken_BearerOnlyToken(t *testing.T) {
 	fakeClient := k8sfake.NewSimpleClientset()
-	v := NewTokenValidator(fakeClient, logr.Discard())
+	v := NewTokenValidator(fakeClient, logr.Discard(), "hibernator-runner", "hibernator-system")
 
 	// "Bearer " strips to ""
 	result := v.ValidateToken(context.Background(), "Bearer ")
@@ -74,7 +80,7 @@ func TestValidateToken_TokenReviewError(t *testing.T) {
 		return true, nil, fmt.Errorf("api server unavailable")
 	})
 
-	v := NewTokenValidator(fakeClient, logr.Discard())
+	v := NewTokenValidator(fakeClient, logr.Discard(), "hibernator-runner", "hibernator-system")
 	result := v.ValidateToken(context.Background(), "some-token")
 	if result.Valid {
 		t.Error("API error should result in invalid token")
@@ -97,7 +103,7 @@ func TestValidateToken_NotAuthenticated(t *testing.T) {
 		return true, review, nil
 	})
 
-	v := NewTokenValidator(fakeClient, logr.Discard())
+	v := NewTokenValidator(fakeClient, logr.Discard(), "hibernator-runner", "hibernator-system")
 	result := v.ValidateToken(context.Background(), "bad-token")
 	if result.Valid {
 		t.Error("unauthenticated token should not be valid")
@@ -123,7 +129,7 @@ func TestValidateToken_NoAudiences(t *testing.T) {
 		return true, review, nil
 	})
 
-	v := NewTokenValidator(fakeClient, logr.Discard())
+	v := NewTokenValidator(fakeClient, logr.Discard(), "hibernator-runner", "hibernator-system")
 	result := v.ValidateToken(context.Background(), "token-no-aud")
 	if result.Valid {
 		t.Error("token with no audiences should not be valid")
@@ -146,7 +152,7 @@ func TestValidateToken_WrongAudience(t *testing.T) {
 		return true, review, nil
 	})
 
-	v := NewTokenValidator(fakeClient, logr.Discard())
+	v := NewTokenValidator(fakeClient, logr.Discard(), "hibernator-runner", "hibernator-system")
 	result := v.ValidateToken(context.Background(), "token-wrong-aud")
 	if result.Valid {
 		t.Error("token with wrong audience should not be valid")
@@ -166,7 +172,7 @@ func TestValidateToken_ValidToken(t *testing.T) {
 				Authenticated: true,
 				Audiences:     []string{ExpectedAudience},
 				User: authv1.UserInfo{
-					Username: "system:serviceaccount:hibernator-system:runner",
+					Username: "system:serviceaccount:hibernator-system:hibernator-runner",
 					Groups:   []string{"system:serviceaccounts", "system:serviceaccounts:hibernator-system"},
 				},
 			},
@@ -174,18 +180,18 @@ func TestValidateToken_ValidToken(t *testing.T) {
 		return true, review, nil
 	})
 
-	v := NewTokenValidator(fakeClient, logr.Discard())
+	v := NewTokenValidator(fakeClient, logr.Discard(), "hibernator-runner", "hibernator-system")
 	result := v.ValidateToken(context.Background(), "valid-token")
 	if !result.Valid {
 		t.Errorf("should be valid, got error: %v", result.Error)
 	}
-	if result.Username != "system:serviceaccount:hibernator-system:runner" {
+	if result.Username != "system:serviceaccount:hibernator-system:hibernator-runner" {
 		t.Errorf("Username = %q", result.Username)
 	}
 	if result.Namespace != "hibernator-system" {
 		t.Errorf("Namespace = %q", result.Namespace)
 	}
-	if result.ServiceAccount != "runner" {
+	if result.ServiceAccount != "hibernator-runner" {
 		t.Errorf("ServiceAccount = %q", result.ServiceAccount)
 	}
 }
@@ -199,14 +205,14 @@ func TestValidateToken_ValidBearerToken(t *testing.T) {
 				Authenticated: true,
 				Audiences:     []string{ExpectedAudience},
 				User: authv1.UserInfo{
-					Username: "system:serviceaccount:ns:sa",
+					Username: "system:serviceaccount:hibernator-system:hibernator-runner",
 				},
 			},
 		}
 		return true, review, nil
 	})
 
-	v := NewTokenValidator(fakeClient, logr.Discard())
+	v := NewTokenValidator(fakeClient, logr.Discard(), "hibernator-runner", "hibernator-system")
 	// Pass with "Bearer " prefix — validator should strip it
 	result := v.ValidateToken(context.Background(), "Bearer valid-bearer-token")
 	if !result.Valid {
@@ -230,7 +236,7 @@ func buildValidatorWithTokenReactor(authenticated bool, audiences []string, user
 		}
 		return true, review, nil
 	})
-	return NewTokenValidator(fakeClient, logr.Discard())
+	return NewTokenValidator(fakeClient, logr.Discard(), "hibernator-runner", "hibernator-system")
 }
 
 func TestGRPCInterceptor_MissingMetadata(t *testing.T) {
@@ -292,7 +298,7 @@ func TestGRPCInterceptor_InvalidToken(t *testing.T) {
 }
 
 func TestGRPCInterceptor_ValidToken(t *testing.T) {
-	validator := buildValidatorWithTokenReactor(true, []string{ExpectedAudience}, "system:serviceaccount:ns:sa")
+	validator := buildValidatorWithTokenReactor(true, []string{ExpectedAudience}, "system:serviceaccount:hibernator-system:hibernator-runner")
 	interceptor := GRPCInterceptor(validator, logr.Discard())
 
 	md := metadata.New(map[string]string{
@@ -401,7 +407,7 @@ func TestGRPCStreamInterceptor_InvalidToken(t *testing.T) {
 }
 
 func TestGRPCStreamInterceptor_ValidToken(t *testing.T) {
-	validator := buildValidatorWithTokenReactor(true, []string{ExpectedAudience}, "system:serviceaccount:ns:sa")
+	validator := buildValidatorWithTokenReactor(true, []string{ExpectedAudience}, "system:serviceaccount:hibernator-system:hibernator-runner")
 	interceptor := GRPCStreamInterceptor(validator, logr.Discard())
 
 	md := metadata.New(map[string]string{AuthorizationHeader: "Bearer valid-token"})
