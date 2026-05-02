@@ -37,7 +37,7 @@ func init() {
 type runner struct {
 	cfg           *Config
 	log           logr.Logger
-	k8sClient     client.Client
+	restoreMgr    *restore.Manager
 	telemetryMgr  *telemetry.Manager
 	registry      *executor.Registry
 	configBuilder *metadata.ConfigBuilder
@@ -82,8 +82,10 @@ func newRunner(ctx context.Context, log logr.Logger, cfg *Config) (*runner, erro
 		r.log.Error(err, "failed to create k8s client")
 		return nil, fmt.Errorf("create k8s client: %w", err)
 	}
-	r.k8sClient = k8sClient
+
 	r.configBuilder = metadata.NewConfigBuilder(k8sClient, r.log)
+
+	r.restoreMgr = restore.NewManager(k8sClient, r.log)
 
 	// Register executors
 	factory := newExecutorFactoryRegistry()
@@ -190,8 +192,7 @@ func (r *runner) run(ctx context.Context) (*executor.Result, error) {
 
 	// Wake-up success: mark target as restored for cleanup coordination
 	if cfg.Operation == "wakeup" {
-		rm := restore.NewManager(r.k8sClient, r.log)
-		if err := rm.MarkTargetRestored(ctx, r.cfg.Namespace, r.cfg.Plan, r.cfg.Target); err != nil {
+		if err := r.restoreMgr.MarkTargetRestored(ctx, r.cfg.Namespace, r.cfg.Plan, r.cfg.Target); err != nil {
 			// Non-fatal: continue even if marking fails
 			r.log.Error(err, "failed to mark target as restored (non-fatal)")
 		} else {
@@ -243,7 +244,7 @@ func (r *runner) executeOperation(ctx context.Context, exec executor.Executor, s
 			executorResult = result
 		}
 	case "wakeup":
-		rd, err := state.LoadRestoreData(ctx, r.k8sClient, r.log, r.cfg.Namespace, r.cfg.Plan, r.cfg.Target)
+		rd, err := state.LoadRestoreData(ctx, r.restoreMgr, r.log, r.cfg.Namespace, r.cfg.Plan, r.cfg.Target)
 		if err != nil {
 			operationErr = fmt.Errorf("load restore data: %w", err)
 			break
@@ -293,7 +294,7 @@ func (r *runner) buildExecutorSpec(ctx context.Context, params map[string]any) (
 	// Add incremental save callback for shutdown operations
 	var flusher func() error
 	if r.cfg.Operation == "shutdown" {
-		callback, flush := state.NewReportStateHandlers(ctx, r.k8sClient, r.log, r.cfg.Namespace, r.cfg.Plan, r.cfg.Target, r.cfg.TargetType, r.cfg.CycleID)
+		callback, flush := state.NewReportStateHandlers(ctx, r.restoreMgr, r.log, r.cfg.Namespace, r.cfg.Plan, r.cfg.Target, r.cfg.TargetType, r.cfg.CycleID)
 		spec.ReportStateCallback = callback
 		flusher = flush
 	}

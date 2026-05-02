@@ -90,7 +90,7 @@ func (f *fakeExecutor) WakeUp(_ context.Context, _ logr.Logger, _ executor.Spec,
 // newTestRunner builds a runner with an in-memory fake client and an injected
 // executor registry – no kubeconfig resolution or real executor factory.
 // Any client.Object values in preloaded are seeded into the fake store.
-func newTestRunner(cfg *Config, fakeExec *fakeExecutor, preloaded ...client.Object) *runner {
+func newTestRunner(cfg *Config, fakeExec *fakeExecutor, preloaded ...client.Object) (*runner, client.Client) {
 	reg := executor.NewRegistry()
 	reg.Register(fakeExec)
 
@@ -101,12 +101,12 @@ func newTestRunner(cfg *Config, fakeExec *fakeExecutor, preloaded ...client.Obje
 		Build()
 
 	return &runner{
-		cfg:       cfg,
-		log:       logr.Discard(),
-		k8sClient: fc,
-		registry:  reg,
+		cfg:        cfg,
+		log:        logr.Discard(),
+		restoreMgr: restore.NewManager(fc, logr.Discard()),
+		registry:   reg,
 		// streamClient nil  → no streaming, reportProgress/reportCompletion log-only
-	}
+	}, fc
 }
 
 // baseConfig returns a minimal Config for the given operation and executor type.
@@ -178,14 +178,14 @@ func TestRunner_Shutdown_WritesRestorePoint(t *testing.T) {
 			"instance-2": map[string]any{"minSize": 0, "maxSize": 5},
 		},
 	}
-	r := newTestRunner(baseConfig("shutdown", "fake"), fakeExec)
+	r, fc := newTestRunner(baseConfig("shutdown", "fake"), fakeExec)
 
 	_, runErr := r.run(context.Background())
 	require.NoError(t, runErr)
 
 	assert.True(t, fakeExec.shutdownCalled)
 
-	rd := readRestoreData(t, r.k8sClient)
+	rd := readRestoreData(t, fc)
 	assert.True(t, rd.IsLive)
 	assert.Contains(t, rd.State, "instance-1")
 	assert.Contains(t, rd.State, "instance-2")
@@ -198,13 +198,13 @@ func TestRunner_Shutdown_WritesRestorePoint(t *testing.T) {
 func TestRunner_Shutdown_NoOp_WritesEmptyRestorePoint(t *testing.T) {
 	// Executor does nothing — zero restore keys emitted.
 	fakeExec := &fakeExecutor{typeVal: "fake"}
-	r := newTestRunner(baseConfig("shutdown", "fake"), fakeExec)
+	r, fc := newTestRunner(baseConfig("shutdown", "fake"), fakeExec)
 
 	_, runErr := r.run(context.Background())
 	require.NoError(t, runErr)
 	assert.True(t, fakeExec.shutdownCalled)
 
-	rd := readRestoreData(t, r.k8sClient)
+	rd := readRestoreData(t, fc)
 	assert.True(t, rd.IsLive, "empty restore point should be marked IsLive")
 	assert.Empty(t, rd.State, "empty restore point should have empty State")
 }
@@ -216,7 +216,7 @@ func TestRunner_Wakeup_ReadsRestorePoint(t *testing.T) {
 		"instance-1": map[string]any{"desiredCapacity": float64(3)},
 	}
 	fakeExec := &fakeExecutor{typeVal: "fake"}
-	r := newTestRunner(baseConfig("wakeup", "fake"), fakeExec, restoreCM(t, state))
+	r, _ := newTestRunner(baseConfig("wakeup", "fake"), fakeExec, restoreCM(t, state))
 
 	_, runErr := r.run(context.Background())
 	require.NoError(t, runErr)
@@ -233,7 +233,7 @@ func TestRunner_Wakeup_ReadsRestorePoint(t *testing.T) {
 func TestRunner_Wakeup_EmptyRestorePoint_Succeeds(t *testing.T) {
 	fakeExec := &fakeExecutor{typeVal: "fake"}
 	// Pre-seed the empty restore point that a no-op shutdown would have written.
-	r := newTestRunner(baseConfig("wakeup", "fake"), fakeExec, restoreCM(t, nil))
+	r, _ := newTestRunner(baseConfig("wakeup", "fake"), fakeExec, restoreCM(t, nil))
 
 	_, runErr := r.run(context.Background())
 	require.NoError(t, runErr)
@@ -250,7 +250,7 @@ func TestRunner_Shutdown_ExecutorError_ReturnsError(t *testing.T) {
 		typeVal:     "fake",
 		shutdownErr: fmt.Errorf("disk full: cannot proceed"),
 	}
-	r := newTestRunner(baseConfig("shutdown", "fake"), fakeExec)
+	r, _ := newTestRunner(baseConfig("shutdown", "fake"), fakeExec)
 
 	_, err := r.run(context.Background())
 	require.Error(t, err)
@@ -263,7 +263,7 @@ func TestRunner_Shutdown_ExecutorError_ReturnsError(t *testing.T) {
 func TestRunner_Wakeup_MissingRestoreData_ReturnsError(t *testing.T) {
 	fakeExec := &fakeExecutor{typeVal: "fake"}
 	// No preloaded ConfigMap.
-	r := newTestRunner(baseConfig("wakeup", "fake"), fakeExec)
+	r, _ := newTestRunner(baseConfig("wakeup", "fake"), fakeExec)
 
 	_, err := r.run(context.Background())
 	require.Error(t, err)
@@ -276,7 +276,7 @@ func TestRunner_Wakeup_MissingRestoreData_ReturnsError(t *testing.T) {
 func TestRunner_UnknownExecutorType_ReturnsError(t *testing.T) {
 	fakeExec := &fakeExecutor{typeVal: "fake"}
 	// Config requests "nonexistent", but only "fake" is registered.
-	r := newTestRunner(baseConfig("shutdown", "nonexistent"), fakeExec)
+	r, _ := newTestRunner(baseConfig("shutdown", "nonexistent"), fakeExec)
 
 	_, err := r.run(context.Background())
 	require.Error(t, err)

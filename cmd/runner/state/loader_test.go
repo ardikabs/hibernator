@@ -74,8 +74,9 @@ func TestLoadRestoreData_ExcludesStaleKeys(t *testing.T) {
 
 	ctx := context.Background()
 	log := logr.Discard()
+	restoreMgr := restore.NewManager(fakeClient, log)
 
-	result, err := LoadRestoreData(ctx, fakeClient, log, "default", "test-plan", "my-target")
+	result, err := LoadRestoreData(ctx, restoreMgr, log, "default", "test-plan", "my-target")
 	require.NoError(t, err)
 
 	assert.NotContains(t, result.Data, "keyA", "keyA should be excluded: StaleCount=1")
@@ -98,8 +99,9 @@ func TestLoadRestoreData_AllKeysStale_EmptyResult(t *testing.T) {
 
 	ctx := context.Background()
 	log := logr.Discard()
+	restoreMgr := restore.NewManager(fakeClient, log)
 
-	result, err := LoadRestoreData(ctx, fakeClient, log, "default", "test-plan", "my-target")
+	result, err := LoadRestoreData(ctx, restoreMgr, log, "default", "test-plan", "my-target")
 	require.NoError(t, err)
 
 	assert.Empty(t, result.Data, "all keys stale should yield empty Data map")
@@ -119,8 +121,9 @@ func TestLoadRestoreData_NoStaleKeys_LoadsAll(t *testing.T) {
 
 	ctx := context.Background()
 	log := logr.Discard()
+	restoreMgr := restore.NewManager(fakeClient, log)
 
-	result, err := LoadRestoreData(ctx, fakeClient, log, "default", "test-plan", "my-target")
+	result, err := LoadRestoreData(ctx, restoreMgr, log, "default", "test-plan", "my-target")
 	require.NoError(t, err)
 
 	assert.Len(t, result.Data, 2)
@@ -137,8 +140,9 @@ func TestLoadRestoreData_MissingConfigMap_ReturnsError(t *testing.T) {
 
 	ctx := context.Background()
 	log := logr.Discard()
+	restoreMgr := restore.NewManager(fakeClient, log)
 
-	_, err := LoadRestoreData(ctx, fakeClient, log, "default", "test-plan", "my-target")
+	_, err := LoadRestoreData(ctx, restoreMgr, log, "default", "test-plan", "my-target")
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "no restore data found")
 }
@@ -160,8 +164,9 @@ func TestLoadRestoreData_MissingTargetInConfigMap_ReturnsError(t *testing.T) {
 
 	ctx := context.Background()
 	log := logr.Discard()
+	restoreMgr := restore.NewManager(fakeClient, log)
 
-	_, err := LoadRestoreData(ctx, fakeClient, log, "default", "test-plan", "my-target")
+	_, err := LoadRestoreData(ctx, restoreMgr, log, "default", "test-plan", "my-target")
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "no restore data found")
 }
@@ -183,8 +188,9 @@ func TestLoadRestoreData_ValueTransformation(t *testing.T) {
 
 	ctx := context.Background()
 	log := logr.Discard()
+	restoreMgr := restore.NewManager(fakeClient, log)
 
-	result, err := LoadRestoreData(ctx, fakeClient, log, "default", "test-plan", "my-target")
+	result, err := LoadRestoreData(ctx, restoreMgr, log, "default", "test-plan", "my-target")
 	require.NoError(t, err)
 
 	require.Contains(t, result.Data, "nodeGroup")
