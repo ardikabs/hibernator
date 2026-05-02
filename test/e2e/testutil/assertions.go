@@ -9,6 +9,7 @@ import (
 	"time"
 
 	. "github.com/onsi/gomega"
+	"github.com/samber/lo"
 	batchv1 "k8s.io/api/batch/v1"
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/errors"
@@ -92,7 +93,7 @@ func EventuallyJobCreated(ctx context.Context, k8sClient client.Client, namespac
 
 // EventuallyMultiJobsCreated waits until few Jobs with target labels are created.
 func EventuallyMultiJobsCreated(ctx context.Context, k8sClient client.Client, namespace, planName string, operation hibernatorv1alpha1.PlanOperation, targets ...string) []*batchv1.Job {
-	jobs := []*batchv1.Job{}
+	jobs := make(map[string]*batchv1.Job)
 	Eventually(func() bool {
 		var jobList batchv1.JobList
 		_ = k8sClient.List(ctx, &jobList, client.InNamespace(namespace), client.MatchingLabels{
@@ -100,7 +101,8 @@ func EventuallyMultiJobsCreated(ctx context.Context, k8sClient client.Client, na
 			wellknown.LabelOperation: string(operation),
 		})
 
-		for _, job := range jobList.Items {
+		for i := range jobList.Items {
+			job := &jobList.Items[i]
 			if _, ok := job.Labels[wellknown.LabelStaleRunnerJob]; ok {
 				continue
 			}
@@ -111,7 +113,9 @@ func EventuallyMultiJobsCreated(ctx context.Context, k8sClient client.Client, na
 
 			for _, target := range targets {
 				if job.Labels[wellknown.LabelTarget] == target {
-					jobs = append(jobs, &job)
+					if _, exists := jobs[target]; !exists {
+						jobs[target] = job
+					}
 				}
 			}
 		}
@@ -122,7 +126,7 @@ func EventuallyMultiJobsCreated(ctx context.Context, k8sClient client.Client, na
 
 		return false
 	}, DefaultTimeout, DefaultInterval).Should(BeTrueBecause("Job for plan %s and operation %s should be created", planName, operation))
-	return jobs
+	return lo.Values(jobs)
 }
 
 // SimulateJobRunning updates the Job status to running.

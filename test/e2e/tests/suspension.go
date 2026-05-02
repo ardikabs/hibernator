@@ -23,6 +23,7 @@ import (
 
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
+	"github.com/samber/lo"
 	"k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/utils/ptr"
@@ -112,6 +113,13 @@ var _ = Describe("Plan Suspension E2E", func() {
 
 		By("Verifying plan resumes to Active phase (clock is 08:00 — on-hours)")
 		testutil.EventuallyPhase(ctx, k8sClient, plan, hibernatorv1alpha1.PhaseActive)
+
+		By("Verifying suspended-at-phase annotation was cleaned up after resume")
+		Eventually(func() bool {
+			_ = k8sClient.Get(ctx, client.ObjectKeyFromObject(plan), plan)
+			_, exists := plan.Annotations[wellknown.AnnotationSuspendedAtPhase]
+			return !exists
+		}, testutil.DefaultTimeout, testutil.DefaultInterval).Should(BeTrue(), "suspended-at-phase annotation should be cleaned up after resume")
 	})
 
 	It("SuspendUntil: should auto-resume plan when the deadline annotation passes", func() {
@@ -165,8 +173,11 @@ var _ = Describe("Plan Suspension E2E", func() {
 		testutil.EventuallyPhase(ctx, k8sClient, plan, hibernatorv1alpha1.PhaseActive)
 
 		By("Verifying suspend-until annotation was cleared after resume")
-		Expect(k8sClient.Get(ctx, client.ObjectKeyFromObject(plan), plan)).To(Succeed())
-		Expect(plan.Annotations).NotTo(HaveKey(wellknown.AnnotationSuspendUntil))
+		Eventually(func() bool {
+			_ = k8sClient.Get(ctx, client.ObjectKeyFromObject(plan), plan)
+			_, exists := plan.Annotations[wellknown.AnnotationSuspendUntil]
+			return !exists
+		}, testutil.DefaultTimeout, testutil.DefaultInterval).Should(BeTrue(), "suspend-until annotation should be cleared after resume")
 	})
 
 	It("ForceWakeup: should force wakeup when plan is suspended while Hibernated and resumes during on-hours", func() {
@@ -514,12 +525,17 @@ var _ = Describe("Plan Suspension E2E", func() {
 		testutil.EventuallyPhase(ctx, k8sClient, plan, hibernatorv1alpha1.PhaseHibernating)
 
 		By("Verifying error state was cleared after suspend-from-error resume")
-		Expect(k8sClient.Get(ctx, client.ObjectKeyFromObject(plan), plan)).To(Succeed())
-		Expect(plan.Status.ErrorMessage).To(BeEmpty())
-		Expect(plan.Status.RetryCount).To(BeZero())
+		Eventually(func() bool {
+			_ = k8sClient.Get(ctx, client.ObjectKeyFromObject(plan), plan)
+			return plan.Status.ErrorMessage == "" && plan.Status.RetryCount == 0
+		}, testutil.DefaultTimeout, testutil.DefaultInterval).Should(BeTrue(), "error state should be cleared after suspend-from-error resume")
 
 		By("Verifying suspended-at-phase annotation was cleaned up")
-		Expect(plan.Annotations).NotTo(HaveKey(wellknown.AnnotationSuspendedAtPhase))
+		Eventually(func() bool {
+			_ = k8sClient.Get(ctx, client.ObjectKeyFromObject(plan), plan)
+			_, exists := plan.Annotations[wellknown.AnnotationSuspendedAtPhase]
+			return !exists
+		}, testutil.DefaultTimeout, testutil.DefaultInterval).Should(BeTrue(), "suspended-at-phase annotation should be cleaned up after resume")
 	})
 
 	It("SuspendFromErrorOnWakeup: should clear error state and route to Hibernated when suspended while in PhaseError during wakeup", func() {
@@ -601,7 +617,7 @@ var _ = Describe("Plan Suspension E2E", func() {
 		}, testutil.DefaultTimeout, testutil.DefaultInterval).Should(Equal(string(hibernatorv1alpha1.PhaseError)))
 
 		By("Advancing clock to on off-hours period (Tuesday 22:00) and resuming the plan, assuming Plan will stay on Hibernated phase because wakeup never completed and resource is still hibernated")
-		fakeClock.SetTime(time.Date(2026, 6, 1, 22, 0, 0, 0, time.UTC))
+		fakeClock.SetTime(time.Date(2026, 6, 9, 22, 0, 0, 0, time.UTC))
 		Expect(k8sClient.Get(ctx, client.ObjectKeyFromObject(plan), plan)).To(Succeed())
 		orig = plan.DeepCopy()
 		plan.Spec.Suspend = false
@@ -611,11 +627,16 @@ var _ = Describe("Plan Suspension E2E", func() {
 		testutil.EventuallyPhase(ctx, k8sClient, plan, hibernatorv1alpha1.PhaseHibernated)
 
 		By("Verifying error state was cleared after suspend-from-error resume")
-		Expect(k8sClient.Get(ctx, client.ObjectKeyFromObject(plan), plan)).To(Succeed())
-		Expect(plan.Status.ErrorMessage).To(BeEmpty())
-		Expect(plan.Status.RetryCount).To(BeZero())
+		Eventually(func() bool {
+			lo.Must0(k8sClient.Get(ctx, client.ObjectKeyFromObject(plan), plan))
+			return plan.Status.ErrorMessage == "" && plan.Status.RetryCount == 0
+		}, testutil.DefaultTimeout, testutil.DefaultInterval).Should(BeTrue(), "error state should be cleared after suspend-from-error resume")
 
 		By("Verifying suspended-at-phase annotation was cleaned up")
-		Expect(plan.Annotations).NotTo(HaveKey(wellknown.AnnotationSuspendedAtPhase))
+		Eventually(func() bool {
+			lo.Must0(k8sClient.Get(ctx, client.ObjectKeyFromObject(plan), plan))
+			_, exists := plan.Annotations[wellknown.AnnotationSuspendedAtPhase]
+			return !exists
+		}, testutil.DefaultTimeout, testutil.DefaultInterval).Should(BeTrue(), "suspended-at-phase annotation should be cleaned up after resume")
 	})
 })
