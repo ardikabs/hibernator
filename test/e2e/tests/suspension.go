@@ -23,6 +23,7 @@ import (
 
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
+	"github.com/samber/lo"
 	"k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/utils/ptr"
@@ -627,13 +628,13 @@ var _ = Describe("Plan Suspension E2E", func() {
 
 		By("Verifying error state was cleared after suspend-from-error resume")
 		Eventually(func() bool {
-			_ = k8sClient.Get(ctx, client.ObjectKeyFromObject(plan), plan)
+			lo.Must0(k8sClient.Get(ctx, client.ObjectKeyFromObject(plan), plan))
 			return plan.Status.ErrorMessage == "" && plan.Status.RetryCount == 0
 		}, testutil.DefaultTimeout, testutil.DefaultInterval).Should(BeTrue(), "error state should be cleared after suspend-from-error resume")
 
 		By("Verifying suspended-at-phase annotation was cleaned up")
 		Eventually(func() bool {
-			_ = k8sClient.Get(ctx, client.ObjectKeyFromObject(plan), plan)
+			lo.Must0(k8sClient.Get(ctx, client.ObjectKeyFromObject(plan), plan))
 			_, exists := plan.Annotations[wellknown.AnnotationSuspendedAtPhase]
 			return !exists
 		}, testutil.DefaultTimeout, testutil.DefaultInterval).Should(BeTrue(), "suspended-at-phase annotation should be cleaned up after resume")
