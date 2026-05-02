@@ -11,7 +11,6 @@ import (
 	"fmt"
 
 	"github.com/go-logr/logr"
-	"sigs.k8s.io/controller-runtime/pkg/client"
 
 	"github.com/ardikabs/hibernator/internal/executor"
 	"github.com/ardikabs/hibernator/internal/restore"
@@ -21,10 +20,8 @@ import (
 // Keys that have a StaleCount > 0 are excluded: if a resource was not reported
 // during the most recent shutdown, its state may be inconsistent and should not
 // be used for restoration.
-func LoadRestoreData(ctx context.Context, k8sClient client.Client, log logr.Logger, namespace, plan, target string) (*executor.RestoreData, error) {
+func LoadRestoreData(ctx context.Context, restoreMgr *restore.Manager, log logr.Logger, namespace, plan, target string) (*executor.RestoreData, error) {
 	log = log.WithValues("plan", fmt.Sprintf("%s/%s", namespace, plan), "target", target)
-
-	restoreMgr := restore.NewManager(k8sClient, log)
 
 	data, err := restoreMgr.Load(ctx, namespace, plan, target)
 	if err != nil {

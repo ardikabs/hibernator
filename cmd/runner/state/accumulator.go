@@ -13,7 +13,6 @@ import (
 
 	"github.com/go-logr/logr"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
-	"sigs.k8s.io/controller-runtime/pkg/client"
 
 	"github.com/ardikabs/hibernator/internal/executor"
 	"github.com/ardikabs/hibernator/internal/restore"
@@ -26,7 +25,7 @@ type Accumulator struct {
 	state      map[string]any         // Accumulated state captured from live API calls
 	reportedAt map[string]metav1.Time // Tracks when each resource was reported (callback invoked)
 	log        logr.Logger
-	k8sClient  client.Client
+	restoreMgr *restore.Manager
 	namespace  string
 	plan       string
 	target     string
@@ -37,12 +36,12 @@ type Accumulator struct {
 // NewReportStateHandlers creates an internal accumulator and returns the corresponding ReportStateCallback
 // and flush functions. The callback accumulates saves in memory; flush writes accumulated data in a single API call.
 // The cycleID parameter is used to track which execution cycle first captured each resource's intent.
-func NewReportStateHandlers(ctx context.Context, k8sClient client.Client, log logr.Logger, namespace, plan, target, targetType, cycleID string) (executor.ReportStateCallback, func() error) {
+func NewReportStateHandlers(ctx context.Context, restoreMgr *restore.Manager, log logr.Logger, namespace, plan, target, targetType, cycleID string) (executor.ReportStateCallback, func() error) {
 	acc := &Accumulator{
 		state:      make(map[string]any),
 		reportedAt: make(map[string]metav1.Time),
 		log:        log,
-		k8sClient:  k8sClient,
+		restoreMgr: restoreMgr,
 		namespace:  namespace,
 		plan:       plan,
 		target:     target,
@@ -152,8 +151,7 @@ func (a *Accumulator) flush(ctx context.Context) error {
 		Status:    status,  // Pre-populated with LastReportedAt for each resource
 	}
 
-	rm := restore.NewManager(a.k8sClient, log)
-	if err := rm.SaveState(ctx, a.namespace, a.plan, a.target, data, maxStaleCount, a.cycleID); err != nil {
+	if err := a.restoreMgr.SaveState(ctx, a.namespace, a.plan, a.target, data, maxStaleCount, a.cycleID); err != nil {
 		return fmt.Errorf("save state to ConfigMap: %w", err)
 	}
 

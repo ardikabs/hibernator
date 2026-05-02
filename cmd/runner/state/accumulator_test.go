@@ -40,7 +40,8 @@ func TestAccumulator_StructConversion(t *testing.T) {
 	}
 
 	// Create accumulator
-	callback, flush := NewReportStateHandlers(ctx, fakeClient, logr.Discard(), "test-ns", "test-plan", "test-target", "rds", "cycle-001")
+	restoreMgr := restore.NewManager(fakeClient, logr.Discard())
+	callback, flush := NewReportStateHandlers(ctx, restoreMgr, logr.Discard(), "test-ns", "test-plan", "test-target", "rds", "cycle-001")
 
 	// Add struct values (as executors do)
 	state1 := TestInstanceState{
@@ -111,7 +112,8 @@ func TestAccumulator_MapStringAnyPassthrough(t *testing.T) {
 	fakeClient := fake.NewClientBuilder().WithScheme(scheme).Build()
 	ctx := context.Background()
 
-	callback, flush := NewReportStateHandlers(ctx, fakeClient, logr.Discard(), "test-ns", "test-plan", "test-target", "workloadscaler", "cycle-001")
+	restoreMgr := restore.NewManager(fakeClient, logr.Discard())
+	callback, flush := NewReportStateHandlers(ctx, restoreMgr, logr.Discard(), "test-ns", "test-plan", "test-target", "workloadscaler", "cycle-001")
 
 	// Add map[string]any values (as workloadscaler might do)
 	state1 := map[string]any{
@@ -157,8 +159,10 @@ func TestAccumulator_StaleCountsAccumulation(t *testing.T) {
 	fakeClient := fake.NewClientBuilder().WithScheme(scheme).Build()
 	ctx := context.Background()
 
+	restoreMgr := restore.NewManager(fakeClient, logr.Discard())
+
 	// First cycle: Save 2 resources
-	callback1, flush1 := NewReportStateHandlers(ctx, fakeClient, logr.Discard(), "test-ns", "test-plan", "test-target", "rds", "cycle-001")
+	callback1, flush1 := NewReportStateHandlers(ctx, restoreMgr, logr.Discard(), "test-ns", "test-plan", "test-target", "rds", "cycle-001")
 
 	type TestState struct {
 		InstanceId string `json:"instanceId"`
@@ -169,8 +173,8 @@ func TestAccumulator_StaleCountsAccumulation(t *testing.T) {
 	_ = callback1("i-2", TestState{InstanceId: "i-2", WasRunning: true})
 	_ = flush1()
 
-	// Second cycle: Only report 1 resource
-	callback2, flush2 := NewReportStateHandlers(ctx, fakeClient, logr.Discard(), "test-ns", "test-plan", "test-target", "rds", "cycle-002")
+	// Second cycle: Only report 1 resource (reuse same restoreMgr to simulate same client)
+	callback2, flush2 := NewReportStateHandlers(ctx, restoreMgr, logr.Discard(), "test-ns", "test-plan", "test-target", "rds", "cycle-002")
 	_ = callback2("i-1", TestState{InstanceId: "i-1", WasRunning: true})
 	_ = flush2()
 
@@ -238,7 +242,8 @@ func TestAccumulator_BackwardCompatibility(t *testing.T) {
 	_ = fakeClient.Create(ctx, cm)
 
 	// Add new data via accumulator
-	callback, flush := NewReportStateHandlers(ctx, fakeClient, logr.Discard(), "test-ns", "test-plan", "test-target", "rds", "cycle-new")
+	restoreMgr := restore.NewManager(fakeClient, logr.Discard())
+	callback, flush := NewReportStateHandlers(ctx, restoreMgr, logr.Discard(), "test-ns", "test-plan", "test-target", "rds", "cycle-new")
 
 	type TestState struct {
 		InstanceId string `json:"instanceId"`
@@ -276,7 +281,8 @@ func TestAccumulator_NoOpShutdown(t *testing.T) {
 	fakeClient := fake.NewClientBuilder().WithScheme(scheme).Build()
 	ctx := context.Background()
 
-	_, flush := NewReportStateHandlers(ctx, fakeClient, logr.Discard(), "test-ns", "test-plan", "test-target", "rds", "cycle-001")
+	restoreMgr := restore.NewManager(fakeClient, logr.Discard())
+	_, flush := NewReportStateHandlers(ctx, restoreMgr, logr.Discard(), "test-ns", "test-plan", "test-target", "rds", "cycle-001")
 
 	// Flush without adding any resources
 	err := flush()
