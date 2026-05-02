@@ -601,7 +601,7 @@ var _ = Describe("Plan Suspension E2E", func() {
 		}, testutil.DefaultTimeout, testutil.DefaultInterval).Should(Equal(string(hibernatorv1alpha1.PhaseError)))
 
 		By("Advancing clock to on off-hours period (Tuesday 22:00) and resuming the plan, assuming Plan will stay on Hibernated phase because wakeup never completed and resource is still hibernated")
-		fakeClock.SetTime(time.Date(2026, 6, 1, 22, 0, 0, 0, time.UTC))
+		fakeClock.SetTime(time.Date(2026, 6, 9, 22, 0, 0, 0, time.UTC))
 		Expect(k8sClient.Get(ctx, client.ObjectKeyFromObject(plan), plan)).To(Succeed())
 		orig = plan.DeepCopy()
 		plan.Spec.Suspend = false
