@@ -18,9 +18,11 @@ import (
 
 // Options configuration for streaming servers
 type Options struct {
-	GRPCAddr      string
-	WebSocketAddr string
-	Clock         clock.Clock
+	GRPCAddr                      string
+	WebSocketAddr                 string
+	Clock                         clock.Clock
+	RunnerServiceAccount          string
+	RunnerServiceAccountNamespace string
 }
 
 // SetupStreamingServerWithManager sets up the streaming servers to the controller manager
@@ -40,9 +42,13 @@ func SetupStreamingServerWithManager(mgr ctrl.Manager, opts Options) error {
 	// Runners persist restore data directly to ConfigMap - controller only orchestrates
 	execService := server.NewExecutionServiceServer(mgr.GetClient(), eventRecorder, opts.Clock)
 
+	// Create token validator with expected runner service account and namespace
+	// This validator is shared across all streaming servers
+	validator := auth.NewTokenValidator(clientset, log, opts.RunnerServiceAccount, opts.RunnerServiceAccountNamespace)
+
 	if opts.GRPCAddr != "" {
 		// Start gRPC server
-		grpcServer := server.NewServer(opts.GRPCAddr, clientset, execService, log)
+		grpcServer := server.NewServer(opts.GRPCAddr, validator, execService, log)
 
 		if err := mgr.Add(grpcServer); err != nil {
 			return fmt.Errorf("failed to add grpc server to manager: %w", err)
@@ -51,14 +57,12 @@ func SetupStreamingServerWithManager(mgr ctrl.Manager, opts Options) error {
 
 	if opts.WebSocketAddr != "" {
 		// Start WebSocket server
-		validator := auth.NewTokenValidator(clientset, log)
 		wsServer := server.NewWebSocketServer(server.WebSocketServerOptions{
-			Addr:         opts.WebSocketAddr,
-			Clock:        opts.Clock,
-			ExecService:  execService,
-			Validator:    validator,
-			K8sClientset: clientset,
-			Log:          log,
+			Addr:        opts.WebSocketAddr,
+			Clock:       opts.Clock,
+			ExecService: execService,
+			Validator:   validator,
+			Log:         log,
 		})
 
 		if err := mgr.Add(wsServer); err != nil {

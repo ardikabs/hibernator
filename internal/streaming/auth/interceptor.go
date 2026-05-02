@@ -55,7 +55,10 @@ func GRPCInterceptor(validator *TokenValidator, log logr.Logger) grpc.UnaryServe
 			return nil, status.Error(codes.Unauthenticated, "missing authorization header")
 		}
 
-		token := ExtractTokenFromHeader(authHeaders[0])
+		token, err := ExtractTokenFromHeader(authHeaders[0])
+		if err != nil {
+			return nil, status.Error(codes.Unauthenticated, err.Error())
+		}
 
 		// Validate token
 		result := validator.ValidateToken(ctx, token)
@@ -107,7 +110,10 @@ func GRPCStreamInterceptor(validator *TokenValidator, log logr.Logger) grpc.Stre
 			return status.Error(codes.Unauthenticated, "missing authorization header")
 		}
 
-		token := ExtractTokenFromHeader(authHeaders[0])
+		token, err := ExtractTokenFromHeader(authHeaders[0])
+		if err != nil {
+			return status.Error(codes.Unauthenticated, err.Error())
+		}
 
 		// Validate token
 		result := validator.ValidateToken(ctx, token)

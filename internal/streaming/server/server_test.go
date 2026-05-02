@@ -11,6 +11,7 @@ package server
 import (
 	"testing"
 
+	"github.com/ardikabs/hibernator/internal/streaming/auth"
 	"github.com/go-logr/logr"
 	k8sfake "k8s.io/client-go/kubernetes/fake"
 )
@@ -20,8 +21,9 @@ import (
 func TestNewServer_NotNil(t *testing.T) {
 	fakeClient := k8sfake.NewSimpleClientset()
 	execService := NewExecutionServiceServer(nil, nil, clk)
+	validator := auth.NewTokenValidator(fakeClient, logr.Discard(), "hibernator-runner", "hibernator-system")
 
-	srv := NewServer(":0", fakeClient, execService, logr.Discard())
+	srv := NewServer(":0", validator, execService, logr.Discard())
 	if srv == nil {
 		t.Fatal("NewServer returned nil")
 	}
@@ -30,8 +32,9 @@ func TestNewServer_NotNil(t *testing.T) {
 func TestGRPCServer_NeedLeaderElection(t *testing.T) {
 	fakeClient := k8sfake.NewSimpleClientset()
 	execService := NewExecutionServiceServer(nil, nil, clk)
+	validator := auth.NewTokenValidator(fakeClient, logr.Discard(), "hibernator-runner", "hibernator-system")
 
-	srv := NewServer(":0", fakeClient, execService, logr.Discard())
+	srv := NewServer(":0", validator, execService, logr.Discard())
 	if srv.NeedLeaderElection() {
 		t.Error("GRPCServer should not require leader election")
 	}
@@ -42,8 +45,9 @@ func TestGRPCServer_NeedLeaderElection(t *testing.T) {
 func TestNewWebhookServer_NotNil(t *testing.T) {
 	fakeClient := k8sfake.NewSimpleClientset()
 	execService := NewExecutionServiceServer(nil, nil, clk)
+	validator := auth.NewTokenValidator(fakeClient, logr.Discard(), "hibernator-runner", "hibernator-system")
 
-	ws := NewWebhookServer(":0", fakeClient, execService, logr.Discard())
+	ws := NewWebhookServer(":0", validator, execService, logr.Discard())
 	if ws == nil {
 		t.Fatal("NewWebhookServer returned nil")
 	}
@@ -52,8 +56,9 @@ func TestNewWebhookServer_NotNil(t *testing.T) {
 func TestWebhookServer_NeedLeaderElection(t *testing.T) {
 	fakeClient := k8sfake.NewSimpleClientset()
 	execService := NewExecutionServiceServer(nil, nil, clk)
+	validator := auth.NewTokenValidator(fakeClient, logr.Discard(), "hibernator-runner", "hibernator-system")
 
-	ws := NewWebhookServer(":0", fakeClient, execService, logr.Discard())
+	ws := NewWebhookServer(":0", validator, execService, logr.Discard())
 	if ws.NeedLeaderElection() {
 		t.Error("WebhookServer should not require leader election")
 	}
@@ -64,12 +69,13 @@ func TestWebhookServer_NeedLeaderElection(t *testing.T) {
 func TestNewWebSocketServer_NotNil(t *testing.T) {
 	fakeClient := k8sfake.NewSimpleClientset()
 	execService := NewExecutionServiceServer(nil, nil, clk)
+	validator := auth.NewTokenValidator(fakeClient, logr.Discard(), "hibernator-runner", "hibernator-system")
 
 	srv := NewWebSocketServer(WebSocketServerOptions{
-		Addr:         ":0",
-		ExecService:  execService,
-		K8sClientset: fakeClient,
-		Log:          logr.Discard(),
+		Addr:        ":0",
+		ExecService: execService,
+		Validator:   validator,
+		Log:         logr.Discard(),
 	})
 	if srv == nil {
 		t.Fatal("NewWebSocketServer returned nil")
@@ -79,12 +85,13 @@ func TestNewWebSocketServer_NotNil(t *testing.T) {
 func TestNewWebSocketServer_DefaultsApplied(t *testing.T) {
 	fakeClient := k8sfake.NewSimpleClientset()
 	execService := NewExecutionServiceServer(nil, nil, clk)
+	validator := auth.NewTokenValidator(fakeClient, logr.Discard(), "hibernator-runner", "hibernator-system")
 
 	srv := NewWebSocketServer(WebSocketServerOptions{
-		Addr:         ":0",
-		ExecService:  execService,
-		K8sClientset: fakeClient,
-		Log:          logr.Discard(),
+		Addr:        ":0",
+		ExecService: execService,
+		Validator:   validator,
+		Log:         logr.Discard(),
 		// Leave all durations zero → should be set to defaults
 	})
 
@@ -105,12 +112,13 @@ func TestNewWebSocketServer_DefaultsApplied(t *testing.T) {
 func TestWebSocketServer_NeedLeaderElection(t *testing.T) {
 	fakeClient := k8sfake.NewSimpleClientset()
 	execService := NewExecutionServiceServer(nil, nil, clk)
+	validator := auth.NewTokenValidator(fakeClient, logr.Discard(), "hibernator-runner", "hibernator-system")
 
 	srv := NewWebSocketServer(WebSocketServerOptions{
-		Addr:         ":0",
-		ExecService:  execService,
-		K8sClientset: fakeClient,
-		Log:          logr.Discard(),
+		Addr:        ":0",
+		ExecService: execService,
+		Validator:   validator,
+		Log:         logr.Discard(),
 	})
 
 	if srv.NeedLeaderElection() {
@@ -119,6 +127,15 @@ func TestWebSocketServer_NeedLeaderElection(t *testing.T) {
 }
 
 // ---- contains helper ----
+
+func contains(slice []string, item string) bool {
+	for _, s := range slice {
+		if s == item {
+			return true
+		}
+	}
+	return false
+}
 
 func TestContains_Found(t *testing.T) {
 	sl := []string{"a", "b", "c"}

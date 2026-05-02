@@ -17,7 +17,6 @@ import (
 	"time"
 
 	"github.com/go-logr/logr"
-	"k8s.io/client-go/kubernetes"
 
 	streamingv1alpha1 "github.com/ardikabs/hibernator/api/streaming/v1alpha1"
 	"github.com/ardikabs/hibernator/internal/streaming/auth"
@@ -33,14 +32,13 @@ type WebhookServer struct {
 }
 
 // NewWebhookServer creates a new webhook server.
+// The validator should be pre-configured with expected runner service account and namespace.
 func NewWebhookServer(
 	address string,
-	clientset kubernetes.Interface,
+	validator *auth.TokenValidator,
 	execService *ExecutionServiceServer,
 	log logr.Logger,
 ) *WebhookServer {
-	validator := auth.NewTokenValidator(clientset, log)
-
 	ws := &WebhookServer{
 		execService: execService,
 		validator:   validator,

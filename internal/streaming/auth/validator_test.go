@@ -24,35 +24,44 @@ func TestBearerPrefix(t *testing.T) {
 
 func TestExtractTokenFromHeader(t *testing.T) {
 	tests := []struct {
-		name   string
-		header string
-		want   string
+		name    string
+		header  string
+		want    string
+		wantErr bool
 	}{
 		{
-			name:   "with bearer prefix",
-			header: "Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9",
-			want:   "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9",
+			name:    "with bearer prefix",
+			header:  "Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9",
+			want:    "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9",
+			wantErr: false,
 		},
 		{
-			name:   "without bearer prefix",
-			header: "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9",
-			want:   "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9",
+			name:    "without bearer prefix",
+			header:  "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9",
+			want:    "",
+			wantErr: true,
 		},
 		{
-			name:   "empty header",
-			header: "",
-			want:   "",
+			name:    "empty header",
+			header:  "",
+			want:    "",
+			wantErr: true,
 		},
 		{
-			name:   "only bearer prefix",
-			header: "Bearer ",
-			want:   "",
+			name:    "only bearer prefix",
+			header:  "Bearer ",
+			want:    "",
+			wantErr: true,
 		},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			got := ExtractTokenFromHeader(tt.header)
+			got, err := ExtractTokenFromHeader(tt.header)
+			if (err != nil) != tt.wantErr {
+				t.Errorf("ExtractTokenFromHeader() error = %v, wantErr %v", err, tt.wantErr)
+				return
+			}
 			if got != tt.want {
 				t.Errorf("ExtractTokenFromHeader() = %v, want %v", got, tt.want)
 			}

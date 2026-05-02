@@ -26,17 +26,23 @@ const (
 
 // TokenValidator validates projected ServiceAccount tokens using TokenReview.
 type TokenValidator struct {
-	clientset kubernetes.Interface
-	log       logr.Logger
-	audience  string
+	clientset              kubernetes.Interface
+	log                    logr.Logger
+	audience               string
+	expectedServiceAccount string
+	expectedNamespace      string
 }
 
 // NewTokenValidator creates a new token validator.
-func NewTokenValidator(clientset kubernetes.Interface, log logr.Logger) *TokenValidator {
+// expectedServiceAccount is the name of the ServiceAccount that runners use.
+// expectedNamespace is the namespace where the control plane runs (and runners are in).
+func NewTokenValidator(clientset kubernetes.Interface, log logr.Logger, expectedServiceAccount, expectedNamespace string) *TokenValidator {
 	return &TokenValidator{
-		clientset: clientset,
-		log:       log.WithName("token-validator"),
-		audience:  ExpectedAudience,
+		clientset:              clientset,
+		log:                    log.WithName("token-validator"),
+		audience:               ExpectedAudience,
+		expectedServiceAccount: expectedServiceAccount,
+		expectedNamespace:      expectedNamespace,
 	}
 }
 
@@ -121,6 +127,26 @@ func (v *TokenValidator) ValidateToken(ctx context.Context, token string) *Valid
 		result.ServiceAccount = parts[3]
 	}
 
+	// Validate that the token belongs to the expected runner service account
+	// in the control plane namespace (runners and control plane are in the same namespace)
+	if result.Namespace != v.expectedNamespace {
+		result.Error = fmt.Errorf("namespace mismatch: expected %s, got %s", v.expectedNamespace, result.Namespace)
+		v.log.Info("token rejected: namespace mismatch",
+			"expected", v.expectedNamespace,
+			"got", result.Namespace,
+		)
+		return result
+	}
+
+	if result.ServiceAccount != v.expectedServiceAccount {
+		result.Error = fmt.Errorf("service account mismatch: expected %s, got %s", v.expectedServiceAccount, result.ServiceAccount)
+		v.log.Info("token rejected: service account mismatch",
+			"expected", v.expectedServiceAccount,
+			"got", result.ServiceAccount,
+		)
+		return result
+	}
+
 	result.Valid = true
 	result.Username = reviewResult.Status.User.Username
 	result.Groups = reviewResult.Status.User.Groups
@@ -135,9 +161,15 @@ func (v *TokenValidator) ValidateToken(ctx context.Context, token string) *Valid
 }
 
 // ExtractTokenFromHeader extracts a bearer token from an Authorization header.
-func ExtractTokenFromHeader(authHeader string) string {
-	if strings.HasPrefix(authHeader, BearerPrefix) {
-		return strings.TrimPrefix(authHeader, BearerPrefix)
+func ExtractTokenFromHeader(authHeader string) (string, error) {
+	if !strings.HasPrefix(authHeader, BearerPrefix) {
+		return "", fmt.Errorf("invalid authorization header format")
 	}
-	return authHeader
+
+	token := strings.TrimPrefix(authHeader, BearerPrefix)
+	if token == "" {
+		return "", fmt.Errorf("invalid authorization header value")
+	}
+
+	return token, nil
 }

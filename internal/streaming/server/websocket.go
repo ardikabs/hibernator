@@ -15,9 +15,6 @@ import (
 
 	"github.com/go-logr/logr"
 	"github.com/gorilla/websocket"
-	authenticationv1 "k8s.io/api/authentication/v1"
-	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
-	"k8s.io/client-go/kubernetes"
 	"k8s.io/utils/clock"
 
 	streamingv1alpha1 "github.com/ardikabs/hibernator/api/streaming/v1alpha1"
@@ -50,7 +47,6 @@ type WebSocketServer struct {
 	addr           string
 	execService    *ExecutionServiceServer
 	validator      *auth.TokenValidator
-	k8sClientset   kubernetes.Interface
 	log            logr.Logger
 	upgrader       websocket.Upgrader
 	connections    map[string]*websocket.Conn
@@ -67,7 +63,6 @@ type WebSocketServerOptions struct {
 	Clock          clock.Clock
 	ExecService    *ExecutionServiceServer
 	Validator      *auth.TokenValidator
-	K8sClientset   kubernetes.Interface
 	Log            logr.Logger
 	PingInterval   time.Duration
 	WriteTimeout   time.Duration
@@ -76,6 +71,7 @@ type WebSocketServerOptions struct {
 }
 
 // NewWebSocketServer creates a new WebSocket streaming server.
+// The validator should be pre-configured with expected runner service account and namespace.
 func NewWebSocketServer(opts WebSocketServerOptions) *WebSocketServer {
 	if opts.PingInterval == 0 {
 		opts.PingInterval = DefaultWebSocketPingInterval
@@ -91,12 +87,11 @@ func NewWebSocketServer(opts WebSocketServerOptions) *WebSocketServer {
 	}
 
 	srv := &WebSocketServer{
-		addr:         opts.Addr,
-		clock:        clock.RealClock{},
-		execService:  opts.ExecService,
-		validator:    opts.Validator,
-		k8sClientset: opts.K8sClientset,
-		log:          opts.Log.WithName("websocket-server"),
+		addr:        opts.Addr,
+		clock:       clock.RealClock{},
+		execService: opts.ExecService,
+		validator:   opts.Validator,
+		log:         opts.Log.WithName("websocket-server"),
 		upgrader: websocket.Upgrader{
 			ReadBufferSize:  4096,
 			WriteBufferSize: 4096,
@@ -164,15 +159,16 @@ func (s *WebSocketServer) handleWebSocket(w http.ResponseWriter, r *http.Request
 	}
 
 	// Authenticate request
-	token := r.Header.Get("Authorization")
-	if token == "" {
+	authHeader := r.Header.Get("Authorization")
+	if authHeader == "" {
 		http.Error(w, "missing Authorization header", http.StatusUnauthorized)
 		return
 	}
 
-	// Remove "Bearer " prefix
-	if len(token) > 7 && token[:7] == "Bearer " {
-		token = token[7:]
+	token, err := auth.ExtractTokenFromHeader(authHeader)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusUnauthorized)
+		return
 	}
 
 	// Validate token
@@ -332,48 +328,17 @@ func (s *WebSocketServer) sendPing(conn *websocket.Conn) error {
 	return conn.WriteMessage(websocket.PingMessage, nil)
 }
 
-// validateToken validates the authentication token.
+// validateToken validates the authentication token using the shared validator.
 func (s *WebSocketServer) validateToken(ctx context.Context, token, executionID string) error {
-	// Create TokenReview request
-	review := &authenticationv1.TokenReview{
-		Spec: authenticationv1.TokenReviewSpec{
-			Token: token,
-			Audiences: []string{
-				"hibernator-control-plane",
-			},
-		},
-	}
-
-	// Submit token review
-	result, err := s.k8sClientset.AuthenticationV1().TokenReviews().Create(ctx, review, metav1.CreateOptions{})
-	if err != nil {
-		return fmt.Errorf("failed to create TokenReview: %w", err)
-	}
-
-	// Check if authenticated
-	if !result.Status.Authenticated {
-		return fmt.Errorf("token not authenticated")
-	}
-
-	// Verify audience
-	if !contains(result.Status.Audiences, "hibernator-control-plane") {
-		return fmt.Errorf("invalid token audience")
+	result := s.validator.ValidateToken(ctx, token)
+	if result.Error != nil {
+		return result.Error
 	}
 
 	s.log.V(1).Info("token validated",
 		"executionId", executionID,
-		"user", result.Status.User.Username,
+		"user", result.Username,
 	)
 
 	return nil
-}
-
-// contains checks if a slice contains a string.
-func contains(slice []string, item string) bool {
-	for _, s := range slice {
-		if s == item {
-			return true
-		}
-	}
-	return false
 }

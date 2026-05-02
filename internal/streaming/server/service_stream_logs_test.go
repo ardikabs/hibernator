@@ -45,13 +45,13 @@ func buildValidWebhookServer() *WebhookServer {
 				Authenticated: true,
 				Audiences:     []string{auth.ExpectedAudience},
 				User: authv1.UserInfo{
-					Username: "system:serviceaccount:default:runner",
+					Username: "system:serviceaccount:hibernator-system:hibernator-runner",
 					Groups:   []string{"system:serviceaccounts"},
 				},
 			},
 		}, nil
 	})
-	validator := auth.NewTokenValidator(fakeClient, logr.Discard())
+	validator := auth.NewTokenValidator(fakeClient, logr.Discard(), "hibernator-runner", "hibernator-system")
 	return &WebhookServer{
 		execService: NewExecutionServiceServer(nil, nil, clk),
 		validator:   validator,
@@ -69,7 +69,7 @@ func buildRejectingWebhookServer() *WebhookServer {
 			},
 		}, nil
 	})
-	validator := auth.NewTokenValidator(fakeClient, logr.Discard())
+	validator := auth.NewTokenValidator(fakeClient, logr.Discard(), "hibernator-runner", "hibernator-system")
 	return &WebhookServer{
 		execService: NewExecutionServiceServer(nil, nil, clk),
 		validator:   validator,

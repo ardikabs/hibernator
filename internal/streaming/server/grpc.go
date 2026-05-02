@@ -17,7 +17,6 @@ import (
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
-	"k8s.io/client-go/kubernetes"
 
 	streamingv1alpha1 "github.com/ardikabs/hibernator/api/streaming/v1alpha1"
 	"github.com/ardikabs/hibernator/internal/streaming/auth"
@@ -32,15 +31,13 @@ type GRPCServer struct {
 }
 
 // NewServer creates a new streaming server.
+// The validator should be pre-configured with expected runner service account and namespace.
 func NewServer(
 	address string,
-	clientset kubernetes.Interface,
+	validator *auth.TokenValidator,
 	execService *ExecutionServiceServer,
 	log logr.Logger,
 ) *GRPCServer {
-	// Create token validator
-	validator := auth.NewTokenValidator(clientset, log)
-
 	// Create gRPC server with auth interceptors
 	grpcServer := grpc.NewServer(
 		grpc.UnaryInterceptor(auth.GRPCInterceptor(validator, log)),

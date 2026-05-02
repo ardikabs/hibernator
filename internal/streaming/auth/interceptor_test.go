@@ -258,15 +258,23 @@ func containsSubstring(s, substr string) bool {
 }
 
 func TestNewTokenValidator(t *testing.T) {
-	// Test that validator is created with correct audience
+	// Test that validator is created with correct audience and expected SA/namespace
 	// We can't test with real clientset, but we can test struct creation
 	validator := &TokenValidator{
-		clientset: nil,
-		audience:  ExpectedAudience,
+		clientset:              nil,
+		audience:               ExpectedAudience,
+		expectedServiceAccount: "hibernator-runner",
+		expectedNamespace:      "hibernator-system",
 	}
 
 	if validator.audience != "hibernator-control-plane" {
 		t.Errorf("audience = %s, want 'hibernator-control-plane'", validator.audience)
+	}
+	if validator.expectedServiceAccount != "hibernator-runner" {
+		t.Errorf("expectedServiceAccount = %s, want 'hibernator-runner'", validator.expectedServiceAccount)
+	}
+	if validator.expectedNamespace != "hibernator-system" {
+		t.Errorf("expectedNamespace = %s, want 'hibernator-system'", validator.expectedNamespace)
 	}
 }
 
@@ -316,40 +324,50 @@ func TestValidationResult_WithError(t *testing.T) {
 
 func TestExtractTokenFromHeader_Extended(t *testing.T) {
 	tests := []struct {
-		name   string
-		header string
-		want   string
+		name    string
+		header  string
+		want    string
+		wantErr bool
 	}{
 		{
-			name:   "with bearer prefix",
-			header: "Bearer my-token-123",
-			want:   "my-token-123",
+			name:    "with bearer prefix",
+			header:  "Bearer my-token-123",
+			want:    "my-token-123",
+			wantErr: false,
 		},
 		{
-			name:   "without bearer prefix",
-			header: "my-token-123",
-			want:   "my-token-123",
+			name:    "without bearer prefix",
+			header:  "my-token-123",
+			want:    "",
+			wantErr: true,
 		},
 		{
-			name:   "empty string",
-			header: "",
-			want:   "",
+			name:    "empty string",
+			header:  "",
+			want:    "",
+			wantErr: true,
 		},
 		{
-			name:   "bearer only",
-			header: "Bearer ",
-			want:   "",
+			name:    "bearer only",
+			header:  "Bearer ",
+			want:    "",
+			wantErr: true,
 		},
 		{
-			name:   "lowercase bearer",
-			header: "bearer my-token",
-			want:   "bearer my-token", // Should not strip lowercase
+			name:    "lowercase bearer",
+			header:  "bearer my-token",
+			want:    "",
+			wantErr: true, // Should error as lowercase is not valid
 		},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			got := ExtractTokenFromHeader(tt.header)
+			got, err := ExtractTokenFromHeader(tt.header)
+			if (err != nil) != tt.wantErr {
+				t.Errorf("ExtractTokenFromHeader(%q) error = %v, wantErr %v", tt.header, err, tt.wantErr)
+				return
+			}
 			if got != tt.want {
 				t.Errorf("ExtractTokenFromHeader(%q) = %q, want %q", tt.header, got, tt.want)
 			}
