@@ -32,7 +32,11 @@ const (
 	defaultTemplateKey = "template.gotpl"
 
 	// defaultDispatchTimeout is the per-sink HTTP call timeout.
-	defaultDispatchTimeout = 5 * time.Second
+	// Must be longer than the maximum expected retry wait time to allow
+	// go-retryablehttp to handle rate limits (429) with Retry-After headers.
+	// With RetryMax=5 and RetryWaitMax=30s, worst case is ~150s, but we
+	// use 90s as a reasonable balance between reliability and responsiveness.
+	defaultDispatchTimeout = 90 * time.Second
 
 	// defaultDrainTimeout is the maximum time to wait for workers to drain remaining items during shutdown.
 	defaultDrainTimeout = 30 * time.Second
