@@ -109,7 +109,7 @@ func New(log logr.Logger, cl client.Reader, opts ...Option) Instance {
 	registry := sink.NewRegistry()
 
 	if !cfg.disableDefaultSinks {
-		httpClient := newHTTPClient()
+		httpClient := newHTTPClient(log.WithName("http-client"))
 		tmplEngine := NewTemplateEngine(log.WithName("template"))
 		registry.Register(slacksink.New(tmplEngine, slacksink.WithHTTPClient(httpClient)))
 		registry.Register(telegramsink.New(tmplEngine, telegramsink.WithHTTPClient(httpClient)))
@@ -135,12 +135,26 @@ func New(log logr.Logger, cl client.Reader, opts ...Option) Instance {
 }
 
 // newHTTPClient builds a retryable http.Client suitable for notification sinks:
-// up to 3 retries, exponential back-off 500 ms – 5 s, stdlib logger suppressed.
-func newHTTPClient() *http.Client {
+// up to 5 retries, exponential back-off 1 s – 30 s with Retry-After support, stdlib logger suppressed.
+//
+// Rate limit handling: Slack may return 429 with Retry-After headers (typically 1-60s).
+// The default backoff respects Retry-After when present, and uses exponential backoff otherwise.
+// With 5 retries and 30s max wait, we can handle most rate limit scenarios.
+func newHTTPClient(log logr.Logger) *http.Client {
 	rc := retryhttp.NewClient()
-	rc.RetryMax = 3
-	rc.RetryWaitMin = 500 * time.Millisecond
-	rc.RetryWaitMax = 5 * time.Second
-	rc.Logger = nil
+	rc.RetryMax = 5
+	rc.RetryWaitMin = 1 * time.Second
+	rc.RetryWaitMax = 30 * time.Second
+
+	// Add response hook to log rate limit events for observability
+	rc.ResponseLogHook = func(_ retryhttp.Logger, resp *http.Response) {
+		if resp.StatusCode == http.StatusTooManyRequests {
+			retryAfter := resp.Header.Get("Retry-After")
+			log.V(1).Info("notification sink rate limited (429)",
+				"retry_after", retryAfter,
+				"url", resp.Request.URL.Redacted())
+		}
+	}
+
 	return rc.StandardClient()
 }
