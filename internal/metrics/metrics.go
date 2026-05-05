@@ -225,4 +225,25 @@ var (
 			Help: "Number of live per-stream notification worker goroutines",
 		},
 	)
+
+	// NotificationRateLimitWaitDuration tracks time spent waiting for rate limiter tokens.
+	// Labels: sink_name (e.g., "slack-team-channel", "slack-alerts").
+	NotificationRateLimitWaitDuration = factory.NewHistogramVec(
+		prometheus.HistogramOpts{
+			Name:    "hibernator_notification_rate_limit_wait_duration_seconds",
+			Help:    "Time spent waiting for rate limiter tokens per sink",
+			Buckets: prometheus.DefBuckets,
+		},
+		[]string{"sink_name"},
+	)
+
+	// NotificationRateLimitDelayTotal counts notifications delayed due to rate limiting.
+	// Labels: sink_name.
+	NotificationRateLimitDelayTotal = factory.NewCounterVec(
+		prometheus.CounterOpts{
+			Name: "hibernator_notification_rate_limit_delay_total",
+			Help: "Total number of notifications delayed due to rate limiting",
+		},
+		[]string{"sink_name"},
+	)
 )

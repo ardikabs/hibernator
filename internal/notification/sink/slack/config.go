@@ -121,6 +121,24 @@ type config struct {
 	//   Recommendation: include `ExecutionProgress` in onEvents so root status moves
 	//   continuously across execution; otherwise root updates only on subscribed events.
 	DeliveryMode string `json:"delivery_mode,omitempty"`
+
+	// RateLimit controls the rate limiting for this specific sink instance.
+	// Used to prevent burst traffic from overwhelming Slack's API limits
+	// (1 request per second per channel with burst tolerance).
+	// If not specified, uses default rate of 2 req/sec with burst of 10.
+	// Reference: https://docs.slack.dev/apis/web-api/rate-limits/
+	RateLimit *RateLimitConfig `json:"rate_limit,omitempty"`
+}
+
+// RateLimitConfig holds rate limiting settings for the sink.
+type RateLimitConfig struct {
+	// RequestsPerSecond is the sustained rate limit.
+	// Default: 2.0 (2 request per second)
+	RequestsPerSecond float64 `json:"requests_per_second,omitempty"`
+
+	// Burst is the maximum number of requests allowed in a burst.
+	// Default: 10
+	Burst int `json:"burst,omitempty"`
 }
 
 func (c *config) useDefaults() {
@@ -156,6 +174,13 @@ func (c *config) useDefaults() {
 	c.DeliveryMode = strings.ToLower(strings.TrimSpace(c.DeliveryMode))
 	if c.DeliveryMode == "" {
 		c.DeliveryMode = defaultDeliveryMode
+	}
+
+	if c.RateLimit == nil {
+		c.RateLimit = &RateLimitConfig{
+			RequestsPerSecond: 2.0,
+			Burst:             10,
+		}
 	}
 
 	c.BotToken = strings.TrimSpace(c.BotToken)
