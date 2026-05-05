@@ -17,6 +17,7 @@ import (
 	"k8s.io/utils/ptr"
 
 	"github.com/ardikabs/hibernator/internal/notification/sink"
+	"github.com/ardikabs/hibernator/pkg/ratelimit"
 )
 
 const (
@@ -42,11 +43,20 @@ func withServerURL(url string) Option {
 	}
 }
 
+// WithRateLimitRegistry sets the rate limit registry for per-sink rate limiting.
+// If not provided, a new registry with default configuration is created.
+func WithRateLimitRegistry(registry *ratelimit.Registry) Option {
+	return func(s *Sink) {
+		s.rateLimitRegistry = registry
+	}
+}
+
 // Sink sends notifications to Telegram via the go-telegram/bot SDK.
 type Sink struct {
-	renderer  sink.Renderer
-	client    *http.Client
-	serverURL string
+	renderer          sink.Renderer
+	client            *http.Client
+	serverURL         string
+	rateLimitRegistry *ratelimit.Registry
 }
 
 // New creates a new Telegram sink.
@@ -55,7 +65,11 @@ type Sink struct {
 // By default it uses http.DefaultClient. In production the caller should supply a
 // shared retryable client via WithHTTPClient (see notification.NewHTTPClient).
 func New(renderer sink.Renderer, opts ...Option) *Sink {
-	s := &Sink{renderer: renderer, client: http.DefaultClient}
+	s := &Sink{
+		renderer:          renderer,
+		client:            http.DefaultClient,
+		rateLimitRegistry: ratelimit.NewRegistry(),
+	}
 	for _, opt := range opts {
 		opt(s)
 	}
@@ -86,6 +100,12 @@ func (s *Sink) Send(ctx context.Context, payload sink.Payload, opts sink.SendOpt
 	}
 	if cfg.ChatID == "" {
 		return sink.SendResult{}, fmt.Errorf("telegram sink config: chat_id is required")
+	}
+	cfg.useDefaults()
+
+	// Apply rate limiting per sink name to prevent burst traffic
+	if err := s.waitForRateLimit(ctx, payload.SinkName, cfg.RateLimit); err != nil {
+		return sink.SendResult{}, fmt.Errorf("rate limit wait cancelled: %w", err)
 	}
 
 	var renderOpts []sink.RenderOption
@@ -127,4 +147,17 @@ func (s *Sink) Send(ctx context.Context, payload sink.Payload, opts sink.SendOpt
 	}
 
 	return sink.SendResult{}, nil
+}
+
+// waitForRateLimit waits for the rate limiter to allow a request for the given sink name.
+// Uses per-sink configuration if provided, otherwise uses default rate limits.
+func (s *Sink) waitForRateLimit(ctx context.Context, sinkName string, cfg *RateLimitConfig) error {
+	if cfg != nil {
+		rlCfg := ratelimit.Config{
+			RequestsPerSecond: cfg.RequestsPerSecond,
+			Burst:             cfg.Burst,
+		}
+		return s.rateLimitRegistry.WaitWithConfig(ctx, sinkName, rlCfg)
+	}
+	return s.rateLimitRegistry.Wait(ctx, sinkName)
 }

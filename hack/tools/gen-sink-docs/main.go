@@ -73,11 +73,12 @@ var sinkTypes = []struct {
 }
 
 type configField struct {
-	Name     string
-	GoType   string
-	JSONTag  string
-	Required bool
-	Doc      string
+	Name      string
+	GoType    string
+	JSONTag   string
+	Required  bool
+	Doc       string
+	Children  []configField // non-nil when the field is a struct
 }
 
 // extraSection maps a documentation section title to a Go struct name
@@ -170,7 +171,7 @@ func parseSink(root, dir, displayName, description string, extras []extraSection
 
 	for _, f := range localFiles {
 		extractSinkType(f, &info)
-		extractConfigFields(f, &info)
+		extractConfigFields(localFiles, f, &info)
 	}
 
 	info.DefaultTemplate = string(lo.Must(sink.TemplateFS.ReadFile(info.Type + "/" + "default.gotmpl")))
@@ -391,7 +392,7 @@ func extractSinkType(f *ast.File, info *sinkInfo) {
 }
 
 // extractConfigFields parses the `config` struct from config.go.
-func extractConfigFields(f *ast.File, info *sinkInfo) {
+func extractConfigFields(files []*ast.File, f *ast.File, info *sinkInfo) {
 	for _, decl := range f.Decls {
 		genDecl, ok := decl.(*ast.GenDecl)
 		if !ok || genDecl.Tok != token.TYPE {
@@ -424,16 +425,75 @@ func extractConfigFields(f *ast.File, info *sinkInfo) {
 					fieldDoc = cleanDoc(field.Doc.Text())
 				}
 
-				info.Fields = append(info.Fields, configField{
-					Name:     name,
-					GoType:   goType,
-					JSONTag:  jsonTag,
-					Required: required,
-					Doc:      fieldDoc,
-				})
+				cf := configField{
+					Name:      name,
+					GoType:    goType,
+					JSONTag:   jsonTag,
+					Required:  required,
+					Doc:       fieldDoc,
+				}
+
+				// Expand nested struct fields
+				cf.Children = resolveConfigStructChildren(files, field.Type)
+
+				info.Fields = append(info.Fields, cf)
 			}
 		}
 	}
+}
+
+// resolveConfigStructChildren extracts fields from nested struct types
+func resolveConfigStructChildren(files []*ast.File, expr ast.Expr) []configField {
+	var ident *ast.Ident
+	switch t := expr.(type) {
+	case *ast.StarExpr:
+		ident, _ = t.X.(*ast.Ident)
+	case *ast.Ident:
+		ident = t
+	}
+	if ident == nil {
+		return nil
+	}
+
+	// Find the struct
+	st := findStruct(files, ident.Name)
+	if st == nil {
+		return nil
+	}
+
+	var fields []configField
+	for _, f := range st.Fields.List {
+		if len(f.Names) == 0 {
+			continue
+		}
+		fName := f.Names[0].Name
+		fType := exprToString(f.Type)
+		fTag := extractJSONTag(f.Tag)
+		if fTag == "-" {
+			continue
+		}
+		if fTag == "" {
+			fTag = fName
+		}
+
+		fRequired := !hasOmitempty(f.Tag)
+		fDoc := ""
+		if f.Doc != nil {
+			fDoc = cleanDoc(f.Doc.Text())
+		}
+
+		child := configField{
+			Name:      fName,
+			GoType:    fType,
+			JSONTag:   fTag,
+			Required:  fRequired,
+			Doc:       fDoc,
+		}
+		child.Children = resolveConfigStructChildren(files, f.Type)
+
+		fields = append(fields, child)
+	}
+	return fields
 }
 
 func render(buf *bytes.Buffer, sinks []sinkInfo) {
@@ -473,12 +533,7 @@ func renderSink(buf *bytes.Buffer, s sinkInfo) {
 		buf.WriteString("\n| Field | Type | Required | Description |\n")
 		buf.WriteString("|-------|------|----------|-------------|\n")
 		for _, f := range s.Fields {
-			req := "No"
-			if f.Required {
-				req = "Yes"
-			}
-			doc := strings.ReplaceAll(f.Doc, "\n", " ")
-			fmt.Fprintf(buf, "| `%s` | `%s` | %s | %s |\n", f.JSONTag, f.GoType, req, doc)
+			renderConfigField(buf, f, 0)
 		}
 		buf.WriteString("\n")
 	}
@@ -499,15 +554,27 @@ func renderSink(buf *bytes.Buffer, s sinkInfo) {
 
 func renderExampleJSON(buf *bytes.Buffer, fields []configField) {
 	buf.WriteString("```json\n{\n")
+	renderExampleJSONFields(buf, fields, 1)
+	buf.WriteString("}\n```\n")
+}
+
+func renderExampleJSONFields(buf *bytes.Buffer, fields []configField, indent int) {
 	for i, f := range fields {
-		placeholder := jsonPlaceholder(f)
 		comma := ","
 		if i == len(fields)-1 {
 			comma = ""
 		}
-		fmt.Fprintf(buf, "  \"%s\": %s%s\n", f.JSONTag, placeholder, comma)
+
+		if len(f.Children) > 0 {
+			// Render as nested object
+			fmt.Fprintf(buf, "%s\"%s\": {\n", strings.Repeat("  ", indent), f.JSONTag)
+			renderExampleJSONFields(buf, f.Children, indent+1)
+			fmt.Fprintf(buf, "%s}%s\n", strings.Repeat("  ", indent), comma)
+		} else {
+			placeholder := jsonPlaceholder(f)
+			fmt.Fprintf(buf, "%s\"%s\": %s%s\n", strings.Repeat("  ", indent), f.JSONTag, placeholder, comma)
+		}
 	}
-	buf.WriteString("}\n```\n")
 }
 
 func renderExtraSection(buf *bytes.Buffer, sec resolvedSection) {
@@ -620,6 +687,32 @@ func jsonPlaceholderForType(goType, jsonTag string) string {
 		return "false"
 	default:
 		return fmt.Sprintf("\"<%s>\"", jsonTag)
+	}
+}
+
+// renderConfigField recursively renders a config field and its children
+func renderConfigField(buf *bytes.Buffer, f configField, depth int) {
+	indent := strings.Repeat("  ", depth)
+	prefix := indent + "`"
+	suffix := "`"
+
+	req := "No"
+	if f.Required {
+		req = "Yes"
+	}
+	doc := strings.ReplaceAll(f.Doc, "\n", " ")
+
+	// Determine type display
+	typeDisplay := f.GoType
+	if len(f.Children) > 0 {
+		typeDisplay = "object"
+	}
+
+	fmt.Fprintf(buf, "| %s%s%s | `%s` | %s | %s |\n", prefix, f.JSONTag, suffix, typeDisplay, req, doc)
+
+	// Render children with indentation
+	for _, child := range f.Children {
+		renderConfigField(buf, child, depth+1)
 	}
 }
 

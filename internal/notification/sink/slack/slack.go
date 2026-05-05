@@ -16,6 +16,7 @@ import (
 	slackapi "github.com/slack-go/slack"
 
 	"github.com/ardikabs/hibernator/internal/notification/sink"
+	"github.com/ardikabs/hibernator/pkg/ratelimit"
 )
 
 const (
@@ -34,11 +35,20 @@ func WithHTTPClient(client *http.Client) Option {
 	}
 }
 
+// WithRateLimitRegistry sets the rate limit registry for per-sink rate limiting.
+// If not provided, a new registry with default configuration is created.
+func WithRateLimitRegistry(registry *ratelimit.Registry) Option {
+	return func(s *Sink) {
+		s.rateLimitRegistry = registry
+	}
+}
+
 // Sink sends notifications to Slack via Incoming Webhook URL.
 type Sink struct {
-	renderer  sink.Renderer
-	client    *http.Client
-	serverURL string
+	renderer           sink.Renderer
+	client             *http.Client
+	serverURL          string
+	rateLimitRegistry  *ratelimit.Registry
 }
 
 // New creates a new Slack sink.
@@ -47,7 +57,11 @@ type Sink struct {
 // By default it uses http.DefaultClient. In production the caller should supply a
 // shared retryable client via WithHTTPClient (see notification.NewHTTPClient).
 func New(renderer sink.Renderer, opts ...Option) *Sink {
-	s := &Sink{renderer: renderer, client: http.DefaultClient}
+	s := &Sink{
+		renderer:          renderer,
+		client:            http.DefaultClient,
+		rateLimitRegistry: ratelimit.NewRegistry(),
+	}
 	for _, opt := range opts {
 		opt(s)
 	}
@@ -95,6 +109,11 @@ func (s *Sink) Send(ctx context.Context, payload sink.Payload, opts sink.SendOpt
 		return sink.SendResult{}, err
 	}
 	opts.Log.Info("Slack sink config resolved", "delivery_mode", cfg.DeliveryMode, "format", cfg.Format, "block_layout", cfg.BlockLayout)
+
+	// Apply rate limiting per sink name to prevent burst traffic
+	if err := s.waitForRateLimit(ctx, payload.SinkName, cfg.RateLimit); err != nil {
+		return sink.SendResult{}, fmt.Errorf("rate limit wait cancelled: %w", err)
+	}
 
 	customTemplate := opts.CustomTemplate
 	if cfg.DeliveryMode == deliveryModeThread && customTemplate != nil {
@@ -221,4 +240,17 @@ func parseJSONTemplateMessage(rendered string, payload sink.Payload) (*slackapi.
 	}
 
 	return nil, fmt.Errorf("template output is not a valid Slack JSON payload")
+}
+
+// waitForRateLimit waits for the rate limiter to allow a request for the given sink name.
+// Uses per-sink configuration if provided, otherwise uses default rate limits.
+func (s *Sink) waitForRateLimit(ctx context.Context, sinkName string, cfg *RateLimitConfig) error {
+	if cfg != nil {
+		rlCfg := ratelimit.Config{
+			RequestsPerSecond: cfg.RequestsPerSecond,
+			Burst:             cfg.Burst,
+		}
+		return s.rateLimitRegistry.WaitWithConfig(ctx, sinkName, rlCfg)
+	}
+	return s.rateLimitRegistry.Wait(ctx, sinkName)
 }

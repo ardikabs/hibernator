@@ -18,6 +18,7 @@ import (
 	slacksink "github.com/ardikabs/hibernator/internal/notification/sink/slack"
 	telegramsink "github.com/ardikabs/hibernator/internal/notification/sink/telegram"
 	webhooksink "github.com/ardikabs/hibernator/internal/notification/sink/webhook"
+	"github.com/ardikabs/hibernator/pkg/ratelimit"
 )
 
 // Instance represents a notification subsystem instance
@@ -111,9 +112,21 @@ func New(log logr.Logger, cl client.Reader, opts ...Option) Instance {
 	if !cfg.disableDefaultSinks {
 		httpClient := newHTTPClient(log.WithName("http-client"))
 		tmplEngine := NewTemplateEngine(log.WithName("template"))
-		registry.Register(slacksink.New(tmplEngine, slacksink.WithHTTPClient(httpClient)))
-		registry.Register(telegramsink.New(tmplEngine, telegramsink.WithHTTPClient(httpClient)))
-		registry.Register(webhooksink.New(tmplEngine, webhooksink.WithHTTPClient(httpClient)))
+		
+		// Create shared rate limiter registry for all sinks
+		// This ensures burst control across all sink instances
+		rateLimitRegistry := ratelimit.NewRegistry(
+			ratelimit.WithLogger(log.WithName("ratelimit")),
+		)
+		
+		registry.Register(slacksink.New(tmplEngine, 
+			slacksink.WithHTTPClient(httpClient),
+			slacksink.WithRateLimitRegistry(rateLimitRegistry)))
+		registry.Register(telegramsink.New(tmplEngine, 
+			telegramsink.WithHTTPClient(httpClient),
+			telegramsink.WithRateLimitRegistry(rateLimitRegistry)))
+		registry.Register(webhooksink.New(tmplEngine, 
+			webhooksink.WithHTTPClient(httpClient)))
 	}
 
 	for _, s := range cfg.extraSinks {
