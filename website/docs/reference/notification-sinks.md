@@ -61,8 +61,8 @@ The configuration must be in a JSON object stored under `config` key in secret r
 | `time_layout` | `string` | No | TimeLayout is Go time layout used by fixed/utc displays. Defaults to `Mon, 02 Jan 2006 15:04:05 MST`. |
 | `delivery_mode` | `string` | No | DeliveryMode controls message grouping behavior. Supported values: - `channel` (default): each event posts as standalone channel message. - `thread`: root message is treated as a live status card and updated on every delivered event for the same plan/cycle, while event entries are posted as thread replies (including Start). Root status is monotonic per sink+plan+cycle+operation: once terminal (`Success`/`Failure`), late non-terminal events (`ExecutionProgress`, `Recovery`, `PhaseChange`, `Start`) do not downgrade root status back to in-progress, though they are still posted as thread replies. In `thread` mode, `templateRef`/custom templates are intentionally ignored: the sink always uses built-in, opinionated thread layouts so context and status progression remain consistent across root updates and replies. Recommendation: include `ExecutionProgress` in onEvents so root status moves continuously across execution; otherwise root updates only on subscribed events. |
 | `rate_limit` | `object` | No | RateLimit controls the rate limiting for this specific sink instance. Used to prevent burst traffic from overwhelming Slack's API limits (1 request per second per channel with burst tolerance). If not specified, uses default rate of 2 req/sec with burst of 10. Reference: https://docs.slack.dev/apis/web-api/rate-limits/ |
-|   `requests_per_second` | `float64` | No | RequestsPerSecond is the sustained rate limit. Default: 2.0 (2 request per second) |
-|   `burst` | `int` | No | Burst is the maximum number of requests allowed in a burst. Default: 10 |
+|   `requests_per_second` | `float64` | No | RequestsPerSecond is the sustained rate limit. Default: 1.0 (1 request per second) |
+|   `burst` | `int` | No | Burst is the maximum number of requests allowed in a burst. Default: 3 |
 
 ### Default Template
 

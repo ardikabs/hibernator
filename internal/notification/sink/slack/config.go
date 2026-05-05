@@ -133,11 +133,11 @@ type config struct {
 // RateLimitConfig holds rate limiting settings for the sink.
 type RateLimitConfig struct {
 	// RequestsPerSecond is the sustained rate limit.
-	// Default: 2.0 (2 request per second)
+	// Default: 1.0 (1 request per second)
 	RequestsPerSecond float64 `json:"requests_per_second,omitempty"`
 
 	// Burst is the maximum number of requests allowed in a burst.
-	// Default: 10
+	// Default: 3
 	Burst int `json:"burst,omitempty"`
 }
 
@@ -178,8 +178,8 @@ func (c *config) useDefaults() {
 
 	if c.RateLimit == nil {
 		c.RateLimit = &RateLimitConfig{
-			RequestsPerSecond: 2.0,
-			Burst:             10,
+			RequestsPerSecond: 1.0,
+			Burst:             3,
 		}
 	}
 
