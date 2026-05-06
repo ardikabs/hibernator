@@ -45,10 +45,10 @@ func WithRateLimitRegistry(registry *ratelimit.Registry) Option {
 
 // Sink sends notifications to Slack via Incoming Webhook URL.
 type Sink struct {
-	renderer           sink.Renderer
-	client             *http.Client
-	serverURL          string
-	rateLimitRegistry  *ratelimit.Registry
+	renderer          sink.Renderer
+	client            *http.Client
+	serverURL         string
+	rateLimitRegistry *ratelimit.Registry
 }
 
 // New creates a new Slack sink.
@@ -249,6 +249,7 @@ func (s *Sink) waitForRateLimit(ctx context.Context, sinkName string, cfg *RateL
 		rlCfg := ratelimit.Config{
 			RequestsPerSecond: cfg.RequestsPerSecond,
 			Burst:             cfg.Burst,
+			RequestsPerMinute: cfg.RequestsPerMinute,
 		}
 		return s.rateLimitRegistry.WaitWithConfig(ctx, sinkName, rlCfg)
 	}

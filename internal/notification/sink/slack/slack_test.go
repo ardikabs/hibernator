@@ -547,12 +547,12 @@ func TestSendRateLimiting_ContextCancellation(t *testing.T) {
 
 // RateLimitedServer wraps an httptest.Server with rate limiting to prevent burst
 type RateLimitedServer struct {
-	Server         *httptest.Server
-	RequestLog     []time.Time
-	mu             sync.Mutex
-	maxBurst       int
-	lastRequest    time.Time
-	minInterval    time.Duration
+	Server      *httptest.Server
+	RequestLog  []time.Time
+	mu          sync.Mutex
+	maxBurst    int
+	lastRequest time.Time
+	minInterval time.Duration
 }
 
 func NewRateLimitedServer(burst int, interval time.Duration) *RateLimitedServer {
@@ -564,10 +564,10 @@ func NewRateLimitedServer(burst int, interval time.Duration) *RateLimitedServer 
 
 	rl.Server = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		rl.mu.Lock()
-		
+
 		now := time.Now()
 		rl.RequestLog = append(rl.RequestLog, now)
-		
+
 		// Enforce rate limit on server side too
 		if rl.lastRequest.IsZero() {
 			rl.lastRequest = now
@@ -579,7 +579,7 @@ func NewRateLimitedServer(burst int, interval time.Duration) *RateLimitedServer 
 			}
 			rl.lastRequest = time.Now()
 		}
-		
+
 		rl.mu.Unlock()
 
 		w.Header().Set("Content-Type", "application/json")
@@ -601,19 +601,19 @@ func (rl *RateLimitedServer) RequestTimes() []time.Time {
 func TestSendRateLimiting_BurstLoad(t *testing.T) {
 	// CI-friendly load test: Generate burst of requests concurrently
 	// Verify they're processed respecting rate limit
-	// 
+	//
 	// Uses faster rate (10 rps) to complete in ~500ms instead of 15 seconds
 	// while still validating burst and rate limiting behavior
-	// 
+	//
 	// Expected behavior:
 	// - First 3 requests complete quickly (burst)
 	// - Remaining 7 wait in queue, processing at 10/sec
 	// - Total time should be ~700ms (7/10 = 0.7s + overhead)
-	
+
 	numRequests := 10
 	rateLimitRPS := 10.0
 	burstSize := 3
-	
+
 	t.Logf("\n=== BURST LOAD TEST ===")
 	t.Logf("Requests: %d", numRequests)
 	t.Logf("Rate limit: %.1f req/sec", rateLimitRPS)
@@ -634,7 +634,7 @@ func TestSendRateLimiting_BurstLoad(t *testing.T) {
 		WebhookURL: server.URL,
 		RateLimit: &RateLimitConfig{
 			RequestsPerSecond: rateLimitRPS,
-			Burst:              burstSize,
+			Burst:             burstSize,
 		},
 	})
 
@@ -642,24 +642,24 @@ func TestSendRateLimiting_BurstLoad(t *testing.T) {
 
 	// Generate burst: launch all requests as fast as possible
 	start := time.Now()
-	
+
 	errCh := make(chan error, numRequests)
 	completionTimes := make([]time.Duration, numRequests)
-	
+
 	var wg sync.WaitGroup
 	for i := 0; i < numRequests; i++ {
 		wg.Add(1)
 		go func(idx int) {
 			defer wg.Done()
-			
+
 			payload := testPayload()
 			payload.SinkName = "burst-test-sink"
 			payload.Event = fmt.Sprintf("Event-%d", idx)
-			
+
 			reqStart := time.Now()
 			_, err := s.Send(context.Background(), payload, sink.SendOptions{Config: cfg})
 			completionTimes[idx] = time.Since(reqStart)
-			
+
 			errCh <- err
 		}(i)
 	}
@@ -682,14 +682,14 @@ func TestSendRateLimiting_BurstLoad(t *testing.T) {
 	t.Logf("Server received %d requests", requestCount.Load())
 
 	// === EVIDENCE ===
-	
+
 	// 1. Calculate expected duration:
 	//    - First burstSize requests are immediate (no wait)
 	//    - Remaining (numRequests - burstSize) requests need tokens
 	//    - At rateLimitRPS tokens/sec, need (numRequests - burstSize) / rateLimitRPS seconds
 	minExpectedDuration := float64(numRequests-burstSize) / rateLimitRPS
 	maxExpectedDuration := minExpectedDuration * 2.0 // Allow 2x overhead for CI
-	
+
 	t.Logf("Expected duration: %.3f - %.3f seconds", minExpectedDuration*0.7, maxExpectedDuration)
 	t.Logf("Actual duration: %.3f seconds", totalDuration.Seconds())
 
@@ -705,14 +705,14 @@ func TestSendRateLimiting_BurstLoad(t *testing.T) {
 	sortedTimes := make([]time.Duration, numRequests)
 	copy(sortedTimes, completionTimes)
 	sort.Slice(sortedTimes, func(i, j int) bool { return sortedTimes[i] < sortedTimes[j] })
-	
+
 	// Calculate average of fastest burstSize requests
 	var fastestBurstAvg time.Duration
 	for i := 0; i < burstSize && i < numRequests; i++ {
 		fastestBurstAvg += sortedTimes[i]
 	}
 	fastestBurstAvg /= time.Duration(burstSize)
-	
+
 	// Calculate average of slowest requests (those that waited)
 	var slowestAvg time.Duration
 	slowCount := numRequests - burstSize
@@ -722,10 +722,10 @@ func TestSendRateLimiting_BurstLoad(t *testing.T) {
 		}
 		slowestAvg /= time.Duration(slowCount)
 	}
-	
+
 	t.Logf("Fastest %d requests avg: %v", burstSize, fastestBurstAvg)
 	t.Logf("Slowest %d requests avg: %v", slowCount, slowestAvg)
-	
+
 	// Fastest burst should be significantly faster than slowest
 	if slowCount > 0 {
 		assert.Less(t, fastestBurstAvg.Milliseconds()*3, slowestAvg.Milliseconds(),

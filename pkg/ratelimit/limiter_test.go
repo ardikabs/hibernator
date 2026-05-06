@@ -214,3 +214,116 @@ func TestRegistryWait(t *testing.T) {
 	// Should have created the limiter
 	assert.Equal(t, 1, registry.Len())
 }
+
+func TestDualLimiterPerMinute(t *testing.T) {
+	t.Run("per-minute auto-calculated from rps", func(t *testing.T) {
+		// 2 RPS * 60 = 120 RPM (but minimum is 20)
+		cfg := Config{
+			RequestsPerSecond: 2.0,
+			Burst:             5,
+			RequestsPerMinute: 0, // Auto-calculate
+		}
+		limiter := NewLimiter(cfg)
+		assert.NotNil(t, limiter.perMinute)
+		assert.NotNil(t, limiter.perSecond)
+	})
+
+	t.Run("per-minute explicitly disabled", func(t *testing.T) {
+		cfg := Config{
+			RequestsPerSecond: 10.0,
+			Burst:             20,
+			RequestsPerMinute: -1, // Disabled
+		}
+		limiter := NewLimiter(cfg)
+		assert.Nil(t, limiter.perMinute)
+		assert.NotNil(t, limiter.perSecond)
+	})
+
+	t.Run("per-minute explicitly set", func(t *testing.T) {
+		cfg := Config{
+			RequestsPerSecond: 10.0,
+			Burst:             5,
+			RequestsPerMinute: 100,
+		}
+		limiter := NewLimiter(cfg)
+		assert.NotNil(t, limiter.perMinute)
+		assert.NotNil(t, limiter.perSecond)
+	})
+}
+
+func TestDualLimiterWaitsForBoth(t *testing.T) {
+	// Create limiter with both per-second and per-minute limiting
+	// Per-second: 100 req/sec (fast)
+	// Per-minute: 600 req/min = 10 req/sec (slower - this will be the bottleneck)
+	cfg := Config{
+		RequestsPerSecond: 100.0,
+		Burst:             5,
+		RequestsPerMinute: 600, // 10 per second effective rate
+	}
+	limiter := NewLimiter(cfg)
+
+	ctx := context.Background()
+
+	// Exhaust per-second burst (5 requests fast)
+	for i := 0; i < 5; i++ {
+		start := time.Now()
+		err := limiter.Wait(ctx)
+		duration := time.Since(start)
+		assert.NoError(t, err)
+		assert.Less(t, duration, 50*time.Millisecond, "Request %d should be fast (within burst)", i+1)
+	}
+
+	// Next request should wait for per-minute limiter (600/min = 10/sec = 100ms between)
+	// Since we're making requests quickly, the per-minute limiter will kick in
+	start := time.Now()
+	err := limiter.Wait(ctx)
+	duration := time.Since(start)
+	assert.NoError(t, err)
+	// Should take some time due to per-minute rate limiting
+	assert.Greater(t, duration, 10*time.Millisecond, "Should be rate limited by per-minute bucket")
+}
+
+func TestConfigValidatePerMinute(t *testing.T) {
+	tests := []struct {
+		name    string
+		config  Config
+		wantErr bool
+	}{
+		{
+			name:    "valid with per-minute",
+			config:  Config{RequestsPerSecond: 1.0, Burst: 5, RequestsPerMinute: 100},
+			wantErr: false,
+		},
+		{
+			name:    "auto per-minute is valid",
+			config:  Config{RequestsPerSecond: 1.0, Burst: 5, RequestsPerMinute: 0},
+			wantErr: false,
+		},
+		{
+			name:    "disabled per-minute is valid",
+			config:  Config{RequestsPerSecond: 1.0, Burst: 5, RequestsPerMinute: -1},
+			wantErr: false,
+		},
+		{
+			name:    "per-minute less than burst is invalid",
+			config:  Config{RequestsPerSecond: 10.0, Burst: 20, RequestsPerMinute: 10},
+			wantErr: true,
+		},
+		{
+			name:    "per-minute negative but not -1 is invalid",
+			config:  Config{RequestsPerSecond: 1.0, Burst: 5, RequestsPerMinute: -2},
+			wantErr: true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			err := tt.config.Validate()
+			if tt.wantErr {
+				assert.Error(t, err)
+			} else {
+				assert.NoError(t, err)
+			}
+		})
+	}
+}

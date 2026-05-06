@@ -29,6 +29,12 @@ type RateLimitConfig struct {
 	// Burst is the maximum number of requests allowed in a burst.
 	// Default: 10
 	Burst int `json:"burst,omitempty"`
+
+	// RequestsPerMinute is the per-minute rate limit.
+	// Optional - if zero or not set, defaults to RequestsPerSecond * 60.
+	// Set to -1 to disable per-minute limiting (only use per-second).
+	// Default: unset
+	RequestsPerMinute int `json:"requests_per_minute,omitempty"`
 }
 
 func (c *config) useDefaults() {

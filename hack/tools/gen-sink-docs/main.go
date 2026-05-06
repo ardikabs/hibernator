@@ -73,12 +73,12 @@ var sinkTypes = []struct {
 }
 
 type configField struct {
-	Name      string
-	GoType    string
-	JSONTag   string
-	Required  bool
-	Doc       string
-	Children  []configField // non-nil when the field is a struct
+	Name     string
+	GoType   string
+	JSONTag  string
+	Required bool
+	Doc      string
+	Children []configField // non-nil when the field is a struct
 }
 
 // extraSection maps a documentation section title to a Go struct name
@@ -426,11 +426,11 @@ func extractConfigFields(files []*ast.File, f *ast.File, info *sinkInfo) {
 				}
 
 				cf := configField{
-					Name:      name,
-					GoType:    goType,
-					JSONTag:   jsonTag,
-					Required:  required,
-					Doc:       fieldDoc,
+					Name:     name,
+					GoType:   goType,
+					JSONTag:  jsonTag,
+					Required: required,
+					Doc:      fieldDoc,
 				}
 
 				// Expand nested struct fields
@@ -483,11 +483,11 @@ func resolveConfigStructChildren(files []*ast.File, expr ast.Expr) []configField
 		}
 
 		child := configField{
-			Name:      fName,
-			GoType:    fType,
-			JSONTag:   fTag,
-			Required:  fRequired,
-			Doc:       fDoc,
+			Name:     fName,
+			GoType:   fType,
+			JSONTag:  fTag,
+			Required: fRequired,
+			Doc:      fDoc,
 		}
 		child.Children = resolveConfigStructChildren(files, f.Type)
 

@@ -156,6 +156,7 @@ func (s *Sink) waitForRateLimit(ctx context.Context, sinkName string, cfg *RateL
 		rlCfg := ratelimit.Config{
 			RequestsPerSecond: cfg.RequestsPerSecond,
 			Burst:             cfg.Burst,
+			RequestsPerMinute: cfg.RequestsPerMinute,
 		}
 		return s.rateLimitRegistry.WaitWithConfig(ctx, sinkName, rlCfg)
 	}
