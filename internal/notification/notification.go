@@ -110,14 +110,18 @@ func New(log logr.Logger, cl client.Reader, opts ...Option) Instance {
 	registry := sink.NewRegistry()
 
 	if !cfg.disableDefaultSinks {
-		httpClient := newHTTPClient(log.WithName("http-client"))
 		tmplEngine := NewTemplateEngine(log.WithName("template"))
 
 		// Create shared rate limiter registry for all sinks
-		// This ensures burst control across all sink instances
-		rateLimitRegistry := ratelimit.NewRegistry(
-			ratelimit.WithLogger(log.WithName("ratelimit")),
-		)
+		// This ensures rate limiting is keyed by a unique identifier (token/webhook)
+		// Rate limiting happens at the HTTP transport level, so every API call
+		// (including thread mode's multiple calls per notification) is properly throttled.
+		rateLimitRegistry := ratelimit.NewRegistry(ratelimit.WithLogger(log.WithName("ratelimit")))
+
+		// Create HTTP client with rate limiting transport at the bottom of the chain.
+		// The transport reads the rate limit key from request context and applies
+		// per-key rate limiting based on configs registered by each sink.
+		httpClient := newHTTPClient(log.WithName("http-client"), rateLimitRegistry)
 
 		registry.Register(slacksink.New(tmplEngine,
 			slacksink.WithHTTPClient(httpClient),
@@ -153,7 +157,11 @@ func New(log logr.Logger, cl client.Reader, opts ...Option) Instance {
 // Rate limit handling: Slack may return 429 with Retry-After headers (typically 1-60s).
 // The default backoff respects Retry-After when present, and uses exponential backoff otherwise.
 // With 5 retries and 30s max wait, we can handle most rate limit scenarios.
-func newHTTPClient(log logr.Logger) *http.Client {
+//
+// The rateLimitRegistry is used to apply per-key rate limiting at the HTTP transport level.
+// Sinks must inject the rate limit key into the request context using ratelimit.WithKey()
+// for rate limiting to be applied.
+func newHTTPClient(log logr.Logger, rateLimitRegistry *ratelimit.Registry) *http.Client {
 	rc := retryhttp.NewClient()
 	rc.RetryMax = 5
 	rc.RetryWaitMin = 1 * time.Second
@@ -169,6 +177,19 @@ func newHTTPClient(log logr.Logger) *http.Client {
 				"url", resp.Request.URL.Redacted())
 		}
 	}
+
+	// Wrap the transport with per-key rate limiting.
+	// This ensures every HTTP request (including thread mode's multiple API calls)
+	// is properly rate limited based on the key in the request context.
+	baseTransport := rc.HTTPClient.Transport
+	if baseTransport == nil {
+		baseTransport = http.DefaultTransport
+	}
+	rc.HTTPClient.Transport = ratelimit.NewTransport(
+		baseTransport,
+		rateLimitRegistry,
+		log.WithName("transport"),
+	)
 
 	return rc.StandardClient()
 }
