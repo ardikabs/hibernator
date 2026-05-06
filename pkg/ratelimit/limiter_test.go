@@ -158,57 +158,28 @@ func TestLimiterWaitContextCancelled(t *testing.T) {
 func TestRegistryGet(t *testing.T) {
 	registry := NewRegistry()
 
-	// Get limiter for sink1
-	limiter1 := registry.Get("sink1")
+	// Get limiter for key1
+	limiter1 := registry.Get("key1")
 	assert.NotNil(t, limiter1)
 
 	// Get again should return same instance (same pointer)
-	limiter1Again := registry.Get("sink1")
-	assert.True(t, limiter1 == limiter1Again, "Should return same limiter instance for same sink")
+	limiter1Again := registry.Get("key1")
+	assert.True(t, limiter1 == limiter1Again, "Should return same limiter instance for same key")
 
-	// Get for different sink should return different instance
-	limiter2 := registry.Get("sink2")
+	// Get for different key should return different instance
+	limiter2 := registry.Get("key2")
 	assert.NotNil(t, limiter2)
-	assert.False(t, limiter1 == limiter2, "Should return different limiter instance for different sink")
+	assert.False(t, limiter1 == limiter2, "Should return different limiter instance for different key")
 
 	// Check count
 	assert.Equal(t, 2, registry.Len())
-}
-
-func TestRegistryGetWithConfig(t *testing.T) {
-	registry := NewRegistry()
-
-	customCfg := Config{
-		RequestsPerSecond: 5.0,
-		Burst:             10,
-	}
-
-	// Get with custom config
-	limiter1 := registry.GetWithConfig("sink1", customCfg)
-	assert.NotNil(t, limiter1)
-	assert.Equal(t, customCfg, limiter1.Config())
-
-	// Get again with same config should return same instance
-	limiter1Again := registry.GetWithConfig("sink1", customCfg)
-	assert.Equal(t, limiter1, limiter1Again)
-
-	// Get with different config should still return same instance (cached)
-	// Note: Registry caches by sink name, not by config
-	differentCfg := Config{
-		RequestsPerSecond: 10.0,
-		Burst:             20,
-	}
-	limiter1Different := registry.GetWithConfig("sink1", differentCfg)
-	assert.Equal(t, limiter1, limiter1Different)
-	// Config remains the first one used
-	assert.Equal(t, customCfg, limiter1Different.Config())
 }
 
 func TestRegistryWait(t *testing.T) {
 	registry := NewRegistry()
 
 	ctx := context.Background()
-	err := registry.Wait(ctx, "test-sink")
+	err := registry.Wait(ctx, "test-key")
 	assert.NoError(t, err)
 
 	// Should have created the limiter
