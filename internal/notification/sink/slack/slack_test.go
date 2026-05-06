@@ -259,42 +259,6 @@ func TestConfigUseDefaults_NormalizeAdditionalScopes(t *testing.T) {
 	assert.Equal(t, []string{scopeEnvironment, scopeAccount, scopeCluster}, cfg.AdditionalScopes)
 }
 
-// setupRateLimitedSink creates a sink with HTTP transport-level rate limiting.
-// This helper sets up the proper rate limit registry and HTTP client for testing.
-func setupRateLimitedSink(t *testing.T, rateLimitCfg *RateLimitConfig) (*Sink, *ratelimit.Registry, *httptest.Server) {
-	t.Helper()
-
-	requestCount := 0
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		requestCount++
-		w.Header().Set("Content-Type", "application/json")
-		w.WriteHeader(http.StatusOK)
-		w.Write([]byte(`{"ok":true}`)) //nolint:errcheck
-	}))
-
-	// Create rate limit registry
-	registry := ratelimit.NewRegistry(ratelimit.WithLogger(logr.Discard()))
-
-	// Create HTTP client with rate limiting transport
-	baseTransport := http.DefaultTransport
-	rateLimitTransport := ratelimit.NewTransport(
-		baseTransport,
-		registry,
-		logr.Discard(),
-	)
-	httpClient := &http.Client{
-		Transport: rateLimitTransport,
-		Timeout:   5 * time.Second,
-	}
-
-	s := New(&stubRenderer{defaultText: "test"},
-		WithHTTPClient(httpClient),
-		WithRateLimitRegistry(registry),
-	)
-
-	return s, registry, server
-}
-
 func TestSendRateLimiting_SameKey(t *testing.T) {
 	// Rate limit configuration: 10 req/sec with burst of 2
 	// Expected behavior:
@@ -658,59 +622,6 @@ func TestSendRateLimiting_ContextCancellation(t *testing.T) {
 	assert.Contains(t, err.Error(), "context")
 	assert.Less(t, duration.Milliseconds(), int64(200),
 		"Should fail quickly when context is cancelled during rate limit wait")
-}
-
-// RateLimitedServer wraps an httptest.Server with rate limiting to prevent burst
-type RateLimitedServer struct {
-	Server      *httptest.Server
-	RequestLog  []time.Time
-	mu          sync.Mutex
-	maxBurst    int
-	lastRequest time.Time
-	minInterval time.Duration
-}
-
-func NewRateLimitedServer(burst int, interval time.Duration) *RateLimitedServer {
-	rl := &RateLimitedServer{
-		maxBurst:    burst,
-		minInterval: interval,
-		RequestLog:  make([]time.Time, 0),
-	}
-
-	rl.Server = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		rl.mu.Lock()
-
-		now := time.Now()
-		rl.RequestLog = append(rl.RequestLog, now)
-
-		// Enforce rate limit on server side too
-		if rl.lastRequest.IsZero() {
-			rl.lastRequest = now
-		} else {
-			sinceLast := now.Sub(rl.lastRequest)
-			if sinceLast < rl.minInterval && len(rl.RequestLog) > rl.maxBurst {
-				// Simulate rate limiting - add delay
-				time.Sleep(rl.minInterval - sinceLast)
-			}
-			rl.lastRequest = time.Now()
-		}
-
-		rl.mu.Unlock()
-
-		w.Header().Set("Content-Type", "application/json")
-		w.WriteHeader(http.StatusOK)
-		w.Write([]byte(`{"ok":true}`)) //nolint:errcheck
-	}))
-
-	return rl
-}
-
-func (rl *RateLimitedServer) RequestTimes() []time.Time {
-	rl.mu.Lock()
-	defer rl.mu.Unlock()
-	result := make([]time.Time, len(rl.RequestLog))
-	copy(result, rl.RequestLog)
-	return result
 }
 
 func TestSendRateLimiting_BurstLoad(t *testing.T) {
