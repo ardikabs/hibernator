@@ -127,7 +127,7 @@ func (s *Sink) Send(ctx context.Context, payload sink.Payload, opts sink.SendOpt
 	// Rate limiting is enforced at the HTTP transport level for every API call.
 	if s.rateLimitRegistry != nil {
 		key := s.extractRateLimitKey(cfg)
-		s.registerRateLimitConfig(key, cfg.RateLimit)
+		s.useRateLimitConfig(key, cfg.RateLimit)
 
 		// Inject key into context so the HTTP transport can apply rate limiting
 		ctx = ratelimit.WithContext(ctx, key)
@@ -179,22 +179,20 @@ func (s *Sink) extractRateLimitKey(cfg config) string {
 	}
 }
 
-// registerRateLimitConfig registers the rate limit configuration for the given key.
+// useRateLimitConfig uses the rate limit configuration for the given key.
 // This allows the HTTP transport to apply per-key rate limiting.
-func (s *Sink) registerRateLimitConfig(key string, rateLimitCfg *RateLimitConfig) {
-	if rateLimitCfg == nil {
+func (s *Sink) useRateLimitConfig(key string, cfg *RateLimitConfig) {
+	if cfg == nil {
 		return
-	}
-
-	rlCfg := ratelimit.Config{
-		RequestsPerSecond: rateLimitCfg.RequestsPerSecond,
-		Burst:             rateLimitCfg.Burst,
-		RequestsPerMinute: rateLimitCfg.RequestsPerMinute,
 	}
 
 	// Register the config with the registry.
 	// If the key already exists, this updates its config.
-	s.rateLimitRegistry.Register(key, rlCfg)
+	s.rateLimitRegistry.Register(key, ratelimit.Config{
+		RequestsPerSecond: cfg.RequestsPerSecond,
+		Burst:             cfg.Burst,
+		RequestsPerMinute: cfg.RequestsPerMinute,
+	})
 }
 
 type deliveryRuntime struct {

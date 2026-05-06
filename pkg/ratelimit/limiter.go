@@ -17,7 +17,7 @@ import (
 	"golang.org/x/time/rate"
 )
 
-// Config holds rate limiting configuration for a sink.
+// Config holds rate limiting configuration.
 type Config struct {
 	// RequestsPerSecond is the sustained rate limit (e.g., 1.0 for 1 req/sec).
 	// Zero means use default.
@@ -98,9 +98,9 @@ func (l *Limiter) Wait(ctx context.Context) error {
 }
 
 // WaitWithMetrics blocks until a token is available and records metrics.
-// The sinkName is used as a label for metrics.
+// The key is used as a label for metrics.
 // Waits for both per-second and per-minute limiters (if configured).
-func (l *Limiter) WaitWithMetrics(ctx context.Context, sinkName string) error {
+func (l *Limiter) WaitWithMetrics(ctx context.Context, key string) error {
 	start := time.Now()
 
 	// Check if we'll need to wait on either limiter
@@ -123,8 +123,8 @@ func (l *Limiter) WaitWithMetrics(ctx context.Context, sinkName string) error {
 
 	if needsWait {
 		waitDuration := time.Since(start)
-		metrics.NotificationRateLimitWaitDuration.WithLabelValues(sinkName).Observe(waitDuration.Seconds())
-		metrics.NotificationRateLimitDelayTotal.WithLabelValues(sinkName).Inc()
+		metrics.NotificationRateLimitWaitDuration.WithLabelValues(key).Observe(waitDuration.Seconds())
+		metrics.NotificationRateLimitDelayTotal.WithLabelValues(key).Inc()
 	}
 
 	return nil
@@ -135,7 +135,6 @@ func (l *Limiter) WaitWithMetrics(ctx context.Context, sinkName string) error {
 // Returns true only if both per-second and per-minute (if configured) have tokens available.
 func (l *Limiter) Allow() bool {
 	if !l.perSecond.Allow() {
-		fmt.Println("KONTOL")
 		return false
 	}
 	if l.perMinute != nil && !l.perMinute.Allow() {
