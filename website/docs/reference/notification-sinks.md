@@ -42,7 +42,8 @@ The configuration must be in a JSON object stored under `config` key in secret r
   "delivery_mode": "<delivery_mode>",
   "rate_limit": {
     "requests_per_second": "<requests_per_second>",
-    "burst": "<burst>"
+    "burst": "<burst>",
+    "requests_per_minute": "<requests_per_minute>"
   }
 }
 ```
@@ -63,6 +64,7 @@ The configuration must be in a JSON object stored under `config` key in secret r
 | `rate_limit` | `object` | No | RateLimit controls the rate limiting for this specific sink instance. Used to prevent burst traffic from overwhelming Slack's API limits (1 request per second per channel with burst tolerance). If not specified, uses default rate of 2 req/sec with burst of 10. Reference: https://docs.slack.dev/apis/web-api/rate-limits/ |
 |   `requests_per_second` | `float64` | No | RequestsPerSecond is the sustained rate limit. Default: 2.0 (2 request per second) |
 |   `burst` | `int` | No | Burst is the maximum number of requests allowed in a burst. Default: 10 |
+|   `requests_per_minute` | `int` | No | RequestsPerMinute is the per-minute rate limit. Optional - if zero or not set, defaults to 50 RPM Set to -1 to disable per-minute limiting (only use per-second). Default: 50 |
 
 ### Default Template
 
@@ -143,7 +145,8 @@ The configuration must be in a JSON object stored under `config` key in secret r
   "parse_mode": "<parse_mode>",
   "rate_limit": {
     "requests_per_second": "<requests_per_second>",
-    "burst": "<burst>"
+    "burst": "<burst>",
+    "requests_per_minute": "<requests_per_minute>"
   }
 }
 ```
@@ -156,6 +159,7 @@ The configuration must be in a JSON object stored under `config` key in secret r
 | `rate_limit` | `object` | No | RateLimit controls the rate limiting for this specific sink instance. Used to prevent burst traffic from overwhelming Telegram's API limits. If not specified, uses default rate of 5 req/sec with burst of 10. |
 |   `requests_per_second` | `float64` | No | RequestsPerSecond is the sustained rate limit. Default: 5.0 (5 requests per second) |
 |   `burst` | `int` | No | Burst is the maximum number of requests allowed in a burst. Default: 10 |
+|   `requests_per_minute` | `int` | No | RequestsPerMinute is the per-minute rate limit. Optional - if zero or not set, defaults to RequestsPerSecond * 60. Set to -1 to disable per-minute limiting (only use per-second). |
 
 ### Default Template
 

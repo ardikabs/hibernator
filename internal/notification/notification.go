@@ -112,20 +112,20 @@ func New(log logr.Logger, cl client.Reader, opts ...Option) Instance {
 	if !cfg.disableDefaultSinks {
 		httpClient := newHTTPClient(log.WithName("http-client"))
 		tmplEngine := NewTemplateEngine(log.WithName("template"))
-		
+
 		// Create shared rate limiter registry for all sinks
 		// This ensures burst control across all sink instances
 		rateLimitRegistry := ratelimit.NewRegistry(
 			ratelimit.WithLogger(log.WithName("ratelimit")),
 		)
-		
-		registry.Register(slacksink.New(tmplEngine, 
+
+		registry.Register(slacksink.New(tmplEngine,
 			slacksink.WithHTTPClient(httpClient),
 			slacksink.WithRateLimitRegistry(rateLimitRegistry)))
-		registry.Register(telegramsink.New(tmplEngine, 
+		registry.Register(telegramsink.New(tmplEngine,
 			telegramsink.WithHTTPClient(httpClient),
 			telegramsink.WithRateLimitRegistry(rateLimitRegistry)))
-		registry.Register(webhooksink.New(tmplEngine, 
+		registry.Register(webhooksink.New(tmplEngine,
 			webhooksink.WithHTTPClient(httpClient)))
 	}
 
@@ -158,6 +158,7 @@ func newHTTPClient(log logr.Logger) *http.Client {
 	rc.RetryMax = 5
 	rc.RetryWaitMin = 1 * time.Second
 	rc.RetryWaitMax = 30 * time.Second
+	rc.Logger = nil
 
 	// Add response hook to log rate limit events for observability
 	rc.ResponseLogHook = func(_ retryhttp.Logger, resp *http.Response) {
