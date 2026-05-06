@@ -43,8 +43,10 @@ func withServerURL(url string) Option {
 	}
 }
 
-// WithRateLimitRegistry sets the rate limit registry for per-sink rate limiting.
-// If not provided, a new registry with default configuration is created.
+// WithRateLimitRegistry sets the rate limit registry for per-key rate limiting.
+// The registry is used to register rate limit configs keyed by a unique identifier (bot token).
+// Rate limits in Telegram are per bot token, so the key is the token itself.
+// If not provided, rate limiting is disabled.
 func WithRateLimitRegistry(registry *ratelimit.Registry) Option {
 	return func(s *Sink) {
 		s.rateLimitRegistry = registry
@@ -66,9 +68,10 @@ type Sink struct {
 // shared retryable client via WithHTTPClient (see notification.NewHTTPClient).
 func New(renderer sink.Renderer, opts ...Option) *Sink {
 	s := &Sink{
-		renderer:          renderer,
-		client:            http.DefaultClient,
-		rateLimitRegistry: ratelimit.NewRegistry(),
+		renderer: renderer,
+		client:   http.DefaultClient,
+		// rateLimitRegistry is nil by default; rate limiting is applied at HTTP transport level
+		// when a registry is provided via WithRateLimitRegistry.
 	}
 	for _, opt := range opts {
 		opt(s)
@@ -90,6 +93,10 @@ func (s *Sink) Type() string {
 // Send renders the notification payload using the Telegram template and delivers it
 // via the Bot API SDK. If opts.CustomTemplateRef is set, that template is used
 // instead of the built-in default.
+//
+// Rate limiting is applied at the HTTP transport level per key (bot token).
+// The rate limit configuration is read from the Secret config and registered
+// with the rate limit registry on the first send for each token.
 func (s *Sink) Send(ctx context.Context, payload sink.Payload, opts sink.SendOptions) (sink.SendResult, error) {
 	var cfg config
 	if err := json.Unmarshal(opts.Config, &cfg); err != nil {
@@ -101,11 +108,15 @@ func (s *Sink) Send(ctx context.Context, payload sink.Payload, opts sink.SendOpt
 	if cfg.ChatID == "" {
 		return sink.SendResult{}, fmt.Errorf("telegram sink config: chat_id is required")
 	}
-	cfg.useDefaults()
 
-	// Apply rate limiting per sink name to prevent burst traffic
-	if err := s.waitForRateLimit(ctx, payload.SinkName, cfg.RateLimit); err != nil {
-		return sink.SendResult{}, fmt.Errorf("rate limit wait cancelled: %w", err)
+	// Register rate limit config for this key (bot token) if a registry is configured.
+	// Rate limiting is enforced at the HTTP transport level for every API call.
+	// Telegram rate limits are per bot token.
+	if cfg.RateLimit != nil && s.rateLimitRegistry != nil {
+		key := cfg.Token
+		s.registerRateLimitConfig(key, cfg.RateLimit)
+		// Inject key into context so the HTTP transport can apply rate limiting
+		ctx = ratelimit.WithContext(ctx, key)
 	}
 
 	var renderOpts []sink.RenderOption
@@ -149,16 +160,20 @@ func (s *Sink) Send(ctx context.Context, payload sink.Payload, opts sink.SendOpt
 	return sink.SendResult{}, nil
 }
 
-// waitForRateLimit waits for the rate limiter to allow a request for the given sink name.
-// Uses per-sink configuration if provided, otherwise uses default rate limits.
-func (s *Sink) waitForRateLimit(ctx context.Context, sinkName string, cfg *RateLimitConfig) error {
-	if cfg != nil {
-		rlCfg := ratelimit.Config{
-			RequestsPerSecond: cfg.RequestsPerSecond,
-			Burst:             cfg.Burst,
-			RequestsPerMinute: cfg.RequestsPerMinute,
-		}
-		return s.rateLimitRegistry.WaitWithConfig(ctx, sinkName, rlCfg)
+// registerRateLimitConfig registers the rate limit configuration for the given key.
+// This allows the HTTP transport to apply per-key rate limiting.
+func (s *Sink) registerRateLimitConfig(key string, rateLimitCfg *RateLimitConfig) {
+	if rateLimitCfg == nil {
+		return
 	}
-	return s.rateLimitRegistry.Wait(ctx, sinkName)
+
+	rlCfg := ratelimit.Config{
+		RequestsPerSecond: rateLimitCfg.RequestsPerSecond,
+		Burst:             rateLimitCfg.Burst,
+		RequestsPerMinute: rateLimitCfg.RequestsPerMinute,
+	}
+
+	// Register the config with the registry.
+	// If the key already exists, this updates its config.
+	s.rateLimitRegistry.Register(key, rlCfg)
 }

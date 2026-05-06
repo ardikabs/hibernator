@@ -12,8 +12,10 @@ import (
 	"github.com/go-logr/logr"
 )
 
-// Registry manages rate limiters per sink name.
+// Registry manages rate limiters per key.
 // It creates limiters on-demand and caches them for reuse.
+// Each key (typically a credential, token, webhook URL, or any unique identifier)
+// gets its own rate limiter with its own configuration.
 type Registry struct {
 	mu       sync.RWMutex
 	limiters map[string]*Limiter
@@ -53,37 +55,52 @@ func NewRegistry(opts ...RegistryOption) *Registry {
 	return r
 }
 
-// Get returns the rate limiter for the given sink name.
+// Register creates or updates a rate limiter for the given key with the specified config.
+// This is typically called by sinks when they initialize to register their key-specific
+// rate limit configuration from user-provided secrets.
+func (r *Registry) Register(key string, cfg Config) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+
+	// Apply defaults for any zero values
+	cfg = cfg.withDefaults()
+
+	r.log.V(1).Info("registering rate limiter", "key", key, "rps", cfg.RequestsPerSecond, "burst", cfg.Burst, "rpm", cfg.RequestsPerMinute)
+	r.limiters[key] = NewLimiter(cfg)
+}
+
+// Get returns the rate limiter for the given key.
 // If no limiter exists, creates one with default configuration.
-func (r *Registry) Get(sinkName string) *Limiter {
+func (r *Registry) Get(key string) *Limiter {
 	r.mu.RLock()
-	limiter, exists := r.limiters[sinkName]
+	limiter, exists := r.limiters[key]
 	r.mu.RUnlock()
 
 	if exists {
 		return limiter
 	}
 
-	// Create new limiter
+	// Create new limiter with defaults
 	r.mu.Lock()
 	defer r.mu.Unlock()
 
 	// Double-check after acquiring write lock
-	if limiter, exists := r.limiters[sinkName]; exists {
+	if limiter, exists := r.limiters[key]; exists {
 		return limiter
 	}
 
-	r.log.V(1).Info("creating new rate limiter", "sink_name", sinkName, "rps", r.defaults.RequestsPerSecond, "burst", r.defaults.Burst)
+	r.log.V(1).Info("creating default rate limiter", "key", key, "rps", r.defaults.RequestsPerSecond, "burst", r.defaults.Burst)
 	limiter = NewLimiter(r.defaults)
-	r.limiters[sinkName] = limiter
+	r.limiters[key] = limiter
 	return limiter
 }
 
-// GetWithConfig returns the rate limiter for the given sink name,
+// GetWithConfig returns the rate limiter for the given key,
 // creating one with the specified configuration if it doesn't exist.
-func (r *Registry) GetWithConfig(sinkName string, cfg Config) *Limiter {
+// Deprecated: Use Register() for explicit key registration.
+func (r *Registry) GetWithConfig(key string, cfg Config) *Limiter {
 	r.mu.RLock()
-	limiter, exists := r.limiters[sinkName]
+	limiter, exists := r.limiters[key]
 	r.mu.RUnlock()
 
 	if exists {
@@ -94,30 +111,32 @@ func (r *Registry) GetWithConfig(sinkName string, cfg Config) *Limiter {
 	defer r.mu.Unlock()
 
 	// Double-check after acquiring write lock
-	if limiter, exists := r.limiters[sinkName]; exists {
+	if limiter, exists := r.limiters[key]; exists {
 		return limiter
 	}
 
 	// Use provided config, falling back to defaults for zero values
 	cfg = cfg.withDefaults()
-	r.log.V(1).Info("creating new rate limiter with config", "sink_name", sinkName, "rps", cfg.RequestsPerSecond, "burst", cfg.Burst)
+	r.log.V(1).Info("creating rate limiter with config", "key", key, "rps", cfg.RequestsPerSecond, "burst", cfg.Burst)
 	limiter = NewLimiter(cfg)
-	r.limiters[sinkName] = limiter
+	r.limiters[key] = limiter
 	return limiter
 }
 
-// Wait waits for a token from the rate limiter for the given sink name.
+// Wait waits for a token from the rate limiter for the given key.
 // This is a convenience method that gets or creates the limiter and waits.
-func (r *Registry) Wait(ctx context.Context, sinkName string) error {
-	limiter := r.Get(sinkName)
-	return limiter.WaitWithMetrics(ctx, sinkName)
+// Typically called by the HTTP transport before making requests.
+func (r *Registry) Wait(ctx context.Context, key string) error {
+	limiter := r.Get(key)
+	return limiter.WaitWithMetrics(ctx, key)
 }
 
 // WaitWithConfig waits for a token using the specified configuration.
-// Creates a new limiter if one doesn't exist for this sink name.
-func (r *Registry) WaitWithConfig(ctx context.Context, sinkName string, cfg Config) error {
-	limiter := r.GetWithConfig(sinkName, cfg)
-	return limiter.WaitWithMetrics(ctx, sinkName)
+// Creates a new limiter if one doesn't exist for this key.
+// Deprecated: Use Register() followed by Wait() for explicit key registration.
+func (r *Registry) WaitWithConfig(ctx context.Context, key string, cfg Config) error {
+	limiter := r.GetWithConfig(key, cfg)
+	return limiter.WaitWithMetrics(ctx, key)
 }
 
 // Len returns the number of limiters in the registry.
@@ -125,4 +144,12 @@ func (r *Registry) Len() int {
 	r.mu.RLock()
 	defer r.mu.RUnlock()
 	return len(r.limiters)
+}
+
+// HasKey checks if a rate limiter exists for the given key.
+func (r *Registry) HasKey(key string) bool {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	_, exists := r.limiters[key]
+	return exists
 }

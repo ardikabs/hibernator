@@ -36,12 +36,3 @@ type RateLimitConfig struct {
 	// Default: unset
 	RequestsPerMinute int `json:"requests_per_minute,omitempty"`
 }
-
-func (c *config) useDefaults() {
-	if c.RateLimit == nil {
-		c.RateLimit = &RateLimitConfig{
-			RequestsPerSecond: 5.0,
-			Burst:             10,
-		}
-	}
-}
