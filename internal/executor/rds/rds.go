@@ -64,10 +64,10 @@ func (s DBClusterState) GetOutcome() operationOutcome { return s.Outcome }
 type operationOutcome string
 
 const (
-	operationOutcomeUnknown      operationOutcome = ""           // Zero value, indicates uninitialized or parsed state
-	operationOutcomeApplied      operationOutcome = "applied"    // Operation was successfully applied
-	operationOutcomeSkippedStale operationOutcome = "skipped"    // Resource was in stale state, operation skipped
-	operationOutcomePending      operationOutcome = "pending"    // Resource needs async processing
+	operationOutcomeUnknown      operationOutcome = ""        // Zero value, indicates uninitialized or parsed state
+	operationOutcomeApplied      operationOutcome = "applied" // Operation was successfully applied
+	operationOutcomeSkippedStale operationOutcome = "skipped" // Resource was in stale state, operation skipped
+	operationOutcomePending      operationOutcome = "pending" // Resource needs async processing
 )
 
 type operationStats struct {
