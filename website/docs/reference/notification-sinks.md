@@ -159,7 +159,7 @@ The configuration must be in a JSON object stored under `config` key in secret r
 | `rate_limit` | `object` | No | RateLimit controls the rate limiting for this specific sink instance. Used to prevent burst traffic from overwhelming Telegram's API limits. If not specified, uses default rate of 5 req/sec with burst of 10. |
 |   `requests_per_second` | `float64` | No | RequestsPerSecond is the sustained rate limit. Default: 5.0 (5 requests per second) |
 |   `burst` | `int` | No | Burst is the maximum number of requests allowed in a burst. Default: 10 |
-|   `requests_per_minute` | `int` | No | RequestsPerMinute is the per-minute rate limit. Optional - if zero or not set, defaults to RequestsPerSecond * 60. Set to -1 to disable per-minute limiting (only use per-second). |
+|   `requests_per_minute` | `int` | No | RequestsPerMinute is the per-minute rate limit. Optional - if zero or not set, defaults to RequestsPerSecond * 60. Set to -1 to disable per-minute limiting (only use per-second). Default: unset |
 
 ### Default Template
 
