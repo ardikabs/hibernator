@@ -46,6 +46,15 @@ const (
 
 	// defaultChannelSize is the default buffered channel capacity for dispatch requests.
 	defaultChannelSize = 256
+
+	// defaultStateCacheTTL is how long sink states remain in the in-memory cache.
+	// This must be longer than the typical time between notifications for the same
+	// plan/cycle to ensure thread continuity. 10 minutes accommodates most use cases.
+	defaultStateCacheTTL = 10 * time.Minute
+
+	// defaultStateCacheEvictionInterval defines the cleanup frequency for expired entries.
+	// It matches the state cache TTL plus a 10-second buffer to ensure expiration has strictly passed.
+	defaultStateCacheEvictionInterval = defaultStateCacheTTL + (10 * time.Second)
 )
 
 // DispatcherConfig holds tuning knobs for the notification Dispatcher.
@@ -113,6 +122,11 @@ type Dispatcher struct {
 
 	// activeWorkerCount tracks the number of currently active workers for graceful shutdown.
 	activeWorkerCount atomic.Int64
+
+	// stateCache provides in-memory caching of sink states to prevent race conditions
+	// between async status updates and immediate state reads. This ensures thread
+	// continuity in Slack thread mode when notifications fire in rapid succession.
+	stateCache *SinkStateCache
 }
 
 type streamKey struct {
@@ -122,6 +136,17 @@ type streamKey struct {
 	SinkName        string
 	SinkType        string
 	Operation       string
+}
+
+// String returns a string representation of the stream key for logging.
+func (k streamKey) String() string {
+	return fmt.Sprintf("plan=%s/%s,cycle=%s,notif=%s,sink=%s,type=%s,op=%s",
+		k.Plan.Namespace, k.Plan.Name,
+		k.CycleID,
+		k.NotificationRef.String(),
+		k.SinkName,
+		k.SinkType,
+		k.Operation)
 }
 
 func streamKeyFromRequest(req Request) streamKey {
@@ -150,6 +175,7 @@ func NewDispatcher(log logr.Logger, c client.Reader, registry *sink.Registry, cf
 		dispatchTimeout: cfg.DispatchTimeout,
 		workerIdleTTL:   cfg.WorkerIdleTTL,
 		done:            make(chan struct{}),
+		stateCache:      NewSinkStateCache(log.WithName("state-cache"), defaultStateCacheTTL),
 	}
 
 	d.pool = keyedworker.New(
@@ -199,7 +225,11 @@ func (d *Dispatcher) Start(ctx context.Context) error {
 		"mode", "keyed-stream",
 		"perStreamBuffer", d.channelSize,
 		"workerIdleTTL", d.workerIdleTTL,
+		"stateCacheTTL", defaultStateCacheTTL,
 	)
+
+	// Start the state cache eviction loop for background cleanup of expired entries.
+	d.stateCache.StartEvictionLoop(ctx, defaultStateCacheEvictionInterval)
 
 	d.pool.Register(ctx, d.workerFactory)
 
@@ -391,7 +421,7 @@ func (d *Dispatcher) dispatch(ctx context.Context, req Request) {
 	sendOpts := sink.SendOptions{
 		Config:         config,
 		CustomTemplate: customTmpl,
-		SinkState:      d.resolveSinkState(ctx, req.NotificationRef, req.SinkName, req.Payload.Plan.Namespace, req.Payload.Plan.Name, req.Payload.CycleID, req.Payload.Operation),
+		SinkState:      d.resolveSinkState(ctx, req),
 		Log:            log,
 	}
 
@@ -415,8 +445,19 @@ func (d *Dispatcher) dispatch(ctx context.Context, req Request) {
 	d.reportDelivery(req, true, nil, states)
 }
 
-// reportDelivery invokes the delivery callback if configured.
+// reportDelivery updates the in-memory cache synchronously and invokes the delivery callback
+// for async persistence. The synchronous cache update ensures that immediately subsequent
+// notifications in the same stream will see the updated state, preventing duplicate root
+// messages in Slack thread mode.
 func (d *Dispatcher) reportDelivery(req Request, success bool, err error, states map[string]string) {
+	// Update cache synchronously so the next notification in the stream sees the state
+	// immediately, before the async status update is persisted.
+	if len(states) > 0 {
+		d.stateCache.Set(req.NotificationRef, req.SinkName,
+			req.Payload.Plan.Namespace, req.Payload.Plan.Name,
+			req.Payload.CycleID, req.Payload.Operation, states)
+	}
+
 	if d.deliveryCallback == nil {
 		return
 	}
@@ -434,29 +475,55 @@ func (d *Dispatcher) reportDelivery(req Request, success bool, err error, states
 	})
 }
 
-func (d *Dispatcher) resolveSinkState(ctx context.Context, notifRef types.NamespacedName, sinkName, planNamespace, planName, cycleID, operation string) map[string]string {
-	if notifRef.Name == "" {
+func (d *Dispatcher) resolveSinkState(ctx context.Context, req Request) map[string]string {
+	if req.NotificationRef.Name == "" {
 		return nil
 	}
 
-	notif := new(hibernatorv1alpha1.HibernateNotification)
-	if err := d.client.Get(ctx, notifRef, notif); err != nil {
-		return nil
-	}
+	// Extract parameters from request
+	notifRef := req.NotificationRef
+	sinkName := req.SinkName
+	planNamespace := req.Payload.Plan.Namespace
+	planName := req.Payload.Plan.Name
+	cycleID := req.Payload.CycleID
+	operation := req.Payload.Operation
 
-	if notif.Status.SinkStatuses != nil {
-		key := SinkStatusKey(sinkName, planNamespace, planName, cycleID, operation)
-		if ss, ok := notif.Status.SinkStatuses[key]; ok {
-			if len(ss.States) == 0 {
-				return nil
+	// Use atomic GetOrFetch to ensure that even when multiple notifications for the
+	// same plan/cycle arrive simultaneously, only one fetches from the API and all
+	// get the same result. This prevents race conditions where multiple goroutines
+	// could read stale/inconsistent states from the API.
+	states, err := d.stateCache.GetOrFetch(ctx,
+		notifRef, sinkName, planNamespace, planName, cycleID, operation,
+		func(fCtx context.Context) (map[string]string, error) {
+			// Fetch from API server - this is called only once even with concurrent requests
+			notif := new(hibernatorv1alpha1.HibernateNotification)
+			if err := d.client.Get(fCtx, notifRef, notif); err != nil {
+				return nil, err
 			}
-			state := make(map[string]string, len(ss.States))
-			maps.Copy(state, ss.States)
-			return state
-		}
+
+			if notif.Status.SinkStatuses != nil {
+				key := SinkStatusKey(sinkName, planNamespace, planName, cycleID, operation)
+				if ss, ok := notif.Status.SinkStatuses[key]; ok {
+					if len(ss.States) == 0 {
+						return nil, nil
+					}
+					state := make(map[string]string, len(ss.States))
+					maps.Copy(state, ss.States)
+					return state, nil
+				}
+			}
+			return nil, nil
+		},
+	)
+
+	if err != nil {
+		d.log.V(2).Error(err, "failed to resolve sink state from API",
+			"notification", notifRef.String(),
+			"sink", sinkName)
+		return nil
 	}
 
-	return nil
+	return states
 }
 
 func mergeStates(base, override map[string]string) map[string]string {
