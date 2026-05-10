@@ -95,7 +95,8 @@ func (s *Sink) Type() string {
 // The rate limit configuration is read from the Secret config and injected
 // into the request context via ratelimit.WithRateLimit.
 func (s *Sink) Send(ctx context.Context, payload sink.Payload, opts sink.SendOptions) (sink.SendResult, error) {
-	opts.Log.Info("dispatching Slack notification", "event", payload.Event, "plan", payload.Plan.String(), "cycle_id", payload.CycleID, "sink", payload.SinkName)
+	opts.Log.Info("dispatching Slack notification")
+
 	opts.Log.V(1).Info("starting Slack sink send", "has_custom_template", opts.CustomTemplate != nil, "has_sink_state", len(opts.SinkState) > 0)
 
 	var cfg config
@@ -106,7 +107,10 @@ func (s *Sink) Send(ctx context.Context, payload sink.Payload, opts sink.SendOpt
 	if err := cfg.validate(); err != nil {
 		return sink.SendResult{}, err
 	}
-	opts.Log.Info("Slack sink config resolved", "delivery_mode", cfg.DeliveryMode, "format", cfg.Format, "block_layout", cfg.BlockLayout)
+	opts.Log.Info("Slack sink config resolved",
+		"delivery_mode", cfg.DeliveryMode,
+		"format", cfg.Format,
+		"block_layout", cfg.BlockLayout)
 
 	// Inject rate limit config into context for the HTTP transport.
 	// The key is determined by the delivery mode:
@@ -138,7 +142,7 @@ func (s *Sink) Send(ctx context.Context, payload sink.Payload, opts sink.SendOpt
 		return sink.SendResult{}, err
 	}
 
-	opts.Log.Info("Slack notification dispatched", "delivery_mode", cfg.DeliveryMode, "event", payload.Event, "plan", payload.Plan.String(), "cycle_id", payload.CycleID)
+	opts.Log.Info("Slack notification dispatched")
 	if len(states) > 0 {
 		opts.Log.V(1).Info("Slack sink emitted state metadata", "state_keys", len(states), "has_root_ts", states["slack.thread.root_ts"] != "")
 	}
