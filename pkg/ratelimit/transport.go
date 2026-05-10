@@ -126,20 +126,20 @@ func (t *Transport) RoundTrip(req *http.Request) (*http.Response, error) {
 	}
 
 	waitKey := entry.key
+	log = log.WithValues("mode", "registry", "key", redactKey(waitKey))
 	if entry.opName != "" {
 		// Register parent + operation in one coordinated step.
 		// This ensures the parent is created with the correct config
 		// rather than falling back to defaults.
 		t.Registry.registerEntry(entry)
 		waitKey = entry.key + "#" + entry.opName
+		log = log.WithValues("operation", entry.opName)
 	} else {
 		// Register parent only.
 		t.Registry.Register(entry.key, entry.cfg)
 	}
 
-	log = log.WithValues("mode", "registry", "key", redactKey(waitKey))
 	log.V(1).Info("applying rate limit")
-
 	start := time.Now()
 	if err := t.Registry.Wait(req.Context(), waitKey); err != nil {
 		log.V(1).Info("rate limit wait cancelled", "error", err)
