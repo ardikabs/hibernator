@@ -49,17 +49,22 @@ type channelDelivery struct {
 }
 
 func (cd *channelDelivery) deliver(ctx context.Context, payload sink.Payload) (States, error) {
+	log := cd.rt.log.WithValues(
+		"format", cd.cfg.Format,
+		"block_layout", cd.cfg.BlockLayout,
+	)
+
 	if shouldSuppressExecutionProgress(payload, cd.cfg) {
-		cd.rt.log.V(1).Info("suppressed Slack channel delivery for non-terminal execution progress", "event", payload.Event, "plan", payload.Plan.String(), "cycle_id", payload.CycleID, "block_layout", cd.cfg.BlockLayout)
+		log.V(1).Info("suppressed Slack channel delivery for non-terminal execution progress")
 		return nil, nil
 	}
 
-	cd.rt.log.V(1).Info("sending Slack channel message", "event", payload.Event, "plan", payload.Plan.String(), "cycle_id", payload.CycleID, "format", cd.cfg.Format)
+	log.V(1).Info("sending Slack channel message")
 	msg := cd.s.buildMessage(ctx, payload, cd.cfg, cd.rt.customTemplate)
 	if err := slackapi.PostWebhookCustomHTTPContext(ctx, cd.cfg.WebhookURL, cd.s.client, msg); err != nil {
 		return States{}, fmt.Errorf("send slack notification: %w", err)
 	}
-	cd.rt.log.V(1).Info("Slack channel message sent", "event", payload.Event, "plan", payload.Plan.String(), "cycle_id", payload.CycleID)
+	log.V(1).Info("Slack channel message sent")
 	return nil, nil
 }
 
@@ -81,17 +86,19 @@ type threadDeliveryFlow struct {
 }
 
 func (td *threadDelivery) deliver(ctx context.Context, payload sink.Payload) (States, error) {
+	log := td.rt.log.WithValues(
+		"format", td.cfg.Format,
+		"block_layout", td.cfg.BlockLayout,
+	)
+
 	if shouldSuppressExecutionProgress(payload, td.cfg) {
-		td.rt.log.V(1).Info("suppressed Slack thread delivery for non-terminal execution progress", "event", payload.Event, "plan", payload.Plan.String(), "cycle_id", payload.CycleID, "block_layout", td.cfg.BlockLayout)
+		log.V(1).Info("suppressed Slack thread delivery for non-terminal execution progress")
 		return nil, nil
 	}
 
 	flow := td.newThreadDeliveryFlow(payload)
-	td.rt.log.V(1).Info(
+	log.V(1).Info(
 		"starting Slack thread delivery",
-		"event", payload.Event,
-		"plan", payload.Plan.String(),
-		"cycle_id", payload.CycleID,
 		"has_existing_root", flow.rootTS != "",
 	)
 
@@ -101,10 +108,12 @@ func (td *threadDelivery) deliver(ctx context.Context, payload sink.Payload) (St
 	if err := td.sendThreadReply(ctx, payload, flow.rootTS); err != nil {
 		return nil, err
 	}
-	td.syncThreadRootReaction(ctx, payload, &flow)
+	td.syncThreadRootReaction(ctx, &flow)
 
 	states := td.buildThreadStates(payload, flow)
-	td.rt.log.V(1).Info("completed Slack thread delivery", "root_ts", flow.rootTS, "event", payload.Event, "plan", payload.Plan.String(), "cycle_id", payload.CycleID, "root_created", flow.rootCreated)
+	log.V(1).Info("completed Slack thread delivery",
+		"root_ts", flow.rootTS,
+		"root_created", flow.rootCreated)
 
 	return states, nil
 }
@@ -129,8 +138,10 @@ func (td *threadDelivery) newThreadDeliveryFlow(payload sink.Payload) threadDeli
 }
 
 func (td *threadDelivery) syncThreadRoot(ctx context.Context, payload sink.Payload, flow *threadDeliveryFlow) error {
+	log := td.rt.log.WithValues("channel_id", td.cfg.ChannelID)
+
 	if flow.rootTS == "" {
-		td.rt.log.Info("creating Slack thread root message", "event", payload.Event, "plan", payload.Plan.String(), "cycle_id", payload.CycleID)
+		log.Info("creating Slack thread root message")
 		rootMsg := td.s.buildRootMessage(ctx, payload, td.cfg, td.rt.customTemplate)
 		createdTS, err := td.sendViaChatAPI(ctx, td.cfg, rootMsg)
 		if err != nil {
@@ -138,23 +149,27 @@ func (td *threadDelivery) syncThreadRoot(ctx context.Context, payload sink.Paylo
 		}
 		flow.rootTS = createdTS
 		flow.rootCreated = true
-		td.rt.log.Info("created Slack thread root message", "root_ts", flow.rootTS, "channel_id", td.cfg.ChannelID, "plan", payload.Plan.String(), "cycle_id", payload.CycleID)
+		log.Info("created Slack thread root message",
+			"root_ts", flow.rootTS)
 		return nil
 	}
+
+	log = log.WithValues("root_ts", flow.rootTS)
 
 	if flow.preserveTerminalRoot {
-		td.rt.log.V(1).Info("skipping Slack thread root update to preserve terminal state", "root_ts", flow.rootTS, "event", payload.Event, "prev_reaction", flow.prevReaction)
+		log.V(1).Info("skipping Slack thread root update to preserve terminal state",
+			"prev_reaction", flow.prevReaction)
 		return nil
 	}
 
-	td.rt.log.V(1).Info("updating Slack thread root message", "root_ts", flow.rootTS, "channel_id", td.cfg.ChannelID, "event", payload.Event)
+	log.V(1).Info("updating Slack thread root message")
 	rootMsg := td.s.buildRootMessage(ctx, payload, td.cfg, td.rt.customTemplate)
 	if err := td.updateViaChatAPI(ctx, td.cfg, flow.rootTS, rootMsg); err != nil {
-		td.rt.log.Error(err, "failed to update root thread message", "root_ts", flow.rootTS, "channel_id", td.cfg.ChannelID)
+		log.Error(err, "failed to update root thread message")
 		return nil
 	}
 
-	td.rt.log.V(1).Info("updated Slack thread root message", "root_ts", flow.rootTS, "channel_id", td.cfg.ChannelID, "event", payload.Event)
+	log.V(1).Info("updated Slack thread root message")
 	return nil
 }
 
@@ -164,18 +179,27 @@ func (td *threadDelivery) sendThreadReply(ctx context.Context, payload sink.Payl
 		replyMsg.ThreadTimestamp = rootTS
 	}
 
-	td.rt.log.V(1).Info("sending Slack thread reply", "root_ts", rootTS, "event", payload.Event, "plan", payload.Plan.String(), "cycle_id", payload.CycleID)
+	log := td.rt.log.WithValues("root_ts", rootTS)
+
+	log.V(1).Info("sending Slack thread reply")
 	_, err := td.sendViaChatAPI(ctx, td.cfg, replyMsg)
 	if err != nil {
 		return err
 	}
-	td.rt.log.V(1).Info("sent Slack thread reply", "root_ts", rootTS, "event", payload.Event, "plan", payload.Plan.String(), "cycle_id", payload.CycleID)
+	log.V(1).Info("sent Slack thread reply")
 	return nil
 }
 
-func (td *threadDelivery) syncThreadRootReaction(ctx context.Context, payload sink.Payload, flow *threadDeliveryFlow) {
+func (td *threadDelivery) syncThreadRootReaction(ctx context.Context, flow *threadDeliveryFlow) {
+	log := td.rt.log.WithValues(
+		"root_ts", flow.rootTS,
+		"channel_id", td.cfg.ChannelID,
+	)
+
 	if flow.preserveTerminalRoot {
-		td.rt.log.V(1).Info("skipping Slack root reaction downgrade to preserve terminal state", "root_ts", flow.rootTS, "event", payload.Event, "prev_reaction", flow.prevReaction, "next_reaction", flow.nextReaction)
+		log.V(1).Info("skipping Slack root reaction downgrade to preserve terminal state",
+			"prev_reaction", flow.prevReaction,
+			"next_reaction", flow.nextReaction)
 		return
 	}
 
@@ -183,7 +207,9 @@ func (td *threadDelivery) syncThreadRootReaction(ctx context.Context, payload si
 	if flow.rootCreated && flow.rootTS != "" && flow.nextReaction != "" {
 		shouldBump = true
 	}
-	td.rt.log.V(1).Info("evaluated Slack root reaction update", "root_ts", flow.rootTS, "event", payload.Event, "reaction", flow.nextReaction, "should_bump", shouldBump)
+	log.V(1).Info("evaluated Slack root reaction update",
+		"reaction", flow.nextReaction,
+		"should_bump", shouldBump)
 
 	if !shouldBump {
 		return
@@ -194,13 +220,19 @@ func (td *threadDelivery) syncThreadRootReaction(ctx context.Context, payload si
 		prevReactionForBump = ""
 	}
 
-	td.rt.log.V(1).Info("updating Slack root reaction", "root_ts", flow.rootTS, "prev_reaction", prevReactionForBump, "next_reaction", flow.nextReaction)
+	log.V(1).Info("updating Slack root reaction",
+		"prev_reaction", prevReactionForBump,
+		"next_reaction", flow.nextReaction)
 	if err := td.overrideRootThreadReaction(ctx, td.cfg, flow.rootTS, prevReactionForBump, flow.nextReaction); err != nil {
-		td.rt.log.Error(err, "failed to override root thread reaction", "prev_reaction", prevReactionForBump, "reaction", flow.nextReaction, "root_ts", flow.rootTS, "channel_id", td.cfg.ChannelID)
+		log.Error(err, "failed to override root thread reaction",
+			"prev_reaction", prevReactionForBump,
+			"reaction", flow.nextReaction,
+			"root_ts", flow.rootTS,
+			"channel_id", td.cfg.ChannelID)
 		return
 	}
 
-	td.rt.log.V(1).Info("updated Slack root reaction", "root_ts", flow.rootTS, "reaction", flow.nextReaction)
+	log.V(1).Info("updated Slack root reaction", "reaction", flow.nextReaction)
 	flow.effectiveReaction = flow.nextReaction
 }
 

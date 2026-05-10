@@ -169,10 +169,9 @@ func New(log logr.Logger, cl client.Reader, opts ...Option) Instance {
 // for rate limiting to be applied.
 func newHTTPClient(log logr.Logger, rateLimitRegistry *ratelimit.Registry) *http.Client {
 	rc := retryhttp.NewClient()
-	rc.RetryMax = 7
-	rc.RetryWaitMin = 2 * time.Second
-	rc.RetryWaitMax = 40 * time.Second
-	rc.Backoff = retryhttp.RateLimitLinearJitterBackoff
+	rc.RetryMax = 10
+	rc.RetryWaitMin = 1 * time.Second
+	rc.RetryWaitMax = 30 * time.Second
 	rc.Logger = nil
 	// Per-call HTTP timeout: bounds the actual network request independently
 	// of the dispatcher's umbrella timeout. Rate limit waits happen in the
