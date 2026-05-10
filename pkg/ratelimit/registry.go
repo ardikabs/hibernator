@@ -138,7 +138,12 @@ func (r *Registry) Register(key string, cfg Config) {
 	// Create new limiter
 	r.cache.Add(key, New(cfg))
 
-	r.log.V(1).Info("registered rate limiter", "key", redactKey(key), "rate", cfg.Rate, "unit", cfg.Unit, "burst", cfg.Burst, "total_keys", r.cache.Len())
+	r.log.V(1).Info("registered rate limiter",
+		"key", redactKey(key),
+		"rate", cfg.Rate,
+		"unit", cfg.Unit,
+		"burst", cfg.Burst,
+		"total_keys", r.cache.Len())
 }
 
 // getOrCreate returns the limiter for key, creating it with defaults if it
@@ -149,7 +154,12 @@ func (r *Registry) getOrCreate(key string) *Limiter {
 		return lim
 	}
 
-	r.log.V(1).Info("creating default rate limiter", "key", redactKey(key), "rate", r.defaults.Rate, "unit", r.defaults.Unit, "burst", r.defaults.Burst)
+	r.log.V(1).Info("creating default rate limiter",
+		"key", redactKey(key),
+		"rate", r.defaults.Rate,
+		"unit", r.defaults.Unit,
+		"burst", r.defaults.Burst)
+
 	lim = New(r.defaults)
 	r.cache.Add(key, lim)
 	return lim
@@ -165,7 +175,8 @@ func (r *Registry) registerEntry(entry *rateLimitEntry) {
 	lim, ok := r.cache.Get(entry.key)
 	if ok {
 		if !configsEqual(lim.Config(), parentCfg) {
-			r.log.V(1).Info("updating rate limiter config", "key", redactKey(entry.key),
+			r.log.V(1).Info("updating rate limiter config",
+				"key", redactKey(entry.key),
 				"old_rate", lim.Config().Rate,
 				"new_rate", parentCfg.Rate,
 				"old_unit", lim.Config().Unit,
@@ -178,7 +189,12 @@ func (r *Registry) registerEntry(entry *rateLimitEntry) {
 	} else {
 		lim = New(parentCfg)
 		r.cache.Add(entry.key, lim)
-		r.log.V(1).Info("registered rate limiter", "key", redactKey(entry.key), "rate", parentCfg.Rate, "unit", parentCfg.Unit, "burst", parentCfg.Burst, "total_keys", r.cache.Len())
+		r.log.V(1).Info("registered rate limiter",
+			"key", redactKey(entry.key),
+			"rate", parentCfg.Rate,
+			"unit", parentCfg.Unit,
+			"burst", parentCfg.Burst,
+			"total_keys", r.cache.Len())
 	}
 
 	if entry.opName != "" {
