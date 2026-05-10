@@ -27,7 +27,16 @@ func newDeliveryHandler(s *Sink, cfg config, rt deliveryRuntime) (deliveryHandle
 	case deliveryModeChannel:
 		return &channelDelivery{s: s, cfg: cfg, rt: rt}, nil
 	case deliveryModeThread:
-		return &threadDelivery{s: s, cfg: cfg, rt: rt}, nil
+		apiOpts := []slackapi.Option{slackapi.OptionHTTPClient(s.client)}
+		if s.serverURL != "" {
+			apiOpts = append(apiOpts, slackapi.OptionAPIURL(s.serverURL))
+		}
+		return &threadDelivery{
+			s:   s,
+			api: slackapi.New(cfg.BotToken, apiOpts...),
+			cfg: cfg,
+			rt:  rt,
+		}, nil
 	default:
 		return nil, fmt.Errorf("slack sink config: delivery_mode must be one of %q, %q", deliveryModeChannel, deliveryModeThread)
 	}
@@ -56,6 +65,7 @@ func (cd *channelDelivery) deliver(ctx context.Context, payload sink.Payload) (S
 
 type threadDelivery struct {
 	s   *Sink
+	api *slackapi.Client
 	cfg config
 	rt  deliveryRuntime
 }
@@ -210,73 +220,6 @@ func (td *threadDelivery) buildThreadStates(payload sink.Payload, flow threadDel
 	return states
 }
 
-func (td *threadDelivery) newSlackAPI(cfg config) *slackapi.Client {
-	apiOpts := []slackapi.Option{slackapi.OptionHTTPClient(td.s.client)}
-	if td.s.serverURL != "" {
-		apiOpts = append(apiOpts, slackapi.OptionAPIURL(td.s.serverURL))
-	}
-	return slackapi.New(cfg.BotToken, apiOpts...)
-}
-
-func (td *threadDelivery) sendViaChatAPI(ctx context.Context, cfg config, msg *slackapi.WebhookMessage) (string, error) {
-	api := td.newSlackAPI(cfg)
-	opts := []slackapi.MsgOption{slackapi.MsgOptionText(msg.Text, false)}
-	if msg.ThreadTimestamp != "" {
-		opts = append(opts, slackapi.MsgOptionPostMessageParameters(slackapi.PostMessageParameters{ThreadTimestamp: msg.ThreadTimestamp}))
-	}
-	if msg.Blocks != nil {
-		opts = append(opts, slackapi.MsgOptionBlocks(msg.Blocks.BlockSet...))
-	}
-
-	channel, ts, err := api.PostMessageContext(ctx, cfg.ChannelID, opts...)
-	if err != nil {
-		return "", fmt.Errorf("send slack notification: %w", err)
-	}
-	if channel == "" || ts == "" {
-		return "", fmt.Errorf("send slack notification: missing channel/ts in Slack API response")
-	}
-	return ts, nil
-}
-
-func (td *threadDelivery) updateViaChatAPI(ctx context.Context, cfg config, ts string, msg *slackapi.WebhookMessage) error {
-	if strings.TrimSpace(ts) == "" {
-		return nil
-	}
-
-	api := td.newSlackAPI(cfg)
-	opts := []slackapi.MsgOption{slackapi.MsgOptionText(msg.Text, false)}
-	if msg.Blocks != nil {
-		opts = append(opts, slackapi.MsgOptionBlocks(msg.Blocks.BlockSet...))
-	}
-
-	channel, updatedTS, _, err := api.UpdateMessageContext(ctx, cfg.ChannelID, ts, opts...)
-	if err != nil {
-		return fmt.Errorf("update slack root notification: %w", err)
-	}
-	if channel == "" || updatedTS == "" {
-		return fmt.Errorf("update slack root notification: missing channel/ts in Slack API response")
-	}
-	return nil
-}
-
-func (td *threadDelivery) bumpRootThreadEmoji(ctx context.Context, cfg config, rootTS, reaction string) error {
-	item := slackapi.ItemRef{Channel: cfg.ChannelID, Timestamp: rootTS}
-	err := td.newSlackAPI(cfg).AddReactionContext(ctx, reaction, item)
-	if err != nil && strings.Contains(err.Error(), "already_reacted") {
-		return nil
-	}
-	return err
-}
-
-func (td *threadDelivery) removeRootThreadEmoji(ctx context.Context, cfg config, rootTS, reaction string) error {
-	item := slackapi.ItemRef{Channel: cfg.ChannelID, Timestamp: rootTS}
-	err := td.newSlackAPI(cfg).RemoveReactionContext(ctx, reaction, item)
-	if err != nil && strings.Contains(err.Error(), "no_reaction") {
-		return nil
-	}
-	return err
-}
-
 func (td *threadDelivery) overrideRootThreadReaction(ctx context.Context, cfg config, rootTS, prevReaction, nextReaction string) error {
 	if nextReaction == "" || rootTS == "" {
 		return nil
@@ -293,6 +236,67 @@ func (td *threadDelivery) overrideRootThreadReaction(ctx context.Context, cfg co
 		return err
 	}
 	return nil
+}
+
+func (td *threadDelivery) sendViaChatAPI(ctx context.Context, cfg config, msg *slackapi.WebhookMessage) (string, error) {
+	ctx = td.s.withMethodRateLimit(ctx, cfg, "chat.postMessage")
+	opts := []slackapi.MsgOption{slackapi.MsgOptionText(msg.Text, false)}
+	if msg.ThreadTimestamp != "" {
+		opts = append(opts, slackapi.MsgOptionPostMessageParameters(slackapi.PostMessageParameters{ThreadTimestamp: msg.ThreadTimestamp}))
+	}
+	if msg.Blocks != nil {
+		opts = append(opts, slackapi.MsgOptionBlocks(msg.Blocks.BlockSet...))
+	}
+
+	channel, ts, err := td.api.PostMessageContext(ctx, cfg.ChannelID, opts...)
+	if err != nil {
+		return "", fmt.Errorf("send slack notification: %w", err)
+	}
+	if channel == "" || ts == "" {
+		return "", fmt.Errorf("send slack notification: missing channel/ts in Slack API response")
+	}
+	return ts, nil
+}
+
+func (td *threadDelivery) updateViaChatAPI(ctx context.Context, cfg config, ts string, msg *slackapi.WebhookMessage) error {
+	if strings.TrimSpace(ts) == "" {
+		return nil
+	}
+
+	ctx = td.s.withMethodRateLimit(ctx, cfg, "chat.update")
+	opts := []slackapi.MsgOption{slackapi.MsgOptionText(msg.Text, false)}
+	if msg.Blocks != nil {
+		opts = append(opts, slackapi.MsgOptionBlocks(msg.Blocks.BlockSet...))
+	}
+
+	channel, updatedTS, _, err := td.api.UpdateMessageContext(ctx, cfg.ChannelID, ts, opts...)
+	if err != nil {
+		return fmt.Errorf("update slack root notification: %w", err)
+	}
+	if channel == "" || updatedTS == "" {
+		return fmt.Errorf("update slack root notification: missing channel/ts in Slack API response")
+	}
+	return nil
+}
+
+func (td *threadDelivery) bumpRootThreadEmoji(ctx context.Context, cfg config, rootTS, reaction string) error {
+	ctx = td.s.withMethodRateLimit(ctx, cfg, "reactions.add")
+	item := slackapi.ItemRef{Channel: cfg.ChannelID, Timestamp: rootTS}
+	err := td.api.AddReactionContext(ctx, reaction, item)
+	if err != nil && strings.Contains(err.Error(), "already_reacted") {
+		return nil
+	}
+	return err
+}
+
+func (td *threadDelivery) removeRootThreadEmoji(ctx context.Context, cfg config, rootTS, reaction string) error {
+	ctx = td.s.withMethodRateLimit(ctx, cfg, "reactions.remove")
+	item := slackapi.ItemRef{Channel: cfg.ChannelID, Timestamp: rootTS}
+	err := td.api.RemoveReactionContext(ctx, reaction, item)
+	if err != nil && strings.Contains(err.Error(), "no_reaction") {
+		return nil
+	}
+	return err
 }
 
 func shouldSuppressExecutionProgress(payload sink.Payload, cfg config) bool {

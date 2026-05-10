@@ -24,8 +24,9 @@ func TestTransportRateLimiting(t *testing.T) {
 	// Create registry with config
 	registry := NewRegistry(
 		WithDefaultConfig(Config{
-			RequestsPerSecond: 2.0,
-			Burst:             1,
+			Rate:  2.0,
+			Unit:  time.Second,
+			Burst: 1,
 		}),
 		WithLogger(logr.Discard()),
 	)
@@ -42,10 +43,11 @@ func TestTransportRateLimiting(t *testing.T) {
 	}
 
 	key := "test-webhook-url"
+	cfg := Config{Rate: 2.0, Unit: time.Second, Burst: 1}
 
 	// Make first request (should be fast - within burst)
 	start := time.Now()
-	ctx1 := WithContext(context.TODO(), key)
+	ctx1 := WithRateLimit(context.TODO(), key, cfg)
 	req1 := lo.Must(http.NewRequestWithContext(ctx1, "GET", server.URL, nil))
 	resp1, err1 := client.Do(req1)
 	duration1 := time.Since(start)
@@ -56,7 +58,7 @@ func TestTransportRateLimiting(t *testing.T) {
 
 	// Make second request (should wait ~500ms for 2 rps)
 	start = time.Now()
-	ctx2 := WithContext(context.TODO(), key)
+	ctx2 := WithRateLimit(context.TODO(), key, cfg)
 	req2 := lo.Must(http.NewRequestWithContext(ctx2, "GET", server.URL, nil))
 	resp2, err2 := client.Do(req2)
 	duration2 := time.Since(start)

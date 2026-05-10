@@ -181,20 +181,29 @@ func TestUpsertPlanRef_UpdatesWhenGenerationChanged(t *testing.T) {
 // HandleDeliveryResult
 // ---------------------------------------------------------------------------
 
+func testRequest(notifRef types.NamespacedName, sinkName, planNS, planName, cycleID, operation string) notification.Request {
+	return notification.Request{
+		NotificationRef: notifRef,
+		SinkName:        sinkName,
+		Payload: notification.Payload{
+			Plan: notification.PlanInfo{
+				Namespace: planNS,
+				Name:      planName,
+			},
+			CycleID:   cycleID,
+			Operation: operation,
+		},
+	}
+}
+
 func TestHandleDeliveryResult_Success(t *testing.T) {
 	p, updater := newTestProcessor(t)
 
 	now := time.Date(2026, 4, 1, 12, 0, 0, 0, time.UTC)
-	p.HandleDeliveryResult(notification.DeliveryResult{
-		NotificationRef: types.NamespacedName{Name: "my-notif", Namespace: "default"},
-		SinkName:        "slack-prod",
-		PlanNamespace:   "default",
-		PlanName:        "my-plan",
-		CycleID:         "cycle-001",
-		Operation:       "shutdown",
-		Timestamp:       now,
-		Success:         true,
-	})
+	p.HandleDeliveryResult(notification.FromRequest(testRequest(
+		types.NamespacedName{Name: "my-notif", Namespace: "default"},
+		"slack-prod", "default", "my-plan", "cycle-001", "shutdown",
+	)).At(now).WithSuccess())
 
 	require.Equal(t, 1, updater.Len())
 	upd := <-updater.C()
@@ -227,19 +236,12 @@ func TestHandleDeliveryResult_PersistsMetadata(t *testing.T) {
 	p, updater := newTestProcessor(t)
 
 	now := time.Date(2026, 4, 1, 12, 0, 0, 0, time.UTC)
-	p.HandleDeliveryResult(notification.DeliveryResult{
-		NotificationRef: types.NamespacedName{Name: "my-notif", Namespace: "default"},
-		SinkName:        "slack-prod",
-		PlanNamespace:   "default",
-		PlanName:        "my-plan",
-		CycleID:         "cycle-001",
-		Operation:       "shutdown",
-		Timestamp:       now,
-		Success:         true,
-		States: map[string]string{
-			"slack.thread.root_ts": "12345.67890",
-		},
-	})
+	p.HandleDeliveryResult(notification.FromRequest(testRequest(
+		types.NamespacedName{Name: "my-notif", Namespace: "default"},
+		"slack-prod", "default", "my-plan", "cycle-001", "shutdown",
+	)).At(now).WithSuccess().WithStates(map[string]string{
+		"slack.thread.root_ts": "12345.67890",
+	}))
 
 	require.Equal(t, 1, updater.Len())
 	upd := <-updater.C()
@@ -254,17 +256,10 @@ func TestHandleDeliveryResult_Failure(t *testing.T) {
 	p, updater := newTestProcessor(t)
 
 	now := time.Date(2026, 4, 1, 12, 0, 0, 0, time.UTC)
-	p.HandleDeliveryResult(notification.DeliveryResult{
-		NotificationRef: types.NamespacedName{Name: "my-notif", Namespace: "default"},
-		SinkName:        "slack-prod",
-		PlanNamespace:   "default",
-		PlanName:        "my-plan",
-		CycleID:         "cycle-001",
-		Operation:       "shutdown",
-		Timestamp:       now,
-		Success:         false,
-		Error:           errors.New("connection refused"),
-	})
+	p.HandleDeliveryResult(notification.FromRequest(testRequest(
+		types.NamespacedName{Name: "my-notif", Namespace: "default"},
+		"slack-prod", "default", "my-plan", "cycle-001", "shutdown",
+	)).At(now).WithError(errors.New("connection refused")))
 
 	require.Equal(t, 1, updater.Len())
 	upd := <-updater.C()
@@ -293,16 +288,10 @@ func TestHandleDeliveryResult_FailureWithNilError(t *testing.T) {
 	p, updater := newTestProcessor(t)
 
 	now := time.Date(2026, 4, 1, 12, 0, 0, 0, time.UTC)
-	p.HandleDeliveryResult(notification.DeliveryResult{
-		NotificationRef: types.NamespacedName{Name: "my-notif", Namespace: "default"},
-		SinkName:        "slack-prod",
-		PlanNamespace:   "default",
-		PlanName:        "my-plan",
-		CycleID:         "cycle-001",
-		Operation:       "shutdown",
-		Timestamp:       now,
-		Success:         false,
-	})
+	p.HandleDeliveryResult(notification.FromRequest(testRequest(
+		types.NamespacedName{Name: "my-notif", Namespace: "default"},
+		"slack-prod", "default", "my-plan", "cycle-001", "shutdown",
+	)).At(now).WithError(nil))
 
 	require.Equal(t, 1, updater.Len())
 	upd := <-updater.C()
@@ -316,11 +305,7 @@ func TestHandleDeliveryResult_FailureWithNilError(t *testing.T) {
 func TestHandleDeliveryResult_SkipsEmptyRef(t *testing.T) {
 	p, updater := newTestProcessor(t)
 
-	p.HandleDeliveryResult(notification.DeliveryResult{
-		SinkName:  "slack-prod",
-		Timestamp: time.Now(),
-		Success:   true,
-	})
+	p.HandleDeliveryResult(notification.FromRequest(notification.Request{SinkName: "slack-prod"}).At(time.Now()).WithSuccess())
 
 	assert.Equal(t, 0, updater.Len(), "should skip when NotificationRef is empty")
 }
@@ -332,13 +317,8 @@ func TestHandleDeliveryResult_NewestFirst(t *testing.T) {
 	t1 := time.Date(2026, 4, 1, 10, 0, 0, 0, time.UTC)
 	t2 := time.Date(2026, 4, 1, 11, 0, 0, 0, time.UTC)
 
-	p.HandleDeliveryResult(notification.DeliveryResult{
-		NotificationRef: ref, SinkName: "slack", PlanNamespace: "default", PlanName: "plan-a", CycleID: "cycle-001", Operation: "shutdown", Timestamp: t1, Success: true,
-	})
-	p.HandleDeliveryResult(notification.DeliveryResult{
-		NotificationRef: ref, SinkName: "telegram", PlanNamespace: "default", PlanName: "plan-a", CycleID: "cycle-001", Operation: "shutdown", Timestamp: t2, Success: false,
-		Error: errors.New("timeout"),
-	})
+	p.HandleDeliveryResult(notification.FromRequest(testRequest(ref, "slack", "default", "plan-a", "cycle-001", "shutdown")).At(t1).WithSuccess())
+	p.HandleDeliveryResult(notification.FromRequest(testRequest(ref, "telegram", "default", "plan-a", "cycle-001", "shutdown")).At(t2).WithError(errors.New("timeout")))
 
 	require.Equal(t, 2, updater.Len())
 
@@ -365,16 +345,7 @@ func TestHandleDeliveryResult_KeepsOnlyLast2CyclesPerSinkPlan(t *testing.T) {
 
 	const total = 5
 	for i := 0; i < total; i++ {
-		p.HandleDeliveryResult(notification.DeliveryResult{
-			NotificationRef: ref,
-			SinkName:        "sink-a",
-			PlanNamespace:   "default",
-			PlanName:        "plan-a",
-			CycleID:         fmt.Sprintf("cycle-%02d", i),
-			Operation:       "shutdown",
-			Timestamp:       base.Add(time.Duration(i) * time.Minute),
-			Success:         true,
-		})
+		p.HandleDeliveryResult(notification.FromRequest(testRequest(ref, "sink-a", "default", "plan-a", fmt.Sprintf("cycle-%02d", i), "shutdown")).At(base.Add(time.Duration(i) * time.Minute)).WithSuccess())
 	}
 
 	require.Equal(t, total, updater.Len())

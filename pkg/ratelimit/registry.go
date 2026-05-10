@@ -6,19 +6,12 @@ Licensed under the Apache License, Version 2.0.
 package ratelimit
 
 import (
-	"container/list"
 	"context"
-	"sync"
+	"strings"
 
+	"github.com/ardikabs/hibernator/pkg/cache"
 	"github.com/go-logr/logr"
 )
-
-// entry is an LRU cache entry
-type entry struct {
-	key     string
-	config  Config
-	limiter *Limiter
-}
 
 // Registry manages rate limiters per key.
 // It creates limiters on-demand and caches them for reuse.
@@ -28,10 +21,13 @@ type entry struct {
 // The registry implements LRU eviction to prevent unbounded memory growth.
 // When the maximum number of keys is reached, the least-recently-used limiter
 // is evicted to make room for new ones.
+//
+// Keys containing "#" are treated as operation-scoped: the portion before
+// "#" is the parent key and the portion after is the operation name.
+// Register stores the operation config on the parent limiter via SetOperation.
+// Get/GetLimiter/Wait resolve the parent limiter and apply the operation.
 type Registry struct {
-	mu       sync.RWMutex
-	limiters map[string]*list.Element // map key -> LRU list element
-	lru      *list.List               // doubly-linked list for LRU tracking
+	cache    *cache.Cache[string, *Limiter]
 	defaults Config
 	maxKeys  int
 	log      logr.Logger
@@ -66,10 +62,8 @@ func WithMaxKeys(max int) RegistryOption {
 // NewRegistry creates a new rate limiter registry.
 func NewRegistry(opts ...RegistryOption) *Registry {
 	r := &Registry{
-		limiters: make(map[string]*list.Element),
-		lru:      list.New(),
 		defaults: DefaultConfig(),
-		maxKeys:  1000, // Default max keys
+		maxKeys:  1000,
 		log:      logr.Discard(),
 	}
 
@@ -77,7 +71,31 @@ func NewRegistry(opts ...RegistryOption) *Registry {
 		opt(r)
 	}
 
+	c, err := cache.New(
+		cache.WithMaxSize[string, *Limiter](r.maxKeys),
+	)
+	if err != nil {
+		// Should never happen with positive maxKeys
+		panic(err)
+	}
+	r.cache = c
+
 	return r
+}
+
+// isChildKey reports whether key contains the operation delimiter.
+func isChildKey(key string) bool {
+	return strings.Contains(key, "#")
+}
+
+// splitChildKey returns the parent key and operation name for a child key.
+// If key is not a child key, returns ("", "").
+func splitChildKey(key string) (parent, op string) {
+	idx := strings.LastIndex(key, "#")
+	if idx < 0 {
+		return "", ""
+	}
+	return key[:idx], key[idx+1:]
 }
 
 // Register creates or updates a rate limiter for the given key with the specified config.
@@ -87,153 +105,148 @@ func NewRegistry(opts ...RegistryOption) *Registry {
 // Behavior:
 //   - If key doesn't exist: creates new limiter with the config
 //   - If key exists and config is unchanged: no-op (idempotent)
-//   - If key exists and config changed: updates limiter with new config
+//   - If key exists and config changed: updates limiter in-place with new config
 //
-// This allows configuration to be updated dynamically when users change settings.
-// If the registry is at capacity, the least-recently-used limiter is evicted.
+// Register does NOT accept operation-scoped keys (keys containing "#").
+// Use registerEntry for coordinated parent+operation registration.
 func (r *Registry) Register(key string, cfg Config) {
-	r.mu.Lock()
-	defer r.mu.Unlock()
-
 	// Apply defaults for any zero values
 	cfg = cfg.withDefaults()
 
-	// Check if limiter already exists for this key
-	if elem, exists := r.limiters[key]; exists {
-		ent := elem.Value.(*entry)
-
+	// Check if limiter already exists
+	lim, ok := r.cache.Get(key)
+	if ok {
 		// If config hasn't changed, just update LRU position (idempotent)
-		// Compare individual fields since the caller creates a new struct each time
-		if configsEqual(ent.config, cfg) {
-			r.lru.MoveToFront(elem)
+		if configsEqual(lim.Config(), cfg) {
 			return
 		}
 
-		// Config changed - update the limiter
+		// Config changed - update the limiter in-place
 		r.log.V(1).Info("updating rate limiter config", "key", redactKey(key),
-			"old_rps", ent.config.RequestsPerSecond,
-			"new_rps", cfg.RequestsPerSecond,
-			"old_burst", ent.config.Burst,
+			"old_rate", lim.Config().Rate,
+			"new_rate", cfg.Rate,
+			"old_unit", lim.Config().Unit,
+			"new_unit", cfg.Unit,
+			"old_burst", lim.Config().Burst,
 			"new_burst", cfg.Burst,
-			"old_rpm", ent.config.RequestsPerMinute,
-			"new_rpm", cfg.RequestsPerMinute,
 		)
 
-		ent.config = cfg
-		ent.limiter = NewLimiter(cfg)
-		r.lru.MoveToFront(elem)
+		lim.SetConfig(cfg)
 		return
 	}
 
-	// Create new limiter and add to LRU list
-	ent := &entry{
-		key:     key,
-		config:  cfg,
-		limiter: NewLimiter(cfg),
+	// Create new limiter
+	r.cache.Add(key, New(cfg))
+
+	r.log.V(1).Info("registered rate limiter", "key", redactKey(key), "rate", cfg.Rate, "unit", cfg.Unit, "burst", cfg.Burst, "total_keys", r.cache.Len())
+}
+
+// getOrCreate returns the limiter for key, creating it with defaults if it
+// does not exist.
+func (r *Registry) getOrCreate(key string) *Limiter {
+	lim, ok := r.cache.Get(key)
+	if ok {
+		return lim
 	}
-	elem := r.lru.PushFront(ent)
-	r.limiters[key] = elem
 
-	r.log.V(1).Info("registered rate limiter", "key", redactKey(key), "rps", cfg.RequestsPerSecond, "burst", cfg.Burst, "rpm", cfg.RequestsPerMinute, "total_keys", r.lru.Len())
+	r.log.V(1).Info("creating default rate limiter", "key", redactKey(key), "rate", r.defaults.Rate, "unit", r.defaults.Unit, "burst", r.defaults.Burst)
+	lim = New(r.defaults)
+	r.cache.Add(key, lim)
+	return lim
+}
 
-	// Evict oldest entry if over capacity
-	if r.lru.Len() > r.maxKeys {
-		r.evictOldest()
+// registerEntry registers a parent limiter and optionally an operation
+// in a single coordinated step. This avoids split registration where the
+// parent might be created with defaults before its real config is applied.
+func (r *Registry) registerEntry(entry *rateLimitEntry) {
+	parentCfg := entry.cfg
+	parentCfg = parentCfg.withDefaults()
+
+	lim, ok := r.cache.Get(entry.key)
+	if ok {
+		if !configsEqual(lim.Config(), parentCfg) {
+			r.log.V(1).Info("updating rate limiter config", "key", redactKey(entry.key),
+				"old_rate", lim.Config().Rate,
+				"new_rate", parentCfg.Rate,
+				"old_unit", lim.Config().Unit,
+				"new_unit", parentCfg.Unit,
+				"old_burst", lim.Config().Burst,
+				"new_burst", parentCfg.Burst,
+			)
+			lim.SetConfig(parentCfg)
+		}
+	} else {
+		lim = New(parentCfg)
+		r.cache.Add(entry.key, lim)
+		r.log.V(1).Info("registered rate limiter", "key", redactKey(entry.key), "rate", parentCfg.Rate, "unit", parentCfg.Unit, "burst", parentCfg.Burst, "total_keys", r.cache.Len())
+	}
+
+	if entry.opName != "" {
+		lim.SetOperation(entry.opName, entry.opCfg)
 	}
 }
 
-// evictOldest removes the least-recently-used limiter from the registry.
-// Must be called with lock held.
-func (r *Registry) evictOldest() {
-	elem := r.lru.Back()
-	if elem == nil {
-		return
-	}
-
-	ent := elem.Value.(*entry)
-	delete(r.limiters, ent.key)
-	r.lru.Remove(elem)
-
-	r.log.V(1).Info("evicted rate limiter due to max_keys reached", "key", redactKey(ent.key), "max_keys", r.maxKeys, "remaining_keys", r.lru.Len())
-}
-
-// Get returns the rate limiter for the given key.
+// Get returns the limiter for the given key.
+// For operation-scoped keys (containing "#"), returns the parent limiter.
 // If no limiter exists, creates one with default configuration.
 // Updates LRU order to mark the key as recently used.
 func (r *Registry) Get(key string) *Limiter {
-	r.mu.RLock()
-	elem, exists := r.limiters[key]
-	r.mu.RUnlock()
-
-	if exists {
-		// Move to front (mark as recently used)
-		r.mu.Lock()
-		r.lru.MoveToFront(elem)
-		r.mu.Unlock()
-		return elem.Value.(*entry).limiter
+	if isChildKey(key) {
+		parentKey, _ := splitChildKey(key)
+		return r.Get(parentKey)
 	}
+	return r.getOrCreate(key)
+}
 
-	// Create new limiter with defaults
-	r.mu.Lock()
-	defer r.mu.Unlock()
-
-	// Double-check after acquiring write lock
-	if elem, exists := r.limiters[key]; exists {
-		r.lru.MoveToFront(elem)
-		return elem.Value.(*entry).limiter
-	}
-
-	r.log.V(1).Info("creating default rate limiter", "key", redactKey(key), "rps", r.defaults.RequestsPerSecond, "burst", r.defaults.Burst)
-	ent := &entry{
-		key:     key,
-		config:  r.defaults,
-		limiter: NewLimiter(r.defaults),
-	}
-	elem = r.lru.PushFront(ent)
-	r.limiters[key] = elem
-
-	// Evict oldest entry if over capacity
-	if r.lru.Len() > r.maxKeys {
-		r.evictOldest()
-	}
-
-	return ent.limiter
+// GetLimiter returns the limiter for the given key.
+// For operation-scoped keys (containing "#"), returns the parent limiter.
+// This is the method the transport should use for rate limiting.
+func (r *Registry) GetLimiter(key string) *Limiter {
+	return r.Get(key)
 }
 
 // Wait waits for a token from the rate limiter for the given key.
 // This is a convenience method that gets or creates the limiter and waits.
-// Typically called by the HTTP transport before making requests.
+// For operation-scoped keys (containing "#"), it waits the global bucket
+// then the operation bucket. Metrics are recorded on the full key.
 func (r *Registry) Wait(ctx context.Context, key string) error {
+	if isChildKey(key) {
+		parentKey, op := splitChildKey(key)
+		limiter := r.Get(parentKey)
+		return limiter.WaitOperationWithMetrics(ctx, key, op)
+	}
 	limiter := r.Get(key)
 	return limiter.WaitWithMetrics(ctx, key)
 }
 
 // Len returns the number of limiters in the registry.
 func (r *Registry) Len() int {
-	r.mu.RLock()
-	defer r.mu.RUnlock()
-	return r.lru.Len()
+	return r.cache.Len()
 }
 
 // HasKey checks if a rate limiter exists for the given key.
 func (r *Registry) HasKey(key string) bool {
-	r.mu.RLock()
-	defer r.mu.RUnlock()
-	_, exists := r.limiters[key]
-	return exists
+	if isChildKey(key) {
+		parentKey, _ := splitChildKey(key)
+		return r.HasKey(parentKey)
+	}
+	return r.cache.Contains(key)
 }
 
 // MaxKeys returns the maximum number of keys the registry can hold.
 func (r *Registry) MaxKeys() int {
-	r.mu.RLock()
-	defer r.mu.RUnlock()
 	return r.maxKeys
 }
 
+// Close stops the background sweep goroutine of the underlying cache.
+// It is safe to call multiple times.
+func (r *Registry) Close() {
+	r.cache.Close()
+}
+
 // configsEqual compares two Config structs for equality.
-// Used since callers create new Config instances on each call.
 func configsEqual(a, b Config) bool {
-	return a.RequestsPerSecond == b.RequestsPerSecond &&
-		a.Burst == b.Burst &&
-		a.RequestsPerMinute == b.RequestsPerMinute
+	return a.Rate == b.Rate &&
+		a.Unit == b.Unit &&
+		a.Burst == b.Burst
 }

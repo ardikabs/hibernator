@@ -109,6 +109,8 @@ func New(log logr.Logger, cl client.Reader, opts ...Option) Instance {
 
 	registry := sink.NewRegistry()
 
+	dispatcherOpts := []DispatcherOption{}
+
 	if !cfg.disableDefaultSinks {
 		tmplEngine := NewTemplateEngine(log.WithName("template"))
 
@@ -124,13 +126,17 @@ func New(log logr.Logger, cl client.Reader, opts ...Option) Instance {
 		httpClient := newHTTPClient(log.WithName("http-client"), rateLimitRegistry)
 
 		registry.Register(slacksink.New(tmplEngine,
-			slacksink.WithHTTPClient(httpClient),
-			slacksink.WithRateLimitRegistry(rateLimitRegistry)))
+			slacksink.WithHTTPClient(httpClient)))
 		registry.Register(telegramsink.New(tmplEngine,
-			telegramsink.WithHTTPClient(httpClient),
-			telegramsink.WithRateLimitRegistry(rateLimitRegistry)))
+			telegramsink.WithHTTPClient(httpClient)))
 		registry.Register(webhooksink.New(tmplEngine,
 			webhooksink.WithHTTPClient(httpClient)))
+
+		dispatcherOpts = append(dispatcherOpts, withRateLimitRegistry(rateLimitRegistry))
+	}
+
+	if cfg.deliveryCallback != nil {
+		dispatcherOpts = append(dispatcherOpts, withDeliveryCallback(cfg.deliveryCallback))
 	}
 
 	for _, s := range cfg.extraSinks {
@@ -142,8 +148,8 @@ func New(log logr.Logger, cl client.Reader, opts ...Option) Instance {
 		cl,
 		registry,
 		cfg.dispatcherConfig,
+		dispatcherOpts...,
 	)
-	dispatcher.deliveryCallback = cfg.deliveryCallback
 
 	return Instance{
 		Notifier: dispatcher.Notifier(),
@@ -167,6 +173,11 @@ func newHTTPClient(log logr.Logger, rateLimitRegistry *ratelimit.Registry) *http
 	rc.RetryWaitMin = 1 * time.Second
 	rc.RetryWaitMax = 30 * time.Second
 	rc.Logger = nil
+	// Per-call HTTP timeout: bounds the actual network request independently
+	// of the dispatcher's umbrella timeout. Rate limit waits happen in the
+	// transport *before* this timer starts, so slow throttling does not
+	// starve the call budget.
+	rc.HTTPClient.Timeout = 30 * time.Second
 
 	// Add response hook to log rate limit events for observability
 	rc.ResponseLogHook = func(_ retryhttp.Logger, resp *http.Response) {

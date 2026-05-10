@@ -295,13 +295,13 @@ func TestSendRateLimiting_SameKey(t *testing.T) {
 
 	s := New(&stubRenderer{defaultText: "test"},
 		WithHTTPClient(httpClient),
-		WithRateLimitRegistry(registry),
+		
 	)
 
 	cfg, _ := json.Marshal(config{
 		WebhookURL: server.URL,
 		RateLimit: &RateLimitConfig{
-			RequestsPerSecond: 10.0,
+			Rate: 10.0,
 			Burst:             2,
 		},
 	})
@@ -399,7 +399,7 @@ func TestSendRateLimiting_DifferentKeys(t *testing.T) {
 
 	s := New(&stubRenderer{defaultText: "test"},
 		WithHTTPClient(httpClient),
-		WithRateLimitRegistry(registry),
+		
 	)
 
 	// Use 1 req/sec to make timing obvious
@@ -407,7 +407,7 @@ func TestSendRateLimiting_DifferentKeys(t *testing.T) {
 	cfg1, _ := json.Marshal(config{
 		WebhookURL: server1.URL,
 		RateLimit: &RateLimitConfig{
-			RequestsPerSecond: 1.0,
+			Rate: 1.0,
 			Burst:             1,
 		},
 	})
@@ -415,7 +415,7 @@ func TestSendRateLimiting_DifferentKeys(t *testing.T) {
 	cfg2, _ := json.Marshal(config{
 		WebhookURL: server2.URL,
 		RateLimit: &RateLimitConfig{
-			RequestsPerSecond: 1.0,
+			Rate: 1.0,
 			Burst:             1,
 		},
 	})
@@ -507,14 +507,14 @@ func TestSendRateLimiting_WithCustomConfig(t *testing.T) {
 
 	s := New(&stubRenderer{defaultText: "test"},
 		WithHTTPClient(httpClient),
-		WithRateLimitRegistry(registry),
+		
 	)
 
 	// Custom rate limit: 2 req/sec, burst of 1
 	cfgWithCustomLimit, _ := json.Marshal(config{
 		WebhookURL: server.URL,
 		RateLimit: &RateLimitConfig{
-			RequestsPerSecond: 2.0,
+			Rate: 2.0,
 			Burst:             1,
 		},
 	})
@@ -590,13 +590,13 @@ func TestSendRateLimiting_ContextCancellation(t *testing.T) {
 
 	s := New(&stubRenderer{defaultText: "test"},
 		WithHTTPClient(httpClient),
-		WithRateLimitRegistry(registry),
+		
 	)
 
 	cfg, _ := json.Marshal(config{
 		WebhookURL: server.URL,
 		RateLimit: &RateLimitConfig{
-			RequestsPerSecond: 0.5, // Very slow: 1 req per 2 seconds
+			Rate: 0.5, // Very slow: 1 req per 2 seconds
 			Burst:             0,   // No burst
 		},
 	})
@@ -675,13 +675,13 @@ func TestSendRateLimiting_BurstLoad(t *testing.T) {
 
 	s := New(&stubRenderer{defaultText: "test"},
 		WithHTTPClient(httpClient),
-		WithRateLimitRegistry(registry),
+		
 	)
 
 	cfg, _ := json.Marshal(config{
 		WebhookURL: server.URL,
 		RateLimit: &RateLimitConfig{
-			RequestsPerSecond: rateLimitRPS,
+			Rate: rateLimitRPS,
 			Burst:             burstSize,
 		},
 	})

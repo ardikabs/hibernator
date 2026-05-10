@@ -16,31 +16,57 @@ import (
 // contextKey is the type for context keys to avoid collisions
 type contextKey string
 
-const (
-	// KeyContextKey is the context key for rate limit key
-	KeyContextKey contextKey = "ratelimit.key"
-)
+const rateLimitContextKey contextKey = "ratelimit.entry"
 
-// Key represents a rate limit key that identifies the rate limit bucket.
-// This is an opaque identifier - it could be a credential, webhook URL,
-// API token, or any other string that uniquely identifies a rate limit scope.
-type Key string
-
-// WithContext adds a rate limit key to the context.
-// Callers should invoke this before making HTTP requests to enable per-key rate limiting.
-func WithContext(ctx context.Context, key string) context.Context {
-	return context.WithValue(ctx, KeyContextKey, Key(key))
+// rateLimitEntry carries rate limit configuration in the request context.
+// The transport reads this entry, registers configs with the registry,
+// and waits for tokens before allowing the request to proceed.
+type rateLimitEntry struct {
+	key    string
+	cfg    Config
+	opName string
+	opCfg  Config
 }
 
-// GetKey extracts the rate limit key from context.
-// Returns empty string if not found.
-func GetKey(ctx context.Context) Key {
-	if v := ctx.Value(KeyContextKey); v != nil {
-		if k, ok := v.(Key); ok {
-			return k
+// RateLimitOption configures a rate limit entry.
+type RateLimitOption func(*rateLimitEntry)
+
+// WithOperation adds a per-operation rate limit to the entry.
+// The transport will register key#opName with the given config and
+// wait on the operation-scoped path (global then operation).
+func WithOperation(opName string, cfg Config) RateLimitOption {
+	return func(e *rateLimitEntry) {
+		e.opName = opName
+		e.opCfg = cfg
+	}
+}
+
+// WithRateLimit adds a rate limit key and configuration to the context.
+// The transport will register the config with its registry and wait for
+// a token before allowing the HTTP request to proceed.
+//
+// For operation-scoped rate limiting (e.g. per-API-method limits within
+// a shared parent bucket), use WithOperation option.
+func WithRateLimit(ctx context.Context, key string, cfg Config, opts ...RateLimitOption) context.Context {
+	entry := &rateLimitEntry{
+		key: key,
+		cfg: cfg,
+	}
+	for _, opt := range opts {
+		opt(entry)
+	}
+	return context.WithValue(ctx, rateLimitContextKey, entry)
+}
+
+// getRateLimitEntry extracts the rate limit entry from context.
+// Returns nil if not found or wrong type.
+func getRateLimitEntry(ctx context.Context) *rateLimitEntry {
+	if v := ctx.Value(rateLimitContextKey); v != nil {
+		if e, ok := v.(*rateLimitEntry); ok {
+			return e
 		}
 	}
-	return ""
+	return nil
 }
 
 // Transport is an HTTP RoundTripper that applies rate limiting per key.
@@ -76,7 +102,8 @@ func redactKey(key string) string {
 }
 
 // RoundTrip implements http.RoundTripper.
-// It checks for a key in the context and applies rate limiting if present.
+// It reads rate limit configuration from the request context, registers it
+// with the registry, and waits for a token before forwarding the request.
 func (t *Transport) RoundTrip(req *http.Request) (*http.Response, error) {
 	// Use default transport if base not provided
 	base := t.Base
@@ -84,43 +111,46 @@ func (t *Transport) RoundTrip(req *http.Request) (*http.Response, error) {
 		base = http.DefaultTransport
 	}
 
-	log := t.Log
+	log := t.Log.WithValues(
+		"url", req.URL.Redacted(),
+		"method", req.Method,
+	)
 	if log.IsZero() {
 		log = logr.Discard()
 	}
 
-	// Check if this request has a key for rate limiting
-	key := GetKey(req.Context())
-	if key == "" || t.Registry == nil {
-		// No key or no registry - proceed without rate limiting
+	entry := getRateLimitEntry(req.Context())
+	if entry == nil || t.Registry == nil {
+		// No rate limit config or no registry - proceed without rate limiting
 		return base.RoundTrip(req)
 	}
 
-	// Log that we're applying rate limiting (key is partially redacted)
-	log.V(1).Info("applying rate limit",
-		"key", redactKey(string(key)),
-		"url", req.URL.Redacted(),
-		"method", req.Method)
+	waitKey := entry.key
+	if entry.opName != "" {
+		// Register parent + operation in one coordinated step.
+		// This ensures the parent is created with the correct config
+		// rather than falling back to defaults.
+		t.Registry.registerEntry(entry)
+		waitKey = entry.key + "#" + entry.opName
+	} else {
+		// Register parent only.
+		t.Registry.Register(entry.key, entry.cfg)
+	}
 
-	// Wait for rate limit token
+	log = log.WithValues("mode", "registry", "key", redactKey(waitKey))
+	log.V(1).Info("applying rate limit")
+
 	start := time.Now()
-	if err := t.Registry.Wait(req.Context(), string(key)); err != nil {
-		log.V(1).Info("rate limit wait cancelled",
-			"key", redactKey(string(key)),
-			"error", err)
+	if err := t.Registry.Wait(req.Context(), waitKey); err != nil {
+		log.V(1).Info("rate limit wait cancelled", "error", err)
 		return nil, err
 	}
 	waitDuration := time.Since(start)
 
-	// Log if we actually had to wait (rate limiting was active)
 	if waitDuration > 0 {
-		log.V(1).Info("rate limit applied",
-			"key", redactKey(string(key)),
-			"wait", waitDuration,
-			"url", req.URL.Redacted())
+		log.V(1).Info("rate limit applied", "wait", waitDuration)
 	}
 
-	// Proceed with the request
 	return base.RoundTrip(req)
 }
 

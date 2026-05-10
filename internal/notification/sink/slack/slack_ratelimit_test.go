@@ -99,7 +99,7 @@ func TestSlackSink_RateLimiting_10ConcurrentPlans(t *testing.T) {
 	// Create rate limit registry with faster config for quick test
 	registry := ratelimit.NewRegistry(
 		ratelimit.WithDefaultConfig(ratelimit.Config{
-			RequestsPerSecond: rps,
+			Rate: rps,
 			Burst:             burst,
 		}),
 		ratelimit.WithLogger(logr.Discard()),
@@ -119,14 +119,14 @@ func TestSlackSink_RateLimiting_10ConcurrentPlans(t *testing.T) {
 	// Create Slack sink with rate limiting enabled
 	s := New(&stubRenderer{defaultText: "test message"},
 		WithHTTPClient(httpClient),
-		WithRateLimitRegistry(registry),
+		
 	)
 
 	// Configure sink with rate limit settings
 	cfg, _ := json.Marshal(config{
 		WebhookURL: server.Server.URL,
 		RateLimit: &RateLimitConfig{
-			RequestsPerSecond: rps,
+			Rate: rps,
 			Burst:             burst,
 		},
 	})
@@ -243,7 +243,7 @@ func TestSlackSink_NoRateLimiting_10ConcurrentPlans(t *testing.T) {
 	// Create Slack sink WITHOUT rate limiting registry
 	s := New(&stubRenderer{defaultText: "test message"},
 		WithHTTPClient(httpClient),
-		// Note: NOT passing WithRateLimitRegistry - rate limiting disabled
+		// Note: Using default HTTP client without rate-limiting transport - rate limiting disabled
 	)
 
 	// Configure sink WITHOUT rate limit settings
@@ -359,7 +359,7 @@ func TestSlackSink_RateLimiting_ThreadMode(t *testing.T) {
 	// Create rate limit registry
 	registry := ratelimit.NewRegistry(
 		ratelimit.WithDefaultConfig(ratelimit.Config{
-			RequestsPerSecond: rps,
+			Rate: rps,
 			Burst:             burst,
 		}),
 		ratelimit.WithLogger(logr.Discard()),
@@ -378,7 +378,7 @@ func TestSlackSink_RateLimiting_ThreadMode(t *testing.T) {
 
 	s := New(&stubRenderer{defaultText: "test message"},
 		WithHTTPClient(httpClient),
-		WithRateLimitRegistry(registry),
+		
 		withServerURL(server.URL+"/"),
 	)
 
@@ -388,7 +388,7 @@ func TestSlackSink_RateLimiting_ThreadMode(t *testing.T) {
 		ChannelID:    "C123456",
 		DeliveryMode: deliveryModeThread,
 		RateLimit: &RateLimitConfig{
-			RequestsPerSecond: rps,
+			Rate: rps,
 			Burst:             burst,
 		},
 	})
@@ -434,7 +434,7 @@ func TestSlackSink_RateLimiting_ContextCancellation(t *testing.T) {
 	// This ensures the second request will have to wait ~100ms
 	registry := ratelimit.NewRegistry(
 		ratelimit.WithDefaultConfig(ratelimit.Config{
-			RequestsPerSecond: 10.0, // 1 request per 100ms
+			Rate: 10.0, // 1 request per 100ms
 			Burst:             1,    // Only 1 burst token
 		}),
 		ratelimit.WithLogger(logr.Discard()),
@@ -452,13 +452,13 @@ func TestSlackSink_RateLimiting_ContextCancellation(t *testing.T) {
 
 	s := New(&stubRenderer{defaultText: "test"},
 		WithHTTPClient(httpClient),
-		WithRateLimitRegistry(registry),
+		
 	)
 
 	cfg, _ := json.Marshal(config{
 		WebhookURL: server.URL,
 		RateLimit: &RateLimitConfig{
-			RequestsPerSecond: 10.0, // 1 request per 100ms
+			Rate: 10.0, // 1 request per 100ms
 			Burst:             1,
 		},
 	})
@@ -489,4 +489,84 @@ func TestSlackSink_RateLimiting_ContextCancellation(t *testing.T) {
 	// Only 1 request should have made it to the server
 	assert.Equal(t, int32(1), requestCount.Load(),
 		"Only 1 request should reach server (second blocked by rate limiter)")
+}
+
+// TestSlackSink_NestedRateLimiting_ThreadMode verifies that thread mode
+// uses operation-scoped rate limiting where per-method operations contend
+// for a shared parent RPM bucket.
+func TestSlackSink_NestedRateLimiting_ThreadMode(t *testing.T) {
+	apiCallCount := atomic.Int32{}
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		apiCallCount.Add(1)
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusOK)
+		w.Write([]byte(`{"ok":true,"channel":"C123","ts":"1234567890.123456"}`))
+	}))
+	defer server.Close()
+
+	// Parent RPS = 2 per second (burst 2).
+	// Child RPS per method is hardcoded (slackMethodRateLimits):
+	//   - chat.postMessage: 1 RPS, burst 5
+	//   - reactions.add:    5 RPS, burst 20
+	// The parent should be the bottleneck: after the first 2 burst calls,
+	// every subsequent call must wait ~500ms for the parent token.
+	registry := ratelimit.NewRegistry(
+		ratelimit.WithDefaultConfig(ratelimit.Config{
+			Rate: 100.0,
+			Burst:             10,
+			
+		}),
+		ratelimit.WithLogger(logr.Discard()),
+	)
+
+	transport := ratelimit.NewTransport(
+		http.DefaultTransport,
+		registry,
+		logr.Discard(),
+	)
+	httpClient := &http.Client{
+		Transport: transport,
+		Timeout:   10 * time.Second,
+	}
+
+	s := New(&stubRenderer{defaultText: "test message"},
+		WithHTTPClient(httpClient),
+		
+		withServerURL(server.URL+"/"),
+	)
+
+	cfg, _ := json.Marshal(config{
+		BotToken:     "xoxb-test-token",
+		ChannelID:    "C123456",
+		DeliveryMode: deliveryModeThread,
+		RateLimit: &RateLimitConfig{
+			Rate: 2.0,
+			Burst:             2,
+			
+		},
+	})
+
+	// Send one notification in thread mode.
+	// With Start event this typically makes 3-4 API calls:
+	// 1. chat.postMessage (root)
+	// 2. chat.postMessage (reply)
+	// 3. reactions.add
+	// With parent burst=2 and RPS=2, calls 1-2 are immediate, call 3 waits ~500ms.
+	start := time.Now()
+	_, err := s.Send(context.Background(), testPayload(), sink.SendOptions{Config: cfg})
+	duration := time.Since(start)
+
+	require.NoError(t, err)
+	calls := apiCallCount.Load()
+	t.Logf("Thread mode made %d API calls in %v", calls, duration)
+	require.GreaterOrEqual(t, calls, int32(2), "Thread mode should make at least 2 API calls")
+
+	// If there are 3+ calls, at least one should have waited for the parent.
+	// With 2 RPS parent, after burst of 2, each additional call waits ~500ms.
+	if calls > 2 {
+		minExpected := time.Duration(calls-2) * 250 * time.Millisecond
+		assert.Greater(t, duration, minExpected,
+			"parent RPM should bottleneck after burst is exhausted")
+	}
 }

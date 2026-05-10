@@ -41,9 +41,9 @@ The configuration must be in a JSON object stored under `config` key in secret r
   "time_layout": "<time_layout>",
   "delivery_mode": "<delivery_mode>",
   "rate_limit": {
-    "requests_per_second": "<requests_per_second>",
-    "burst": "<burst>",
-    "requests_per_minute": "<requests_per_minute>"
+    "rate": "<rate>",
+    "unit": "<unit>",
+    "burst": "<burst>"
   }
 }
 ```
@@ -61,10 +61,10 @@ The configuration must be in a JSON object stored under `config` key in secret r
 | `timezone` | `string` | No | Timezone is an IANA timezone name (for example, `Asia/Jakarta`) used only when TimeDisplay is `fixed`. Defaults to `UTC` in fixed mode. |
 | `time_layout` | `string` | No | TimeLayout is Go time layout used by fixed/utc displays. Defaults to `Mon, 02 Jan 2006 15:04:05 MST`. |
 | `delivery_mode` | `string` | No | DeliveryMode controls message grouping behavior. Supported values: - `channel` (default): each event posts as standalone channel message. - `thread`: root message is treated as a live status card and updated on every delivered event for the same plan/cycle, while event entries are posted as thread replies (including Start). Root status is monotonic per sink+plan+cycle+operation: once terminal (`Success`/`Failure`), late non-terminal events (`ExecutionProgress`, `Recovery`, `PhaseChange`, `Start`) do not downgrade root status back to in-progress, though they are still posted as thread replies. In `thread` mode, `templateRef`/custom templates are intentionally ignored: the sink always uses built-in, opinionated thread layouts so context and status progression remain consistent across root updates and replies. Recommendation: include `ExecutionProgress` in onEvents so root status moves continuously across execution; otherwise root updates only on subscribed events. |
-| `rate_limit` | `object` | No | RateLimit controls the rate limiting for this specific sink instance. Used to prevent burst traffic from overwhelming Slack's API limits (1 request per second per channel with burst tolerance). If not specified, uses default rate of 2 req/sec with burst of 10. Reference: https://docs.slack.dev/apis/web-api/rate-limits/ |
-|   `requests_per_second` | `float64` | No | RequestsPerSecond is the sustained rate limit. Default: 2.0 (2 request per second) |
-|   `burst` | `int` | No | Burst is the maximum number of requests allowed in a burst. Default: 10 |
-|   `requests_per_minute` | `int` | No | RequestsPerMinute is the per-minute rate limit. Optional - if zero or not set, defaults to 50 RPM Set to -1 to disable per-minute limiting (only use per-second). Default: 50 |
+| `rate_limit` | `object` | No | RateLimit controls the rate limiting for this specific sink instance. Used to prevent burst traffic from overwhelming Slack's API limits (1 request per second per channel with burst tolerance). If not specified, uses default rate of 50 req/minute with burst of 75 (aligned with Web API Tier 3-4). Reference: https://docs.slack.dev/apis/web-api/rate-limits/ |
+|   `rate` | `float64` | No | Rate is the sustained rate limit (e.g. 2.0 for 2 req/unit). Default: 50.0 |
+|   `unit` | `string` | No | Unit is the time unit for Rate: "second" or "minute". Default: "minute" |
+|   `burst` | `int` | No | Burst is the maximum number of requests allowed in a burst. Default: 75 |
 
 ### Default Template
 
@@ -144,9 +144,9 @@ The configuration must be in a JSON object stored under `config` key in secret r
   "chat_id": "<chat_id>",
   "parse_mode": "<parse_mode>",
   "rate_limit": {
-    "requests_per_second": "<requests_per_second>",
-    "burst": "<burst>",
-    "requests_per_minute": "<requests_per_minute>"
+    "rate": "<rate>",
+    "unit": "<unit>",
+    "burst": "<burst>"
   }
 }
 ```
@@ -157,9 +157,9 @@ The configuration must be in a JSON object stored under `config` key in secret r
 | `chat_id` | `string` | Yes | ChatID is the target chat ID (numeric ID or channel username like "@mychannel"). |
 | `parse_mode` | `*string` | No | ParseMode is the message parse mode (MarkdownV2 or HTML), defaults to HTML if not specified. |
 | `rate_limit` | `object` | No | RateLimit controls the rate limiting for this specific sink instance. Used to prevent burst traffic from overwhelming Telegram's API limits. If not specified, uses default rate of 5 req/sec with burst of 10. |
-|   `requests_per_second` | `float64` | No | RequestsPerSecond is the sustained rate limit. Default: 5.0 (5 requests per second) |
+|   `rate` | `float64` | No | Rate is the sustained rate limit (e.g. 5.0 for 5 req/unit). Default: 5.0 |
+|   `unit` | `string` | No | Unit is the time unit for Rate: "second" or "minute". Default: "second" |
 |   `burst` | `int` | No | Burst is the maximum number of requests allowed in a burst. Default: 10 |
-|   `requests_per_minute` | `int` | No | RequestsPerMinute is the per-minute rate limit. Optional - if zero or not set, defaults to RequestsPerSecond * 60. Set to -1 to disable per-minute limiting (only use per-second). Default: unset |
 
 ### Default Template
 
