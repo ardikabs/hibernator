@@ -9,6 +9,7 @@ import (
 	"context"
 	"fmt"
 	"maps"
+	"sync"
 	"sync/atomic"
 	"time"
 
@@ -21,7 +22,9 @@ import (
 	hibernatorv1alpha1 "github.com/ardikabs/hibernator/api/v1alpha1"
 	"github.com/ardikabs/hibernator/internal/metrics"
 	"github.com/ardikabs/hibernator/internal/notification/sink"
+	"github.com/ardikabs/hibernator/pkg/cache"
 	"github.com/ardikabs/hibernator/pkg/keyedworker"
+	"github.com/ardikabs/hibernator/pkg/ratelimit"
 )
 
 const (
@@ -31,12 +34,16 @@ const (
 	// defaultTemplateKey is the well-known key inside the ConfigMap that holds the custom template string.
 	defaultTemplateKey = "template.gotpl"
 
-	// defaultDispatchTimeout is the per-sink HTTP call timeout.
-	// Must be longer than the maximum expected retry wait time to allow
-	// go-retryablehttp to handle rate limits (429) with Retry-After headers.
-	// With RetryMax=5 and RetryWaitMax=30s, worst case is ~150s, but we
-	// use 90s as a reasonable balance between reliability and responsiveness.
-	defaultDispatchTimeout = 90 * time.Second
+	// defaultDispatchTimeout is the per-notification umbrella timeout.
+	// It must be generous enough to accommodate:
+	//   - multiple sequential API calls in thread mode (3-4 calls)
+	//   - client-side rate limit waits (can be 60-120s per minute-tier)
+	//   - go-retryablehttp retry back-off for 429 responses
+	//
+	// The underlying HTTP client has its own per-call timeout (30s) so a
+	// single hung request is still bounded. This umbrella timeout prevents
+	// a truly pathological sink from holding a worker goroutine forever.
+	defaultDispatchTimeout = 5 * time.Minute
 
 	// defaultDrainTimeout is the maximum time to wait for workers to drain remaining items during shutdown.
 	defaultDrainTimeout = 30 * time.Second
@@ -51,10 +58,6 @@ const (
 	// This must be longer than the typical time between notifications for the same
 	// plan/cycle to ensure thread continuity. 10 minutes accommodates most use cases.
 	defaultStateCacheTTL = 10 * time.Minute
-
-	// defaultStateCacheEvictionInterval defines the cleanup frequency for expired entries.
-	// It matches the state cache TTL plus a 10-second buffer to ensure expiration has strictly passed.
-	defaultStateCacheEvictionInterval = defaultStateCacheTTL + (10 * time.Second)
 )
 
 // DispatcherConfig holds tuning knobs for the notification Dispatcher.
@@ -85,6 +88,24 @@ func (c DispatcherConfig) withDefaults() DispatcherConfig {
 		c.WorkerIdleTTL = defaultWorkerIdleTTL
 	}
 	return c
+}
+
+// DispatcherOption configures an optional dependency of a Dispatcher.
+type DispatcherOption func(*Dispatcher)
+
+// withDeliveryCallback registers a callback invoked after each dispatch attempt.
+func withDeliveryCallback(cb DeliveryCallback) DispatcherOption {
+	return func(d *Dispatcher) {
+		d.deliveryCallback = cb
+	}
+}
+
+// withRateLimitRegistry wires the shared rate limiter registry into the dispatcher.
+// The registry is closed when the dispatcher shuts down.
+func withRateLimitRegistry(r *ratelimit.Registry) DispatcherOption {
+	return func(d *Dispatcher) {
+		d.rateLimitRegistry = r
+	}
 }
 
 // Dispatcher is a standalone controller-runtime Runnable that processes notification
@@ -126,7 +147,15 @@ type Dispatcher struct {
 	// stateCache provides in-memory caching of sink states to prevent race conditions
 	// between async status updates and immediate state reads. This ensures thread
 	// continuity in Slack thread mode when notifications fire in rapid succession.
-	stateCache *SinkStateCache
+	stateCache *cache.Cache[string, map[string]string]
+
+	// rateLimitRegistry is the shared rate limiter registry used by HTTP sink clients.
+	// It is closed when the dispatcher shuts down to release background resources.
+	rateLimitRegistry *ratelimit.Registry
+
+	// closeOnce ensures d.done is closed at most once, guarding against duplicate
+	// closure if Start() is invoked more than once.
+	closeOnce sync.Once
 }
 
 type streamKey struct {
@@ -165,8 +194,18 @@ func streamKeyFromRequest(req Request) streamKey {
 
 // NewDispatcher creates a new NotificationDispatcher.
 // The client should be the cached reader (informer cache) for Secret lookups.
-func NewDispatcher(log logr.Logger, c client.Reader, registry *sink.Registry, cfg DispatcherConfig) *Dispatcher {
+func NewDispatcher(log logr.Logger, c client.Reader, registry *sink.Registry, cfg DispatcherConfig, opts ...DispatcherOption) *Dispatcher {
 	cfg = cfg.withDefaults()
+
+	stateCache, err := cache.New(
+		cache.WithTTL[string, map[string]string](defaultStateCacheTTL),
+		cache.WithActiveMode[string, map[string]string](),
+	)
+	if err != nil {
+		// Should never happen with positive TTL.
+		panic(err)
+	}
+
 	d := &Dispatcher{
 		log:             log,
 		client:          c,
@@ -175,7 +214,11 @@ func NewDispatcher(log logr.Logger, c client.Reader, registry *sink.Registry, cf
 		dispatchTimeout: cfg.DispatchTimeout,
 		workerIdleTTL:   cfg.WorkerIdleTTL,
 		done:            make(chan struct{}),
-		stateCache:      NewSinkStateCache(log.WithName("state-cache"), defaultStateCacheTTL),
+		stateCache:      stateCache,
+	}
+
+	for _, opt := range opts {
+		opt(d)
 	}
 
 	d.pool = keyedworker.New(
@@ -228,15 +271,12 @@ func (d *Dispatcher) Start(ctx context.Context) error {
 		"stateCacheTTL", defaultStateCacheTTL,
 	)
 
-	// Start the state cache eviction loop for background cleanup of expired entries.
-	d.stateCache.StartEvictionLoop(ctx, defaultStateCacheEvictionInterval)
-
 	d.pool.Register(ctx, d.workerFactory)
 
 	d.log.V(1).Info("notification dispatcher running", "mode", "keyed-stream")
 	<-ctx.Done()
 	d.log.V(1).Info("notification dispatcher initiating shutdown")
-	close(d.done)
+	d.closeOnce.Do(func() { close(d.done) })
 	d.pool.Stop()
 
 	deadline := time.NewTimer(defaultDrainTimeout)
@@ -259,6 +299,10 @@ waitLoop:
 		}
 	}
 
+	d.stateCache.Close()
+	if d.rateLimitRegistry != nil {
+		d.rateLimitRegistry.Close()
+	}
 	d.log.Info("notification dispatcher stopped")
 	return nil
 }
@@ -425,23 +469,36 @@ func (d *Dispatcher) dispatch(ctx context.Context, req Request) {
 		Log:            log,
 	}
 
-	// Send with timeout.
+	// Send with buffer timeout. This is a safety net, not a budget:
+	// the underlying HTTP client has its own per-call timeout ranging from 1s-30s.
+	// The buffer must be generous enough for thread mode's multiple
+	// API calls + rate limit waits, which can total 1-3 minutes under load.
 	sendCtx, cancel := context.WithTimeout(ctx, d.dispatchTimeout)
 	defer cancel()
 
+	sendStart := time.Now()
 	sendResult, sendErr := provider.Send(sendCtx, sinkPayload, sendOpts)
+	sendDuration := time.Since(sendStart)
 	states := mergeStates(sendOpts.SinkState, sendResult.States)
+
+	totalDuration := time.Since(start)
 	if sendErr != nil {
-		log.Error(sendErr, "failed to send notification")
+		log.Error(sendErr, "failed to send notification",
+			"resolve_ms", totalDuration.Milliseconds()-sendDuration.Milliseconds(),
+			"send_ms", sendDuration.Milliseconds(),
+			"total_ms", totalDuration.Milliseconds())
 		metrics.NotificationErrorsTotal.WithLabelValues(req.SinkType, req.Payload.Event).Inc()
-		metrics.NotificationLatency.WithLabelValues(req.SinkType).Observe(time.Since(start).Seconds())
+		metrics.NotificationLatency.WithLabelValues(req.SinkType).Observe(totalDuration.Seconds())
 		d.reportDelivery(req, false, sendErr, states)
 		return
 	}
 
-	log.Info("notification sent successfully")
+	log.Info("notification sent successfully",
+		"resolve_ms", totalDuration.Milliseconds()-sendDuration.Milliseconds(),
+		"send_ms", sendDuration.Milliseconds(),
+		"total_ms", totalDuration.Milliseconds())
 	metrics.NotificationSentTotal.WithLabelValues(req.SinkType, req.Payload.Event).Inc()
-	metrics.NotificationLatency.WithLabelValues(req.SinkType).Observe(time.Since(start).Seconds())
+	metrics.NotificationLatency.WithLabelValues(req.SinkType).Observe(totalDuration.Seconds())
 	d.reportDelivery(req, true, nil, states)
 }
 
@@ -453,26 +510,19 @@ func (d *Dispatcher) reportDelivery(req Request, success bool, err error, states
 	// Update cache synchronously so the next notification in the stream sees the state
 	// immediately, before the async status update is persisted.
 	if len(states) > 0 {
-		d.stateCache.Set(req.NotificationRef, req.SinkName,
-			req.Payload.Plan.Namespace, req.Payload.Plan.Name,
-			req.Payload.CycleID, req.Payload.Operation, states)
+		statesCopy := make(map[string]string, len(states))
+		maps.Copy(statesCopy, states)
+		d.stateCache.Add(req.String(), statesCopy)
 	}
 
 	if d.deliveryCallback == nil {
 		return
 	}
-	d.deliveryCallback(DeliveryResult{
-		NotificationRef: req.NotificationRef,
-		SinkName:        req.SinkName,
-		PlanNamespace:   req.Payload.Plan.Namespace,
-		PlanName:        req.Payload.Plan.Name,
-		CycleID:         req.Payload.CycleID,
-		Operation:       req.Payload.Operation,
-		Timestamp:       time.Now(),
-		Success:         success,
-		Error:           err,
-		States:          states,
-	})
+
+	d.deliveryCallback(FromRequest(req).
+		At(time.Now()).
+		WithOutcome(success, err).
+		WithStates(states))
 }
 
 func (d *Dispatcher) resolveSinkState(ctx context.Context, req Request) map[string]string {
@@ -480,52 +530,43 @@ func (d *Dispatcher) resolveSinkState(ctx context.Context, req Request) map[stri
 		return nil
 	}
 
-	// Extract parameters from request
-	notifRef := req.NotificationRef
-	sinkName := req.SinkName
-	planNamespace := req.Payload.Plan.Namespace
-	planName := req.Payload.Plan.Name
-	cycleID := req.Payload.CycleID
-	operation := req.Payload.Operation
-
 	// Use atomic GetOrFetch to ensure that even when multiple notifications for the
 	// same plan/cycle arrive simultaneously, only one fetches from the API and all
 	// get the same result. This prevents race conditions where multiple goroutines
 	// could read stale/inconsistent states from the API.
-	states, err := d.stateCache.GetOrFetch(ctx,
-		notifRef, sinkName, planNamespace, planName, cycleID, operation,
-		func(fCtx context.Context) (map[string]string, error) {
-			// Fetch from API server - this is called only once even with concurrent requests
-			notif := new(hibernatorv1alpha1.HibernateNotification)
-			if err := d.client.Get(fCtx, notifRef, notif); err != nil {
-				return nil, err
-			}
+	states, err := d.stateCache.GetOrFetch(ctx, req.String(), func(fCtx context.Context) (map[string]string, error) {
+		notif := new(hibernatorv1alpha1.HibernateNotification)
+		if err := d.client.Get(fCtx, req.NotificationRef, notif); err != nil {
+			return nil, err
+		}
 
-			if notif.Status.SinkStatuses != nil {
-				key := SinkStatusKey(sinkName, planNamespace, planName, cycleID, operation)
-				if ss, ok := notif.Status.SinkStatuses[key]; ok {
-					if len(ss.States) == 0 {
-						return nil, nil
-					}
-					state := make(map[string]string, len(ss.States))
-					maps.Copy(state, ss.States)
-					return state, nil
+		if notif.Status.SinkStatuses != nil {
+			ssKey := req.ShortName()
+			if ss, ok := notif.Status.SinkStatuses[ssKey]; ok {
+				if len(ss.States) == 0 {
+					return nil, cache.ErrDontCache
 				}
+				state := make(map[string]string, len(ss.States))
+				maps.Copy(state, ss.States)
+				return state, nil
 			}
-			return nil, nil
-		},
-	)
+		}
+		return nil, cache.ErrDontCache
+	})
 
 	if err != nil {
-		d.log.V(2).Error(err, "failed to resolve sink state from API",
-			"notification", notifRef.String(),
-			"sink", sinkName)
+		d.log.Error(err, "failed to resolve sink state from API",
+			"notification", req.NotificationRef.String(),
+			"sink", req.SinkName)
 		return nil
 	}
 
 	return states
 }
 
+// mergeStates combines two state maps. Values in override take precedence over base.
+// An empty string value in override deletes the corresponding key from the result.
+// Returns nil when the merged result is empty.
 func mergeStates(base, override map[string]string) map[string]string {
 	if len(base) == 0 && len(override) == 0 {
 		return nil

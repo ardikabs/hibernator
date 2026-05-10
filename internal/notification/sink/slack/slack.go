@@ -11,6 +11,7 @@ import (
 	"fmt"
 	"net/http"
 	"strings"
+	"time"
 
 	"github.com/go-logr/logr"
 	slackapi "github.com/slack-go/slack"
@@ -35,22 +36,11 @@ func WithHTTPClient(client *http.Client) Option {
 	}
 }
 
-// WithRateLimitRegistry sets the rate limit registry for per-key rate limiting.
-// The registry is used to register rate limit configs keyed by a unique identifier
-// (webhook URL for channel mode, bot token for thread mode).
-// If not provided, rate limiting is disabled.
-func WithRateLimitRegistry(registry *ratelimit.Registry) Option {
-	return func(s *Sink) {
-		s.rateLimitRegistry = registry
-	}
-}
-
 // Sink sends notifications to Slack via Incoming Webhook URL.
 type Sink struct {
-	renderer          sink.Renderer
-	client            *http.Client
-	serverURL         string
-	rateLimitRegistry *ratelimit.Registry
+	renderer  sink.Renderer
+	client    *http.Client
+	serverURL string
 }
 
 // New creates a new Slack sink.
@@ -62,8 +52,6 @@ func New(renderer sink.Renderer, opts ...Option) *Sink {
 	s := &Sink{
 		renderer: renderer,
 		client:   http.DefaultClient,
-		// rateLimitRegistry is nil by default; rate limiting is applied at HTTP transport level
-		// when a registry is provided via WithRateLimitRegistry.
 	}
 	for _, opt := range opts {
 		opt(s)
@@ -104,8 +92,8 @@ func (s *Sink) Type() string {
 //   - channel mode: key is the webhook URL
 //   - thread mode: key is the bot token
 //
-// The rate limit configuration is read from the Secret config and registered
-// with the rate limit registry on the first send for each key.
+// The rate limit configuration is read from the Secret config and injected
+// into the request context via ratelimit.WithRateLimit.
 func (s *Sink) Send(ctx context.Context, payload sink.Payload, opts sink.SendOptions) (sink.SendResult, error) {
 	opts.Log.Info("dispatching Slack notification", "event", payload.Event, "plan", payload.Plan.String(), "cycle_id", payload.CycleID, "sink", payload.SinkName)
 	opts.Log.V(1).Info("starting Slack sink send", "has_custom_template", opts.CustomTemplate != nil, "has_sink_state", len(opts.SinkState) > 0)
@@ -120,17 +108,14 @@ func (s *Sink) Send(ctx context.Context, payload sink.Payload, opts sink.SendOpt
 	}
 	opts.Log.Info("Slack sink config resolved", "delivery_mode", cfg.DeliveryMode, "format", cfg.Format, "block_layout", cfg.BlockLayout)
 
-	// Register rate limit config for this key if a registry is configured.
+	// Inject rate limit config into context for the HTTP transport.
 	// The key is determined by the delivery mode:
 	// - channel mode: webhook URL
 	// - thread mode: bot token
 	// Rate limiting is enforced at the HTTP transport level for every API call.
-	if s.rateLimitRegistry != nil {
-		key := s.extractRateLimitKey(cfg)
-		s.useRateLimitConfig(key, cfg.RateLimit)
-
-		// Inject key into context so the HTTP transport can apply rate limiting
-		ctx = ratelimit.WithContext(ctx, key)
+	key := s.extractRateLimitKey(cfg)
+	if key != "" && cfg.RateLimit != nil {
+		ctx = ratelimit.WithRateLimit(ctx, key, toRatelimitConfig(cfg.RateLimit))
 	}
 
 	customTemplate := opts.CustomTemplate
@@ -161,6 +146,24 @@ func (s *Sink) Send(ctx context.Context, payload sink.Payload, opts sink.SendOpt
 	return sink.SendResult{States: states}, nil
 }
 
+// toRatelimitConfig converts the user-facing RateLimitConfig to the internal
+// ratelimit.Config. The unit string "second" or "minute" is mapped to a
+// time.Duration.
+func toRatelimitConfig(rl *RateLimitConfig) ratelimit.Config {
+	if rl == nil {
+		return ratelimit.Config{}
+	}
+	unit := time.Second
+	if rl.Unit == "minute" {
+		unit = time.Minute
+	}
+	return ratelimit.Config{
+		Rate:  rl.Rate,
+		Unit:  unit,
+		Burst: rl.Burst,
+	}
+}
+
 // extractRateLimitKey extracts the rate limit key from config.
 // For channel mode: returns the webhook URL.
 // For thread mode: returns the bot token.
@@ -179,20 +182,54 @@ func (s *Sink) extractRateLimitKey(cfg config) string {
 	}
 }
 
-// useRateLimitConfig uses the rate limit configuration for the given key.
-// This allows the HTTP transport to apply per-key rate limiting.
-func (s *Sink) useRateLimitConfig(key string, cfg *RateLimitConfig) {
-	if cfg == nil {
-		return
+// slackMethodRateLimits defines internal rate limits for Slack Web API methods
+// used in thread delivery mode. These are conservative defaults based on Slack's
+// documented tier limits. The parent's config (set by user via rate_limit) acts
+// as the shared aggregate cap across all methods.
+//
+// Each operation has its own unambiguous Rate + Unit. There is no double-
+// counting because the parent and child each have a single token bucket.
+//
+// References:
+//   - chat.postMessage: ~1/sec per channel
+//   - chat.update:      ~1/sec per channel
+//   - reactions.add:    higher throughput tier
+//   - reactions.remove: higher throughput tier
+//
+// If a method is not listed here, it falls back to the base rate_limit config.
+var slackMethodRateLimits = map[string]ratelimit.Config{
+	"chat.postMessage": {Rate: 1.0, Unit: time.Second, Burst: 5},
+	"chat.update":      {Rate: 1.0, Unit: time.Second, Burst: 5},
+	"reactions.add":    {Rate: 5.0, Unit: time.Second, Burst: 20},
+	"reactions.remove": {Rate: 5.0, Unit: time.Second, Burst: 20},
+}
+
+// withMethodRateLimit returns a context scoped to a specific Slack API method
+// with operation-scoped rate limiting.
+//
+// The transport reads the rate limit entry from context, registers both the
+// parent config and the operation config with its registry, and enforces both
+// per-method rate and aggregate parent rate via WaitOperation.
+//
+// Per-method rate limits are hardcoded (slackMethodRateLimits). The user
+// only configures the aggregate rate_limit (which sets the parent's limits).
+// If a method is not in the hardcoded map, it falls back to the base
+// rate_limit config.
+func (s *Sink) withMethodRateLimit(ctx context.Context, cfg config, method string) context.Context {
+	baseKey := s.extractRateLimitKey(cfg)
+	if baseKey == "" {
+		return ctx
 	}
 
-	// Register the config with the registry.
-	// If the key already exists, this updates its config.
-	s.rateLimitRegistry.Register(key, ratelimit.Config{
-		RequestsPerSecond: cfg.RequestsPerSecond,
-		Burst:             cfg.Burst,
-		RequestsPerMinute: cfg.RequestsPerMinute,
-	})
+	// Resolve effective config: hardcoded method limit → base config fallback.
+	effective := toRatelimitConfig(cfg.RateLimit)
+	if mCfg, ok := slackMethodRateLimits[method]; ok {
+		effective = mCfg
+	}
+
+	parentCfg := toRatelimitConfig(cfg.RateLimit)
+
+	return ratelimit.WithRateLimit(ctx, baseKey, parentCfg, ratelimit.WithOperation(method, effective))
 }
 
 type deliveryRuntime struct {
@@ -201,7 +238,6 @@ type deliveryRuntime struct {
 	customTemplate *sink.CustomTemplate
 }
 
-// buildMessage constructs the Slack message based on the payload and config.
 func (s *Sink) buildMessage(ctx context.Context, payload sink.Payload, cfg config, customTemplate *sink.CustomTemplate) *slackapi.WebhookMessage {
 	switch cfg.Format {
 	case formatJSON:

@@ -22,17 +22,15 @@ type config struct {
 
 // RateLimitConfig holds rate limiting settings for the sink.
 type RateLimitConfig struct {
-	// RequestsPerSecond is the sustained rate limit.
-	// Default: 5.0 (5 requests per second)
-	RequestsPerSecond float64 `json:"requests_per_second,omitempty"`
+	// Rate is the sustained rate limit (e.g. 5.0 for 5 req/unit).
+	// Default: 5.0
+	Rate float64 `json:"rate,omitempty"`
+
+	// Unit is the time unit for Rate: "second" or "minute".
+	// Default: "second"
+	Unit string `json:"unit,omitempty"`
 
 	// Burst is the maximum number of requests allowed in a burst.
 	// Default: 10
 	Burst int `json:"burst,omitempty"`
-
-	// RequestsPerMinute is the per-minute rate limit.
-	// Optional - if zero or not set, defaults to RequestsPerSecond * 60.
-	// Set to -1 to disable per-minute limiting (only use per-second).
-	// Default: unset
-	RequestsPerMinute int `json:"requests_per_minute,omitempty"`
 }

@@ -1077,11 +1077,6 @@ func TestDispatcher_PerStreamBufferDropsExcess(t *testing.T) {
 	assert.LessOrEqual(t, stub.callCount.Load(), int32(2), "only in-flight and one buffered request can be observed")
 }
 
-func TestSinkStatusKey_CanonicalFormat(t *testing.T) {
-	key := SinkStatusKey("slack-prod", "default", "my-plan", "cycle-001", "shutdown")
-	require.Equal(t, "slack-prod|default/my-plan|cycle-001|shutdown", key)
-}
-
 // TestDispatcher_SameStreamOrdering_DeterministicFIFO verifies that events for the
 // same stream (same plan+cycle+notification+sink+operation) are processed in strict
 // FIFO order, eliminating the race condition between ExecutionProgress and Success.

@@ -314,8 +314,7 @@ func (p *LifecycleProcessor) HandleDeliveryResult(result notification.DeliveryRe
 				n.Status.SinkStatuses = make(map[string]hibernatorv1alpha1.NotificationSinkStatus)
 			}
 
-			entryKey := notification.SinkStatusKey(result.SinkName, result.PlanNamespace, result.PlanName, result.CycleID, result.Operation)
-			entry, exists := n.Status.SinkStatuses[entryKey]
+			entry, exists := n.Status.SinkStatuses[result.ID]
 			if !exists {
 				entry = hibernatorv1alpha1.NotificationSinkStatus{
 					SinkName: result.SinkName,
@@ -346,7 +345,7 @@ func (p *LifecycleProcessor) HandleDeliveryResult(result notification.DeliveryRe
 				n.Status.LastFailureTime = &ts
 			}
 
-			n.Status.SinkStatuses[entryKey] = entry
+			n.Status.SinkStatuses[result.ID] = entry
 
 			pruneSinkStatusesPerPlan(n)
 			pruneSinkStatusesToMaxEntries(n)

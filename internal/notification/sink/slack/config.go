@@ -125,26 +125,24 @@ type config struct {
 	// RateLimit controls the rate limiting for this specific sink instance.
 	// Used to prevent burst traffic from overwhelming Slack's API limits
 	// (1 request per second per channel with burst tolerance).
-	// If not specified, uses default rate of 2 req/sec with burst of 10.
+	// If not specified, uses default rate of 50 req/minute with burst of 75 (aligned with Web API Tier 3-4).
 	// Reference: https://docs.slack.dev/apis/web-api/rate-limits/
 	RateLimit *RateLimitConfig `json:"rate_limit,omitempty"`
 }
 
 // RateLimitConfig holds rate limiting settings for the sink.
 type RateLimitConfig struct {
-	// RequestsPerSecond is the sustained rate limit.
-	// Default: 2.0 (2 request per second)
-	RequestsPerSecond float64 `json:"requests_per_second,omitempty"`
+	// Rate is the sustained rate limit (e.g. 2.0 for 2 req/unit).
+	// Default: 50.0
+	Rate float64 `json:"rate,omitempty"`
+
+	// Unit is the time unit for Rate: "second" or "minute".
+	// Default: "minute"
+	Unit string `json:"unit,omitempty"`
 
 	// Burst is the maximum number of requests allowed in a burst.
-	// Default: 10
+	// Default: 75
 	Burst int `json:"burst,omitempty"`
-
-	// RequestsPerMinute is the per-minute rate limit.
-	// Optional - if zero or not set, defaults to 50 RPM
-	// Set to -1 to disable per-minute limiting (only use per-second).
-	// Default: 50
-	RequestsPerMinute int `json:"requests_per_minute,omitempty"`
 }
 
 func (c *config) useDefaults() {
@@ -184,15 +182,14 @@ func (c *config) useDefaults() {
 
 	if c.RateLimit == nil {
 		c.RateLimit = &RateLimitConfig{
-			RequestsPerSecond: 2.0,
-			RequestsPerMinute: 50,
-			Burst:             10,
+			Rate:  50.0,
+			Unit:  "minute",
+			Burst: 75,
 		}
 	}
 
 	c.BotToken = strings.TrimSpace(c.BotToken)
 	c.ChannelID = strings.TrimSpace(c.ChannelID)
-
 	c.AdditionalScopes = normalizeScopeList(c.AdditionalScopes)
 }
 

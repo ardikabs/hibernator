@@ -18,23 +18,21 @@ import (
 
 // DeliveryResult reports the outcome of a single notification dispatch.
 type DeliveryResult struct {
-	// NotificationRef identifies the HibernateNotification.
+	// Identifiers derived from the original Request.
+
+	// ID is the canonical sink-status key for this delivery.
+	// It matches Request.ShortName() and is used to index
+	// per-sink state inside HibernateNotification.Status.SinkStatuses.
+	//
+	// Format: <sink>|<namespace>/<plan>|<cycle>|<operation>
+	ID string
+
 	NotificationRef types.NamespacedName
-
-	// SinkName is the sink that was dispatched to.
-	SinkName string
-
-	// PlanNamespace is the namespace of the plan that emitted this event.
-	PlanNamespace string
-
-	// PlanName is the name of the plan that emitted this event.
-	PlanName string
-
-	// CycleID is the execution cycle identifier associated with this dispatch.
-	CycleID string
-
-	// Operation is the operation associated with this dispatch (shutdown/wakeup).
-	Operation string
+	SinkName        string
+	PlanNamespace   string
+	PlanName        string
+	CycleID         string
+	Operation       string
 
 	// Timestamp is when the dispatch completed.
 	Timestamp time.Time
@@ -50,13 +48,58 @@ type DeliveryResult struct {
 	States map[string]string
 }
 
+// FromRequest pre-fills the identifier fields of a DeliveryResult from a Request.
+func FromRequest(req Request) DeliveryResult {
+	return DeliveryResult{
+		ID:              req.ShortName(),
+		NotificationRef: req.NotificationRef,
+		SinkName:        req.SinkName,
+		PlanNamespace:   req.Payload.Plan.Namespace,
+		PlanName:        req.Payload.Plan.Name,
+		CycleID:         req.Payload.CycleID,
+		Operation:       req.Payload.Operation,
+	}
+}
+
+// At sets the completion timestamp.
+func (r DeliveryResult) At(t time.Time) DeliveryResult {
+	r.Timestamp = t
+	return r
+}
+
+// WithSuccess marks the result as succeeded.
+func (r DeliveryResult) WithSuccess() DeliveryResult {
+	r.Success = true
+	return r
+}
+
+// WithError marks the result as failed and records the error.
+func (r DeliveryResult) WithError(err error) DeliveryResult {
+	r.Success = false
+	r.Error = err
+	return r
+}
+
+// WithOutcome sets both the success flag and the error in one call.
+func (r DeliveryResult) WithOutcome(success bool, err error) DeliveryResult {
+	r.Success = success
+	r.Error = err
+	return r
+}
+
+// WithStates attaches sink-specific state metadata.
+func (r DeliveryResult) WithStates(states map[string]string) DeliveryResult {
+	r.States = states
+	return r
+}
+
 // DeliveryCallback is invoked after each dispatch attempt to report delivery
 // results back to the lifecycle processor for status tracking.
 type DeliveryCallback func(result DeliveryResult)
 
-// Request represents a single notification request submitted
-// by a hook closure. It contains all data needed by the dispatcher to resolve
-// credentials, render the message, and send it to the sink.
+// Request represents a single notification request submitted by a hook closure.
+// It contains all data needed by the dispatcher to resolve credentials, render
+// the message, and send it to the sink.
 type Request struct {
 	// Payload carries the notification event data.
 	Payload Payload
@@ -80,6 +123,26 @@ type Request struct {
 	NotificationRef types.NamespacedName
 }
 
+// ShortName returns the canonical sink-status key for this request.
+//
+// Format: <sink>|<namespace>/<plan>|<cycle>|<operation>
+//
+// This key is used to index per-sink delivery state inside
+// HibernateNotification.Status.SinkStatuses.
+func (r Request) ShortName() string {
+	return fmt.Sprintf("%s|%s|%s|%s", r.SinkName, r.Payload.Plan.String(), r.Payload.CycleID, r.Payload.Operation)
+}
+
+// String returns a fully-qualified string that uniquely identifies this
+// request across the entire cluster. It includes the notification reference
+// so that two requests for the same sink/plan/cycle but different
+// HibernateNotification objects do not collide.
+//
+// Format: <notification>|<sink>|<namespace>/<plan>|<cycle>|<operation>
+func (r Request) String() string {
+	return r.NotificationRef.String() + "|" + r.ShortName()
+}
+
 // Payload carries the notification event data passed to sinks for dispatch.
 type Payload = sink.Payload
 
@@ -94,13 +157,6 @@ type ConnectorInfo = sink.ConnectorInfo
 
 // Result carries the outcome of a sink Send operation, including any sink-specific metadata.
 type Result = sink.SendResult
-
-// SinkStatusKey builds the canonical HibernateNotification sink status key.
-//
-// Format: <sink>|<namespace>/<plan>|<cycle>|<operation>
-func SinkStatusKey(sinkName, planNamespace, planName, cycleID, operation string) string {
-	return fmt.Sprintf("%s|%s/%s|%s|%s", sinkName, planNamespace, planName, cycleID, operation)
-}
 
 // Overflow is a concurrency-safe, unbounded spillover queue.
 //

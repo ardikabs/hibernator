@@ -8,6 +8,7 @@ package ratelimit
 import (
 	"context"
 	"testing"
+	"time"
 
 	"github.com/go-logr/logr"
 	"github.com/stretchr/testify/assert"
@@ -22,8 +23,9 @@ func TestRegistryRegisterIdempotent(t *testing.T) {
 
 	key := "test-key"
 	cfg := Config{
-		RequestsPerSecond: 1,
-		Burst:             1,
+		Rate:  1.0,
+		Unit:  time.Second,
+		Burst: 1,
 	}
 
 	// Register first time
@@ -54,8 +56,9 @@ func TestRegistryRegisterDifferentKeys(t *testing.T) {
 	registry := NewRegistry(WithLogger(logr.Discard()))
 
 	cfg := Config{
-		RequestsPerSecond: 10.0,
-		Burst:             2,
+		Rate:  10.0,
+		Unit:  time.Second,
+		Burst: 2,
 	}
 
 	// Register multiple different keys
@@ -83,8 +86,9 @@ func TestRegistryLRUEviction(t *testing.T) {
 	)
 
 	cfg := Config{
-		RequestsPerSecond: 10.0,
-		Burst:             2,
+		Rate:  10.0,
+		Unit:  time.Second,
+		Burst: 2,
 	}
 
 	// Register 3 keys (at capacity)
@@ -116,8 +120,9 @@ func TestRegistryLRUAccessUpdatesOrder(t *testing.T) {
 	)
 
 	cfg := Config{
-		RequestsPerSecond: 10.0,
-		Burst:             2,
+		Rate:  10.0,
+		Unit:  time.Second,
+		Burst: 2,
 	}
 
 	// Register 3 keys
@@ -147,8 +152,9 @@ func TestRegistryRegisterUpdatesLRU(t *testing.T) {
 	)
 
 	cfg := Config{
-		RequestsPerSecond: 10.0,
-		Burst:             2,
+		Rate:  10.0,
+		Unit:  time.Second,
+		Burst: 2,
 	}
 
 	// Register 3 keys
@@ -193,12 +199,14 @@ func TestRegistryRegisterUpdatesConfig(t *testing.T) {
 
 	key := "test-key"
 	cfg1 := Config{
-		RequestsPerSecond: 10.0,
-		Burst:             2,
+		Rate:  10.0,
+		Unit:  time.Second,
+		Burst: 2,
 	}
 	cfg2 := Config{
-		RequestsPerSecond: 20.0,
-		Burst:             5,
+		Rate:  20.0,
+		Unit:  time.Second,
+		Burst: 5,
 	}
 
 	// Register first time
@@ -210,14 +218,14 @@ func TestRegistryRegisterUpdatesConfig(t *testing.T) {
 	require.NotNil(t, limiter1)
 	assert.Equal(t, cfg1, limiter1.Config(), "Initial config should match")
 
-	// Register again with different config - should update the limiter
+	// Register again with different config - should update the limiter in-place
 	registry.Register(key, cfg2)
 	require.Equal(t, 1, registry.Len(), "Should still have 1 limiter")
 
-	// Get the limiter again - should be a new instance with updated config
+	// Get the limiter again - should be the same instance with updated config
 	limiter2 := registry.Get(key)
 	require.NotNil(t, limiter2)
-	assert.NotSame(t, limiter1, limiter2, "Should return different limiter instance after config change")
+	assert.Same(t, limiter1, limiter2, "Should return same limiter instance after config change")
 	assert.Equal(t, cfg2, limiter2.Config(), "Config should be updated")
 
 	// Register again with same config - should be idempotent (no change)
@@ -225,4 +233,114 @@ func TestRegistryRegisterUpdatesConfig(t *testing.T) {
 	registry.Register(key, cfg2)
 	limiter4 := registry.Get(key)
 	assert.Same(t, limiter3, limiter4, "Should return same instance when config unchanged")
+}
+
+func TestRegistry_OperationKeyNotInLRU(t *testing.T) {
+	registry := NewRegistry(WithLogger(logr.Discard()))
+
+	// Register parent and set operation directly on the limiter
+	registry.Register("parent", Config{Rate: 10.0, Unit: time.Second, Burst: 5})
+	parent := registry.Get("parent")
+	parent.SetOperation("child", Config{Rate: 1.0, Unit: time.Second, Burst: 2})
+
+	// Operation should NOT create a separate registry entry — only parent is in LRU
+	assert.Equal(t, 1, registry.Len(), "Operation key should not be in LRU")
+	assert.True(t, registry.HasKey("parent"), "Parent should be in registry")
+	// HasKey for operation resolves to parent
+	assert.True(t, registry.HasKey("parent#child"), "Operation should resolve to parent")
+}
+
+func TestRegistry_OperationKeyGetLimiter(t *testing.T) {
+	registry := NewRegistry(WithLogger(logr.Discard()))
+
+	parentCfg := Config{Rate: 10.0, Unit: time.Second, Burst: 5}
+	childCfg := Config{Rate: 1.0, Unit: time.Second, Burst: 2}
+	registry.Register("parent", parentCfg)
+	parent := registry.Get("parent")
+	parent.SetOperation("child", childCfg)
+
+	// GetLimiter for operation should return the parent *Limiter
+	limiter := registry.GetLimiter("parent#child")
+	require.NotNil(t, limiter)
+	assert.Equal(t, parentCfg, limiter.Config(), "GetLimiter for op key should return parent limiter")
+
+	// But the parent limiter should have the operation configured
+	ctx := context.Background()
+	// First WaitOperation for child is within burst
+	require.NoError(t, limiter.WaitOperation(ctx, "child"))
+	// Second should wait because operation RPS=1, burst=2
+	// Actually burst=2, so 2nd is also fast. 3rd should wait.
+	require.NoError(t, limiter.WaitOperation(ctx, "child"))
+}
+
+func TestRegistry_OperationKeyEviction(t *testing.T) {
+	registry := NewRegistry(
+		WithLogger(logr.Discard()),
+		WithMaxKeys(2),
+	)
+
+	// Register 2 parents (at capacity) + operations for each
+	registry.Register("parent1", Config{Rate: 10.0, Unit: time.Second, Burst: 5})
+	p1 := registry.Get("parent1")
+	p1.SetOperation("child", Config{Rate: 1.0, Unit: time.Second, Burst: 2})
+
+	registry.Register("parent2", Config{Rate: 10.0, Unit: time.Second, Burst: 5})
+	p2 := registry.Get("parent2")
+	p2.SetOperation("child", Config{Rate: 1.0, Unit: time.Second, Burst: 2})
+
+	require.Equal(t, 2, registry.Len(), "Should have 2 parent limiters")
+
+	// Register a 3rd parent — should evict parent1 and its operations
+	registry.Register("parent3", Config{Rate: 10.0, Unit: time.Second, Burst: 5})
+
+	require.Equal(t, 2, registry.Len(), "Should still have 2 parent limiters")
+	assert.False(t, registry.HasKey("parent1"), "parent1 should be evicted")
+	assert.True(t, registry.HasKey("parent2"), "parent2 should still exist")
+	assert.True(t, registry.HasKey("parent3"), "parent3 should exist")
+
+	// Child of evicted parent should be gone (new parent created with defaults)
+	childLimiter := registry.Get("parent1#child")
+	assert.Equal(t, DefaultConfig().Rate, childLimiter.Config().Rate,
+		"Evicted parent's child should be recreated with defaults")
+}
+
+func TestRegistry_OperationKeyConfigUpdate(t *testing.T) {
+	registry := NewRegistry(WithLogger(logr.Discard()))
+
+	registry.Register("parent", Config{Rate: 10.0, Unit: time.Second, Burst: 5})
+	parent := registry.Get("parent")
+	parent.SetOperation("child", Config{Rate: 1.0, Unit: time.Second, Burst: 2})
+
+	// Verify operation is set
+	ctx := context.Background()
+	require.NoError(t, parent.WaitOperation(ctx, "child"))
+	require.NoError(t, parent.WaitOperation(ctx, "child"))
+
+	// Update child config
+	parent.SetOperation("child", Config{Rate: 2.0, Unit: time.Second, Burst: 4})
+
+	// Parent limiter should have updated operation in-place
+	// 3rd call should now be fast because burst was updated to 4
+	require.NoError(t, parent.WaitOperation(ctx, "child"))
+	require.NoError(t, parent.WaitOperation(ctx, "child"))
+}
+
+func TestRegistry_OperationKeyParentEvicted(t *testing.T) {
+	registry := NewRegistry(
+		WithLogger(logr.Discard()),
+		WithMaxKeys(1),
+	)
+
+	registry.Register("parent", Config{Rate: 10.0, Unit: time.Second, Burst: 5})
+	parent := registry.Get("parent")
+	parent.SetOperation("child", Config{Rate: 1.0, Unit: time.Second, Burst: 2})
+
+	// Evict parent by adding a new one
+	registry.Register("other", Config{Rate: 20.0, Unit: time.Second, Burst: 10})
+
+	// GetLimiter for child should create default parent and return it
+	limiter := registry.GetLimiter("parent#child")
+	require.NotNil(t, limiter)
+	assert.Equal(t, DefaultConfig().Rate, limiter.Config().Rate,
+		"GetLimiter should return default parent when original was evicted")
 }
