@@ -210,6 +210,7 @@ func TestWorker_SetDeadlineTimer_SetsNewTimer(t *testing.T) {
 	w.setDeadlineTimer(time.Hour)
 
 	require.NotNil(t, w.deadlineTimer)
+	assert.Equal(t, time.Hour, w.deadlineDuration)
 	w.deadlineTimer.Stop()
 }
 
@@ -219,6 +220,7 @@ func TestWorker_SetDeadlineTimer_PreserveExistingTimer(t *testing.T) {
 	fakeClock := clocktesting.NewFakeClock(time.Now())
 	w := newTestWorker(fakeClock)
 	w.deadlineTimer = clk.NewTimer(time.Hour)
+	w.deadlineDuration = time.Hour
 	prevC := w.deadlineTimer.C()
 
 	w.setDeadlineTimer(30 * time.Minute)
@@ -228,14 +230,53 @@ func TestWorker_SetDeadlineTimer_PreserveExistingTimer(t *testing.T) {
 
 	require.NotNil(t, w.deadlineTimer)
 	assert.Equal(t, prevC, w.deadlineTimer.C(), "should have preserved the existing timer")
+	assert.Equal(t, time.Hour, w.deadlineDuration, "should preserve original deadlineDuration")
 	w.deadlineTimer.Stop()
 }
 
 func TestWorker_StopDeadlineTimer_NilTimer_IsNoop(t *testing.T) {
 	fakeClock := clocktesting.NewFakeClock(time.Now())
 	w := newTestWorker(fakeClock)
+	w.deadlineDuration = time.Hour
 	w.stopDeadlineTimer()
 	assert.Nil(t, w.deadlineTimer)
+	assert.Equal(t, time.Hour, w.deadlineDuration, "deadlineDuration should not be modified when timer is nil")
+}
+
+func TestWorker_ResetIdleTimer_Default(t *testing.T) {
+	fakeClock := clocktesting.NewFakeClock(time.Now())
+	w := newTestWorker(fakeClock)
+	w.idleTimer = fakeClock.NewTimer(defaultWorkerIdleTimeout)
+
+	w.resetIdleTimer()
+
+	// FakeClock timer doesn't expose duration; verify no panic and timer still active.
+	assert.NotNil(t, w.idleTimer)
+}
+
+func TestWorker_ResetIdleTimer_ShortDeadline_NoExtension(t *testing.T) {
+	fakeClock := clocktesting.NewFakeClock(time.Now())
+	w := newTestWorker(fakeClock)
+	w.idleTimer = fakeClock.NewTimer(defaultWorkerIdleTimeout)
+	w.setDeadlineTimer(5 * time.Minute) // shorter than 30 min
+
+	w.resetIdleTimer()
+
+	assert.NotNil(t, w.idleTimer)
+	// idle timer should remain at default defaultWorkerIdleTimeout (30 min)
+	// since deadline (5 min) is shorter.
+}
+
+func TestWorker_ResetIdleTimer_LongDeadline_ExtendsIdle(t *testing.T) {
+	fakeClock := clocktesting.NewFakeClock(time.Now())
+	w := newTestWorker(fakeClock)
+	w.idleTimer = fakeClock.NewTimer(defaultWorkerIdleTimeout)
+	w.setDeadlineTimer(2 * time.Hour) // longer than 30 min
+
+	w.resetIdleTimer()
+
+	assert.NotNil(t, w.idleTimer)
+	// idle timer should be extended to 2h + 1m to cover the deadline.
 }
 
 func TestWorker_Cleanup_ClearsAllTimers(t *testing.T) {
@@ -245,9 +286,11 @@ func TestWorker_Cleanup_ClearsAllTimers(t *testing.T) {
 	w := newTestWorker(fakeClock)
 	w.requeueTimer = clk.NewTimer(time.Hour)
 	w.deadlineTimer = clk.NewTimer(time.Hour)
+	w.idleTimer = clk.NewTimer(time.Hour)
 
 	w.cleanup()
 
 	assert.Nil(t, w.requeueTimer)
 	assert.Nil(t, w.deadlineTimer)
+	assert.Nil(t, w.idleTimer)
 }

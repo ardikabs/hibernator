@@ -30,10 +30,10 @@ const (
 	// is reset to StatePending for re-dispatch.
 	consecutiveJobMissThreshold = 3
 
-	// workerIdleTimeout is the duration after which a Worker that has received no slot
-	// delivery and no timer event self-terminates. The Coordinator re-spawns it on
-	// the next delivery, keeping the goroutine pool bounded.
-	workerIdleTimeout = 30 * time.Minute
+	// defaultWorkerIdleTimeout is the default duration after which a Worker that has received no slot
+	// delivery and no timer event self-terminates. The Coordinator re-spawns it on the next delivery,
+	// keeping the goroutine pool bounded.
+	defaultWorkerIdleTimeout = 30 * time.Minute
 
 	// maxHandleDepth is the maximum allowed depth of recursive handle() calls due to Requeue=true results.
 	// This prevents unbounded recursion in the case of a misbehaving handler that always returns Requeue=true.
@@ -78,8 +78,13 @@ type Worker struct {
 	Notifier       notification.Notifier
 
 	// Timers — nil means inactive.
-	requeueTimer  clock.Timer
 	deadlineTimer clock.Timer
+	idleTimer     clock.Timer
+	requeueTimer  clock.Timer
+
+	// deadlineDuration tracks the original duration the deadline timer was armed for.
+	// Used to extend the idle timer so the goroutine stays alive until the deadline fires.
+	deadlineDuration time.Duration
 
 	// consecutiveJobMisses tracks how many consecutive poll cycles each target's
 	// runner Job has been absent while still in StateRunning. Lazily initialised
@@ -100,8 +105,8 @@ type Worker struct {
 func (s *Worker) run(ctx context.Context) {
 	defer s.cleanup()
 
-	workerIdleTimer := s.Clock.NewTimer(workerIdleTimeout)
-	defer workerIdleTimer.Stop()
+	s.idleTimer = s.Clock.NewTimer(defaultWorkerIdleTimeout)
+	defer s.idleTimer.Stop()
 
 	for {
 		select {
@@ -115,23 +120,24 @@ func (s *Worker) run(ctx context.Context) {
 			}
 			s.mergeIncoming(planCtx)
 			s.handle(ctx, s.cachedCtx, false)
-			workerIdleTimer.Reset(workerIdleTimeout)
+			s.resetIdleTimer()
 
 		case <-timerChan(s.requeueTimer):
 			s.requeueTimer = nil
 			if s.cachedCtx != nil {
 				s.handle(ctx, s.cachedCtx, false)
 			}
-			workerIdleTimer.Reset(workerIdleTimeout)
+			s.resetIdleTimer()
 
 		case <-timerChan(s.deadlineTimer):
 			s.deadlineTimer = nil
+			s.deadlineDuration = 0
 			if s.cachedCtx != nil {
 				s.handle(ctx, s.cachedCtx, true)
 			}
-			workerIdleTimer.Reset(workerIdleTimeout)
+			s.resetIdleTimer()
 
-		case <-workerIdleTimer.C():
+		case <-s.idleTimer.C():
 			s.log.V(1).Info("worker idle timeout reached, self-terminating", "plan", s.key)
 			return
 		}
@@ -339,6 +345,7 @@ func (s *Worker) stopRequeueTimer() {
 func (s *Worker) setDeadlineTimer(d time.Duration) {
 	if s.deadlineTimer == nil {
 		s.deadlineTimer = s.Clock.NewTimer(d)
+		s.deadlineDuration = d
 	}
 }
 
@@ -346,6 +353,21 @@ func (s *Worker) stopDeadlineTimer() {
 	if s.deadlineTimer != nil {
 		s.deadlineTimer.Stop()
 		s.deadlineTimer = nil
+		s.deadlineDuration = 0
+	}
+}
+
+// resetIdleTimer resets the idle timer. If a deadline is active and its duration
+// exceeds the default workerIdleTimeout, the idle timer is extended to cover the
+// deadline plus a small buffer. This prevents the goroutine from exiting before
+// a long-running deadline (e.g., a multi-hour suspend) has a chance to fire.
+func (s *Worker) resetIdleTimer() {
+	d := defaultWorkerIdleTimeout
+	if s.deadlineDuration > d {
+		d = s.deadlineDuration + time.Minute
+	}
+	if s.idleTimer != nil {
+		s.idleTimer.Reset(d)
 	}
 }
 
@@ -353,6 +375,10 @@ func (s *Worker) stopDeadlineTimer() {
 func (s *Worker) cleanup() {
 	s.stopRequeueTimer()
 	s.stopDeadlineTimer()
+	if s.idleTimer != nil {
+		s.idleTimer.Stop()
+		s.idleTimer = nil
+	}
 }
 
 // timerChan returns the channel of t, or nil if t is nil.
