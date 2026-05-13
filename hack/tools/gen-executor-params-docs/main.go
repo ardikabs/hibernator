@@ -4,10 +4,14 @@ Licensed under the Apache License, Version 2.0.
 */
 
 // gen-executor-params-docs generates a Markdown API reference page from the
-// Go struct definitions in pkg/executorparams/params.go. It uses the Go AST
-// to extract type names, field names, json tags, Go types, and doc comments,
-// then renders a Markdown file that matches the style produced by crd-ref-docs
-// for the CRD API reference.
+// Go struct definitions in pkg/executorparams/params.go and related files.
+// It uses the Go AST to extract type names, field names, json tags, Go types,
+// and doc comments, then renders a Markdown file that matches the style
+// produced by crd-ref-docs for the CRD API reference.
+//
+// The tool discovers structs from multiple packages within the same module
+// (e.g., pkg/awsutil for TagSelector) and links to well-known external types
+// (e.g., metav1.LabelSelector from k8s.io/apimachinery).
 package main
 
 import (
@@ -22,10 +26,14 @@ import (
 	"strings"
 )
 
-const (
-	sourceFile = "pkg/executorparams/params.go"
-	outputFile = "website/docs/reference/executor-parameters.md"
-)
+const outputFile = "website/docs/reference/executor-parameters.md"
+
+// sourceFiles lists all Go source files to parse for struct discovery.
+// Files are parsed in order; the first file's package comment is used as the module doc.
+var sourceFiles = []string{
+	"pkg/executorparams/params.go",
+	"pkg/awsutil/tagselector.go",
+}
 
 // executorTypes are the top-level parameter types that map to executor names.
 // Order here controls the order in the generated document.
@@ -41,6 +49,14 @@ var executorTypes = []struct {
 	{"CloudSQLParameters", "cloudsql"},
 	{"WorkloadScalerParameters", "workloadscaler"},
 	{"NoOpParameters", "noop"},
+}
+
+// externalTypes maps well-known external (non-local) fully-qualified type names
+// to their markdown representation (typically a link to upstream docs).
+// These types are referenced by executor parameters but defined in external modules.
+var externalTypes = map[string]string{
+	"metav1.LabelSelector":       `[metav1.LabelSelector](https://kubernetes.io/docs/reference/generated/kubernetes-api/v1.33/#labelselector-v1-meta)`,
+	"metav1.LabelSelectorRequirement": `[metav1.LabelSelectorRequirement](https://kubernetes.io/docs/reference/generated/kubernetes-api/v1.33/#labelselectorrequirement-v1-meta)`,
 }
 
 type structField struct {
@@ -60,17 +76,26 @@ func main() {
 	root := findModuleRoot()
 
 	fset := token.NewFileSet()
-	src := filepath.Join(root, sourceFile)
-	f, err := parser.ParseFile(fset, src, nil, parser.ParseComments)
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "error parsing %s: %v\n", src, err)
-		os.Exit(1)
+	allTypes := make(map[string]*structType)
+
+	for _, srcPath := range sourceFiles {
+		src := filepath.Join(root, srcPath)
+		f, err := parser.ParseFile(fset, src, nil, parser.ParseComments)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "error parsing %s: %v\n", src, err)
+			os.Exit(1)
+		}
+		fileTypes := extractStructs(f)
+		for name, st := range fileTypes {
+			if existing, ok := allTypes[name]; ok {
+				fmt.Fprintf(os.Stderr, "warning: type %s from %s shadows earlier definition (from %s)\n", name, srcPath, existing.Name)
+			}
+			allTypes[name] = st
+		}
 	}
 
-	types := extractStructs(f)
-
 	var buf bytes.Buffer
-	render(&buf, types)
+	render(&buf, allTypes)
 
 	out := filepath.Join(root, outputFile)
 	if err := os.MkdirAll(filepath.Dir(out), 0o755); err != nil {
@@ -230,36 +255,49 @@ func renderType(buf *bytes.Buffer, st *structType, allTypes map[string]*structTy
 	buf.WriteString("\n")
 }
 
-// renderFieldType formats a Go type for Markdown, linking to known struct types.
+// renderFieldType formats a Go type for Markdown, linking to known struct types
+// (local or external).
 func renderFieldType(goType string, allTypes map[string]*structType) string {
 	// Handle pointer types
 	isPtr := strings.HasPrefix(goType, "*")
 	base := strings.TrimPrefix(goType, "*")
 
-	// Handle package-qualified types
-	if idx := strings.LastIndex(base, "."); idx >= 0 {
-		base = base[idx+1:]
-	}
-
 	// Handle slice types
 	isSlice := strings.HasPrefix(base, "[]")
 	elem := strings.TrimPrefix(base, "[]")
 
-	// Check if the element is a known struct type
-	display := goType
-	if _, ok := allTypes[elem]; ok {
-		anchor := strings.ToLower(elem)
-		linked := fmt.Sprintf("[%s](#%s)", elem, anchor)
+	// Extract the unqualified element name (e.g., "LabelSelector" from "metav1.LabelSelector")
+	elemName := elem
+	if idx := strings.LastIndex(elem, "."); idx >= 0 {
+		elemName = elem[idx+1:]
+	}
+
+	// Check local types first
+	if _, ok := allTypes[elemName]; ok {
+		anchor := strings.ToLower(elemName)
+		linked := fmt.Sprintf("[%s](#%s)", elemName, anchor)
 		if isSlice {
 			linked = "[]" + linked
 		}
 		if isPtr {
 			linked = "*" + linked
 		}
-		display = linked
+		return fmt.Sprintf("_%s_", linked)
 	}
 
-	return fmt.Sprintf("_%s_", display)
+	// Check external types (match against the qualified name, e.g., "metav1.LabelSelector")
+	if link, ok := externalTypes[elem]; ok {
+		linked := link
+		if isSlice {
+			linked = "[]" + linked
+		}
+		if isPtr {
+			linked = "*" + linked
+		}
+		return fmt.Sprintf("_%s_", linked)
+	}
+
+	return fmt.Sprintf("_%s_", goType)
 }
 
 // referencedTypes returns type names referenced by a struct's fields that exist in allTypes.

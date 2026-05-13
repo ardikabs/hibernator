@@ -18,6 +18,7 @@ import (
 	"github.com/go-logr/logr"
 
 	"github.com/ardikabs/hibernator/internal/executor"
+	"github.com/ardikabs/hibernator/pkg/awsutil"
 	"github.com/ardikabs/hibernator/pkg/executorparams"
 	"github.com/ardikabs/hibernator/pkg/waiter"
 )
@@ -55,6 +56,19 @@ func (s *instanceStrategy) Discover(ctx context.Context, log logr.Logger, client
 		return instanceIDs, nil
 	}
 
+	// Build the effective tag selector
+	var effectiveSelector *awsutil.TagSelector
+	if selector.TagSelector != nil {
+		effectiveSelector = selector.TagSelector
+	} else if len(selector.Tags) > 0 {
+		effectiveSelector = awsutil.ToTagSelector(selector.Tags)
+	}
+
+	// For excludeTags, we need to build a negative selector
+	// But since TagSelector is expressive enough, we should have already migrated.
+	// For backward compat, if ExcludeTags is used, we fall back to old behavior.
+	usingExcludeTags := len(selector.ExcludeTags) > 0
+
 	// Apply tag-based filtering
 	for _, inst := range result.DBInstances {
 		instanceID := aws.ToString(inst.DBInstanceIdentifier)
@@ -81,14 +95,13 @@ func (s *instanceStrategy) Discover(ctx context.Context, log logr.Logger, client
 		}
 
 		// Apply tag filtering
-		if len(selector.Tags) > 0 {
-			// Include instances matching tags
-			if matchesTags(instanceTags, selector.Tags) {
+		if effectiveSelector != nil {
+			if awsutil.Match(instanceTags, effectiveSelector) {
 				instanceIDs = append(instanceIDs, instanceID)
-				log.Info("instance included (tags match)", "instanceId", instanceID, "tags", instanceTags)
+				log.Info("instance included (tagSelector match)", "instanceId", instanceID, "tags", instanceTags)
 			}
-		} else if len(selector.ExcludeTags) > 0 {
-			// Include instances NOT matching excludeTags
+		} else if usingExcludeTags {
+			// Include instances NOT matching excludeTags (backward compat)
 			if !matchesTags(instanceTags, selector.ExcludeTags) {
 				instanceIDs = append(instanceIDs, instanceID)
 				log.Info("instance included (excludeTags don't match)", "instanceId", instanceID, "tags", instanceTags)

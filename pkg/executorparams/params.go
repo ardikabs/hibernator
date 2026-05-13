@@ -14,7 +14,11 @@ Licensed under the Apache License, Version 2.0.
 //   - Pure Go types with no Kubernetes dependencies
 package executorparams
 
-import metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+import (
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+
+	"github.com/ardikabs/hibernator/pkg/awsutil"
+)
 
 // AwaitCompletion configures whether to wait for operations to complete and timeout settings.
 // When Enabled=true, executors will poll asynchronously until operations reach the desired state.
@@ -55,7 +59,12 @@ type EC2Parameters struct {
 // EC2Selector defines how to find EC2 instances.
 type EC2Selector struct {
 	// Tags filters instances by AWS resource tags.
+	// DEPRECATED: Use tagSelector for expression-based matching.
 	Tags map[string]string `json:"tags,omitempty"`
+
+	// TagSelector provides flexible expression-based tag matching.
+	// Mutually exclusive with Tags.
+	TagSelector *awsutil.TagSelector `json:"tagSelector,omitempty"`
 
 	// InstanceIDs is a list of explicit EC2 instance IDs to target.
 	InstanceIDs []string `json:"instanceIds,omitempty"`
@@ -77,7 +86,7 @@ type RDSParameters struct {
 //
 // MUTUAL EXCLUSIVITY RULES:
 // Only ONE of the following selection methods can be used:
-//  1. Tag-based selection: `tags` OR `excludeTags` (mutually exclusive with each other)
+//  1. Tag-based selection: `tags` OR `excludeTags` OR `tagSelector`
 //  2. Explicit IDs: `instanceIds` and/or `clusterIds` (intent-based, discovers exactly what you specify)
 //  3. Discovery mode: `includeAll`
 //
@@ -87,7 +96,7 @@ type RDSParameters struct {
 //   - If `clusterIds` specified → discovers clusters
 //   - If both specified → discovers both
 //
-// For dynamic discovery (`tags`/`excludeTags`/`includeAll`), `discoverInstances` and `discoverClusters`
+// For dynamic discovery (`tags`/`excludeTags`/`tagSelector`/`includeAll`), `discoverInstances` and `discoverClusters`
 // must be explicitly enabled (opt-out by default):
 //   - Neither set: no resources discovered (no-op)
 //   - `discoverInstances`: true only: discovers only DB instances
@@ -97,6 +106,7 @@ type RDSParameters struct {
 // Examples (valid):
 //   - `{tags: {"env": "prod"}, discoverInstances: true}` — tag-based, discovers only DB instances
 //   - `{excludeTags: {"critical": "true"}, discoverClusters: true}` — exclusion-based, discovers only DB clusters
+//   - `{tagSelector: {matchTags: {"env": "prod"}}, discoverInstances: true}` — expression-based
 //   - `{instanceIds: ["db-1", "db-2"], clusterIds: ["cluster-1"]}` — explicit IDs; resource types inferred from which IDs are provided
 //   - `{includeAll: true, discoverInstances: true, discoverClusters: true}` — discovers all instances and clusters in the region
 //
@@ -106,16 +116,23 @@ type RDSParameters struct {
 // Examples (invalid — rejected at validation):
 //   - `{tags: {...}, instanceIds: [...]}` — cannot mix tag-based selection with explicit IDs
 //   - `{tags: {...}, excludeTags: {...}}` — tags and excludeTags are mutually exclusive
+//   - `{tags: {...}, tagSelector: {...}}` — tags and tagSelector are mutually exclusive
 //   - `{includeAll: true, tags: {...}}` — includeAll cannot be combined with any other selector
 type RDSSelector struct {
 	// Tags for inclusion. If value is empty string "", matches any instance with that key.
 	// If value is non-empty, matches only exact key=value.
-	// Mutually exclusive with: ExcludeTags, InstanceIDs, ClusterIDs, IncludeAll.
+	// DEPRECATED: Use tagSelector for expression-based matching.
+	// Mutually exclusive with: ExcludeTags, TagSelector, InstanceIDs, ClusterIDs, IncludeAll.
 	Tags map[string]string `json:"tags,omitempty"`
 
 	// ExcludeTags for exclusion. Same logic: empty value = exclude if key exists.
-	// Mutually exclusive with: Tags, InstanceIDs, ClusterIDs, IncludeAll.
+	// DEPRECATED: Use tagSelector with DoesNotExist/NotIn operators instead.
+	// Mutually exclusive with: Tags, TagSelector, InstanceIDs, ClusterIDs, IncludeAll.
 	ExcludeTags map[string]string `json:"excludeTags,omitempty"`
+
+	// TagSelector provides flexible expression-based tag matching.
+	// Mutually exclusive with Tags and ExcludeTags.
+	TagSelector *awsutil.TagSelector `json:"tagSelector,omitempty"`
 
 	// Explicit DB instance IDs to target.
 	// Can be combined with ClusterIDs, but mutually exclusive with tag-based selection or IncludeAll.
@@ -130,12 +147,12 @@ type RDSSelector struct {
 	IncludeAll bool `json:"includeAll,omitempty"`
 
 	// DiscoverInstances controls whether to discover DB instances for dynamic selection methods.
-	// Only used with `tags`, `excludeTags`, or `includeAll` (ignored for explicit `instanceIds`/`clusterIds`).
+	// Only used with `tags`, `excludeTags`, `tagSelector`, or `includeAll` (ignored for explicit `instanceIds`/`clusterIds`).
 	// Must be explicitly set to true to discover instances. Default: false (opt-out, no-op).
 	DiscoverInstances bool `json:"discoverInstances,omitempty"`
 
 	// DiscoverClusters controls whether to discover DB clusters for dynamic selection methods.
-	// Only used with `tags`, `excludeTags`, or `includeAll` (ignored for explicit `instanceIds`/`clusterIds`).
+	// Only used with `tags`, `excludeTags`, `tagSelector`, or `includeAll` (ignored for explicit `instanceIds`/`clusterIds`).
 	// Must be explicitly set to true to discover clusters. Default: false (opt-out, no-op).
 	DiscoverClusters bool `json:"discoverClusters,omitempty"`
 }
@@ -162,7 +179,13 @@ type EKSNodeGroup struct {
 // KarpenterParameters defines the expected parameters for the Karpenter executor.
 type KarpenterParameters struct {
 	// NodePools is a list of Karpenter NodePool names to hibernate.
-	NodePools []string `json:"nodePools"`
+	// DEPRECATED: Use nodeSelector for label-based selection.
+	// Mutually exclusive with NodeSelector.
+	NodePools []string `json:"nodePools,omitempty"`
+
+	// NodeSelector selects NodePools by labels using Kubernetes LabelSelector semantics.
+	// Mutually exclusive with NodePools.
+	NodeSelector *metav1.LabelSelector `json:"nodeSelector,omitempty"`
 
 	// AwaitCompletion configures whether to wait for node pools to drain.
 	AwaitCompletion AwaitCompletion `json:"awaitCompletion"`
@@ -205,33 +228,6 @@ type NamespaceSelector struct {
 
 	// Selector is a label selector for namespaces (mutually exclusive with Literals).
 	Selector map[string]string `json:"selector,omitempty"`
-}
-
-// LabelSelector defines a label selector for Kubernetes resources.
-type LabelSelector struct {
-	// MatchLabels is a map of {key,value} pairs. A single {key,value} in the matchLabels
-	// map is equivalent to an element of matchExpressions, whose key field is "key", the
-	// operator is "In", and the values array contains only "value".
-	MatchLabels map[string]string `json:"matchLabels,omitempty"`
-
-	// MatchExpressions is a list of label selector requirements. The requirements are ANDed.
-	MatchExpressions []LabelSelectorRequirement `json:"matchExpressions,omitempty"`
-}
-
-// LabelSelectorRequirement is a selector that contains values, a key, and an operator that
-// relates the key and values.
-type LabelSelectorRequirement struct {
-	// Key is the label key that the selector applies to.
-	Key string `json:"key"`
-
-	// Operator represents a key's relationship to a set of values.
-	// Valid operators are In, NotIn, Exists and DoesNotExist.
-	Operator string `json:"operator"`
-
-	// Values is an array of string values. If the operator is In or NotIn,
-	// the values array must be non-empty. If the operator is Exists or DoesNotExist,
-	// the values array must be empty.
-	Values []string `json:"values,omitempty"`
 }
 
 // NoOpParameters defines the expected parameters for the noop executor.

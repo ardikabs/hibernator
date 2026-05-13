@@ -813,6 +813,186 @@ func TestShutdown_DynamicDiscovery_TagKeyOnly(t *testing.T) {
 	mockRDS.AssertExpectations(t)
 }
 
+func TestShutdown_DynamicDiscovery_TagSelector_Matches(t *testing.T) {
+	ctx := context.Background()
+	mockRDS := &mocks.RDSClient{}
+	mockSTS := &mocks.STSClient{}
+
+	// Mock for tag selector with Matches operator
+	mockRDS.On("DescribeDBInstances", mock.Anything, &rds.DescribeDBInstancesInput{}).Return(&rds.DescribeDBInstancesOutput{
+		DBInstances: []types.DBInstance{
+			{
+				DBInstanceIdentifier: aws.String("app-prod-01"),
+				DBInstanceStatus:     aws.String("available"),
+				DBInstanceClass:      aws.String("db.t3.small"),
+				DBInstanceArn:        aws.String("arn:aws:rds:us-east-1:123456789012:db:app-prod-01"),
+			},
+			{
+				DBInstanceIdentifier: aws.String("db-prod-01"),
+				DBInstanceStatus:     aws.String("available"),
+				DBInstanceClass:      aws.String("db.t3.small"),
+				DBInstanceArn:        aws.String("arn:aws:rds:us-east-1:123456789012:db:db-prod-01"),
+			},
+		},
+	}, nil)
+
+	// app-prod-01 has Name=app-prod-01 (matches app-*)
+	mockRDS.On("ListTagsForResource", mock.Anything, &rds.ListTagsForResourceInput{
+		ResourceName: aws.String("arn:aws:rds:us-east-1:123456789012:db:app-prod-01"),
+	}).Return(&rds.ListTagsForResourceOutput{
+		TagList: []types.Tag{
+			{Key: aws.String("Name"), Value: aws.String("app-prod-01")},
+		},
+	}, nil)
+
+	// db-prod-01 has Name=db-prod-01 (doesn't match app-*)
+	mockRDS.On("ListTagsForResource", mock.Anything, &rds.ListTagsForResourceInput{
+		ResourceName: aws.String("arn:aws:rds:us-east-1:123456789012:db:db-prod-01"),
+	}).Return(&rds.ListTagsForResourceOutput{
+		TagList: []types.Tag{
+			{Key: aws.String("Name"), Value: aws.String("db-prod-01")},
+		},
+	}, nil)
+
+	// Get instance details before stopping
+	mockRDS.On("DescribeDBInstances", mock.Anything, &rds.DescribeDBInstancesInput{
+		DBInstanceIdentifier: aws.String("app-prod-01"),
+	}).Return(&rds.DescribeDBInstancesOutput{
+		DBInstances: []types.DBInstance{
+			{
+				DBInstanceIdentifier: aws.String("app-prod-01"),
+				DBInstanceStatus:     aws.String("available"),
+				DBInstanceClass:      aws.String("db.t3.small"),
+			},
+		},
+	}, nil)
+
+	mockRDS.On("StopDBInstance", mock.Anything, &rds.StopDBInstanceInput{
+		DBInstanceIdentifier: aws.String("app-prod-01"),
+	}).Return(&rds.StopDBInstanceOutput{}, nil)
+
+	e := NewWithClients(
+		func(cfg aws.Config) RDSClient { return mockRDS },
+		func(cfg aws.Config) STSClient { return mockSTS },
+		nil,
+	)
+
+	spec := executor.Spec{
+		TargetName: "test-tagselector-matches",
+		TargetType: "rds",
+		Parameters: json.RawMessage(`{"selector": {"tagSelector": {"matchExpressions": [{"key": "Name", "operator": "Matches", "values": ["app-*"]}]}, "discoverInstances": true}}`),
+		ConnectorConfig: executor.ConnectorConfig{
+			AWS: &executor.AWSConnectorConfig{Region: "us-east-1"},
+		},
+	}
+
+	_, err := e.Shutdown(ctx, logr.Discard(), spec)
+	assert.NoError(t, err)
+
+	mockRDS.AssertExpectations(t)
+}
+
+func TestShutdown_DynamicDiscovery_TagSelector_Exists(t *testing.T) {
+	ctx := context.Background()
+	mockRDS := &mocks.RDSClient{}
+	mockSTS := &mocks.STSClient{}
+
+	// Mock for tag selector with Exists operator
+	mockRDS.On("DescribeDBInstances", mock.Anything, &rds.DescribeDBInstancesInput{}).Return(&rds.DescribeDBInstancesOutput{
+		DBInstances: []types.DBInstance{
+			{
+				DBInstanceIdentifier: aws.String("instance-with-tag"),
+				DBInstanceStatus:     aws.String("available"),
+				DBInstanceClass:      aws.String("db.t3.small"),
+				DBInstanceArn:        aws.String("arn:aws:rds:us-east-1:123456789012:db:instance-with-tag"),
+			},
+			{
+				DBInstanceIdentifier: aws.String("instance-no-tag"),
+				DBInstanceStatus:     aws.String("available"),
+				DBInstanceClass:      aws.String("db.t3.small"),
+				DBInstanceArn:        aws.String("arn:aws:rds:us-east-1:123456789012:db:instance-no-tag"),
+			},
+		},
+	}, nil)
+
+	// instance-with-tag has Hibernate tag
+	mockRDS.On("ListTagsForResource", mock.Anything, &rds.ListTagsForResourceInput{
+		ResourceName: aws.String("arn:aws:rds:us-east-1:123456789012:db:instance-with-tag"),
+	}).Return(&rds.ListTagsForResourceOutput{
+		TagList: []types.Tag{
+			{Key: aws.String("Hibernate"), Value: aws.String("true")},
+		},
+	}, nil)
+
+	// instance-no-env has no Hibernate tag
+	mockRDS.On("ListTagsForResource", mock.Anything, &rds.ListTagsForResourceInput{
+		ResourceName: aws.String("arn:aws:rds:us-east-1:123456789012:db:instance-no-tag"),
+	}).Return(&rds.ListTagsForResourceOutput{
+		TagList: []types.Tag{},
+	}, nil)
+
+	// Get instance details before stopping
+	mockRDS.On("DescribeDBInstances", mock.Anything, &rds.DescribeDBInstancesInput{
+		DBInstanceIdentifier: aws.String("instance-with-tag"),
+	}).Return(&rds.DescribeDBInstancesOutput{
+		DBInstances: []types.DBInstance{
+			{
+				DBInstanceIdentifier: aws.String("instance-with-tag"),
+				DBInstanceStatus:     aws.String("available"),
+				DBInstanceClass:      aws.String("db.t3.small"),
+			},
+		},
+	}, nil)
+
+	mockRDS.On("StopDBInstance", mock.Anything, &rds.StopDBInstanceInput{
+		DBInstanceIdentifier: aws.String("instance-with-tag"),
+	}).Return(&rds.StopDBInstanceOutput{}, nil)
+
+	e := NewWithClients(
+		func(cfg aws.Config) RDSClient { return mockRDS },
+		func(cfg aws.Config) STSClient { return mockSTS },
+		nil,
+	)
+
+	spec := executor.Spec{
+		TargetName: "test-tagselector-exists",
+		TargetType: "rds",
+		Parameters: json.RawMessage(`{"selector": {"tagSelector": {"matchExpressions": [{"key": "Hibernate", "operator": "Exists"}]}, "discoverInstances": true}}`),
+		ConnectorConfig: executor.ConnectorConfig{
+			AWS: &executor.AWSConnectorConfig{Region: "us-east-1"},
+		},
+	}
+
+	_, err := e.Shutdown(ctx, logr.Discard(), spec)
+	assert.NoError(t, err)
+
+	mockRDS.AssertExpectations(t)
+}
+
+func TestValidate_TagSelectorAndOldTags_MutualExclusivity(t *testing.T) {
+	mockRDS := &mocks.RDSClient{}
+	mockSTS := &mocks.STSClient{}
+
+	e := NewWithClients(
+		func(cfg aws.Config) RDSClient { return mockRDS },
+		func(cfg aws.Config) STSClient { return mockSTS },
+		nil,
+	)
+
+	spec := executor.Spec{
+		TargetName: "test-mutual-exclusive",
+		TargetType: "rds",
+		Parameters: json.RawMessage(`{"selector": {"tags": {"env": "prod"}, "tagSelector": {"matchTags": {"env": "prod"}}, "discoverInstances": true}}`),
+		ConnectorConfig: executor.ConnectorConfig{
+			AWS: &executor.AWSConnectorConfig{Region: "us-east-1"},
+		},
+	}
+
+	err := e.Validate(spec)
+	assert.Error(t, err)
+	assert.Contains(t, err.Error(), "mutually exclusive")
+}
+
 func TestParameters_JSON(t *testing.T) {
 	params := Parameters{
 		SnapshotBeforeStop: true,

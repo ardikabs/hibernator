@@ -122,6 +122,14 @@ func (e *Executor) Validate(spec executor.Spec) error {
 		}
 	}
 
+	// NodePools and NodeSelector are mutually exclusive
+	hasNodePools := len(params.NodePools) > 0
+	hasNodeSelector := params.NodeSelector != nil && (len(params.NodeSelector.MatchLabels) > 0 || len(params.NodeSelector.MatchExpressions) > 0)
+
+	if hasNodePools && hasNodeSelector {
+		return fmt.Errorf("nodePools and nodeSelector are mutually exclusive")
+	}
+
 	return nil
 }
 
@@ -142,7 +150,8 @@ func (e *Executor) Shutdown(ctx context.Context, log logr.Logger, spec executor.
 
 	log.Info("parameters parsed",
 		"nodePoolCount", len(params.NodePools),
-		"isAllNodePools", len(params.NodePools) == 0,
+		"hasNodeSelector", params.NodeSelector != nil,
+		"isAllNodePools", len(params.NodePools) == 0 && params.NodeSelector == nil,
 	)
 
 	// Build clients using injected factory
@@ -154,7 +163,20 @@ func (e *Executor) Shutdown(ctx context.Context, log logr.Logger, spec executor.
 
 	// Determine target NodePools
 	targetNodePools := params.NodePools
-	if len(targetNodePools) == 0 {
+	if params.NodeSelector != nil {
+		// Use label selector to discover NodePools
+		log.Info("discovering NodePools by label selector")
+		selector, err := metav1.LabelSelectorAsSelector(params.NodeSelector)
+		if err != nil {
+			return nil, fmt.Errorf("invalid nodeSelector: %w", err)
+		}
+		discovered, err := e.listNodePoolsBySelector(ctx, client, selector.String())
+		if err != nil {
+			log.Error(err, "failed to list NodePools by selector")
+			return nil, fmt.Errorf("list NodePools by selector: %w", err)
+		}
+		targetNodePools = discovered
+	} else if len(targetNodePools) == 0 {
 		// Empty nodePools means all NodePools in the cluster
 		log.Info("discovering all NodePools in cluster")
 		discovered, err := e.listAllNodePools(ctx, client)
@@ -338,6 +360,27 @@ func (e *Executor) listAllNodePools(ctx context.Context, client Client) ([]strin
 	list, err := client.Resource(nodePoolGVR).List(ctx, metav1.ListOptions{})
 	if err != nil {
 		return nil, fmt.Errorf("list NodePools: %w", err)
+	}
+
+	var names []string
+	for _, item := range list.Items {
+		names = append(names, item.GetName())
+	}
+
+	return names, nil
+}
+
+// listNodePoolsBySelector discovers Karpenter NodePools matching the given label selector.
+func (e *Executor) listNodePoolsBySelector(ctx context.Context, client Client, labelSelector string) ([]string, error) {
+	nodePoolGVR := schema.GroupVersionResource{
+		Group:    "karpenter.sh",
+		Version:  "v1",
+		Resource: "nodepools",
+	}
+
+	list, err := client.Resource(nodePoolGVR).List(ctx, metav1.ListOptions{LabelSelector: labelSelector})
+	if err != nil {
+		return nil, fmt.Errorf("list NodePools by selector: %w", err)
 	}
 
 	var names []string

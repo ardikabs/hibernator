@@ -726,3 +726,92 @@ func TestNodePoolState_AllFields(t *testing.T) {
 	assert.NotNil(t, decoded.Labels)
 	assert.Equal(t, "premium", decoded.Labels["tier"])
 }
+
+func TestShutdown_NodeSelector_LabelMatch(t *testing.T) {
+	ctx := context.Background()
+	mockClient := mocks.NewClient(t)
+
+	gvr := schema.GroupVersionResource{
+		Group:    "karpenter.sh",
+		Version:  "v1",
+		Resource: "nodepools",
+	}
+
+	// Create fake dynamic client with labeled NodePools
+	scheme := runtime.NewScheme()
+	defaultPool := &unstructured.Unstructured{
+		Object: map[string]interface{}{
+			"apiVersion": "karpenter.sh/v1",
+			"kind":       "NodePool",
+			"metadata": map[string]interface{}{
+				"name": "default",
+				"labels": map[string]interface{}{
+					"hibernator.ardikabs.com/enabled": "true",
+				},
+			},
+			"spec": map[string]interface{}{
+				"limits": map[string]interface{}{"cpu": "1000"},
+			},
+		},
+	}
+	spotPool := &unstructured.Unstructured{
+		Object: map[string]interface{}{
+			"apiVersion": "karpenter.sh/v1",
+			"kind":       "NodePool",
+			"metadata": map[string]interface{}{
+				"name": "spot",
+				"labels": map[string]interface{}{
+					"hibernator.ardikabs.com/enabled": "false",
+				},
+			},
+			"spec": map[string]interface{}{
+				"limits": map[string]interface{}{"cpu": "500"},
+			},
+		},
+	}
+
+	fakeDynamic := dynamicfake.NewSimpleDynamicClient(scheme, defaultPool, spotPool)
+
+	// Mock Resource to return the fake dynamic resource interface
+	mockClient.On("Resource", gvr).Return(fakeDynamic.Resource(gvr))
+
+	// ListNode should NOT be called when awaitCompletion is disabled
+	// No mock setup for ListNode
+
+	e := NewWithClients(func(ctx context.Context, spec *executor.Spec) (Client, error) {
+		return mockClient, nil
+	})
+
+	spec := executor.Spec{
+		TargetName: "test-nodepools",
+		TargetType: "karpenter",
+		Parameters: json.RawMessage(`{"nodeSelector": {"matchLabels": {"hibernator.ardikabs.com/enabled": "true"}}}`),
+		ConnectorConfig: executor.ConnectorConfig{
+			K8S: &executor.K8SConnectorConfig{ClusterName: "test-cluster", Region: "us-east-1"},
+		},
+	}
+
+	result, err := e.Shutdown(ctx, logr.Discard(), spec)
+	assert.NoError(t, err)
+	assert.NotNil(t, result)
+	assert.Contains(t, result.Message, "scaled down 1 Karpenter NodePool(s)")
+
+	mockClient.AssertExpectations(t)
+}
+
+func TestValidate_NodeSelectorAndNodePools_MutualExclusivity(t *testing.T) {
+	e := New()
+
+	spec := executor.Spec{
+		TargetName: "test-mutual-exclusive",
+		TargetType: "karpenter",
+		Parameters: json.RawMessage(`{"nodePools": ["default"], "nodeSelector": {"matchLabels": {"env": "prod"}}}`),
+		ConnectorConfig: executor.ConnectorConfig{
+			K8S: &executor.K8SConnectorConfig{ClusterName: "test-cluster", Region: "us-east-1"},
+		},
+	}
+
+	err := e.Validate(spec)
+	assert.Error(t, err)
+	assert.Contains(t, err.Error(), "mutually exclusive")
+}
