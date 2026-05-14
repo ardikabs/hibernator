@@ -6,6 +6,7 @@ Licensed under the Apache License, Version 2.0.
 package plan
 
 import (
+	"context"
 	"testing"
 	"time"
 
@@ -28,7 +29,7 @@ import (
 // ---------------------------------------------------------------------------
 
 func newTestWorker(clk clock.Clock) *Worker {
-	return &Worker{
+	w := &Worker{
 		Infrastructure: state.Infrastructure{
 			Clock: clk,
 		},
@@ -37,6 +38,20 @@ func newTestWorker(clk clock.Clock) *Worker {
 		slot:     keyedworker.LatestWinsSlot[*message.PlanContext]()(),
 		Statuses: newTestStatuses(),
 	}
+	w.timers = NewTimerSet(logr.Discard(), w.Clock, defaultWorkerIdleTimeout, TimerHooks{
+		OnRequeue: func(_ context.Context, planCtx *message.PlanContext) {
+			if planCtx != nil {
+				w.handle(nil, planCtx, false)
+			}
+		},
+		OnDeadline: func(_ context.Context, planCtx *message.PlanContext) {
+			if planCtx != nil {
+				w.handle(nil, planCtx, true)
+			}
+		},
+		OnInactivity: func() {},
+	})
+	return w
 }
 
 func planCtxWithPhase(phase hibernatorv1alpha1.PlanPhase) *message.PlanContext {
@@ -149,148 +164,130 @@ func TestWorker_ResetConsecutiveJobMiss_NilMap_IsNoop(t *testing.T) {
 	w.resetConsecutiveJobMiss("target-a")
 }
 
-func TestTimerChan_NilTimer_ReturnsNil(t *testing.T) {
-	assert.Nil(t, timerChan(nil))
-}
-
-func TestTimerChan_ActiveTimer_ReturnsChannel(t *testing.T) {
-	clk := &clock.RealClock{}
-	timer := clk.NewTimer(time.Hour)
-	defer timer.Stop()
-	assert.NotNil(t, timerChan(timer))
-}
-
 // ---------------------------------------------------------------------------
-// Worker — timer helpers
+// Worker — timer helpers via TimerSet
 // ---------------------------------------------------------------------------
 
-func TestWorker_StopRequeue_NilTimer_IsNoop(t *testing.T) {
+func TestWorker_TimerSet_StopRequeue_NilTimer_IsNoop(t *testing.T) {
 	fakeClock := clocktesting.NewFakeClock(time.Now())
 	w := newTestWorker(fakeClock)
-	// Must not panic when pollTimer is nil.
-	w.stopRequeueTimer()
-	assert.Nil(t, w.requeueTimer)
+	// Must not panic when requeue timer is nil.
+	w.timers.StopRequeue()
+	assert.False(t, w.timers.Requeue.IsArmed())
 }
 
-func TestWorker_StopRequeueTimer_ActiveTimer_StopsAndNils(t *testing.T) {
+func TestWorker_TimerSet_SetRequeueTimer_SetsNewTimer(t *testing.T) {
 	fakeClock := clocktesting.NewFakeClock(time.Now())
 	w := newTestWorker(fakeClock)
-	w.setRequeueTimer(time.Hour)
-	w.stopRequeueTimer()
-	assert.Nil(t, w.requeueTimer)
+	w.timers.SetRequeue(time.Hour)
+
+	require.True(t, w.timers.Requeue.IsArmed())
+	w.timers.StopRequeue() // cleanup
 }
 
-func TestWorker_SetRequeueTimer_SetsNewTimer(t *testing.T) {
-	fakeClock := clocktesting.NewFakeClock(time.Now())
-	w := newTestWorker(fakeClock)
-	w.setRequeueTimer(time.Hour)
-
-	require.NotNil(t, w.requeueTimer)
-	w.requeueTimer.Stop() // cleanup
-}
-
-func TestWorker_SetRequeueTimer_ReplacesExistingTimer(t *testing.T) {
+func TestWorker_TimerSet_SetRequeueTimer_ReplacesExistingTimer(t *testing.T) {
 	clk := &clock.RealClock{}
 
 	fakeClock := clocktesting.NewFakeClock(time.Now())
 	w := newTestWorker(fakeClock)
-	w.requeueTimer = clk.NewTimer(time.Hour)
-	prevC := w.requeueTimer.C()
+	w.timers.Requeue = NewSchedule(clk, "requeue")
+	w.timers.Requeue.Arm(time.Hour)
+	prevC := w.timers.Requeue.C()
 
-	w.setRequeueTimer(2 * time.Hour)
+	w.timers.SetRequeue(2 * time.Hour)
 
-	require.NotNil(t, w.requeueTimer)
-	assert.NotEqual(t, prevC, w.requeueTimer.C(), "should have created a new timer")
-	w.requeueTimer.Stop()
+	require.True(t, w.timers.Requeue.IsArmed())
+	assert.NotEqual(t, prevC, w.timers.Requeue.C(), "should have created a new timer")
+	w.timers.StopRequeue()
 }
 
-func TestWorker_SetDeadlineTimer_SetsNewTimer(t *testing.T) {
+func TestWorker_TimerSet_SetDeadlineTimer_SetsNewTimer(t *testing.T) {
 	fakeClock := clocktesting.NewFakeClock(time.Now())
 	w := newTestWorker(fakeClock)
-	w.setDeadlineTimer(time.Hour)
+	w.timers.SetDeadline(time.Hour)
 
-	require.NotNil(t, w.deadlineTimer)
-	assert.Equal(t, time.Hour, w.deadlineDuration)
-	w.deadlineTimer.Stop()
+	require.True(t, w.timers.Deadline.IsArmed())
+	assert.Equal(t, time.Hour, w.timers.Deadline.Duration())
+
+	w.timers.StopDeadline()
 }
 
-func TestWorker_SetDeadlineTimer_PreserveExistingTimer(t *testing.T) {
+func TestWorker_TimerSet_SetDeadlineTimer_AlwaysReplaces(t *testing.T) {
 	clk := &clock.RealClock{}
 
 	fakeClock := clocktesting.NewFakeClock(time.Now())
 	w := newTestWorker(fakeClock)
-	w.deadlineTimer = clk.NewTimer(time.Hour)
-	w.deadlineDuration = time.Hour
-	prevC := w.deadlineTimer.C()
+	w.timers.Deadline = NewSchedule(clk, "deadline")
+	w.timers.Deadline.Arm(time.Hour)
+	prevC := w.timers.Deadline.C()
 
-	w.setDeadlineTimer(30 * time.Minute)
-	w.setDeadlineTimer(15 * time.Minute)
-	w.setDeadlineTimer(16 * time.Minute)
-	w.setDeadlineTimer(17 * time.Minute)
+	w.timers.SetDeadline(30 * time.Minute)
 
-	require.NotNil(t, w.deadlineTimer)
-	assert.Equal(t, prevC, w.deadlineTimer.C(), "should have preserved the existing timer")
-	assert.Equal(t, time.Hour, w.deadlineDuration, "should preserve original deadlineDuration")
-	w.deadlineTimer.Stop()
+	require.True(t, w.timers.Deadline.IsArmed())
+	assert.NotEqual(t, prevC, w.timers.Deadline.C(), "should have replaced the existing timer")
+	assert.Equal(t, 30*time.Minute, w.timers.Deadline.Duration(), "should use the new deadline duration")
+	w.timers.StopDeadline()
 }
 
-func TestWorker_StopDeadlineTimer_NilTimer_IsNoop(t *testing.T) {
+func TestWorker_TimerSet_StopDeadlineTimer_NilTimer_IsNoop(t *testing.T) {
 	fakeClock := clocktesting.NewFakeClock(time.Now())
 	w := newTestWorker(fakeClock)
-	w.deadlineDuration = time.Hour
-	w.stopDeadlineTimer()
-	assert.Nil(t, w.deadlineTimer)
-	assert.Equal(t, time.Hour, w.deadlineDuration, "deadlineDuration should not be modified when timer is nil")
+	// Must not panic when deadline timer is not armed.
+	w.timers.StopDeadline()
+	assert.False(t, w.timers.Deadline.IsArmed())
 }
 
-func TestWorker_ResetIdleTimer_Default(t *testing.T) {
+func TestWorker_TimerSet_KeepAlive_Default(t *testing.T) {
 	fakeClock := clocktesting.NewFakeClock(time.Now())
 	w := newTestWorker(fakeClock)
-	w.idleTimer = fakeClock.NewTimer(defaultWorkerIdleTimeout)
+	w.timers.Inactivity.Arm(defaultWorkerIdleTimeout)
 
-	w.resetIdleTimer()
+	w.timers.KeepAlive()
 
 	// FakeClock timer doesn't expose duration; verify no panic and timer still active.
-	assert.NotNil(t, w.idleTimer)
+	assert.True(t, w.timers.Inactivity.IsArmed())
 }
 
-func TestWorker_ResetIdleTimer_ShortDeadline_NoExtension(t *testing.T) {
+func TestWorker_TimerSet_KeepAlive_ShortDeadline_NoExtension(t *testing.T) {
 	fakeClock := clocktesting.NewFakeClock(time.Now())
 	w := newTestWorker(fakeClock)
-	w.idleTimer = fakeClock.NewTimer(defaultWorkerIdleTimeout)
-	w.setDeadlineTimer(5 * time.Minute) // shorter than 30 min
+	w.timers.Inactivity.Arm(defaultWorkerIdleTimeout)
+	w.timers.SetDeadline(5 * time.Minute) // shorter than 30 min
 
-	w.resetIdleTimer()
+	w.timers.KeepAlive()
 
-	assert.NotNil(t, w.idleTimer)
-	// idle timer should remain at default defaultWorkerIdleTimeout (30 min)
+	assert.True(t, w.timers.Inactivity.IsArmed())
+	// inactivity timer should remain at default defaultWorkerIdleTimeout (30 min)
 	// since deadline (5 min) is shorter.
 }
 
-func TestWorker_ResetIdleTimer_LongDeadline_ExtendsIdle(t *testing.T) {
+func TestWorker_TimerSet_KeepAlive_LongDeadline_ExtendsInactivity(t *testing.T) {
 	fakeClock := clocktesting.NewFakeClock(time.Now())
 	w := newTestWorker(fakeClock)
-	w.idleTimer = fakeClock.NewTimer(defaultWorkerIdleTimeout)
-	w.setDeadlineTimer(2 * time.Hour) // longer than 30 min
+	w.timers.Inactivity.Arm(defaultWorkerIdleTimeout)
+	w.timers.SetDeadline(2 * time.Hour) // longer than 30 min
 
-	w.resetIdleTimer()
+	w.timers.KeepAlive()
 
-	assert.NotNil(t, w.idleTimer)
-	// idle timer should be extended to 2h + 1m to cover the deadline.
+	assert.True(t, w.timers.Inactivity.IsArmed())
+	// inactivity timer should be extended to 2h + 1m to cover the deadline.
 }
 
-func TestWorker_Cleanup_ClearsAllTimers(t *testing.T) {
+func TestWorker_TimerSet_Cleanup_ClearsAllTimers(t *testing.T) {
 	clk := &clock.RealClock{}
 
 	fakeClock := clocktesting.NewFakeClock(time.Now())
 	w := newTestWorker(fakeClock)
-	w.requeueTimer = clk.NewTimer(time.Hour)
-	w.deadlineTimer = clk.NewTimer(time.Hour)
-	w.idleTimer = clk.NewTimer(time.Hour)
+	w.timers.Requeue = NewSchedule(clk, "requeue")
+	w.timers.Requeue.Arm(time.Hour)
+	w.timers.Deadline = NewSchedule(clk, "deadline")
+	w.timers.Deadline.Arm(time.Hour)
+	w.timers.Inactivity = NewSchedule(clk, "inactivity")
+	w.timers.Inactivity.Arm(time.Hour)
 
-	w.cleanup()
+	w.timers.Cleanup()
 
-	assert.Nil(t, w.requeueTimer)
-	assert.Nil(t, w.deadlineTimer)
-	assert.Nil(t, w.idleTimer)
+	assert.False(t, w.timers.Requeue.IsArmed())
+	assert.False(t, w.timers.Deadline.IsArmed())
+	assert.False(t, w.timers.Inactivity.IsArmed())
 }

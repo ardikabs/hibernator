@@ -11,7 +11,6 @@ import (
 
 	"github.com/go-logr/logr"
 	"k8s.io/apimachinery/pkg/types"
-	"k8s.io/utils/clock"
 
 	hibernatorv1alpha1 "github.com/ardikabs/hibernator/api/v1alpha1"
 	"github.com/ardikabs/hibernator/internal/message"
@@ -77,14 +76,8 @@ type Worker struct {
 	Statuses       *statusprocessor.ControllerStatuses
 	Notifier       notification.Notifier
 
-	// Timers — nil means inactive.
-	deadlineTimer clock.Timer
-	idleTimer     clock.Timer
-	requeueTimer  clock.Timer
-
-	// deadlineDuration tracks the original duration the deadline timer was armed for.
-	// Used to extend the idle timer so the goroutine stays alive until the deadline fires.
-	deadlineDuration time.Duration
+	// timers encapsulates all timer lifecycle management.
+	timers *TimerSet
 
 	// consecutiveJobMisses tracks how many consecutive poll cycles each target's
 	// runner Job has been absent while still in StateRunning. Lazily initialised
@@ -92,21 +85,37 @@ type Worker struct {
 	consecutiveJobMisses map[string]int
 }
 
-// run is the worker's event loop. It blocks on five event sources:
+// run is the worker's event loop. It blocks on three event sources:
 //
 //   - slot.ready    — a new PlanContext was delivered by the coordinator (latest-wins).
-//   - requeueTimer  — re-drives the current phase while runner Jobs are in-flight, and
-//     fires after exponential backoff when the plan is in PhaseError.
-//   - deadlineTimer — fires when a suspend-until deadline expires.
-//   - idleTimer     — fires when the worker has been idle for workerIdleTimeout.
+//   - timers.C()    — multiplexed timer events from TimerSet (requeue, deadline, idle).
 //
 // On each event the worker builds a fresh planState for the current phase and calls
-// Handle(ctx). A nil timer channel never fires, so inactive timers are represented as nil.
+// Handle(ctx).
 func (s *Worker) run(ctx context.Context) {
-	defer s.cleanup()
+	s.timers = NewTimerSet(s.log.WithName("timerset"), s.Clock, defaultWorkerIdleTimeout, TimerHooks{
+		OnDeadline: func(ctx context.Context, planCtx *message.PlanContext) {
+			if planCtx != nil {
+				s.handle(ctx, planCtx, true)
+			}
+		},
+		OnInactivity: func() {
+			s.log.V(1).Info("worker inactivity timeout reached, self-terminating", "plan", s.key)
+		},
+		OnRequeue: func(ctx context.Context, planCtx *message.PlanContext) {
+			if planCtx != nil {
+				s.handle(ctx, planCtx, false)
+			}
+		},
+		OnTimeout: func(ctx context.Context, planCtx *message.PlanContext) {
+			if planCtx != nil {
+				s.handle(ctx, planCtx, true)
+			}
+		},
+	})
 
-	s.idleTimer = s.Clock.NewTimer(defaultWorkerIdleTimeout)
-	defer s.idleTimer.Stop()
+	s.timers.Start()
+	defer s.timers.Stop()
 
 	for {
 		select {
@@ -120,26 +129,12 @@ func (s *Worker) run(ctx context.Context) {
 			}
 			s.mergeIncoming(planCtx)
 			s.handle(ctx, s.cachedCtx, false)
-			s.resetIdleTimer()
+			s.timers.KeepAlive()
 
-		case <-timerChan(s.requeueTimer):
-			s.requeueTimer = nil
-			if s.cachedCtx != nil {
-				s.handle(ctx, s.cachedCtx, false)
+		case fn := <-s.timers.C():
+			if !fn(ctx, s.cachedCtx) {
+				return
 			}
-			s.resetIdleTimer()
-
-		case <-timerChan(s.deadlineTimer):
-			s.deadlineTimer = nil
-			s.deadlineDuration = 0
-			if s.cachedCtx != nil {
-				s.handle(ctx, s.cachedCtx, true)
-			}
-			s.resetIdleTimer()
-
-		case <-s.idleTimer.C():
-			s.log.V(1).Info("worker idle timeout reached, self-terminating", "plan", s.key)
-			return
 		}
 	}
 }
@@ -227,13 +222,12 @@ func (s *Worker) handleWithDepth(ctx context.Context, planCtx *message.PlanConte
 	if result.Requeue {
 		// Phase transition: cancel all timers then immediately re-evaluate.
 		// The next phase arms its own timers via its first Handle() call.
-		s.stopRequeueTimer()
-		s.stopDeadlineTimer()
+		s.timers.Reset()
 		s.handleWithDepth(ctx, planCtx, false, depth+1)
 		return
 	}
 
-	s.applyTimers(result)
+	s.timers.Apply(result)
 }
 
 // trackConsecutiveJobMiss increments the consecutive-miss counter for target and returns
@@ -303,89 +297,4 @@ func (s *Worker) mergeIncoming(incoming *message.PlanContext) {
 
 	s.cachedCtx = incoming
 	s.cachedCtx.Plan.Status = status
-}
-
-// ---------------------------------------------------------------------------
-// Timer helpers
-// ---------------------------------------------------------------------------
-
-// applyTimers applies the non-Requeue timer directives from a StateResult.
-// Zero RequeueAfter cancels the poll timer; zero TimeoutAfter and DeadlineAfter
-// cancel the deadline timer. See StateResult for the full contract.
-func (s *Worker) applyTimers(result state.StateResult) {
-	if result.RequeueAfter > 0 {
-		s.setRequeueTimer(result.RequeueAfter)
-	} else {
-		s.stopRequeueTimer()
-	}
-
-	switch {
-	case result.TimeoutAfter > 0:
-		s.setDeadlineTimer(result.TimeoutAfter) // arm-once: no-op if already running
-	case result.DeadlineAfter > 0:
-		s.stopDeadlineTimer()
-		s.deadlineTimer = s.Clock.NewTimer(result.DeadlineAfter) // always-override
-	default:
-		s.stopDeadlineTimer()
-	}
-}
-
-func (s *Worker) setRequeueTimer(d time.Duration) {
-	s.stopRequeueTimer()
-	s.requeueTimer = s.Clock.NewTimer(d)
-}
-
-func (s *Worker) stopRequeueTimer() {
-	if s.requeueTimer != nil {
-		s.requeueTimer.Stop()
-		s.requeueTimer = nil
-	}
-}
-
-func (s *Worker) setDeadlineTimer(d time.Duration) {
-	if s.deadlineTimer == nil {
-		s.deadlineTimer = s.Clock.NewTimer(d)
-		s.deadlineDuration = d
-	}
-}
-
-func (s *Worker) stopDeadlineTimer() {
-	if s.deadlineTimer != nil {
-		s.deadlineTimer.Stop()
-		s.deadlineTimer = nil
-		s.deadlineDuration = 0
-	}
-}
-
-// resetIdleTimer resets the idle timer. If a deadline is active and its duration
-// exceeds the default workerIdleTimeout, the idle timer is extended to cover the
-// deadline plus a small buffer. This prevents the goroutine from exiting before
-// a long-running deadline (e.g., a multi-hour suspend) has a chance to fire.
-func (s *Worker) resetIdleTimer() {
-	d := defaultWorkerIdleTimeout
-	if s.deadlineDuration > d {
-		d = s.deadlineDuration + time.Minute
-	}
-	if s.idleTimer != nil {
-		s.idleTimer.Reset(d)
-	}
-}
-
-// cleanup cancels all active timers when the worker exits.
-func (s *Worker) cleanup() {
-	s.stopRequeueTimer()
-	s.stopDeadlineTimer()
-	if s.idleTimer != nil {
-		s.idleTimer.Stop()
-		s.idleTimer = nil
-	}
-}
-
-// timerChan returns the channel of t, or nil if t is nil.
-// A nil channel never selects, so inactive timers effectively disable their case.
-func timerChan(t clock.Timer) <-chan time.Time {
-	if t == nil {
-		return nil
-	}
-	return t.C()
 }
