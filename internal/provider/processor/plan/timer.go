@@ -205,7 +205,6 @@ func (ts *TimerSet) loop(ctx context.Context) {
 			return
 		case <-ts.notify:
 			// A timer was armed or disarmed; re-evaluate all channels.
-			ts.log.V(1).Info("poke received, re-evaluating timer channels")
 		case <-ts.Requeue.C():
 			ts.send(ts.Requeue.Name, func(ctx context.Context, planCtx *message.PlanContext) bool {
 				ts.Requeue.Disarm()
