@@ -130,14 +130,6 @@ func (a *Accumulator) flush(ctx context.Context) error {
 
 	log := a.log.WithValues("plan", fmt.Sprintf("%s/%s", a.namespace, a.plan), "target", a.target)
 
-    // If no callbacks were invoked, preserve existing restore data.
-    // This prevents the staleness mechanism from invalidating data
-    // saved by a prior run (critical for delete-based executors like Karpenter).
-    if len(a.state) == 0 && len(a.reportedAt) == 0 {
-        log.Info("no state accumulated, skipping flush to preserve existing restore data")
-        return nil
-    }
-
 	const maxStaleCount = 3
 
 	now := metav1.Now()
