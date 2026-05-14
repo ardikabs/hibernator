@@ -100,6 +100,32 @@ targets:
         timeout: "10m"
 ```
 
+### Select NodePools by Labels
+
+Use `nodeSelector` to dynamically discover NodePools by their Kubernetes labels, just like `workloadSelector` in the WorkloadScaler executor:
+
+```yaml
+targets:
+  - name: hibernatable-pools
+    type: karpenter
+    connectorRef:
+      kind: K8SCluster
+      name: eks-production
+    parameters:
+      nodeSelector:
+        matchLabels:
+          hibernator.ardikabs.com/enabled: "true"
+        matchExpressions:
+          - key: karpenter.sh/capacity-type
+            operator: In
+            values: ["spot", "on-demand"]
+      awaitCompletion:
+        enabled: true
+```
+
+!!! note
+    `nodePools` and `nodeSelector` are mutually exclusive — use one or the other.
+
 ### Protect Critical NodePools
 
 To hibernate most pools while keeping a critical one running, list only the non-critical pools explicitly:

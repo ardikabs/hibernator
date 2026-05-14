@@ -580,3 +580,87 @@ func TestValidateParams_WorkloadScaler_Valid_ComplexSelector(t *testing.T) {
 		t.Errorf("expected no errors, got: %v", result.Errors)
 	}
 }
+
+func TestValidateParams_EC2_TagSelector_Valid(t *testing.T) {
+	params := []byte(`{"selector": {"tagSelector": {"matchExpressions": [{"key": "Name", "operator": "Matches", "values": ["app-*"]}]}}}`)
+	result := ValidateParams("ec2", params)
+
+	if result == nil {
+		t.Fatal("expected non-nil result")
+	}
+	if result.HasErrors() {
+		t.Errorf("expected no errors, got: %v", result.Errors)
+	}
+}
+
+func TestValidateParams_EC2_TagSelectorAndTags_MutualExclusivity(t *testing.T) {
+	params := []byte(`{"selector": {"tags": {"env": "prod"}, "tagSelector": {"matchTags": {"env": "prod"}}}}`)
+	result := ValidateParams("ec2", params)
+
+	if result == nil {
+		t.Fatal("expected non-nil result")
+	}
+	if !result.HasErrors() {
+		t.Error("expected errors for mutually exclusive tags and tagSelector")
+	}
+}
+
+func TestValidateParams_EC2_TagsAndInstanceIDs_MutualExclusivity(t *testing.T) {
+	params := []byte(`{"selector": {"tags": {"env": "prod"}, "instanceIds": ["i-1234567890abcdef0"]}}`)
+	result := ValidateParams("ec2", params)
+
+	if result == nil {
+		t.Fatal("expected non-nil result")
+	}
+	if !result.HasErrors() {
+		t.Error("expected errors for mutually exclusive tags and instanceIds")
+	}
+}
+
+func TestValidateParams_RDS_TagSelector_Valid(t *testing.T) {
+	params := []byte(`{"selector": {"tagSelector": {"matchExpressions": [{"key": "env", "operator": "In", "values": ["dev", "staging"]}]}, "discoverInstances": true}}`)
+	result := ValidateParams("rds", params)
+
+	if result == nil {
+		t.Fatal("expected non-nil result")
+	}
+	if result.HasErrors() {
+		t.Errorf("expected no errors, got: %v", result.Errors)
+	}
+}
+
+func TestValidateParams_RDS_TagSelectorAndTags_MutualExclusivity(t *testing.T) {
+	params := []byte(`{"selector": {"tags": {"env": "prod"}, "tagSelector": {"matchTags": {"env": "prod"}}, "discoverInstances": true}}`)
+	result := ValidateParams("rds", params)
+
+	if result == nil {
+		t.Fatal("expected non-nil result")
+	}
+	if !result.HasErrors() {
+		t.Error("expected errors for mutually exclusive tags and tagSelector")
+	}
+}
+
+func TestValidateParams_Karpenter_NodeSelector_Valid(t *testing.T) {
+	params := []byte(`{"nodeSelector": {"matchLabels": {"hibernator.ardikabs.com/enabled": "true"}}}`)
+	result := ValidateParams("karpenter", params)
+
+	if result == nil {
+		t.Fatal("expected non-nil result")
+	}
+	if result.HasErrors() {
+		t.Errorf("expected no errors, got: %v", result.Errors)
+	}
+}
+
+func TestValidateParams_Karpenter_NodeSelectorAndNodePools_MutualExclusivity(t *testing.T) {
+	params := []byte(`{"nodePools": ["default"], "nodeSelector": {"matchLabels": {"env": "prod"}}}`)
+	result := ValidateParams("karpenter", params)
+
+	if result == nil {
+		t.Fatal("expected non-nil result")
+	}
+	if !result.HasErrors() {
+		t.Error("expected errors for mutually exclusive nodePools and nodeSelector")
+	}
+}

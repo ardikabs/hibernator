@@ -86,6 +86,48 @@ targets:
 
 Tags are matched with AND logic — an instance must have **all** specified tag key-value pairs. If a tag value is an empty string, the executor matches any instance with that tag key regardless of value.
 
+### Select by Tag Patterns (Expression-Based)
+
+Use `tagSelector` for more flexible matching with glob patterns and logical operators:
+
+```yaml
+targets:
+  - name: app-servers
+    type: ec2
+    connectorRef:
+      kind: CloudProvider
+      name: aws-production
+    parameters:
+      selector:
+        tagSelector:
+          matchTags:
+            Name: "app-*-prod"
+          matchExpressions:
+            - key: Team
+              operator: In
+              values: ["backend", "frontend"]
+            - key: Critical
+              operator: DoesNotExist
+      awaitCompletion:
+        enabled: true
+```
+
+Supported operators:
+
+| Operator | Behavior |
+|---|---|
+| `In` | Tag value is in the provided list |
+| `NotIn` | Tag value is NOT in the provided list |
+| `Exists` | Tag key exists (any value) |
+| `DoesNotExist` | Tag key does not exist |
+| `Matches` | Tag value matches a glob pattern (`*`, `?`) |
+| `NotMatches` | Tag value does NOT match any glob pattern |
+
+`matchTags` values support AWS-native wildcards (`*`). `matchExpressions` are evaluated with AND logic.
+
+!!! note
+    `tags` and `tagSelector` are mutually exclusive — use one or the other.
+
 ### Select by Instance IDs
 
 Target specific instances by their IDs:

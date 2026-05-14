@@ -166,15 +166,18 @@ func (e *Executor) Validate(spec executor.Spec) error {
 		return err
 	}
 
+	hasTagSelector := params.Selector.TagSelector != nil && (len(params.Selector.TagSelector.MatchTags) > 0 || len(params.Selector.TagSelector.MatchExpressions) > 0)
+
 	// Validate selector - at least one selection method required
 	hasSelection := len(params.Selector.Tags) > 0 ||
 		len(params.Selector.ExcludeTags) > 0 ||
+		hasTagSelector ||
 		len(params.Selector.InstanceIds) > 0 ||
 		len(params.Selector.ClusterIds) > 0 ||
 		params.Selector.IncludeAll
 
 	if !hasSelection {
-		return fmt.Errorf("selector must specify at least one of: tags, excludeTags, InstanceIds, ClusterIds, or includeAll")
+		return fmt.Errorf("selector must specify at least one of: tags, excludeTags, tagSelector, InstanceIds, ClusterIds, or includeAll")
 	}
 
 	// Tags and ExcludeTags are mutually exclusive
@@ -182,11 +185,16 @@ func (e *Executor) Validate(spec executor.Spec) error {
 		return fmt.Errorf("selector.tags and selector.excludeTags are mutually exclusive")
 	}
 
+	// TagSelector is mutually exclusive with Tags and ExcludeTags
+	if hasTagSelector && (len(params.Selector.Tags) > 0 || len(params.Selector.ExcludeTags) > 0) {
+		return fmt.Errorf("selector.tagSelector is mutually exclusive with selector.tags and selector.excludeTags")
+	}
+
 	// IncludeAll cannot be combined with other selection methods
 	if params.Selector.IncludeAll {
-		if len(params.Selector.Tags) > 0 || len(params.Selector.ExcludeTags) > 0 ||
+		if len(params.Selector.Tags) > 0 || len(params.Selector.ExcludeTags) > 0 || hasTagSelector ||
 			len(params.Selector.InstanceIds) > 0 || len(params.Selector.ClusterIds) > 0 {
-			return fmt.Errorf("selector.includeAll cannot be combined with tags, excludeTags, InstanceIds, or ClusterIds")
+			return fmt.Errorf("selector.includeAll cannot be combined with tags, excludeTags, tagSelector, InstanceIds, or ClusterIds")
 		}
 	}
 

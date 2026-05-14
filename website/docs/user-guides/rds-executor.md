@@ -119,6 +119,47 @@ parameters:
 !!! note
     `tags` and `excludeTags` are mutually exclusive — you cannot use both in the same selector.
 
+### Mode 2b: Expression-Based Tag Selection
+
+For more flexible matching, use `tagSelector` with operators and glob patterns:
+
+```yaml
+parameters:
+  selector:
+    tagSelector:
+      matchTags:
+        Environment: "staging-*"
+      matchExpressions:
+        - key: Team
+          operator: In
+          values: ["backend", "frontend"]
+        - key: Critical
+          operator: DoesNotExist
+    discoverInstances: true
+    discoverClusters: false
+```
+
+Supported operators:
+
+| Operator | Behavior |
+|---|---|
+| `In` | Tag value is in the provided list |
+| `NotIn` | Tag value is NOT in the provided list |
+| `Exists` | Tag key exists (any value) |
+| `DoesNotExist` | Tag key does not exist |
+| `Matches` | Tag value matches a glob pattern (`*`, `?`) |
+| `NotMatches` | Tag value does NOT match any glob pattern |
+
+!!! note
+    `tagSelector` is mutually exclusive with `tags` and `excludeTags`.
+
+#### Migrating from `excludeTags` to `tagSelector`
+
+| Old (`excludeTags`) | New (`tagSelector`) |
+|---|---|
+| `excludeTags: {Critical: "true"}` | `matchExpressions: [{key: Critical, operator: DoesNotExist}]` |
+| `excludeTags: {Env: "prod"}` | `matchExpressions: [{key: Env, operator: NotIn, values: ["prod"]}]` |
+
 ### Mode 3: Include All
 
 Discover all databases in the account and region:

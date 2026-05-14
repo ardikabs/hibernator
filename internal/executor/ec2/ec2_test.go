@@ -69,7 +69,7 @@ func TestValidate_MissingSelector(t *testing.T) {
 	}
 	err := e.Validate(spec)
 	assert.Error(t, err)
-	assert.Contains(t, err.Error(), "either tags or instanceIds must be specified")
+	assert.Contains(t, err.Error(), "either tags, tagSelector, or instanceIds must be specified")
 }
 
 func TestValidate_WithTags(t *testing.T) {
@@ -597,4 +597,148 @@ func TestWakeUp_SkipsAlreadyRunningInstances(t *testing.T) {
 	assert.Contains(t, result.Message, "started 1 EC2 instance(s)")
 
 	mockEC2.AssertExpectations(t)
+}
+
+func TestShutdown_TagSelector_MatchesWildcard(t *testing.T) {
+	ctx := context.Background()
+	mockEC2 := &mocks.EC2Client{}
+
+	// Mock DescribeInstances - no tag filters when using TagSelector
+	mockEC2.On("DescribeInstances", mock.Anything, mock.Anything).Return(&awsec2.DescribeInstancesOutput{
+		Reservations: []types.Reservation{
+			{
+				Instances: []types.Instance{
+					{
+						InstanceId: aws.String("i-app-prod-01"),
+						State: &types.InstanceState{
+							Name: types.InstanceStateNameRunning,
+						},
+						Tags: []types.Tag{
+							{Key: aws.String("Name"), Value: aws.String("app-prod-01")},
+						},
+					},
+					{
+						InstanceId: aws.String("i-db-prod-01"),
+						State: &types.InstanceState{
+							Name: types.InstanceStateNameRunning,
+						},
+						Tags: []types.Tag{
+							{Key: aws.String("Name"), Value: aws.String("db-prod-01")},
+						},
+					},
+				},
+			},
+		},
+	}, nil)
+
+	// Only app-* instances should be stopped
+	mockEC2.On("StopInstances", mock.Anything, &awsec2.StopInstancesInput{
+		InstanceIds: []string{"i-app-prod-01"},
+	}).Return(&awsec2.StopInstancesOutput{}, nil)
+
+	ec2Factory := func(cfg aws.Config) EC2Client { return mockEC2 }
+	e := NewWithClients(ec2Factory, nil)
+
+	spec := executor.Spec{
+		TargetName: "test-tagselector",
+		TargetType: "ec2",
+		Parameters: json.RawMessage(`{"selector": {"tagSelector": {"matchExpressions": [{"key": "Name", "operator": "Matches", "values": ["app-*"]}]}}}`),
+		ConnectorConfig: executor.ConnectorConfig{
+			AWS: &executor.AWSConnectorConfig{Region: "us-east-1"},
+		},
+	}
+
+	result, err := e.Shutdown(ctx, logr.Discard(), spec)
+	assert.NoError(t, err)
+	assert.NotNil(t, result)
+	assert.Contains(t, result.Message, "stopped 1 of 1 EC2 instance(s)")
+
+	mockEC2.AssertExpectations(t)
+}
+
+func TestShutdown_TagSelector_Exists(t *testing.T) {
+	ctx := context.Background()
+	mockEC2 := &mocks.EC2Client{}
+
+	mockEC2.On("DescribeInstances", mock.Anything, mock.Anything).Return(&awsec2.DescribeInstancesOutput{
+		Reservations: []types.Reservation{
+			{
+				Instances: []types.Instance{
+					{
+						InstanceId: aws.String("i-with-tag"),
+						State: &types.InstanceState{
+							Name: types.InstanceStateNameRunning,
+						},
+						Tags: []types.Tag{
+							{Key: aws.String("Hibernate"), Value: aws.String("true")},
+						},
+					},
+					{
+						InstanceId: aws.String("i-without-tag"),
+						State: &types.InstanceState{
+							Name: types.InstanceStateNameRunning,
+						},
+						Tags: []types.Tag{},
+					},
+				},
+			},
+		},
+	}, nil)
+
+	mockEC2.On("StopInstances", mock.Anything, &awsec2.StopInstancesInput{
+		InstanceIds: []string{"i-with-tag"},
+	}).Return(&awsec2.StopInstancesOutput{}, nil)
+
+	ec2Factory := func(cfg aws.Config) EC2Client { return mockEC2 }
+	e := NewWithClients(ec2Factory, nil)
+
+	spec := executor.Spec{
+		TargetName: "test-tagselector-exists",
+		TargetType: "ec2",
+		Parameters: json.RawMessage(`{"selector": {"tagSelector": {"matchExpressions": [{"key": "Hibernate", "operator": "Exists"}]}}}`),
+		ConnectorConfig: executor.ConnectorConfig{
+			AWS: &executor.AWSConnectorConfig{Region: "us-east-1"},
+		},
+	}
+
+	result, err := e.Shutdown(ctx, logr.Discard(), spec)
+	assert.NoError(t, err)
+	assert.NotNil(t, result)
+	assert.Contains(t, result.Message, "stopped 1 of 1 EC2 instance(s)")
+
+	mockEC2.AssertExpectations(t)
+}
+
+func TestValidate_TagSelectorAndOldTags_MutualExclusivity(t *testing.T) {
+	e := New()
+
+	spec := executor.Spec{
+		TargetName: "test-mutual-exclusive",
+		TargetType: "ec2",
+		Parameters: json.RawMessage(`{"selector": {"tags": {"env": "prod"}, "tagSelector": {"matchTags": {"env": "prod"}}}}`),
+		ConnectorConfig: executor.ConnectorConfig{
+			AWS: &executor.AWSConnectorConfig{Region: "us-east-1"},
+		},
+	}
+
+	err := e.Validate(spec)
+	assert.Error(t, err)
+	assert.Contains(t, err.Error(), "mutually exclusive")
+}
+
+func TestValidate_TagsAndInstanceIDs_MutualExclusivity(t *testing.T) {
+	e := New()
+
+	spec := executor.Spec{
+		TargetName: "test-mutual-exclusive",
+		TargetType: "ec2",
+		Parameters: json.RawMessage(`{"selector": {"tags": {"env": "prod"}, "instanceIds": ["i-1234567890abcdef0"]}}`),
+		ConnectorConfig: executor.ConnectorConfig{
+			AWS: &executor.AWSConnectorConfig{Region: "us-east-1"},
+		},
+	}
+
+	err := e.Validate(spec)
+	assert.Error(t, err)
+	assert.Contains(t, err.Error(), "selector.tags and selector.instanceIds are mutually exclusive")
 }

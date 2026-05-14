@@ -51,7 +51,8 @@ KarpenterParameters defines the expected parameters for the Karpenter executor.
 
 | Field | Type | Description |
 | ----- | ---- | ----------- |
-| `nodePools` | _[]string_ | NodePools is a list of Karpenter NodePool names to hibernate. |
+| `nodePools` | _[]string_ | NodePools is a list of Karpenter NodePool names to hibernate.<br />DEPRECATED: Use nodeSelector for label-based selection.<br />Mutually exclusive with NodeSelector. |
+| `nodeSelector` | _*[metav1.LabelSelector](https://kubernetes.io/docs/reference/generated/kubernetes-api/v1.33/#labelselector-v1-meta)_ | NodeSelector selects NodePools by labels using Kubernetes LabelSelector semantics.<br />Mutually exclusive with NodePools. |
 | `awaitCompletion` | _[AwaitCompletion](#awaitcompletion)_ | AwaitCompletion configures whether to wait for node pools to drain. |
 
 ### EC2Parameters
@@ -67,12 +68,32 @@ EC2Parameters defines the expected parameters for the EC2 executor.
 
 ### EC2Selector
 
-EC2Selector defines how to find EC2 instances.
+EC2Selector defines how to find EC2 instances.<br /><br />SELECTION METHODS (mutually exclusive server-side filters):<br />- Tags: server-side filter via AWS DescribeInstances Filters<br />- InstanceIDs: server-side filter via explicit InstanceIds<br /><br />CLIENT-SIDE FILTER:<br />- TagSelector: applied AFTER instances are fetched. Can be used alone or combined<br />with InstanceIDs, but is mutually exclusive with Tags.<br /><br />At least one selection method must be specified.
 
 | Field | Type | Description |
 | ----- | ---- | ----------- |
-| `tags` | _map[string]string_ | Tags filters instances by AWS resource tags. |
-| `instanceIds` | _[]string_ | InstanceIDs is a list of explicit EC2 instance IDs to target. |
+| `tags` | _map[string]string_ | Tags filters instances by AWS resource tags using DescribeInstances Filters.<br />Applied server-side before instances are returned.<br />Mutually exclusive with InstanceIDs (both are server-side filters). |
+| `tagSelector` | _*[TagSelector](#tagselector)_ | TagSelector provides flexible expression-based tag matching.<br />Applied client-side after instances are fetched.<br />Mutually exclusive with Tags. |
+| `instanceIds` | _[]string_ | InstanceIDs is a list of explicit EC2 instance IDs to target.<br />Applied server-side via DescribeInstances InstanceIds.<br />Mutually exclusive with Tags (both are server-side filters). |
+
+### TagSelector
+
+TagSelector defines how to select AWS resources by tags.
+
+| Field | Type | Description |
+| ----- | ---- | ----------- |
+| `matchTags` | _map[string]string_ | MatchTags is a map of {key,value} pairs. A single {key,value} is equivalent to<br />a MatchExpression with operator "In" and a single value.<br />Empty value means match any value for that key (Exists semantics). |
+| `matchExpressions` | _[][TagSelectorRequirement](#tagselectorrequirement)_ | MatchExpressions is a list of tag selector requirements. The requirements are ANDed. |
+
+### TagSelectorRequirement
+
+TagSelectorRequirement is a selector that contains values, a key, and an operator that<br />relates the key and values.
+
+| Field | Type | Description |
+| ----- | ---- | ----------- |
+| `key` | _string_ | Key is the tag key that the selector applies to. |
+| `operator` | _string_ | Operator represents a key's relationship to a set of values.<br />Valid operators are `In`, `NotIn`, `Exists`, `DoesNotExist`, `Matches`, and `NotMatches`. |
+| `values` | _[]string_ | Values is an array of string values. If the operator is `In`, `NotIn`, `Matches`, or `NotMatches`,<br />the values array must be non-empty. If the operator is `Exists` or `DoesNotExist`,<br />the values array must be empty. |
 
 ### RDSParameters
 
@@ -88,17 +109,18 @@ RDSParameters defines the expected parameters for the RDS executor.
 
 ### RDSSelector
 
-RDSSelector defines how to find RDS instances and clusters.<br /><br />MUTUAL EXCLUSIVITY RULES:<br />Only ONE of the following selection methods can be used:<br />1. Tag-based selection: `tags` OR `excludeTags` (mutually exclusive with each other)<br />2. Explicit IDs: `instanceIds` and/or `clusterIds` (intent-based, discovers exactly what you specify)<br />3. Discovery mode: `includeAll`<br /><br />RESOURCE TYPE CONTROL:<br />For intent-based selection (`instanceIds`/`clusterIds`), resource types are implicit:<br />- If `instanceIds` specified → discovers instances<br />- If `clusterIds` specified → discovers clusters<br />- If both specified → discovers both<br /><br />For dynamic discovery (`tags`/`excludeTags`/`includeAll`), `discoverInstances` and `discoverClusters`<br />must be explicitly enabled (opt-out by default):<br />- Neither set: no resources discovered (no-op)<br />- `discoverInstances`: true only: discovers only DB instances<br />- `discoverClusters`: true only: discovers only DB clusters<br />- Both true: discovers both instances and clusters<br /><br />Examples (valid):<br />- `{tags: {"env": "prod"}, discoverInstances: true}` — tag-based, discovers only DB instances<br />- `{excludeTags: {"critical": "true"}, discoverClusters: true}` — exclusion-based, discovers only DB clusters<br />- `{instanceIds: ["db-1", "db-2"], clusterIds: ["cluster-1"]}` — explicit IDs; resource types inferred from which IDs are provided<br />- `{includeAll: true, discoverInstances: true, discoverClusters: true}` — discovers all instances and clusters in the region<br /><br />Examples (no-op — nothing will be discovered):<br />- `{tags: {"env": "prod"}}` — tag-based selection requires at least one of `discoverInstances` or `discoverClusters`<br /><br />Examples (invalid — rejected at validation):<br />- `{tags: {...}, instanceIds: [...]}` — cannot mix tag-based selection with explicit IDs<br />- `{tags: {...}, excludeTags: {...}}` — tags and excludeTags are mutually exclusive<br />- `{includeAll: true, tags: {...}}` — includeAll cannot be combined with any other selector
+RDSSelector defines how to find RDS instances and clusters.<br /><br />MUTUAL EXCLUSIVITY RULES:<br />Only ONE of the following selection methods can be used:<br />1. Tag-based selection: `tags` OR `excludeTags` OR `tagSelector`<br />2. Explicit IDs: `instanceIds` and/or `clusterIds` (intent-based, discovers exactly what you specify)<br />3. Discovery mode: `includeAll`<br /><br />RESOURCE TYPE CONTROL:<br />For intent-based selection (`instanceIds`/`clusterIds`), resource types are implicit:<br />- If `instanceIds` specified → discovers instances<br />- If `clusterIds` specified → discovers clusters<br />- If both specified → discovers both<br /><br />For dynamic discovery (`tags`/`excludeTags`/`tagSelector`/`includeAll`), `discoverInstances` and `discoverClusters`<br />must be explicitly enabled (opt-out by default):<br />- Neither set: no resources discovered (no-op)<br />- `discoverInstances`: true only: discovers only DB instances<br />- `discoverClusters`: true only: discovers only DB clusters<br />- Both true: discovers both instances and clusters<br /><br />Examples (valid):<br />- `{tags: {"env": "prod"}, discoverInstances: true}` — tag-based, discovers only DB instances<br />- `{excludeTags: {"critical": "true"}, discoverClusters: true}` — exclusion-based, discovers only DB clusters<br />- `{tagSelector: {matchTags: {"env": "prod"}}, discoverInstances: true}` — expression-based<br />- `{instanceIds: ["db-1", "db-2"], clusterIds: ["cluster-1"]}` — explicit IDs; resource types inferred from which IDs are provided<br />- `{includeAll: true, discoverInstances: true, discoverClusters: true}` — discovers all instances and clusters in the region<br /><br />Examples (no-op — nothing will be discovered):<br />- `{tags: {"env": "prod"}}` — tag-based selection requires at least one of `discoverInstances` or `discoverClusters`<br /><br />Examples (invalid — rejected at validation):<br />- `{tags: {...}, instanceIds: [...]}` — cannot mix tag-based selection with explicit IDs<br />- `{tags: {...}, excludeTags: {...}}` — tags and excludeTags are mutually exclusive<br />- `{tags: {...}, tagSelector: {...}}` — tags and tagSelector are mutually exclusive<br />- `{includeAll: true, tags: {...}}` — includeAll cannot be combined with any other selector
 
 | Field | Type | Description |
 | ----- | ---- | ----------- |
-| `tags` | _map[string]string_ | Tags for inclusion. If value is empty string "", matches any instance with that key.<br />If value is non-empty, matches only exact key=value.<br />Mutually exclusive with: ExcludeTags, InstanceIDs, ClusterIDs, IncludeAll. |
-| `excludeTags` | _map[string]string_ | ExcludeTags for exclusion. Same logic: empty value = exclude if key exists.<br />Mutually exclusive with: Tags, InstanceIDs, ClusterIDs, IncludeAll. |
+| `tags` | _map[string]string_ | Tags for inclusion. If value is empty string "", matches any instance with that key.<br />If value is non-empty, matches only exact key=value.<br />DEPRECATED: Use tagSelector for expression-based matching.<br />Mutually exclusive with: ExcludeTags, TagSelector, InstanceIDs, ClusterIDs, IncludeAll. |
+| `excludeTags` | _map[string]string_ | ExcludeTags for exclusion. Same logic: empty value = exclude if key exists.<br />DEPRECATED: Use tagSelector with DoesNotExist/NotIn operators instead.<br />Mutually exclusive with: Tags, TagSelector, InstanceIDs, ClusterIDs, IncludeAll. |
+| `tagSelector` | _*[TagSelector](#tagselector)_ | TagSelector provides flexible expression-based tag matching.<br />Mutually exclusive with Tags and ExcludeTags. |
 | `instanceIds` | _[]string_ | Explicit DB instance IDs to target.<br />Can be combined with ClusterIDs, but mutually exclusive with tag-based selection or IncludeAll. |
 | `clusterIds` | _[]string_ | Explicit DB cluster IDs to target.<br />Can be combined with InstanceIDs, but mutually exclusive with tag-based selection or IncludeAll. |
 | `includeAll` | _bool_ | IncludeAll discovers all DB instances and clusters in the account/region.<br />Mutually exclusive with all other selection methods. |
-| `discoverInstances` | _bool_ | DiscoverInstances controls whether to discover DB instances for dynamic selection methods.<br />Only used with `tags`, `excludeTags`, or `includeAll` (ignored for explicit `instanceIds`/`clusterIds`).<br />Must be explicitly set to true to discover instances. Default: false (opt-out, no-op). |
-| `discoverClusters` | _bool_ | DiscoverClusters controls whether to discover DB clusters for dynamic selection methods.<br />Only used with `tags`, `excludeTags`, or `includeAll` (ignored for explicit `instanceIds`/`clusterIds`).<br />Must be explicitly set to true to discover clusters. Default: false (opt-out, no-op). |
+| `discoverInstances` | _bool_ | DiscoverInstances controls whether to discover DB instances for dynamic selection methods.<br />Only used with `tags`, `excludeTags`, `tagSelector`, or `includeAll` (ignored for explicit `instanceIds`/`clusterIds`).<br />Must be explicitly set to true to discover instances. Default: false (opt-out, no-op). |
+| `discoverClusters` | _bool_ | DiscoverClusters controls whether to discover DB clusters for dynamic selection methods.<br />Only used with `tags`, `excludeTags`, `tagSelector`, or `includeAll` (ignored for explicit `instanceIds`/`clusterIds`).<br />Must be explicitly set to true to discover clusters. Default: false (opt-out, no-op). |
 
 ### GKEParameters
 
@@ -131,7 +153,7 @@ WorkloadScalerParameters defines the expected parameters for the workloadscaler 
 | ----- | ---- | ----------- |
 | `includedGroups` | _[]string_ | IncludedGroups specifies which workload kinds to scale. Defaults to [Deployment]. |
 | `namespace` | _[NamespaceSelector](#namespaceselector)_ | Namespace specifies the namespace scope for discovery (exactly one must be set). |
-| `workloadSelector` | _*[LabelSelector](#labelselector)_ | WorkloadSelector filters workloads by labels (optional). |
+| `workloadSelector` | _*[metav1.LabelSelector](https://kubernetes.io/docs/reference/generated/kubernetes-api/v1.33/#labelselector-v1-meta)_ | WorkloadSelector filters workloads by labels (optional). |
 | `awaitCompletion` | _[AwaitCompletion](#awaitcompletion)_ | AwaitCompletion controls whether to wait for replica counts to match desired state. |
 
 ### NamespaceSelector
@@ -142,25 +164,6 @@ NamespaceSelector defines how to select namespaces.
 | ----- | ---- | ----------- |
 | `literals` | _[]string_ | Literals is a list of explicit namespace names. |
 | `selector` | _map[string]string_ | Selector is a label selector for namespaces (mutually exclusive with Literals). |
-
-### LabelSelector
-
-LabelSelector defines a label selector for Kubernetes resources.
-
-| Field | Type | Description |
-| ----- | ---- | ----------- |
-| `matchLabels` | _map[string]string_ | MatchLabels is a map of {key,value} pairs. A single {key,value} in the matchLabels<br />map is equivalent to an element of matchExpressions, whose key field is "key", the<br />operator is "In", and the values array contains only "value". |
-| `matchExpressions` | _[][LabelSelectorRequirement](#labelselectorrequirement)_ | MatchExpressions is a list of label selector requirements. The requirements are ANDed. |
-
-### LabelSelectorRequirement
-
-LabelSelectorRequirement is a selector that contains values, a key, and an operator that<br />relates the key and values.
-
-| Field | Type | Description |
-| ----- | ---- | ----------- |
-| `key` | _string_ | Key is the label key that the selector applies to. |
-| `operator` | _string_ | Operator represents a key's relationship to a set of values.<br />Valid operators are In, NotIn, Exists and DoesNotExist. |
-| `values` | _[]string_ | Values is an array of string values. If the operator is In or NotIn,<br />the values array must be non-empty. If the operator is Exists or DoesNotExist,<br />the values array must be empty. |
 
 ### NoOpParameters
 

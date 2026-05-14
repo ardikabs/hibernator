@@ -17,6 +17,7 @@ import (
 	"github.com/go-logr/logr"
 
 	"github.com/ardikabs/hibernator/internal/executor"
+	"github.com/ardikabs/hibernator/pkg/awsutil"
 	"github.com/ardikabs/hibernator/pkg/executorparams"
 	"github.com/ardikabs/hibernator/pkg/waiter"
 )
@@ -54,6 +55,17 @@ func (s *clusterStrategy) Discover(ctx context.Context, log logr.Logger, client 
 		return clusterIDs, nil
 	}
 
+	// Build the effective tag selector
+	var effectiveSelector *awsutil.TagSelector
+	if selector.TagSelector != nil {
+		effectiveSelector = selector.TagSelector
+	} else if len(selector.Tags) > 0 {
+		effectiveSelector = awsutil.ToTagSelector(selector.Tags)
+	}
+
+	// For backward compat with ExcludeTags
+	usingExcludeTags := len(selector.ExcludeTags) > 0
+
 	// Apply tag-based filtering
 	for _, cluster := range result.DBClusters {
 		clusterID := aws.ToString(cluster.DBClusterIdentifier)
@@ -74,14 +86,13 @@ func (s *clusterStrategy) Discover(ctx context.Context, log logr.Logger, client 
 		}
 
 		// Apply tag filtering
-		if len(selector.Tags) > 0 {
-			// Include clusters matching tags
-			if matchesTags(clusterTags, selector.Tags) {
+		if effectiveSelector != nil {
+			if awsutil.Match(clusterTags, effectiveSelector) {
 				clusterIDs = append(clusterIDs, clusterID)
-				log.Info("cluster included (tags match)", "clusterId", clusterID, "tags", clusterTags)
+				log.Info("cluster included (tagSelector match)", "clusterId", clusterID, "tags", clusterTags)
 			}
-		} else if len(selector.ExcludeTags) > 0 {
-			// Include clusters NOT matching excludeTags
+		} else if usingExcludeTags {
+			// Include clusters NOT matching excludeTags (backward compat)
 			if !matchesTags(clusterTags, selector.ExcludeTags) {
 				clusterIDs = append(clusterIDs, clusterID)
 				log.Info("cluster included (excludeTags don't match)", "clusterId", clusterID, "tags", clusterTags)

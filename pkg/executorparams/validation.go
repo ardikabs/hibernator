@@ -15,6 +15,8 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/validation"
 	"k8s.io/apimachinery/pkg/util/validation/field"
+
+	"github.com/ardikabs/hibernator/pkg/awsutil"
 )
 
 // Result holds the outcome of parameter validation.
@@ -171,7 +173,7 @@ func validateEC2Params(params []byte) *Result {
 	result := &Result{}
 
 	if len(params) == 0 {
-		result.AddError("parameters required: either selector.tags or selector.instanceIds must be specified")
+		result.AddError("parameters required: either selector.tags, selector.tagSelector, or selector.instanceIds must be specified")
 		return result
 	}
 
@@ -181,9 +183,32 @@ func validateEC2Params(params []byte) *Result {
 		return result
 	}
 
-	// Validate selector - either tags or instanceIds required
-	if len(p.Selector.Tags) == 0 && len(p.Selector.InstanceIDs) == 0 {
-		result.AddError("either selector.tags or selector.instanceIds must be specified")
+	// Validate selector - at least one selection method required
+	hasTagSelector := p.Selector.TagSelector != nil && (len(p.Selector.TagSelector.MatchTags) > 0 || len(p.Selector.TagSelector.MatchExpressions) > 0)
+	hasTags := len(p.Selector.Tags) > 0
+	hasInstanceIDs := len(p.Selector.InstanceIDs) > 0
+
+	if !hasTags && !hasTagSelector && !hasInstanceIDs {
+		result.AddError("either selector.tags, selector.tagSelector, or selector.instanceIds must be specified")
+	}
+
+	// Tags and InstanceIDs are mutually exclusive (both are server-side filters)
+	if hasTags && hasInstanceIDs {
+		result.AddError("selector.tags and selector.instanceIds are mutually exclusive (both are server-side filters)")
+	}
+
+	// Tags and TagSelector are mutually exclusive
+	if hasTags && hasTagSelector {
+		result.AddError("selector.tags and selector.tagSelector are mutually exclusive")
+	}
+
+	// Validate TagSelector structure if present
+	if p.Selector.TagSelector != nil {
+		if errs := awsutil.ValidateTagSelector(p.Selector.TagSelector, field.NewPath("selector").Child("tagSelector")); len(errs) > 0 {
+			for _, err := range errs {
+				result.AddError("selector.tagSelector: %s", err)
+			}
+		}
 	}
 
 	// Validate AwaitCompletion timeout format if waiting is enabled
@@ -211,20 +236,23 @@ func validateRDSParams(params []byte) *Result {
 		return result
 	}
 
+	hasTagSelector := p.Selector.TagSelector != nil && (len(p.Selector.TagSelector.MatchTags) > 0 || len(p.Selector.TagSelector.MatchExpressions) > 0)
+
 	// Validate selector - at least one selection method required
 	hasSelection := len(p.Selector.Tags) > 0 ||
 		len(p.Selector.ExcludeTags) > 0 ||
+		hasTagSelector ||
 		len(p.Selector.InstanceIds) > 0 ||
 		len(p.Selector.ClusterIds) > 0 ||
 		p.Selector.IncludeAll
 
 	if !hasSelection {
-		result.AddError("selector must specify at least one of: tags, excludeTags, instanceIds, clusterIds, or includeAll")
+		result.AddError("selector must specify at least one of: tags, excludeTags, tagSelector, instanceIds, clusterIds, or includeAll")
 	}
 
 	// Count selection methods used
 	methodCount := 0
-	if len(p.Selector.Tags) > 0 || len(p.Selector.ExcludeTags) > 0 {
+	if len(p.Selector.Tags) > 0 || len(p.Selector.ExcludeTags) > 0 || hasTagSelector {
 		methodCount++
 	}
 	if len(p.Selector.InstanceIds) > 0 || len(p.Selector.ClusterIds) > 0 {
@@ -236,7 +264,7 @@ func validateRDSParams(params []byte) *Result {
 
 	// Only one selection method allowed
 	if methodCount > 1 {
-		result.AddError("selector must use only one method: either (tags/excludeTags), (instanceIds/clusterIds), or includeAll")
+		result.AddError("selector must use only one method: either (tags/excludeTags/tagSelector), (instanceIds/clusterIds), or includeAll")
 	}
 
 	// Tags and ExcludeTags are mutually exclusive
@@ -244,8 +272,22 @@ func validateRDSParams(params []byte) *Result {
 		result.AddError("selector.tags and selector.excludeTags are mutually exclusive")
 	}
 
+	// TagSelector is mutually exclusive with Tags and ExcludeTags
+	if hasTagSelector && (len(p.Selector.Tags) > 0 || len(p.Selector.ExcludeTags) > 0) {
+		result.AddError("selector.tagSelector is mutually exclusive with selector.tags and selector.excludeTags")
+	}
+
+	// Validate TagSelector structure if present
+	if p.Selector.TagSelector != nil {
+		if errs := awsutil.ValidateTagSelector(p.Selector.TagSelector, field.NewPath("selector").Child("tagSelector")); len(errs) > 0 {
+			for _, err := range errs {
+				result.AddError("selector.tagSelector: %s", err)
+			}
+		}
+	}
+
 	// Validate DiscoverInstances and DiscoverClusters are only used with dynamic discovery
-	isDynamicDiscovery := len(p.Selector.Tags) > 0 || len(p.Selector.ExcludeTags) > 0 || p.Selector.IncludeAll
+	isDynamicDiscovery := len(p.Selector.Tags) > 0 || len(p.Selector.ExcludeTags) > 0 || hasTagSelector || p.Selector.IncludeAll
 	isIntentBased := len(p.Selector.InstanceIds) > 0 || len(p.Selector.ClusterIds) > 0
 
 	if isIntentBased && (p.Selector.DiscoverInstances || p.Selector.DiscoverClusters) {
@@ -255,7 +297,7 @@ func validateRDSParams(params []byte) *Result {
 	// For dynamic discovery, at least one resource type must be explicitly enabled (opt-out)
 	if isDynamicDiscovery {
 		if !p.Selector.DiscoverInstances && !p.Selector.DiscoverClusters {
-			result.AddError("at least one of discoverInstances or discoverClusters must be explicitly set to true for dynamic discovery (tags/excludeTags/includeAll)")
+			result.AddError("at least one of discoverInstances or discoverClusters must be explicitly set to true for dynamic discovery (tags/excludeTags/tagSelector/includeAll)")
 		}
 	}
 
@@ -316,7 +358,20 @@ func validateKarpenterParams(params []byte) *Result {
 		return result
 	}
 
-	// Empty nodePools is valid - means target all NodePools in the cluster
+	// NodePools and NodeSelector are mutually exclusive
+	hasNodePools := len(p.NodePools) > 0
+	hasNodeSelector := p.NodeSelector != nil && (len(p.NodeSelector.MatchLabels) > 0 || len(p.NodeSelector.MatchExpressions) > 0)
+
+	if hasNodePools && hasNodeSelector {
+		result.AddError("nodePools and nodeSelector are mutually exclusive")
+	}
+
+	// Validate nodeSelector if present
+	if p.NodeSelector != nil {
+		if err := validateLabelSelector(p.NodeSelector); err != nil {
+			result.AddError("nodeSelector validation failed: %v", err)
+		}
+	}
 
 	// Validate AwaitCompletion timeout format if waiting is enabled
 	if p.AwaitCompletion.Enabled && p.AwaitCompletion.Timeout != "" {
