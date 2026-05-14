@@ -499,6 +499,113 @@ func TestTimerSet_Loop_Stop_CancelsLoop(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
+// TimerSet — timer armed after loop starts (regression for stale nil channel)
+// ---------------------------------------------------------------------------
+
+func TestTimerSet_Loop_Requeue_ArmedAfterLoopStarts(t *testing.T) {
+	clk := clocktesting.NewFakeClock(time.Now())
+	requeueCalled := false
+	ts := NewTimerSet(logr.Discard(), clk, defaultWorkerIdleTimeout, TimerHooks{
+		OnRequeue: func(_ context.Context, _ *message.PlanContext) {
+			requeueCalled = true
+		},
+		OnTimeout:    func(_ context.Context, _ *message.PlanContext) {},
+		OnDeadline:   func(_ context.Context, _ *message.PlanContext) {},
+		OnInactivity: func() {},
+	})
+
+	ts.Start()
+	defer ts.Stop()
+
+	// Wait until the loop goroutine is blocked inside its select statement.
+	// At this point, select has captured Requeue.C() as nil (not armed yet).
+	assert.Eventually(t, clk.HasWaiters, time.Second, time.Millisecond,
+		"loop goroutine should be waiting on timers")
+
+	// Arm requeue AFTER the loop has entered select. Without the poke fix,
+	// the loop's select still holds the old nil channel and never fires.
+	ts.SetRequeue(time.Millisecond)
+
+	// Let the poke wake the loop and the loop re-enter select with the new channel.
+	assert.Eventually(t, clk.HasWaiters, time.Second, time.Millisecond,
+		"loop should re-enter select and wait on the new requeue timer")
+
+	// Fire the requeue timer.
+	clk.Step(time.Millisecond)
+
+	select {
+	case fn := <-ts.C():
+		ok := fn(context.Background(), nil)
+		assert.True(t, ok)
+		assert.True(t, requeueCalled)
+	case <-time.After(2 * time.Second):
+		t.Fatal("expected requeue callback; loop did not pick up newly armed timer")
+	}
+}
+
+func TestTimerSet_Loop_Timeout_ArmedAfterLoopStarts(t *testing.T) {
+	clk := clocktesting.NewFakeClock(time.Now())
+	timeoutCalled := false
+	ts := NewTimerSet(logr.Discard(), clk, defaultWorkerIdleTimeout, TimerHooks{
+		OnRequeue:    func(_ context.Context, _ *message.PlanContext) {},
+		OnTimeout:    func(_ context.Context, _ *message.PlanContext) { timeoutCalled = true },
+		OnDeadline:   func(_ context.Context, _ *message.PlanContext) {},
+		OnInactivity: func() {},
+	})
+
+	ts.Start()
+	defer ts.Stop()
+
+	assert.Eventually(t, clk.HasWaiters, time.Second, time.Millisecond)
+
+	ts.SetTimeout(time.Millisecond)
+
+	assert.Eventually(t, clk.HasWaiters, time.Second, time.Millisecond)
+
+	clk.Step(time.Millisecond)
+
+	select {
+	case fn := <-ts.C():
+		ok := fn(context.Background(), nil)
+		assert.True(t, ok)
+		assert.True(t, timeoutCalled)
+	case <-time.After(2 * time.Second):
+		t.Fatal("expected timeout callback; loop did not pick up newly armed timer")
+	}
+}
+
+func TestTimerSet_Loop_Deadline_ArmedAfterLoopStarts(t *testing.T) {
+	clk := clocktesting.NewFakeClock(time.Now())
+	deadlineCalled := false
+	ts := NewTimerSet(logr.Discard(), clk, defaultWorkerIdleTimeout, TimerHooks{
+		OnRequeue:    func(_ context.Context, _ *message.PlanContext) {},
+		OnTimeout:    func(_ context.Context, _ *message.PlanContext) {},
+		OnDeadline:   func(_ context.Context, _ *message.PlanContext) { deadlineCalled = true },
+		OnInactivity: func() {},
+	})
+
+	ts.Start()
+	defer ts.Stop()
+
+	assert.Eventually(t, clk.HasWaiters, time.Second, time.Millisecond)
+
+	ts.SetDeadline(time.Millisecond)
+
+	assert.Eventually(t, clk.HasWaiters, time.Second, time.Millisecond)
+
+	clk.Step(time.Millisecond)
+
+	select {
+	case fn := <-ts.C():
+		ok := fn(context.Background(), nil)
+		assert.True(t, ok)
+		assert.True(t, deadlineCalled)
+	case <-time.After(2 * time.Second):
+		t.Fatal("expected deadline callback; loop did not pick up newly armed timer")
+	}
+}
+
+// ---------------------------------------------------------------------------
 // TimerSet — send buffer overflow
 // ---------------------------------------------------------------------------
 

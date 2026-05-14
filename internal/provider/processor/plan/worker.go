@@ -93,14 +93,15 @@ type Worker struct {
 // On each event the worker builds a fresh planState for the current phase and calls
 // Handle(ctx).
 func (s *Worker) run(ctx context.Context) {
-	s.timers = NewTimerSet(s.log.WithName("timerset"), s.Clock, defaultWorkerIdleTimeout, TimerHooks{
+	log := s.log.WithName("timerset").WithValues("plan", s.key)
+	s.timers = NewTimerSet(log, s.Clock, defaultWorkerIdleTimeout, TimerHooks{
 		OnDeadline: func(ctx context.Context, planCtx *message.PlanContext) {
 			if planCtx != nil {
 				s.handle(ctx, planCtx, true)
 			}
 		},
 		OnInactivity: func() {
-			s.log.V(1).Info("worker inactivity timeout reached, self-terminating", "plan", s.key)
+			log.Info("worker inactivity timeout reached, self-terminating")
 		},
 		OnRequeue: func(ctx context.Context, planCtx *message.PlanContext) {
 			if planCtx != nil {
