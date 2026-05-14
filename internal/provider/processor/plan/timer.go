@@ -144,6 +144,7 @@ type TimerSet struct {
 	out    chan func(ctx context.Context, planCtx *message.PlanContext) bool
 	cancel context.CancelFunc
 	wg     sync.WaitGroup
+	notify chan struct{}
 }
 
 // NewTimerSet creates a new TimerSet with the given clock, inactivity timeout, and hooks.
@@ -154,6 +155,7 @@ func NewTimerSet(log logr.Logger, clock clock.Clock, inactivityTimeout time.Dura
 		hooks:             hooks,
 		log:               log,
 		out:               make(chan func(ctx context.Context, planCtx *message.PlanContext) bool, 1),
+		notify:            make(chan struct{}, 1),
 	}
 	ts.Requeue = NewSchedule(clock, "requeue")
 	ts.Timeout = NewSchedule(clock, "timeout")
@@ -189,12 +191,21 @@ func (ts *TimerSet) C() <-chan func(ctx context.Context, planCtx *message.PlanCo
 }
 
 // loop multiplexes timer channels into ts.out.
+//
+// IMPORTANT: Go's select evaluates channel expressions once per iteration.
+// If a timer is not armed when select is entered, its C() returns nil and that
+// case is permanently blocked for that iteration. The notify channel (written
+// to by poke()) forces the loop to re-iterate whenever a timer is armed or
+// disarmed, ensuring the select picks up newly created timer channels.
 func (ts *TimerSet) loop(ctx context.Context) {
 	defer ts.wg.Done()
 	for {
 		select {
 		case <-ctx.Done():
 			return
+		case <-ts.notify:
+			// A timer was armed or disarmed; re-evaluate all channels.
+			ts.log.V(1).Info("poke received, re-evaluating timer channels")
 		case <-ts.Requeue.C():
 			ts.send(ts.Requeue.Name, func(ctx context.Context, planCtx *message.PlanContext) bool {
 				ts.Requeue.Disarm()
@@ -250,36 +261,52 @@ func (ts *TimerSet) send(name string, fn func(ctx context.Context, planCtx *mess
 // Lifecycle helpers
 // ---------------------------------------------------------------------------
 
+// poke signals the loop goroutine to re-evaluate timer channels.
+// It uses a non-blocking send on a buffered(1) channel, so multiple
+// rapid pokes coalesce into a single wakeup.
+func (ts *TimerSet) poke() {
+	select {
+	case ts.notify <- struct{}{}:
+	default:
+	}
+}
+
 // SetRequeue arms the requeue timer with the given duration.
 func (ts *TimerSet) SetRequeue(d time.Duration) {
 	ts.Requeue.Arm(d)
+	ts.poke()
 }
 
 // StopRequeue disarms the requeue timer.
 func (ts *TimerSet) StopRequeue() {
 	ts.Requeue.Disarm()
+	ts.poke()
 }
 
 // SetTimeout arms the timeout timer only if it is not already armed (arm-once).
 func (ts *TimerSet) SetTimeout(d time.Duration) {
 	if !ts.Timeout.IsArmed() {
 		ts.Timeout.Arm(d)
+		ts.poke()
 	}
 }
 
 // StopTimeout disarms the timeout timer.
 func (ts *TimerSet) StopTimeout() {
 	ts.Timeout.Disarm()
+	ts.poke()
 }
 
 // SetDeadline arms the deadline timer, always replacing any existing deadline.
 func (ts *TimerSet) SetDeadline(d time.Duration) {
 	ts.Deadline.Arm(d)
+	ts.poke()
 }
 
 // StopDeadline disarms the deadline timer.
 func (ts *TimerSet) StopDeadline() {
 	ts.Deadline.Disarm()
+	ts.poke()
 }
 
 // KeepAlive resets the inactivity timer. If a deadline is active and its duration
