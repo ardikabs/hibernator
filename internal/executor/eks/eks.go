@@ -724,9 +724,7 @@ func (e *Executor) determineTargetNodeGroups(ctx context.Context, log logr.Logge
 	}
 
 	log.Info("target node groups determined", "count", len(targetNodeGroups))
-
 	if len(targetNodeGroups) == 0 {
-		log.Error(nil, "no node groups found", "clusterName", clusterName)
 		return nil, fmt.Errorf("no node groups found in cluster %s", clusterName)
 	}
 

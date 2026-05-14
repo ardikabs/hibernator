@@ -300,3 +300,121 @@ func TestAccumulator_NoOpShutdown(t *testing.T) {
 	require.Empty(t, data.State)
 	require.True(t, data.IsLive)
 }
+
+// TestAccumulator_RestartSameCycle_PreservesData verifies that if a restart
+// happens in the same cycle, existing data is preserved without incrementing staleness.
+func TestAccumulator_RestartSameCycle_PreservesData(t *testing.T) {
+	scheme := runtime.NewScheme()
+	_ = corev1.AddToScheme(scheme)
+
+	// Pre-create ConfigMap with existing data for cycle-001
+	now := metav1.Now()
+	existingData := restore.Data{
+		Target:   "test-target",
+		Executor: "karpenter",
+		CycleID:  "cycle-001",
+		IsLive:   true,
+		State: map[string]any{
+			"nodepool-1": map[string]any{"foo": "bar"},
+		},
+		Status: map[string]restore.ResourceStatus{
+			"nodepool-1": {StaleCount: 0, LastReportedAt: &now},
+		},
+	}
+	dataBytes, _ := json.Marshal(existingData)
+
+	cm := &corev1.ConfigMap{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "hibernator-restore-test-plan",
+			Namespace: "test-ns",
+		},
+		Data: map[string]string{
+			"test-target.json": string(dataBytes),
+		},
+	}
+
+	fakeClient := fake.NewClientBuilder().WithScheme(scheme).WithRuntimeObjects(cm).Build()
+	ctx := context.Background()
+
+	restoreMgr := restore.NewManager(fakeClient, logr.Discard())
+	// Restart with SAME cycle ID
+	_, flush := NewReportStateHandlers(ctx, restoreMgr, logr.Discard(), "test-ns", "test-plan", "test-target", "karpenter", "cycle-001")
+
+	// Flush without adding anything (restart run where nothing was re-discovered)
+	err := flush()
+	require.NoError(t, err)
+
+	// Verify ConfigMap data preserved without staleness
+	updatedCm := &corev1.ConfigMap{}
+	err = fakeClient.Get(ctx, client.ObjectKey{Namespace: "test-ns", Name: "hibernator-restore-test-plan"}, updatedCm)
+	require.NoError(t, err)
+
+	var finalData restore.Data
+	err = json.Unmarshal([]byte(updatedCm.Data["test-target.json"]), &finalData)
+	require.NoError(t, err)
+
+	// State should still be there
+	require.NotEmpty(t, finalData.State)
+	require.Contains(t, finalData.State, "nodepool-1")
+	// StaleCount should NOT have incremented
+	require.Equal(t, 0, finalData.Status["nodepool-1"].StaleCount)
+}
+
+// TestAccumulator_NewCycle_IncrementsStaleness verifies that if a NEW cycle starts
+// and nothing is reported, the existing data correctly increments its staleness.
+func TestAccumulator_NewCycle_IncrementsStaleness(t *testing.T) {
+	scheme := runtime.NewScheme()
+	_ = corev1.AddToScheme(scheme)
+
+	// Pre-create ConfigMap with existing data for cycle-OLD
+	now := metav1.Now()
+	existingData := restore.Data{
+		Target:   "test-target",
+		Executor: "karpenter",
+		CycleID:  "cycle-OLD",
+		IsLive:   true,
+		State: map[string]any{
+			"nodepool-1": map[string]any{"foo": "bar"},
+		},
+		Status: map[string]restore.ResourceStatus{
+			"nodepool-1": {StaleCount: 0, LastReportedAt: &now},
+		},
+	}
+	dataBytes, _ := json.Marshal(existingData)
+
+	cm := &corev1.ConfigMap{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "hibernator-restore-test-plan",
+			Namespace: "test-ns",
+		},
+		Data: map[string]string{
+			"test-target.json": string(dataBytes),
+		},
+	}
+
+	fakeClient := fake.NewClientBuilder().WithScheme(scheme).WithRuntimeObjects(cm).Build()
+	ctx := context.Background()
+
+	restoreMgr := restore.NewManager(fakeClient, logr.Discard())
+	// New run with NEW cycle ID
+	_, flush := NewReportStateHandlers(ctx, restoreMgr, logr.Discard(), "test-ns", "test-plan", "test-target", "karpenter", "cycle-NEW")
+
+	// Flush without adding anything (new run where nothing was discovered)
+	err := flush()
+	require.NoError(t, err)
+
+	// Verify ConfigMap data has incremented staleness
+	updatedCm := &corev1.ConfigMap{}
+	err = fakeClient.Get(ctx, client.ObjectKey{Namespace: "test-ns", Name: "hibernator-restore-test-plan"}, updatedCm)
+	require.NoError(t, err)
+
+	var finalData restore.Data
+	err = json.Unmarshal([]byte(updatedCm.Data["test-target.json"]), &finalData)
+	require.NoError(t, err)
+
+	// State should still be there (stale count not yet at threshold)
+	require.NotEmpty(t, finalData.State)
+	// StaleCount should HAVE incremented to 1
+	require.Equal(t, 1, finalData.Status["nodepool-1"].StaleCount)
+	require.Equal(t, "cycle-NEW", finalData.CycleID)
+}

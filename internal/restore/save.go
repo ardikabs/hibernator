@@ -111,6 +111,16 @@ func (m *Manager) SaveState(ctx context.Context, namespace, planName, targetName
 		return m.saveNewState(data, cycleID, namespace, planName, targetName, ctx)
 	}
 
+	// If no new state reported AND this is the same cycle as existing data,
+	// we skip the save entirely to preserve exactly what was saved in the
+	// prior attempt. This is crucial for delete-based executors (Karpenter)
+	// where re-runs will find zero resources.
+	if existing.CycleID == cycleID && len(data.State) == 0 {
+		m.log.Info("no new state reported in restart run, preserving existing restore point",
+			"target", targetName, "cycleID", cycleID)
+		return nil
+	}
+
 	// Build merged state and status using strategies
 	mergedState := make(map[string]any)
 	mergedStatus := make(map[string]ResourceStatus)
@@ -143,7 +153,7 @@ func (m *Manager) SaveState(ctx context.Context, namespace, planName, targetName
 	}
 
 	// Process existing keys not reported this cycle (staleness handling)
-	m.handleStaleResources(existing, data, maxStaleCount, mergedState, mergedStatus)
+	m.handleStaleResources(existing, data, maxStaleCount, mergedState, mergedStatus, isSameCycle)
 	return m.saveMergedData(data, existing, cycleID, mergedState, mergedStatus, namespace, planName, targetName, ctx)
 }
 
@@ -161,9 +171,19 @@ func (m *Manager) normalizeStateValue(key string, value any) any {
 }
 
 // handleStaleResources processes resources not reported in this cycle.
-func (m *Manager) handleStaleResources(existing, data *Data, maxStaleCount int, mergedState map[string]any, mergedStatus map[string]ResourceStatus) {
+func (m *Manager) handleStaleResources(existing, data *Data, maxStaleCount int, mergedState map[string]any, mergedStatus map[string]ResourceStatus, isSameCycle bool) {
 	for key, value := range existing.State {
 		if _, reported := data.State[key]; !reported {
+			// If it's the same cycle, we only increment staleness if it WASN'T reported in this cycle yet.
+			// This handles restarts where a resource was reported in a prior attempt but isn't re-discovered now.
+			if isSameCycle {
+				if status, exists := existing.Status[key]; exists && status.LastReportedAt != nil {
+					mergedState[key] = value
+					mergedStatus[key] = status
+					continue
+				}
+			}
+
 			staleCount := 0
 			if existing.Status != nil {
 				staleCount = existing.Status[key].StaleCount

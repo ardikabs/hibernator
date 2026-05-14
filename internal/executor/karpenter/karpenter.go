@@ -190,8 +190,11 @@ func (e *Executor) Shutdown(ctx context.Context, log logr.Logger, spec executor.
 	log.Info("target NodePools determined", "count", len(targetNodePools))
 
 	if len(targetNodePools) == 0 {
-		log.Error(nil, "no NodePools found in cluster")
-		return nil, fmt.Errorf("no NodePools found in cluster")
+		log.Info("no NodePools found; they may have been deleted by a prior shutdown run or the selector matched nothing",
+			"hasNodeSelector", params.NodeSelector != nil,
+			"isAllNodePools", len(params.NodePools) == 0 && params.NodeSelector == nil,
+		)
+		return &executor.Result{Message: "shutdown completed for Karpenter (no NodePools found)"}, nil
 	}
 
 	stats := operationStats{processed: len(targetNodePools)}
