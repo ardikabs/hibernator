@@ -87,14 +87,21 @@ func (e *Executor) Validate(spec executor.Spec) error {
 		return err
 	}
 
+	hasTags := len(params.Selector.Tags) > 0
+	hasInstanceIDs := len(params.Selector.InstanceIDs) > 0
 	hasTagSelector := params.Selector.TagSelector != nil && (len(params.Selector.TagSelector.MatchTags) > 0 || len(params.Selector.TagSelector.MatchExpressions) > 0)
 
-	if len(params.Selector.Tags) == 0 && !hasTagSelector && len(params.Selector.InstanceIDs) == 0 {
+	if !hasTags && !hasTagSelector && !hasInstanceIDs {
 		return fmt.Errorf("either tags, tagSelector, or instanceIds must be specified in selector")
 	}
 
+	// Tags and InstanceIDs are mutually exclusive (both are server-side filters)
+	if hasTags && hasInstanceIDs {
+		return fmt.Errorf("selector.tags and selector.instanceIds are mutually exclusive (both are server-side filters)")
+	}
+
 	// Tags and TagSelector are mutually exclusive
-	if len(params.Selector.Tags) > 0 && hasTagSelector {
+	if hasTags && hasTagSelector {
 		return fmt.Errorf("selector.tags and selector.tagSelector are mutually exclusive")
 	}
 
@@ -494,26 +501,24 @@ func (e *Executor) loadAWSConfig(ctx context.Context, spec executor.Spec) (aws.C
 func (e *Executor) findInstances(ctx context.Context, client EC2Client, selector Selector) ([]types.Instance, error) {
 	input := &ec2.DescribeInstancesInput{}
 
-	// Build filters
-	var filters []types.Filter
-
-	// Check if using new-style TagSelector
-	hasTagSelector := selector.TagSelector != nil && (len(selector.TagSelector.MatchTags) > 0 || len(selector.TagSelector.MatchExpressions) > 0)
-
-	if hasTagSelector {
-		// For TagSelector, we fetch all active instances and apply client-side filtering.
-		// We still use instance-state-name filter to avoid fetching terminated instances.
-		filters = append(filters, types.Filter{
-			Name: aws.String("instance-state-name"),
-			Values: []string{
-				string(types.InstanceStateNamePending),
-				string(types.InstanceStateNameRunning),
-				string(types.InstanceStateNameStopping),
-				string(types.InstanceStateNameStopped),
-			},
-		})
+	// Server-side filter: explicit instance IDs bypass all other filters.
+	if len(selector.InstanceIDs) > 0 {
+		input.InstanceIds = selector.InstanceIDs
 	} else {
-		// Add tag filters for legacy Tags selector
+		// Server-side filter: build AWS Filters from selector.tags.
+		// This reduces the result set before data leaves AWS.
+		filters := []types.Filter{
+			{
+				Name: aws.String("instance-state-name"),
+				Values: []string{
+					string(types.InstanceStateNamePending),
+					string(types.InstanceStateNameRunning),
+					string(types.InstanceStateNameStopping),
+					string(types.InstanceStateNameStopped),
+				},
+			},
+		}
+
 		tagKeyOnlySelectors := []string{}
 		for key, value := range selector.Tags {
 			if value == "" {
@@ -533,28 +538,6 @@ func (e *Executor) findInstances(ctx context.Context, client EC2Client, selector
 				Values: tagKeyOnlySelectors,
 			})
 		}
-	}
-
-	// Add instance ID filter
-	if len(selector.InstanceIDs) > 0 {
-		input.InstanceIds = selector.InstanceIDs
-	}
-
-	// Filter out terminated instances - we only care about active instances
-	// (only add if not already added above for TagSelector)
-	if !hasTagSelector {
-		filters = append(filters, types.Filter{
-			Name: aws.String("instance-state-name"),
-			Values: []string{
-				string(types.InstanceStateNamePending),
-				string(types.InstanceStateNameRunning),
-				string(types.InstanceStateNameStopping),
-				string(types.InstanceStateNameStopped),
-			},
-		})
-	}
-
-	if len(filters) > 0 {
 		input.Filters = filters
 	}
 
@@ -568,12 +551,18 @@ func (e *Executor) findInstances(ctx context.Context, client EC2Client, selector
 		instances = append(instances, reservation.Instances...)
 	}
 
-	// Apply client-side filtering for TagSelector
+	// Client-side filter: apply TagSelector to the instances returned by AWS.
+	// This runs locally and supports advanced expressions (Exists, Matches, etc.)
+	// that AWS native filters do not support.
+	hasTagSelector := selector.TagSelector != nil &&
+		(len(selector.TagSelector.MatchTags) > 0 ||
+			len(selector.TagSelector.MatchExpressions) > 0)
+
 	if hasTagSelector {
 		instances = filterInstancesByTagSelector(instances, selector.TagSelector)
 	}
 
-	// apply exclusions for ASG and Karpenter managed instances
+	// Apply exclusions for ASG and Karpenter managed instances
 	return awsutil.ApplyExclusions(instances, awsutil.ExcludeByASGManaged, awsutil.ExcludeByKarpenterManaged), nil
 }
 

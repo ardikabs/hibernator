@@ -725,3 +725,20 @@ func TestValidate_TagSelectorAndOldTags_MutualExclusivity(t *testing.T) {
 	assert.Error(t, err)
 	assert.Contains(t, err.Error(), "mutually exclusive")
 }
+
+func TestValidate_TagsAndInstanceIDs_MutualExclusivity(t *testing.T) {
+	e := New()
+
+	spec := executor.Spec{
+		TargetName: "test-mutual-exclusive",
+		TargetType: "ec2",
+		Parameters: json.RawMessage(`{"selector": {"tags": {"env": "prod"}, "instanceIds": ["i-1234567890abcdef0"]}}`),
+		ConnectorConfig: executor.ConnectorConfig{
+			AWS: &executor.AWSConnectorConfig{Region: "us-east-1"},
+		},
+	}
+
+	err := e.Validate(spec)
+	assert.Error(t, err)
+	assert.Contains(t, err.Error(), "selector.tags and selector.instanceIds are mutually exclusive")
+}

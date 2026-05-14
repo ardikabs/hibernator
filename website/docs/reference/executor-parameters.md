@@ -68,13 +68,13 @@ EC2Parameters defines the expected parameters for the EC2 executor.
 
 ### EC2Selector
 
-EC2Selector defines how to find EC2 instances.
+EC2Selector defines how to find EC2 instances.<br /><br />SELECTION METHODS (mutually exclusive server-side filters):<br />- Tags: server-side filter via AWS DescribeInstances Filters<br />- InstanceIDs: server-side filter via explicit InstanceIds<br /><br />CLIENT-SIDE FILTER:<br />- TagSelector: applied AFTER instances are fetched. Can be used alone or combined<br />with InstanceIDs, but is mutually exclusive with Tags.<br /><br />At least one selection method must be specified.
 
 | Field | Type | Description |
 | ----- | ---- | ----------- |
-| `tags` | _map[string]string_ | Tags filters instances by AWS resource tags.<br />DEPRECATED: Use tagSelector for expression-based matching. |
-| `tagSelector` | _*[TagSelector](#tagselector)_ | TagSelector provides flexible expression-based tag matching.<br />Mutually exclusive with Tags. |
-| `instanceIds` | _[]string_ | InstanceIDs is a list of explicit EC2 instance IDs to target. |
+| `tags` | _map[string]string_ | Tags filters instances by AWS resource tags using DescribeInstances Filters.<br />Applied server-side before instances are returned.<br />Mutually exclusive with InstanceIDs (both are server-side filters). |
+| `tagSelector` | _*[TagSelector](#tagselector)_ | TagSelector provides flexible expression-based tag matching.<br />Applied client-side after instances are fetched.<br />Mutually exclusive with Tags. |
+| `instanceIds` | _[]string_ | InstanceIDs is a list of explicit EC2 instance IDs to target.<br />Applied server-side via DescribeInstances InstanceIds.<br />Mutually exclusive with Tags (both are server-side filters). |
 
 ### TagSelector
 

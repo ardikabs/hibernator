@@ -605,6 +605,18 @@ func TestValidateParams_EC2_TagSelectorAndTags_MutualExclusivity(t *testing.T) {
 	}
 }
 
+func TestValidateParams_EC2_TagsAndInstanceIDs_MutualExclusivity(t *testing.T) {
+	params := []byte(`{"selector": {"tags": {"env": "prod"}, "instanceIds": ["i-1234567890abcdef0"]}}`)
+	result := ValidateParams("ec2", params)
+
+	if result == nil {
+		t.Fatal("expected non-nil result")
+	}
+	if !result.HasErrors() {
+		t.Error("expected errors for mutually exclusive tags and instanceIds")
+	}
+}
+
 func TestValidateParams_RDS_TagSelector_Valid(t *testing.T) {
 	params := []byte(`{"selector": {"tagSelector": {"matchExpressions": [{"key": "env", "operator": "In", "values": ["dev", "staging"]}]}, "discoverInstances": true}}`)
 	result := ValidateParams("rds", params)

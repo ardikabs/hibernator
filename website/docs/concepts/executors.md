@@ -285,7 +285,7 @@ Manages **EC2 instances** by stopping running instances during hibernation and s
 
 ### Shutdown Flow
 
-1. **Discover instances** — Calls `DescribeInstances` with tag filters (from `selector.tags`) or explicit `selector.instanceIds`. Filters out terminated/shutting-down instances and those managed by ASGs or Karpenter.
+1. **Discover instances** — Calls `DescribeInstances` with server-side filters (`selector.tags` as AWS Filters or `selector.instanceIds` as explicit IDs). When `selector.tagSelector` is used, it applies as a client-side filter after fetching. Filters out terminated/shutting-down instances and those managed by ASGs or Karpenter.
 2. **Capture state** — Records each instance's ID and whether it was running (`wasRunning`).
 3. **Persist restore data** — Saves instance states to the restore ConfigMap.
 4. **Stop instances** — Calls `StopInstances` for all instances that were running. Already-stopped instances are skipped.

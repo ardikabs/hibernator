@@ -183,14 +183,22 @@ func validateEC2Params(params []byte) *Result {
 		return result
 	}
 
-	// Validate selector - either tags, tagSelector, or instanceIds required
+	// Validate selector - at least one selection method required
 	hasTagSelector := p.Selector.TagSelector != nil && (len(p.Selector.TagSelector.MatchTags) > 0 || len(p.Selector.TagSelector.MatchExpressions) > 0)
-	if len(p.Selector.Tags) == 0 && !hasTagSelector && len(p.Selector.InstanceIDs) == 0 {
+	hasTags := len(p.Selector.Tags) > 0
+	hasInstanceIDs := len(p.Selector.InstanceIDs) > 0
+
+	if !hasTags && !hasTagSelector && !hasInstanceIDs {
 		result.AddError("either selector.tags, selector.tagSelector, or selector.instanceIds must be specified")
 	}
 
+	// Tags and InstanceIDs are mutually exclusive (both are server-side filters)
+	if hasTags && hasInstanceIDs {
+		result.AddError("selector.tags and selector.instanceIds are mutually exclusive (both are server-side filters)")
+	}
+
 	// Tags and TagSelector are mutually exclusive
-	if len(p.Selector.Tags) > 0 && hasTagSelector {
+	if hasTags && hasTagSelector {
 		result.AddError("selector.tags and selector.tagSelector are mutually exclusive")
 	}
 

@@ -57,16 +57,30 @@ type EC2Parameters struct {
 }
 
 // EC2Selector defines how to find EC2 instances.
+//
+// SELECTION METHODS (mutually exclusive server-side filters):
+//   - Tags: server-side filter via AWS DescribeInstances Filters
+//   - InstanceIDs: server-side filter via explicit InstanceIds
+//
+// CLIENT-SIDE FILTER:
+//   - TagSelector: applied AFTER instances are fetched. Can be used alone or combined
+//     with InstanceIDs, but is mutually exclusive with Tags.
+//
+// At least one selection method must be specified.
 type EC2Selector struct {
-	// Tags filters instances by AWS resource tags.
-	// DEPRECATED: Use tagSelector for expression-based matching.
+	// Tags filters instances by AWS resource tags using DescribeInstances Filters.
+	// Applied server-side before instances are returned.
+	// Mutually exclusive with InstanceIDs (both are server-side filters).
 	Tags map[string]string `json:"tags,omitempty"`
 
 	// TagSelector provides flexible expression-based tag matching.
+	// Applied client-side after instances are fetched.
 	// Mutually exclusive with Tags.
 	TagSelector *awsutil.TagSelector `json:"tagSelector,omitempty"`
 
 	// InstanceIDs is a list of explicit EC2 instance IDs to target.
+	// Applied server-side via DescribeInstances InstanceIds.
+	// Mutually exclusive with Tags (both are server-side filters).
 	InstanceIDs []string `json:"instanceIds,omitempty"`
 }
 
