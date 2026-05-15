@@ -112,7 +112,7 @@ kubectl hibernator preview --file plan.yaml
 
 ### `override`
 
-Manually override the schedule of a HibernatePlan, forcing it toward a target phase (hibernate or wakeup). The override is **persistent** — the plan stays locked until explicitly deactivated. See [Manual Actions](override-actions.md) for full details.
+Manually override the schedule of a HibernatePlan, forcing it toward a target phase (hibernate or wakeup). The override is **persistent** — the plan stays locked until explicitly deactivated or until the deadline expires. See [Manual Actions](override-actions.md) for full details.
 
 ```bash
 # Force hibernation
@@ -123,15 +123,27 @@ kubectl hibernator override my-plan --to wakeup
 
 # Deactivate override and restore schedule control
 kubectl hibernator override my-plan --disable
+
+# Override with automatic expiration (2 hours)
+kubectl hibernator override my-plan --to wakeup --seconds 7200
+
+# Override until a specific time using natural language
+kubectl hibernator override my-plan --to hibernate --until "tomorrow at 8am"
+
+# Override with dry-run to preview changes
+kubectl hibernator override my-plan --to wakeup --until "in 30 minutes" --dry-run
 ```
 
 | Flag | Description |
 |------|-------------|
 | `--to` | Target phase: `hibernate` or `wakeup`. Required when activating. |
 | `--disable` | Deactivate the override and restore normal schedule control. Mutually exclusive with `--to`. |
+| `--seconds` | Duration in seconds for the override to remain active. Mutually exclusive with `--until`. |
+| `--until` | Deadline for the override. Supports natural language (e.g., `in 30 minutes`, `tomorrow at 6am`) or RFC3339 format. Mutually exclusive with `--seconds`. |
+| `--dry-run` | Preview what would happen without making changes. |
 
 !!! warning
-    This is **not** a one-shot action. The plan will stay locked at the target phase until you explicitly run `kubectl hibernator override <plan> --disable`.
+    Without `--seconds` or `--until`, this is **not** a one-shot action. The plan will stay locked at the target phase until you explicitly run `kubectl hibernator override <plan> --disable` or the deadline expires.
 
 ---
 
@@ -169,15 +181,44 @@ Suspend a HibernatePlan for a specified duration, preventing all hibernation ope
 # Suspend for 2 hours
 kubectl hibernator suspend my-plan --seconds 7200 --reason "production deployment"
 
-# Suspend until a specific time
+# Suspend until a specific time (RFC3339 format)
 kubectl hibernator suspend my-plan --until "2026-01-15T06:00:00Z" --reason "maintenance window"
+
+# Suspend using natural language
+kubectl hibernator suspend my-plan --until "in 2 hours" --reason "maintenance window"
+
+# Suspend until tomorrow morning
+kubectl hibernator suspend my-plan --until "tomorrow at 8am" --reason "scheduled maintenance"
+
+# Suspend until a specific date/time
+kubectl hibernator suspend my-plan --until "2026-01-15 14:30" --reason "holiday freeze"
+
+# Preview suspension without applying
+kubectl hibernator suspend my-plan --until "in 30 minutes" --reason "test" --dry-run
 ```
 
 | Flag | Description |
 |------|-------------|
 | `--seconds` | Duration in seconds to suspend. Mutually exclusive with `--until`. |
-| `--until` | Deadline in RFC3339 UTC format (e.g., `2026-01-15T06:00:00Z`). Mutually exclusive with `--seconds`. |
+| `--until` | Deadline for suspension. Supports natural language (e.g., `in 30 minutes`, `tomorrow at 6am`), date/time formats (e.g., `2026-01-15 14:30`), or RFC3339 format (e.g., `2026-01-15T06:00:00Z`). Mutually exclusive with `--seconds`. |
 | `--reason` | Reason for suspension (default: `"User initiated"`). |
+| `--dry-run` | Preview what would happen without making changes. |
+
+**Natural Language Formats for `--until`:**
+
+The `--until` flag supports multiple user-friendly formats for both `suspend` and `override` commands:
+
+| Format Type | Examples |
+|-------------|----------|
+| **Relative** | `in 30 minutes`, `in 2 hours`, `in 1 day` |
+| **Tomorrow** | `tomorrow`, `tomorrow at 6am`, `tomorrow at 14:30` |
+| **Next** | `next Monday`, `next week` |
+| **Date** | `2026-01-15`, `Jan 15, 2026` |
+| **Date+Time** | `2026-01-15 14:30`, `Jan 15, 2026 2:30pm` |
+| **RFC3339** | `2026-01-15T14:30:00Z` (recommended for scripts) |
+
+!!! note
+    All times are interpreted in your local timezone and stored as UTC internally.
 
 ---
 
