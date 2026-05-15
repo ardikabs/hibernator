@@ -53,16 +53,67 @@ Override Action is a **persistent** manual phase override. While active, the con
 
 After deactivation the controller resumes normal schedule evaluation immediately.
 
+### Override with Automatic Expiration
+
+By default, overrides are **persistent** and remain active until explicitly disabled. However, you can set an automatic expiration time using the `--until` flag (CLI) or `override-until` annotation (kubectl). When the deadline is reached, the controller automatically deactivates the override and restores normal schedule control.
+
+=== "CLI (Natural Language)"
+
+    ```bash
+    # Override for 2 hours using relative time
+    kubectl hibernator override dev-offhours --to wakeup --until "in 2 hours"
+
+    # Override until tomorrow morning
+    kubectl hibernator override dev-offhours --to hibernate --until "tomorrow at 8am"
+
+    # Override until a specific date/time
+    kubectl hibernator override dev-offhours --to wakeup --until "2026-01-15 14:30"
+    ```
+
+=== "CLI (Seconds)"
+
+    ```bash
+    # Override for exactly 7200 seconds (2 hours)
+    kubectl hibernator override dev-offhours --to wakeup --seconds 7200
+    ```
+
+=== "kubectl (RFC3339)"
+
+    ```bash
+    # Set override with automatic expiration using RFC3339 UTC format
+    kubectl annotate hibernateplan dev-offhours -n hibernator-system \
+      hibernator.ardikabs.com/override-action=true \
+      hibernator.ardikabs.com/override-phase-target=wakeup \
+      hibernator.ardikabs.com/override-until="2026-01-15T14:30:00Z"
+    ```
+
+**Supported Time Formats:**
+
+| Format Type | CLI Example | Annotation Value |
+|-------------|-------------|------------------|
+| **Relative** | `in 30 minutes`, `in 2 hours`, `in 1 day` | N/A |
+| **Tomorrow** | `tomorrow at 6am`, `tomorrow at 14:30` | N/A |
+| **Next** | `next Monday`, `next week` | N/A |
+| **Date** | `2026-01-15`, `Jan 15, 2026` | N/A |
+| **Date+Time** | `2026-01-15 14:30`, `Jan 15, 2026 2:30pm` | N/A |
+| **RFC3339** | `2026-01-15T14:30:00Z` | `2026-01-15T14:30:00Z` |
+
+!!! note "Timezone Handling"
+    CLI natural language and date/time formats are interpreted in your **local timezone** and stored as UTC internally. The `override-until` annotation must always use **RFC3339 format in UTC** (e.g., `2026-01-15T14:30:00Z`).
+
 ### How It Works
 
 1. The controller detects `hibernator.ardikabs.com/override-action=true` and reads the companion `override-phase-target` annotation.
-2. Schedule-driven phase transitions are suppressed — the plan will not automatically switch between Active and Hibernated based on the schedule.
-3. The plan is driven toward the target phase via executor dispatch.
-4. Once the target phase is reached, subsequent reconcile ticks become no-ops (the override remains active, but no work is dispatched).
-5. The annotations are **persistent** — the controller never removes them. The user must explicitly deactivate.
+2. If `hibernator.ardikabs.com/override-until` is set, the controller checks if the current time exceeds the deadline.
+   - If expired: The override is automatically deactivated (annotations are removed) and normal schedule control resumes.
+   - If not expired: The override remains active and schedule-driven transitions are suppressed.
+3. Schedule-driven phase transitions are suppressed while the override is active.
+4. The plan is driven toward the target phase via executor dispatch.
+5. Once the target phase is reached, subsequent reconcile ticks become no-ops (the override remains active, but no work is dispatched).
+6. Without an expiration, the annotations are **persistent** — the controller never removes them. The user must explicitly deactivate.
 
 !!! warning "Persistent Override"
-    Unlike a one-shot action, the override stays active indefinitely. If you forget to deactivate it, the plan will **never** follow its schedule again until the annotations are removed. Always deactivate when done.
+    Without `--until`, `--seconds`, or the `override-until` annotation, the override stays active **indefinitely**. If you forget to deactivate it, the plan will **never** follow its schedule again until the annotations are removed. Always set an expiration when possible, or remember to deactivate when done.
 
 ### When to Use Override
 
@@ -137,5 +188,6 @@ Restart is a **one-shot** action that re-triggers the last executor operation as
 |------------|-------|-----------|
 | `hibernator.ardikabs.com/override-action` | `"true"` | Enables persistent schedule override. Must be paired with `override-phase-target`. |
 | `hibernator.ardikabs.com/override-phase-target` | `hibernate` or `wakeup` | Specifies the target phase for override. |
+| `hibernator.ardikabs.com/override-until` | RFC3339 UTC (e.g., `2026-01-15T14:30:00Z`) | Optional deadline for automatic override expiration. When current time exceeds this value, the controller automatically deactivates the override. |
 | `hibernator.ardikabs.com/restart` | `"true"` | One-shot re-trigger of last executor operation. Consumed by controller. |
 | `hibernator.ardikabs.com/retry-now` | `"true"` | One-shot retry for Error phase plans. Consumed by controller. |
