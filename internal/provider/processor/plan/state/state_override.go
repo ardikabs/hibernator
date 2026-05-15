@@ -8,11 +8,14 @@ package state
 import (
 	"context"
 	"fmt"
+	"time"
 
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
 	hibernatorv1alpha1 "github.com/ardikabs/hibernator/api/v1alpha1"
 	"github.com/ardikabs/hibernator/internal/wellknown"
+	"github.com/go-logr/logr"
 )
 
 // overrideActionState handles manual phase override for Active and Hibernated plans.
@@ -29,6 +32,15 @@ import (
 //
 // This avoids the race window that would arise from deleting the annotation and
 // writing a phase in two separate API calls.
+//
+// # Auto-expiration
+//
+// If override-until is set to an RFC3339 timestamp, the controller will automatically
+// revoke the override when the deadline is reached. This is useful for temporary
+// overrides (e.g., "keep awake during deployment window").
+//
+// When the deadline fires, OnDeadline() removes all override annotations and
+// returns control to the schedule.
 //
 // # Restarting the same operation
 //
@@ -63,6 +75,11 @@ func (s *overrideActionState) Handle(ctx context.Context) (StateResult, error) {
 			"overridePhaseTarget", target,
 		)
 
+	res := s.initStateResult(log, plan)
+	if res.DeadlineAfter > 0 {
+		log = log.WithValues("deadline", res.DeadlineAfter.String())
+	}
+
 	switch target {
 	case wellknown.OverridePhaseTargetHibernate:
 		switch plan.Status.Phase {
@@ -72,7 +89,7 @@ func (s *overrideActionState) Handle(ctx context.Context) (StateResult, error) {
 
 		case hibernatorv1alpha1.PhaseHibernated:
 			if restart, err := s.consumeRestart(ctx, plan); err != nil {
-				return StateResult{}, err
+				return res, err
 			} else if restart {
 				log.Info("restart: re-triggering hibernation executor")
 				return s.transitionToHibernating(ctx, log)
@@ -102,7 +119,7 @@ func (s *overrideActionState) Handle(ctx context.Context) (StateResult, error) {
 			// HasRestoreData stays true after wakeup).
 			restart, err := s.consumeRestart(ctx, plan)
 			if err != nil {
-				return StateResult{}, err
+				return res, err
 			}
 			if restart {
 				if s.PlanCtx.HasRestoreData {
@@ -112,7 +129,7 @@ func (s *overrideActionState) Handle(ctx context.Context) (StateResult, error) {
 				log.Info("restart: wakeup re-trigger requested but no restore data available; " +
 					"the plan has not completed a hibernation cycle yet — " +
 					"hibernate first so restore data is captured, then retry")
-				return StateResult{}, nil
+				return res, nil
 			}
 			log.V(1).Info("manual override: plan is already Active; " +
 				"remove the annotations to restore schedule control (or set restart=true to re-run)")
@@ -125,7 +142,49 @@ func (s *overrideActionState) Handle(ctx context.Context) (StateResult, error) {
 			"validValues", wellknown.OverridePhaseTargetHibernate+"|"+wellknown.OverridePhaseTargetWakeup)
 	}
 
+	return res, nil
+}
+
+func (s *overrideActionState) OnDeadline(ctx context.Context) (StateResult, error) {
+	plan := s.plan()
+
+	log := s.Log.
+		WithName("override").
+		WithValues("plan", s.Key.String())
+
+	log.Info("override deadline reached, auto-disabling override and restoring schedule control",
+		"deadline", plan.Annotations[wellknown.AnnotationOverrideUntil])
+
+	orig := plan.DeepCopy()
+	delete(plan.Annotations, wellknown.AnnotationOverrideAction)
+	delete(plan.Annotations, wellknown.AnnotationOverridePhaseTarget)
+	delete(plan.Annotations, wellknown.AnnotationOverrideUntil)
+	if err := s.patchAndPreserveStatus(ctx, plan, client.MergeFrom(orig)); err != nil {
+		if !apierrors.IsNotFound(err) {
+			log.Error(err, "deadline: failed to revert override annotation")
+		}
+		return StateResult{}, err
+	}
+
 	return StateResult{}, nil
+}
+
+func (s *overrideActionState) initStateResult(log logr.Logger, plan *hibernatorv1alpha1.HibernatePlan) StateResult {
+	var res StateResult
+	if deadlineStr, ok := plan.Annotations[wellknown.AnnotationOverrideUntil]; ok {
+		deadline, err := time.Parse(time.RFC3339, deadlineStr)
+		if err != nil {
+			log.Error(err, "invalid override-until timestamp, deadline will not be enforced",
+				"value", deadlineStr,
+				"expectedFormat", "RFC3339 (e.g., 2026-01-15T06:00:00Z)",
+				"action", "treating as no deadline")
+			return res
+		}
+
+		res.DeadlineAfter = deadline.Sub(s.Clock.Now())
+	}
+
+	return res
 }
 
 // consumeRestart checks for the restart annotation. If set to "true", deletes it via

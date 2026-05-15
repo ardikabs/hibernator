@@ -51,6 +51,11 @@ const (
 	// Valid values: OverridePhaseTargetHibernate, OverridePhaseTargetWakeup.
 	AnnotationOverridePhaseTarget = "hibernator.ardikabs.com/override-phase-target"
 
+	// AnnotationOverrideUntil is the annotation key that specifies when the override action
+	// will be automatically disabled.
+	// Value format: RFC3339 timestamp (e.g., "2026-01-15T06:00:00Z").
+	AnnotationOverrideUntil = "hibernator.ardikabs.com/override-until"
+
 	// AnnotationRestart is a one-shot annotation that re-triggers the last executor operation
 	// as recorded in .Status.CurrentOperation, even when the plan is already at a stable
 	// resting phase (which would normally be a no-op).
