@@ -69,6 +69,12 @@ func (s *preSuspensionState) performSuspension(ctx context.Context) (StateResult
 		plan.Annotations = make(map[string]string)
 	}
 
+	if !plan.Spec.Suspend {
+		// auto-suspend path (triggered by suspend-until without explicit Spec.Suspend):
+		// align Spec with the PhaseSuspended status we are about to write.
+		plan.Spec.Suspend = true
+	}
+
 	plan.Annotations[wellknown.AnnotationSuspendedAtPhase] = string(plan.Status.Phase)
 	if err := s.patchAndPreserveStatus(ctx, plan, client.MergeFrom(orig)); err != nil {
 		return StateResult{}, fmt.Errorf("failed to record suspended-at-phase annotation: %w", err)
