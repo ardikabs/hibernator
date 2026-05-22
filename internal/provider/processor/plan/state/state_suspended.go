@@ -67,7 +67,6 @@ func (state *suspendedState) Handle(ctx context.Context) (StateResult, error) {
 				log.Error(err, "failed to auto-resume from suspension deadline")
 				return StateResult{}, err
 			}
-			// Fall through to resume logic below.
 		}
 	}
 
