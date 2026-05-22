@@ -1,6 +1,6 @@
 # Hibernator Operator Helm Chart
 
-![Version: 1.4.0](https://img.shields.io/badge/Version-1.4.0-informational?style=flat-square) ![Type: application](https://img.shields.io/badge/Type-application-informational?style=flat-square) ![AppVersion: 1.6.0](https://img.shields.io/badge/AppVersion-1.6.0-informational?style=flat-square)
+![Version: 1.5.0](https://img.shields.io/badge/Version-1.5.0-informational?style=flat-square) ![Type: application](https://img.shields.io/badge/Type-application-informational?style=flat-square) ![AppVersion: 1.6.0](https://img.shields.io/badge/AppVersion-1.6.0-informational?style=flat-square)
 
 A Helm chart for Hibernator Operator - Kubernetes-native time-based infrastructure hibernation.
 
@@ -14,7 +14,7 @@ A Helm chart for Hibernator Operator - Kubernetes-native time-based infrastructu
 
 ## Prerequisites
 
-- Kubernetes 1.24+
+- Kubernetes 1.33+
 - Helm 3.0+
 - (Optional) cert-manager 1.7+ for automatic webhook certificate management
 
