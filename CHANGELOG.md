@@ -1,3 +1,73 @@
+<a name="v1.6.0"></a>
+
+## [v1.6.0](https://github.com/ardikabs/hibernator/compare/v1.5.0...v1.6.0) (2026-05-22)
+
+### ✨ Features
+
+* override-until and cli support ([#155](https://github.com/ardikabs/hibernator/issues/155))
+* new TagSelector for AWS-related executors ([#151](https://github.com/ardikabs/hibernator/issues/151))
+* add cache package and revamp notif ratelimit ([#146](https://github.com/ardikabs/hibernator/issues/146))
+* implement caching for notification state ([#145](https://github.com/ardikabs/hibernator/issues/145))
+* support ratelimiter with RPM ([#142](https://github.com/ardikabs/hibernator/issues/142))
+* introduce ratelimiter for notification sink ([#140](https://github.com/ardikabs/hibernator/issues/140))
+* make timestamp output to be local aware ([#135](https://github.com/ardikabs/hibernator/issues/135))
+* revamp data model with Strategy pattern ([#131](https://github.com/ardikabs/hibernator/issues/131))
+* handle pending state on exec/rds ([#129](https://github.com/ardikabs/hibernator/issues/129))
+* introduce cycle id tracker in restore point for idempotency handling ([#128](https://github.com/ardikabs/hibernator/issues/128))
+* cli restore subcommand with stale info ([#127](https://github.com/ardikabs/hibernator/issues/127))
+* refactor restore data flow on runner ([#126](https://github.com/ardikabs/hibernator/issues/126))
+* using keyedworker pool for notification handling ([#121](https://github.com/ardikabs/hibernator/issues/121))
+* sink slack progression on delivery mode of thread ([#115](https://github.com/ardikabs/hibernator/issues/115))
+* sink slack with custom delivery mode ([#114](https://github.com/ardikabs/hibernator/issues/114))
+* sink slack with json format for blocks support ([#112](https://github.com/ardikabs/hibernator/issues/112))
+* add new event for per target execution progress notification ([#107](https://github.com/ardikabs/hibernator/issues/107))
+* implement HibernateNotification CRD feature ([#96](https://github.com/ardikabs/hibernator/issues/96))
+* add Connector context to the notification payload ([#102](https://github.com/ardikabs/hibernator/issues/102))
+* unifying validation webhook path ([#97](https://github.com/ardikabs/hibernator/issues/97))
+* notification lifecycle processor and status callback ([#98](https://github.com/ardikabs/hibernator/issues/98))
+* **cmd:** add notification subcommand ([#101](https://github.com/ardikabs/hibernator/issues/101))
+* **executor:** propagate success execution message ([#100](https://github.com/ardikabs/hibernator/issues/100))
+
+### 🐛 Bug Fixes
+
+* idempotency handling for deletion-based executor (Karpenter) ([#154](https://github.com/ardikabs/hibernator/issues/154))
+* add poke helper for updated timer ([#152](https://github.com/ardikabs/hibernator/issues/152))
+* worker deadline and idle timer ([#150](https://github.com/ardikabs/hibernator/issues/150))
+* use bigger retry attempts to align with send timeout ([#149](https://github.com/ardikabs/hibernator/issues/149))
+* use LinearJitterBackoff and add retry max capacity ([#148](https://github.com/ardikabs/hibernator/issues/148))
+* ensure idempotency and consistency in ratelimiter ([#144](https://github.com/ardikabs/hibernator/issues/144))
+* implement ratelimit in transport level instead of operation ([#143](https://github.com/ardikabs/hibernator/issues/143))
+* extend retry and timeout on dispatch during Send notification operation ([#139](https://github.com/ardikabs/hibernator/issues/139))
+* ensure auth validation is coming from runner SA ([#138](https://github.com/ardikabs/hibernator/issues/138))
+* [exec/workloadscaler] idempotency on shutdown ([#133](https://github.com/ardikabs/hibernator/issues/133))
+* clarify between capturedAt and reportedAt on restore ([#134](https://github.com/ardikabs/hibernator/issues/134))
+* job should be marked stale on terminal state ([#132](https://github.com/ardikabs/hibernator/issues/132))
+* ensure correct data format passed for execution state ([#130](https://github.com/ardikabs/hibernator/issues/130))
+* [exec/ec2] ensure restore point captures all instances regardless of state ([#123](https://github.com/ardikabs/hibernator/issues/123))
+* inconsistent state handling ([#122](https://github.com/ardikabs/hibernator/issues/122))
+* provide clear information on logs command ([#119](https://github.com/ardikabs/hibernator/issues/119))
+* EC2 executor tolerate on missing instance ([#118](https://github.com/ardikabs/hibernator/issues/118))
+* race condition between execution progress and completed event ([#117](https://github.com/ardikabs/hibernator/issues/117))
+* internal cmd error handler ([#110](https://github.com/ardikabs/hibernator/issues/110))
+* adjust notification lifecycle ([#106](https://github.com/ardikabs/hibernator/issues/106))
+* execution summary also record on error phase ([#103](https://github.com/ardikabs/hibernator/issues/103))
+* fix and refactor planner especially DAG for reverse ([#95](https://github.com/ardikabs/hibernator/issues/95))
+
+### 🛠️ Code Refactoring
+
+* restore manager single initialization ([#136](https://github.com/ardikabs/hibernator/issues/136))
+* executor ec2 on wakeup flow to be idempotent ([#120](https://github.com/ardikabs/hibernator/issues/120))
+* outcome messaging with domain-friendly message that include fix to consider stale resource during restore ([#116](https://github.com/ardikabs/hibernator/issues/116))
+* slack auto layout ([#113](https://github.com/ardikabs/hibernator/issues/113))
+* refine execution message on running and failure recovery ([#105](https://github.com/ardikabs/hibernator/issues/105))
+
+### 🧹 Miscellaneous
+
+* remove logger from timerset (notify) activity ([#153](https://github.com/ardikabs/hibernator/issues/153))
+* adjust log format on ratelimiter ([#147](https://github.com/ardikabs/hibernator/issues/147))
+* minor correctness ([#125](https://github.com/ardikabs/hibernator/issues/125))
+* cosmetic change like adding TODO marker ([#109](https://github.com/ardikabs/hibernator/issues/109))
+
 <a name="v1.5.0"></a>
 
 ## [v1.5.0](https://github.com/ardikabs/hibernator/compare/v1.4.1...v1.5.0) (2026-03-27)
