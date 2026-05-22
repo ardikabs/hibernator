@@ -224,6 +224,140 @@ func TestNew_SuspendRequested_AlreadySuspended_ReturnsSuspendedState(t *testing.
 }
 
 // ---------------------------------------------------------------------------
+// runPrePhaseGates — deletionGate
+// ---------------------------------------------------------------------------
+
+func TestDeletionGate_NilDeletionTimestamp_ReturnsNil(t *testing.T) {
+	plan := basePlanForState("p", hibernatorv1alpha1.PhaseActive)
+	c := newHandlerFakeClient(plan)
+	s := newHandlerState(plan, c)
+
+	h := deletionGate(s)
+	assert.Nil(t, h, "nil DeletionTimestamp should pass through the deletion gate")
+}
+
+func TestDeletionGate_ActiveDeletion_ReturnsLifecycleDeleteState(t *testing.T) {
+	plan := basePlanForState("p", hibernatorv1alpha1.PhaseActive)
+	now := metav1.NewTime(time.Now())
+	plan.DeletionTimestamp = &now
+	plan.Finalizers = []string{"hibernator.ardikabs.com/finalizer"}
+	c := newHandlerFakeClient(plan)
+	s := newHandlerState(plan, c)
+
+	h := deletionGate(s)
+	require.NotNil(t, h)
+	ls, ok := h.(*lifecycleState)
+	require.True(t, ok, "expected *lifecycleState for active deletion")
+	assert.True(t, ls.delete)
+}
+
+// ---------------------------------------------------------------------------
+// runPrePhaseGates — suspensionGate
+// ---------------------------------------------------------------------------
+
+func TestSuspensionGate_SpecSuspend_NotYetSuspended_ReturnsPreSuspensionState(t *testing.T) {
+	plan := basePlanForState("p", hibernatorv1alpha1.PhaseActive)
+	plan.Spec.Suspend = true
+	c := newHandlerFakeClient(plan)
+	s := newHandlerState(plan, c)
+
+	h := suspensionGate(s)
+	require.NotNil(t, h)
+	_, ok := h.(*preSuspensionState)
+	assert.True(t, ok, "Spec.Suspend=true should route to preSuspensionState")
+}
+
+func TestSuspensionGate_SpecSuspend_AlreadySuspended_ReturnsNil(t *testing.T) {
+	plan := basePlanForState("p", hibernatorv1alpha1.PhaseSuspended)
+	plan.Spec.Suspend = true
+	c := newHandlerFakeClient(plan)
+	s := newHandlerState(plan, c)
+
+	h := suspensionGate(s)
+	assert.Nil(t, h, "gate should pass through when already in PhaseSuspended")
+}
+
+func TestSuspensionGate_SuspendUntil_FutureDeadline_ReturnsPreSuspensionState(t *testing.T) {
+	plan := basePlanForState("p", hibernatorv1alpha1.PhaseActive)
+	plan.Annotations = map[string]string{
+		wellknown.AnnotationSuspendUntil: time.Now().Add(1 * time.Hour).UTC().Format(time.RFC3339),
+	}
+	c := newHandlerFakeClient(plan)
+	s := newHandlerState(plan, c)
+
+	h := suspensionGate(s)
+	require.NotNil(t, h)
+	_, ok := h.(*preSuspensionState)
+	assert.True(t, ok, "future suspend-until should auto-suspend via preSuspensionState")
+}
+
+func TestSuspensionGate_SuspendUntil_PastDeadline_ReturnsNil(t *testing.T) {
+	plan := basePlanForState("p", hibernatorv1alpha1.PhaseActive)
+	plan.Annotations = map[string]string{
+		wellknown.AnnotationSuspendUntil: time.Now().Add(-1 * time.Hour).UTC().Format(time.RFC3339),
+	}
+	c := newHandlerFakeClient(plan)
+	s := newHandlerState(plan, c)
+
+	h := suspensionGate(s)
+	assert.Nil(t, h, "past suspend-until deadline should pass through")
+}
+
+func TestSuspensionGate_SuspendUntil_InvalidFormat_ReturnsNil(t *testing.T) {
+	plan := basePlanForState("p", hibernatorv1alpha1.PhaseActive)
+	plan.Annotations = map[string]string{
+		wellknown.AnnotationSuspendUntil: "not-a-timestamp",
+	}
+	c := newHandlerFakeClient(plan)
+	s := newHandlerState(plan, c)
+
+	h := suspensionGate(s)
+	assert.Nil(t, h, "invalid suspend-until format should pass through")
+}
+
+func TestSuspensionGate_SuspendUntil_AlreadySuspended_ReturnsNil(t *testing.T) {
+	plan := basePlanForState("p", hibernatorv1alpha1.PhaseSuspended)
+	plan.Annotations = map[string]string{
+		wellknown.AnnotationSuspendUntil: time.Now().Add(1 * time.Hour).UTC().Format(time.RFC3339),
+	}
+	c := newHandlerFakeClient(plan)
+	s := newHandlerState(plan, c)
+
+	h := suspensionGate(s)
+	assert.Nil(t, h, "gate should pass through when already in PhaseSuspended")
+}
+
+// ---------------------------------------------------------------------------
+// runPrePhaseGates — priority ordering
+// ---------------------------------------------------------------------------
+
+func TestRunPrePhaseGates_DeletionBeatsSuspension(t *testing.T) {
+	// DeletionTimestamp set + Spec.Suspend=true: deletion gate fires first.
+	plan := basePlanForState("p", hibernatorv1alpha1.PhaseActive)
+	now := metav1.NewTime(time.Now())
+	plan.DeletionTimestamp = &now
+	plan.Finalizers = []string{"hibernator.ardikabs.com/finalizer"}
+	plan.Spec.Suspend = true
+	c := newHandlerFakeClient(plan)
+	s := newHandlerState(plan, c)
+
+	h := s.runPrePhaseGates()
+	require.NotNil(t, h)
+	ls, ok := h.(*lifecycleState)
+	require.True(t, ok, "deletion gate should win over suspension gate")
+	assert.True(t, ls.delete)
+}
+
+func TestRunPrePhaseGates_NoGateTriggered_ReturnsNil(t *testing.T) {
+	plan := basePlanForState("p", hibernatorv1alpha1.PhaseActive)
+	c := newHandlerFakeClient(plan)
+	s := newHandlerState(plan, c)
+
+	h := s.runPrePhaseGates()
+	assert.Nil(t, h, "no gate conditions met should return nil")
+}
+
+// ---------------------------------------------------------------------------
 // HandlerFunc
 // ---------------------------------------------------------------------------
 

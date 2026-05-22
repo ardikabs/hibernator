@@ -16,9 +16,9 @@ import (
 //  1. Deletion in progress (DeletionTimestamp set) — returns a lifecycleState
 //     configured for finalizer cleanup, regardless of the current phase.
 //
-//  2. Suspension requested (Spec.Suspend=true) but not yet reflected in status —
-//     returns an inline handler that calls TransitionToSuspended, which drains
-//     any in-flight executions before writing PhaseSuspended.
+//  2. Suspension pending (selectSuspensionHandler) — returns a preSuspensionState
+//     when either Spec.Suspend=true or a suspend-until annotation carries a future
+//     deadline. Skipped when already in PhaseSuspended.
 //
 //  3. Phase-based dispatch — maps Status.Phase to its dedicated handler:
 //     - ""               → lifecycleState (initialisation / first-time setup)
@@ -37,17 +37,12 @@ import (
 // delegating to phase-specific handling. The pipeline is instantiated fresh on each
 // selectHandler call, allowing observations to be correctly scoped to each state.
 func selectHandler(s *state) Handler {
+	if h := s.runPrePhaseGates(); h != nil {
+		return h
+	}
+
 	plan := s.plan()
 
-	// Deletion in progress — run finalizer cleanup regardless of phase.
-	if !plan.DeletionTimestamp.IsZero() {
-		return &lifecycleState{state: s, delete: true}
-	}
-	if plan.Spec.Suspend &&
-		plan.Status.Phase != hibernatorv1alpha1.PhaseSuspended {
-		// Suspension requested but not yet in PhaseSuspended — transition first.
-		return &preSuspensionState{state: s}
-	}
 	// Phase-based dispatch.
 	switch plan.Status.Phase {
 	case "":
@@ -93,4 +88,28 @@ func selectIdleHandler(s *state) Handler {
 	}
 
 	return idle
+}
+
+// runPrePhaseGates serves as the interceptor pipeline for the state machine,
+// evaluating a series of "guards" before the core phase logic executes.
+//
+// This function implements a first-match-wins (short-circuit) strategy:
+// It iterates through registered gates in strict priority order. If any gate
+// determines that a state transition is required (e.g., entering suspension),
+// it returns the corresponding Handler immediately, rerouting the reconciliation
+// flow.
+func (s *state) runPrePhaseGates() Handler {
+	// List your gates in priority order
+	gates := []Gate{
+		deletionGate,
+		suspensionGate,
+	}
+
+	for _, check := range gates {
+		if handler := check(s); handler != nil {
+			return handler
+		}
+	}
+
+	return nil
 }

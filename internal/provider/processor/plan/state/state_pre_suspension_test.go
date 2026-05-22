@@ -186,3 +186,19 @@ func TestPreSuspensionState_Suspension_RecordsTimestampInStatus(t *testing.T) {
 	require.NotNil(t, plan.Status.LastTransitionTime)
 	assert.NotZero(t, plan.Status.LastTransitionTime.Time)
 }
+
+func TestPreSuspensionState_AutoSuspend_SetsSuspendSpec(t *testing.T) {
+	// When triggered via suspend-until (Spec.Suspend=false), performSuspension
+	// must patch Spec.Suspend=true so that PhaseSuspended is always consistent
+	// with Spec.Suspend regardless of how the suspension was triggered.
+	plan := basePlanForState("p", hibernatorv1alpha1.PhaseActive)
+	// Spec.Suspend intentionally left false — simulates annotation-driven path.
+	c := newHandlerFakeClient(plan)
+	ps := newPreSuspensionState(plan, c)
+
+	_, err := ps.Handle(context.Background())
+	require.NoError(t, err)
+
+	assert.True(t, plan.Spec.Suspend,
+		"performSuspension should set Spec.Suspend=true even on the auto-suspend path")
+}
