@@ -1,3 +1,5 @@
+# BRANCHES_PLACEHOLDER
+
 tagFormat: "v${version}"
 
 plugins:
