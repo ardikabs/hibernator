@@ -82,10 +82,7 @@ jobs:
         with:
           version: v1.14.2
 
-      - name: Setup Semantic Release Config for App
-        run: cp .github/releaserc/app.releaserc.yml .releaserc.yml
-
-      - name: Prepare Semantic Release Branches Configuration
+      - name: Generate Semantic Release Config for App
         run: |
           chmod +x hack/generate-releaserc.sh
           ./hack/generate-releaserc.sh "${{ github.ref_name }}" "${{ github.event_name }}"
