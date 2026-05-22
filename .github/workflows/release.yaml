@@ -1,21 +1,55 @@
 name: Release
 
-run-name: Release - ${{ format('{0}',github.event.repository.updated_at) }}
+run-name: >-
+  ${{
+    github.event_name == 'workflow_dispatch' && format('🚀 Manual Release: {0}', github.event.inputs.reason) ||
+    github.event_name == 'push' && format('🛠️ Maintenance Patch: {0}', github.ref_name) ||
+    github.event_name == 'workflow_run' && format('🧪 RC Release: {0}', github.event.workflow_run.head_branch) ||
+    format('📦 Release - {0}', github.event.repository.updated_at)
+  }}
+
 
 on:
-  push:
+  workflow_run:
+    workflows: ["CI"] # Must match the 'name' of Workflow A
     branches:
-      - "stable"
+      - "main"
       - "release/v*"
+    types:
+      - completed
+
   workflow_dispatch:
+    inputs:
+      reason:
+        description: 'Provide a enough description for this release (e.g., "Release v1.5 <codename>").'
+        required: true
+        default: 'Next Release'
 
 jobs:
+  verification:
+    name: Verification
+    runs-on: ubuntu-latest
+    outputs:
+      should_release: ${{ steps.decision.outputs.run }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Release Decision
+        id: decision
+        run: |
+          chmod +x hack/release-gate.sh
+          ./hack/release-gate.sh \
+            --event "${{ github.event_name }}" \
+            --ref "${{ github.ref }}" \
+            --ref-name "${{ github.ref_name }}" \
+            --branch "${{ github.event.workflow_run.head_branch }}" \
+            --message "${{ github.event.workflow_run.head_commit.message }}"
+
   release:
     name: Release
-    if: |
-      (github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main') ||
-      (github.event_name == 'push' && startsWith(github.ref, 'refs/heads/release/v')) ||
-      (github.event_name == 'push' && startsWith(github.ref, 'refs/heads/stable'))
+    needs: [verification]
+    if: needs.verification.outputs.should_release == 'true'
     runs-on: ubuntu-latest
     permissions:
       contents: write
@@ -52,19 +86,10 @@ jobs:
         run: cp .github/releaserc/app.releaserc.yml .releaserc.yml
 
       - name: Prepare Semantic Release Branches Configuration
-        id: prep
         run: |
-          # Define the three components
-          MAIN_BRANCH='{"name": "main", "channel":  ${{ github.ref_name == 'main' && '"latest"' || '"next"' }}, "prerelease": ${{ github.ref_name == 'main' && 'false' || '"rc"' }}}'
-          STABLE_BRANCH='{"name": "stable", "channel": "stable"}'
-          REGEX_BRANCH='{"name": "release/v+([0-9]).+([0-9])", "range": "${name.replace(\"release/v\", \"\") + \".x\"}", "channel": "${name.replace(\"release/v\", \"\")}"}'
-
-          # Logic: If main, use 0 and 2. Otherwise (stable), use all three.
-          if [[ "${{ github.ref_name }}" == "main" ]]; then
-            echo "branches=[$MAIN_BRANCH, $REGEX_BRANCH]" >> $GITHUB_OUTPUT
-          else
-            echo "branches=[$MAIN_BRANCH, $STABLE_BRANCH, $REGEX_BRANCH]" >> $GITHUB_OUTPUT
-          fi
+          chmod +x hack/generate-releaserc.sh
+          ./hack/generate-releaserc.sh "${{ github.ref_name }}" "${{ github.event_name }}"
+          cat .releaserc.yml
 
       - name: Semantic Release (App)
         id: semantic
@@ -77,12 +102,6 @@ jobs:
             @semantic-release/git
             @semantic-release/exec
             conventional-changelog-conventionalcommits
-
-          # Workaround for https://github.com/semantic-release/semantic-release/issues/1487
-          # It will cover the release from main, but when moved to stable branch,
-          # the main branch marked as prerelease.
-          branches: |
-            ${{ steps.prep.outputs.branches }}
 
   # --- Publish Image (Only runs on new release) ---
   publish-image:
