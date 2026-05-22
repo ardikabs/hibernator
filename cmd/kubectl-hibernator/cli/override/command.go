@@ -195,7 +195,7 @@ func runOverride(ctx context.Context, opts *overrideOptions, planName string) er
 	if !deadline.IsZero() {
 		out.Hint("Override Until: %s (%s)",
 			timeparse.FormatDeadline(deadline),
-			timeparse.FormatDuration(deadline))
+			timeparse.FormatDuration(time.Now(), deadline))
 	} else {
 		out.Warning("Override Indefinitely: the plan will stay locked at the target phase until you run: kubectl hibernator override %s --disable", planName)
 	}

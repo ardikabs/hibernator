@@ -164,7 +164,7 @@ func runSuspend(ctx context.Context, opts *suspendOptions, planName string) erro
 	if !deadline.IsZero() {
 		out.Hint("Suspended Until: %s (%s)",
 			timeparse.FormatDeadline(deadline),
-			timeparse.FormatDuration(deadline))
+			timeparse.FormatDuration(time.Now(), deadline))
 	} else {
 		out.Warning("Suspended Indefinitely: the plan will stay suspended until you run: kubectl hibernator resume %s", planName)
 	}
