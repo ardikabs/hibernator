@@ -72,55 +72,8 @@ EOF
     echo "branches:" > "$TEMP_BRANCHES"
     echo "$result" >> "$TEMP_BRANCHES"
 }
-# 3. Scoped Generator: Commit Plugins Configuration
-generate_plugins_config() {
-    msg "Generating plugin context..."
 
-    # 1. Shared Analyzer Rules (Used by both standard analyzer and unsquash)
-    local ANALYZER_CONFIG='{
-        "preset": "conventionalcommits",
-        "releaseRules": [
-          {"type": "feat", "release": "minor"},
-          {"type": "fix", "release": "patch"},
-          {"type": "perf", "release": "patch"}
-        ]
-      }'
-
-    # 2. Shared Release Notes Preset (Section headers and emojis)
-    local NOTES_CONFIG='{
-        "preset": "conventionalcommits",
-        "presetConfig": {
-          "types": [
-            {"type": "feat", "section": "✨ Features", "hidden": false},
-            {"type": "fix", "section": "🐛 Bug Fixes", "hidden": false},
-            {"type": "perf", "section": "🚀 Performance Improvements", "hidden": false},
-            {"type": "chore", "section": "🧹 Miscellaneous", "hidden": false},
-            {"type": "refactor", "section": "🛠️ Code Refactoring", "hidden": false}
-          ]
-        }
-      }'
-
-    if [[ "$CURRENT_BRANCH" == release/v* ]]; then
-        # Maintenance branch: Use the unsquash wrapper with the shared configs
-cat <<EOF > "$TEMP_PLUGINS"
-- [
-    "semantic-release-unsquash",
-    {
-      "commitAnalyzerConfig": $ANALYZER_CONFIG,
-      "noteGeneratorConfig": $NOTES_CONFIG
-    }
-  ]
-EOF
-    else
-        # Standard branches: Use individual plugins with shared configs
-cat <<EOF > "$TEMP_PLUGINS"
-- ["@semantic-release/commit-analyzer", $ANALYZER_CONFIG]
-- ["@semantic-release/release-notes-generator", $NOTES_CONFIG]
-EOF
-    fi
-}
-
-# 4. Final Assembly
+# 3. Final Assembly
 assemble_config() {
     # Fix: Pipe the output so both placeholders are replaced in one flow
     sed -e "/# BRANCHES_PLACEHOLDER/r $TEMP_BRANCHES" \
@@ -133,7 +86,6 @@ assemble_config() {
 
 # --- Execution ---
 generate_branches_config
-generate_plugins_config
 assemble_config
 
 msg "✅ Generated $OUTPUT_FILE for $CURRENT_BRANCH."

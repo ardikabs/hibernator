@@ -104,7 +104,6 @@ jobs:
             @semantic-release/git
             @semantic-release/exec
             conventional-changelog-conventionalcommits
-            semantic-release-unsquash
 
   # --- Publish Image (Only runs on new release) ---
   publish-image:
