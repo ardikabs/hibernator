@@ -1,3 +1,11 @@
+<a name="v1.6.1"></a>
+
+## [v1.6.1](https://github.com/ardikabs/hibernator/compare/v1.6.0...v1.6.1) (2026-05-23)
+
+### 🧹 Miscellaneous
+
+* [release/v1.6] hotfix ([#163](https://github.com/ardikabs/hibernator/issues/163))
+
 <a name="v1.6.0"></a>
 
 ## [v1.6.0](https://github.com/ardikabs/hibernator/compare/v1.5.0...v1.6.0) (2026-05-22)
