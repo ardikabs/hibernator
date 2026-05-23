@@ -10,18 +10,19 @@ run-name: >-
 
 
 on:
-  workflow_run:
-    workflows: ["CI"] # Must match the 'name' of Workflow A
+  push:
     branches:
-      - "main"
       - "release/v*"
+
+  workflow_run:
+    workflows: ["CI"]
     types:
       - completed
 
   workflow_dispatch:
     inputs:
       reason:
-        description: 'Provide a enough description for this release (e.g., "Release v1.5 <codename>").'
+        description: 'Short description about this release (e.g., "Release v1.5 <codename>").'
         required: true
         default: 'Next Release'
 
@@ -29,6 +30,9 @@ jobs:
   verification:
     name: Verification
     runs-on: ubuntu-latest
+    if: |
+      (github.event_name == 'workflow_run' && github.event.workflow_run.head_branch == 'main') ||
+      (github.event_name == 'push' && startsWith(github.ref, 'refs/heads/release/v'))
     outputs:
       should_release: ${{ steps.decision.outputs.run }}
     steps:
@@ -37,14 +41,15 @@ jobs:
 
       - name: Release Decision
         id: decision
+        env:
+          TARGET_BRANCH: "${{ github.event.workflow_run.head_branch || github.ref_name }}"
+          COMMIT_MSG: "${{ github.event.workflow_run.head_commit.message || '' }}"
         run: |
           chmod +x hack/release-gate.sh
           ./hack/release-gate.sh \
             --event "${{ github.event_name }}" \
-            --ref "${{ github.ref }}" \
-            --ref-name "${{ github.ref_name }}" \
-            --branch "${{ github.event.workflow_run.head_branch }}" \
-            --message "${{ github.event.workflow_run.head_commit.message }}"
+            --branch "$TARGET_BRANCH" \
+            --message "$COMMIT_MSG"
 
   release:
     name: Release
