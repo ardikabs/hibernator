@@ -22,6 +22,7 @@ Hibernator is a Kubernetes operator that provides centralized, declarative manag
 - 🔌 **Pluggable executor model** for AWS (EKS, RDS, EC2, Karpenter)
 - 🔒 **Isolated runner jobs** with scoped RBAC, IRSA, and projected ServiceAccount tokens
 - 📊 **Real-time progress streaming** via gRPC (preferred) or HTTP webhooks (fallback)
+- 🔔 **Event-driven notifications** via Slack, Telegram, or generic webhooks on lifecycle events
 - 💾 **Durable restore metadata** persisted in ConfigMaps for safe recovery
 
 ## Why Hibernator?
@@ -84,6 +85,7 @@ The operator adopts a **unified reconciler pattern**:
 - **Supported Executors**: EKS, RDS, EC2, Karpenter, and generic WorkloadScaler.
 - **Security**: RBAC-scoped runners, IRSA support, and TokenReview authentication.
 - **Schedule Exceptions**: Temporary overrides for emergency events or maintenance.
+- **Notifications**: `HibernateNotification` CRD with Slack (channel/thread), Telegram, and generic webhook sinks. Selector-based fan-out to multiple plans; fires on `Start`, `Success`, `Failure`, `Recovery`, `PhaseChange`, and `ExecutionProgress` events. Credentials stored exclusively in Secrets with optional Go template customisation via ConfigMap.
 
 ## Documentation
 
