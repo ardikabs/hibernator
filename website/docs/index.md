@@ -20,6 +20,7 @@ Hibernator is a Kubernetes operator that provides centralized, declarative manag
 - :material-power-plug-outline: **Pluggable executor model** for AWS (EKS, RDS, EC2, Karpenter)
 - :material-lock-outline: **Isolated runner jobs** with scoped RBAC, IRSA, and projected ServiceAccount tokens
 - :material-chart-line: **Real-time progress streaming** via gRPC or HTTP webhooks between runners and control plane
+- :material-bell-outline: **Event-driven notifications** via Slack, Telegram, or generic webhooks on lifecycle events
 - :material-database-outline: **Durable restore metadata** persisted in ConfigMaps for safe recovery
 
 ## Why Hibernator?
