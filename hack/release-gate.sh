@@ -42,10 +42,13 @@ case "$EVENT" in
   "workflow_dispatch")
     # Manual Trigger: Authorization check
     if [[ "$TARGET_BRANCH" == "main" || "$TARGET_BRANCH" == release/v* ]]; then
-      msg "✅ Match: Manual release authorized on $TARGET_BRANCH."
+      msg "✅ Match: Release authorized for cutoff branch ($TARGET_BRANCH)."
       RUN_RELEASE=true
     else
-      msg "❌ Block: Manual releases not permitted on $TARGET_BRANCH."
+      msg "❌ Block: $TARGET_BRANCH is not a valid release path."
+      msg "--- Available Release Paths ---"
+      msg "1. Release: Manual trigger on a cutoff branch (main)."
+      msg "2. Release Candidate: Automated flow on 'main' via commit markers (e.g., Release-As: rc)."
     fi
     ;;
 
@@ -53,7 +56,7 @@ case "$EVENT" in
     # Automated RC: Only from main + commit message marker
     if [[ "$TARGET_BRANCH" == "main" ]]; then
       if echo "$MESSAGE" | grep -Ei "(Release-As|Release-Channel):\s*(rc|release-candidate)" > /dev/null; then
-        msg "✅ Match: Release marker found on main."
+        msg "✅ Match: Release marker found on main branch."
         RUN_RELEASE=true
       else
         msg "ℹ️ Info: No release marker in message."
@@ -66,7 +69,7 @@ case "$EVENT" in
   "push")
     # Maintenance/Stable: Automated on push
     if [[ "$TARGET_BRANCH" == release/v* ]]; then
-      msg "✅ Match: Direct push release for $TARGET_BRANCH."
+      msg "✅ Match: Maintenance branch push event detected ($TARGET_BRANCH)."
       RUN_RELEASE=true
     else
       msg "ℹ️ Info: Push to $TARGET_BRANCH does not trigger release."
