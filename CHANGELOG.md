@@ -1,3 +1,12 @@
+<a name="v1.6.1"></a>
+
+## [v1.6.1](https://github.com/ardikabs/hibernator/compare/v1.6.0...v1.6.1) (2026-05-23)
+
+### 🐛 Bug Fixes
+
+* prevent concurrent map read/write when marking jobs stale ([#160](https://github.com/ardikabs/hibernator/issues/160))
+* suspension during state selection ([#161](https://github.com/ardikabs/hibernator/issues/161))
+
 <a name="v1.6.0"></a>
 
 ## [v1.6.0](https://github.com/ardikabs/hibernator/compare/v1.5.0...v1.6.0) (2026-05-22)
