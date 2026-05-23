@@ -59,15 +59,15 @@ func ParseDeadline(input string, now time.Time) (time.Time, error) {
 
 	// Try each tier in order
 	if t, ok := parseNaturalLanguage(input, now); ok {
-		return validateDeadline(t)
+		return validateDeadline(t, now)
 	}
 
-	if t, ok := parseSimpleFormats(input); ok {
-		return validateDeadline(t)
+	if t, ok := parseSimpleFormats(input, now); ok {
+		return validateDeadline(t, now)
 	}
 
 	if t, ok := parseRFC3339(input); ok {
-		return validateDeadline(t)
+		return validateDeadline(t, now)
 	}
 
 	return time.Time{}, fmt.Errorf(
@@ -270,7 +270,8 @@ func parseTimeOfDay(input string) (time.Time, bool) {
 
 // parseSimpleFormats handles simple date/time formats without timezone info.
 // These are interpreted in the user's local timezone.
-func parseSimpleFormats(input string) (time.Time, bool) {
+// The now parameter provides the reference date for time-only inputs.
+func parseSimpleFormats(input string, now time.Time) (time.Time, bool) {
 	input = strings.TrimSpace(input)
 
 	// Try various date/time layouts
@@ -305,9 +306,8 @@ func parseSimpleFormats(input string) (time.Time, bool) {
 		}
 	}
 
-	// Try time-only formats (assumes today)
+	// Try time-only formats (assumes reference date from now)
 	if t, ok := parseTimeOfDay(input); ok {
-		now := time.Now()
 		result := time.Date(
 			now.Year(), now.Month(), now.Day(),
 			t.Hour(), t.Minute(), t.Second(), 0,
@@ -333,8 +333,8 @@ func parseRFC3339(input string) (time.Time, bool) {
 	return time.Time{}, false
 }
 
-// validateDeadline ensures the deadline is in the future.
-func validateDeadline(t time.Time) (time.Time, error) {
+// validateDeadline ensures the deadline is in the future relative to now.
+func validateDeadline(t, now time.Time) (time.Time, error) {
 	if t.IsZero() {
 		return time.Time{}, fmt.Errorf("parsed time is zero")
 	}
@@ -343,7 +343,7 @@ func validateDeadline(t time.Time) (time.Time, error) {
 	t = t.UTC()
 
 	// Check if deadline is in the past
-	if t.Before(time.Now().UTC()) {
+	if t.Before(now.UTC()) {
 		return time.Time{}, fmt.Errorf("deadline %s is in the past", t.Format(time.RFC3339))
 	}
 
@@ -375,13 +375,13 @@ func FormatDeadline(t time.Time) string {
 	)
 }
 
-// FormatDuration formats the time until a deadline in a human-readable way.
-func FormatDuration(until time.Time) string {
+// FormatDuration formats the duration from 'from' until 'until' in a human-readable way.
+func FormatDuration(from, until time.Time) string {
 	if until.IsZero() {
 		return ""
 	}
 
-	d := time.Until(until)
+	d := until.Sub(from)
 	if d < 0 {
 		return "overdue"
 	}

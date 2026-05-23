@@ -360,7 +360,7 @@ func TestFormatDuration(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			until := now.Add(tt.d)
-			got := FormatDuration(until)
+			got := FormatDuration(now, until)
 			if !strings.Contains(got, tt.wantContains) {
 				t.Errorf("FormatDuration() = %v, should contain %v", got, tt.wantContains)
 			}

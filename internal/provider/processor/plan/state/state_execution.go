@@ -363,7 +363,7 @@ func (s *state) updateExecutionStatuses(ctx context.Context,
 
 				// Mark job as stale immediately upon reaching terminal state.
 				// This prevents the job from being re-associated on restart.
-				go s.markJobAsStale(ctx, log, &job)
+				go s.markJobAsStale(ctx, log, job.DeepCopy())
 			}
 
 			if execID, ok := job.Labels[wellknown.LabelExecutionID]; ok {
