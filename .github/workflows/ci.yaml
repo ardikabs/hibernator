@@ -4,19 +4,12 @@ on:
   push:
     branches:
       - main
-      - "release/v*"
-    paths:
-      - api/**
-      - cmd/**
-      - internal/**
-      - pkg/**
-      - test/**
-      - go.mod
 
   pull_request:
     branches:
       - main
-      - "release/v*"
+      - release/v*
+
     paths:
       - api/**
       - cmd/**
