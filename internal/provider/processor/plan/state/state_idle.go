@@ -155,7 +155,12 @@ func (state *idleState) transitionToWakingUp(log logr.Logger) (StateResult, erro
 
 // getExistingCycleIDForHibernation checks if there's existing live restore data for any target
 // in the plan and returns the cycle ID from that data. This enables idempotent restarts by
-// reusing the same cycle ID when the runner restarts mid-hibernation.
+// reusing the same cycle ID when the runner restarts mid-hibernation, or when a suspended
+// plan resumes and the schedule re-triggers hibernation.
+//
+// Restore data is the authoritative source of truth for cycle liveness. As long as
+// data.IsLive is true, the cycle is considered active regardless of plan status changes
+// (suspension, resume, worker restart, etc.).
 // Returns empty string if no live restore data exists.
 func (state *idleState) getExistingCycleIDForHibernation(ctx context.Context, log logr.Logger, plan *hibernatorv1alpha1.HibernatePlan) string {
 	if state.RestoreManager == nil {
