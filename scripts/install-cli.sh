@@ -4,6 +4,10 @@
 # Usage: curl -sSL https://hibernator.ardikabs.com/install-cli.sh | bash
 #        curl -sSL https://hibernator.ardikabs.com/install-cli.sh | bash -s -- --version v1.2.3
 #
+# Supports two download formats:
+# 1. New format (preferred): Tarballs with checksums (kubectl-hibernator_v1.2.3_linux_amd64.tar.gz)
+# 2. Legacy format (fallback): Flat binaries (kubectl-hibernator-linux-amd64)
+#
 
 set -e
 
@@ -94,41 +98,107 @@ get_latest_version() {
     echo "$version"
 }
 
-# Download the binary
+# Download from URL to file
+# Returns 0 on success, 1 on failure
+download_file() {
+    local url="$1"
+    local output="$2"
+    curl -sSL --fail "$url" -o "$output" 2>/dev/null
+}
+
+# Try to download tarball format (new, with checksums)
+# Returns: asset_name on success, empty on failure
+try_download_tarball() {
+    local version="$1"
+    local os="$2"
+    local arch="$3"
+    local tmp_dir="$4"
+
+    local asset_name="${BINARY_NAME}_${version}_${os}_${arch}.tar.gz"
+    local url="https://github.com/${REPO}/releases/download/${version}/${asset_name}"
+    local output_path="${tmp_dir}/${asset_name}"
+
+    if download_file "$url" "$output_path"; then
+        echo "$asset_name"
+        return 0
+    fi
+    return 1
+}
+
+# Try to download flat binary format (legacy, backward compatible)
+# Returns: asset_name on success, empty on failure
+try_download_flat() {
+    local version="$1"
+    local os="$2"
+    local arch="$3"
+    local tmp_dir="$4"
+
+    local asset_name="${BINARY_NAME}-${os}-${arch}"
+    local url="https://github.com/${REPO}/releases/download/${version}/${asset_name}"
+    local output_path="${tmp_dir}/${asset_name}"
+
+    if download_file "$url" "$output_path"; then
+        echo "$asset_name"
+        return 0
+    fi
+    return 1
+}
+
+# Download the binary (tries tarball first, falls back to flat binary)
 download_binary() {
     local version="$1"
     local os="$2"
     local arch="$3"
     local tmp_dir="$4"
-    
-    local asset_name="${BINARY_NAME}_${version}_${os}_${arch}.tar.gz"
-    local url="https://github.com/${REPO}/releases/download/${version}/${asset_name}"
-    
-    print_info "Downloading ${BINARY_NAME} ${version} for ${os}/${arch}..."
-    
-    if ! curl -sSL "$url" -o "${tmp_dir}/${asset_name}"; then
-        print_error "Failed to download from: $url"
-        print_info "Make sure version $version exists and supports ${os}/${arch}"
-        exit 1
+
+    local asset_name
+
+    # Try new tarball format first (with checksums)
+    print_info "Attempting to download tarball format..."
+    if asset_name=$(try_download_tarball "$version" "$os" "$arch" "$tmp_dir"); then
+        echo "$asset_name tarball"
+        return 0
     fi
-    
-    echo "$asset_name"
+
+    # Fall back to legacy flat binary format
+    print_info "Tarball not found, trying legacy flat binary format..."
+    if asset_name=$(try_download_flat "$version" "$os" "$arch" "$tmp_dir"); then
+        # Make it executable since flat binaries don't preserve permissions
+        echo "$asset_name flat"
+        return 0
+    fi
+
+    # Both failed
+    print_error "Could not download binary for ${os}/${arch}"
+    print_info "Tried:"
+    print_info "  - ${BINARY_NAME}_${version}_${os}_${arch}.tar.gz (new format)"
+    print_info "  - ${BINARY_NAME}-${os}-${arch} (legacy format)"
+    print_info ""
+    print_info "Make sure version $version exists and supports ${os}/${arch}"
+    exit 1
 }
 
-# Verify checksum if available
+# Verify checksum if available (only for tarballs)
 verify_checksum() {
     local tmp_dir="$1"
     local asset_name="$2"
     local version="$3"
-    
+    local format="$4"
+
+    # Only verify checksums for tarball format
+    if [ "$format" != "tarball" ]; then
+        print_info "Flat binary format detected, skipping checksum verification"
+        return 0
+    fi
+
     local checksum_url="https://github.com/${REPO}/releases/download/${version}/checksums.txt"
     local checksum_file="${tmp_dir}/checksums.txt"
-    
-    if curl -sSL "$checksum_url" -o "$checksum_file" 2>/dev/null; then
+
+    if curl -sSL --fail "$checksum_url" -o "$checksum_file" 2>/dev/null; then
         print_info "Verifying checksum..."
         local expected_checksum
-        expected_checksum=$(grep "$asset_name" "$checksum_file" | awk '{print $1}')
-        
+        expected_checksum=$(grep "$asset_name" "$checksum_file" 2>/dev/null | awk '{print $1}')
+
         if [ -n "$expected_checksum" ]; then
             local actual_checksum
             if command -v sha256sum >/dev/null 2>&1; then
@@ -139,7 +209,7 @@ verify_checksum() {
                 print_warning "Neither sha256sum nor shasum found, skipping checksum verification"
                 return 0
             fi
-            
+
             if [ "$expected_checksum" != "$actual_checksum" ]; then
                 print_error "Checksum verification failed!"
                 print_error "Expected: $expected_checksum"
@@ -147,22 +217,45 @@ verify_checksum() {
                 exit 1
             fi
             print_success "Checksum verified successfully"
+        else
+            print_warning "Asset not found in checksums file, skipping verification"
         fi
     else
         print_warning "Could not download checksums file, skipping verification"
     fi
 }
 
-# Extract the binary
+# Extract the binary (handles both tarball and flat formats)
 extract_binary() {
     local tmp_dir="$1"
     local asset_name="$2"
-    
-    print_info "Extracting binary..."
-    tar -xzf "${tmp_dir}/${asset_name}" -C "$tmp_dir"
-    
+    local format="$3"
+
+    if [ "$format" = "tarball" ]; then
+        print_info "Extracting tarball..."
+        tar -xzf "${tmp_dir}/${asset_name}" -C "$tmp_dir"
+
+        if [ ! -f "${tmp_dir}/${BINARY_NAME}" ]; then
+            # Try to find the binary in the tarball
+            local extracted
+            extracted=$(find "$tmp_dir" -name "${BINARY_NAME}*" -type f | head -1)
+            if [ -n "$extracted" ]; then
+                mv "$extracted" "${tmp_dir}/${BINARY_NAME}"
+            else
+                print_error "Binary not found in tarball"
+                exit 1
+            fi
+        fi
+    else
+        # Flat binary - just rename it
+        print_info "Using flat binary (legacy format)..."
+        mv "${tmp_dir}/${asset_name}" "${tmp_dir}/${BINARY_NAME}"
+        chmod +x "${tmp_dir}/${BINARY_NAME}"
+    fi
+
+    # Verify the binary exists
     if [ ! -f "${tmp_dir}/${BINARY_NAME}" ]; then
-        print_error "Binary not found in archive"
+        print_error "Binary extraction failed"
         exit 1
     fi
 }
@@ -171,7 +264,7 @@ extract_binary() {
 install_binary() {
     local tmp_dir="$1"
     local target_path="${INSTALL_DIR}/${BINARY_NAME}"
-    
+
     # Check if we need sudo
     local use_sudo=""
     if [ ! -w "$INSTALL_DIR" ]; then
@@ -186,7 +279,7 @@ install_binary() {
             exit 1
         fi
     fi
-    
+
     # Check if binary already exists
     if [ -f "$target_path" ] && [ "$FORCE" != "true" ]; then
         print_warning "Binary already exists at $target_path"
@@ -197,7 +290,7 @@ install_binary() {
             exit 0
         fi
     fi
-    
+
     print_info "Installing to $target_path..."
     $use_sudo mv "${tmp_dir}/${BINARY_NAME}" "$target_path"
     $use_sudo chmod +x "$target_path"
@@ -206,12 +299,12 @@ install_binary() {
 # Verify installation
 verify_installation() {
     local target_path="${INSTALL_DIR}/${BINARY_NAME}"
-    
+
     if [ ! -f "$target_path" ]; then
         print_error "Installation failed: binary not found at $target_path"
         exit 1
     fi
-    
+
     # Test the binary
     if "$target_path" version >/dev/null 2>&1 || "$target_path" --version >/dev/null 2>&1 || "$target_path" -v >/dev/null 2>&1; then
         local installed_version
@@ -223,7 +316,7 @@ verify_installation() {
         print_warning "Binary installed but version check failed"
         print_info "Location: $target_path"
     fi
-    
+
     # Check if in PATH
     if command -v "$BINARY_NAME" >/dev/null 2>&1; then
         print_success "${BINARY_NAME} is available in your PATH"
@@ -254,6 +347,11 @@ Options:
     -i, --install-dir DIR    Installation directory (default: /usr/local/bin)
     -f, --force              Force overwrite if binary exists
     -h, --help               Show this help message
+
+Download Formats:
+    The installer tries multiple download formats for compatibility:
+    1. New format (preferred): kubectl-hibernator_v1.2.3_linux_amd64.tar.gz with checksums
+    2. Legacy format (fallback): kubectl-hibernator-linux-amd64 flat binary
 
 Examples:
     # Install latest version
@@ -300,39 +398,52 @@ parse_args() {
 # Main function
 main() {
     parse_args "$@"
-    
+
     print_info "========================================"
     print_info "  Hibernator CLI Installer"
     print_info "========================================"
     echo
-    
+
     # Detect OS and architecture
     local os arch
     os=$(detect_os)
     arch=$(detect_arch)
-    
+
     print_info "Detected: $os/$arch"
-    
+
     # Get version
     if [ -z "$VERSION" ]; then
         print_info "Detecting latest version..."
         VERSION=$(get_latest_version)
     fi
     print_info "Version: $VERSION"
-    
+
     # Create temp directory
     local tmp_dir
     tmp_dir=$(mktemp -d)
     trap "cleanup $tmp_dir" EXIT
-    
-    # Download and install
+
+    # Download binary (tries tarball first, then flat binary)
+    local download_result
+    download_result=$(download_binary "$VERSION" "$os" "$arch" "$tmp_dir")
+
     local asset_name
-    asset_name=$(download_binary "$VERSION" "$os" "$arch" "$tmp_dir")
-    verify_checksum "$tmp_dir" "$asset_name" "$VERSION"
-    extract_binary "$tmp_dir" "$asset_name"
+    local format
+    asset_name=$(echo "$download_result" | awk '{print $1}')
+    format=$(echo "$download_result" | awk '{print $2}')
+
+    print_info "Downloaded: $asset_name ($format)"
+
+    # Verify checksum (only for tarballs)
+    verify_checksum "$tmp_dir" "$asset_name" "$VERSION" "$format"
+
+    # Extract binary
+    extract_binary "$tmp_dir" "$asset_name" "$format"
+
+    # Install
     install_binary "$tmp_dir"
     verify_installation
-    
+
     echo
     print_success "Installation complete!"
     print_info ""
