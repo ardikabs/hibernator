@@ -109,8 +109,13 @@ func (state *suspendedState) OnDeadline(ctx context.Context) (StateResult, error
 // Priority order:
 //  1. Suspended-at-Error → resumeFromError() (operation-aware idle phase + idleState re-evaluates)
 //  2. Suspended-mid-execution → resumeFromExecution() (continue or route to idle baseline)
-//  3. Force-wakeup conditions met → forceWakeUpOnResume()
-//  4. Default → PhaseActive
+//  3. Force-wakeup conditions met → forceWakeUpOnResume() (suspended-at-Hibernated + on-hours + HasRestoreData)
+//  4. Default → PhaseActive (covers Active and Hibernated-during-off-hours)
+//
+// Note: PhaseHibernated during off-hours falls through to the default PhaseActive
+// path. idleState then re-evaluates and transitions back to Hibernating. This relies
+// on executor idempotency — the shutdown sequence is safe to re-run against an
+// already-hibernated resource. See findings: suspend-unsuspend-resume-routing.
 func (state *suspendedState) resume(ctx context.Context, log logr.Logger) (StateResult, error) {
 	plan := state.plan()
 
@@ -305,6 +310,13 @@ func (state *suspendedState) forceWakeUpOnResume(ctx context.Context, log logr.L
 	// initialises Executions, CycleID, StageIndex, and CurrentOperation.
 	// Going directly to WakingUp would inherit stale execution state from
 	// the pre-suspension cycle.
+	//
+	// Note: The PhaseHibernated mutation here is only in-memory. The status
+	// update is deferred to the next dispatch cycle via Requeue. If the worker
+	// crashes after cleanupSuspensionAnnotations succeeds but before the next
+	// dispatch, the plan restarts at PhaseSuspended with no suspended-at-phase
+	// annotation and falls through to PhaseActive (stranded). This is a known
+	// durability gap — see findings: suspend-unsuspend-resume-routing.
 	plan.Status.Phase = hibernatorv1alpha1.PhaseHibernated
 
 	log.Info("plan resumed to Hibernated phase, returning Requeue to trigger wake-up flow", "targetPhase", plan.Status.Phase)
