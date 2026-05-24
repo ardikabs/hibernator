@@ -4,12 +4,15 @@ on:
   push:
     branches: [main]
     paths:
+      - 'scripts/install-cli.sh'
       - 'website/**'
       - 'CHANGELOG.md'
       - '.github/workflows/docs.yml'
+
   pull_request:
     branches: [main]
     paths:
+      - 'scripts/install-cli.sh'
       - 'website/**'
       - '.github/workflows/docs.yml'
 

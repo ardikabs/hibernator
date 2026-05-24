@@ -25,21 +25,25 @@ YELLOW='\033[1;33m'
 BLUE='\033[0;34m'
 NC='\033[0m' # No Color
 
+msg() {
+    echo >&2 -e "$*"
+}
+
 # Print functions
 print_error() {
-    echo -e "${RED}Error: $1${NC}" >&2
+    msg "${RED}Error: $1${NC}"
 }
 
 print_success() {
-    echo -e "${GREEN}$1${NC}"
+    msg "${GREEN}$1${NC}"
 }
 
 print_info() {
-    echo -e "${BLUE}$1${NC}"
+    msg "${BLUE}$1${NC}"
 }
 
 print_warning() {
-    echo -e "${YELLOW}Warning: $1${NC}"
+    msg "${YELLOW}Warning: $1${NC}"
 }
 
 # Detect OS
@@ -329,12 +333,22 @@ verify_installation() {
 
 # Cleanup
 cleanup() {
-    local tmp_dir="$1"
-    if [ -d "$tmp_dir" ]; then
+    local exit_code=$?
+
+    # Only print "Cleaning up" if the script failed or if in a verbose mode
+    # This keeps successful installs "clean"
+    if [ $exit_code -ne 0 ]; then
+        print_warning "Script interrupted or failed. Cleaning up temporary files..."
+    else
+        msg "${YELLOW}Cleaning up temporary resources...${NC}"
+    fi
+
+    if [[ -n "${tmp_dir:-}" && -d "$tmp_dir" ]]; then
         rm -rf "$tmp_dir"
     fi
-}
 
+    exit $exit_code
+}
 # Print usage
 usage() {
     cat <<EOF
