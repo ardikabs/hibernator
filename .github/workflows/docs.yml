@@ -40,6 +40,11 @@ jobs:
       - name: Generate auto-rendered docs reference
         run: make generate
 
+      - name: Copy install script to website
+        run: |
+          cp scripts/install-cli.sh website/docs/install-cli.sh
+          chmod +x website/docs/install-cli.sh
+
       - name: Check for git diff in website directory
         run: git diff --exit-code website/
 

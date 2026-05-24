@@ -1,22 +1,36 @@
 ---
 rfc: RFC-0006
 title: Notification System via HibernateNotification CRD
-status: In Progress 🚀
+status: Implemented ✅
 date: 2026-02-16
-last-updated: 2026-04-13
+last-updated: 2026-05-23
 ---
 
 # RFC 0006 — Notification System via HibernateNotification CRD
 
 **Keywords:** Notifications, Alerting, Sinks, Webhooks, Slack, Teams, Discord, HibernateNotification, Observability, Event-Driven, Hooks, Templates
 
-**Status:** In Progress 🚀
+**Status:** Implemented ✅
 
 ## Summary
 
 This RFC proposes a decoupled, selector-based notification system for the Hibernator Operator. By introducing a new Custom Resource Definition (CRD) called `HibernateNotification`, users can define notification rules (triggers and sinks) that apply to one or multiple `HibernatePlan` resources based on label selectors. Notifications are delivered through a dedicated lifecycle that integrates with the async phase-driven reconciler via `PlanContext`, using pre/post hooks on status transitions to fire events. Users can customize message formatting through Go templates referenced from ConfigMaps.
 
 For Slack-specific formatting modes (`format=text|json`), template behavior per mode, and preset JSON layouts (`default|compact|auto`), see [RFC-0009](./0009-slack-block-kit-notification-format.md).
+
+## Implementation Notes
+
+This RFC has been **fully implemented** as of v1.x. All phases described in the Implementation Plan have been completed:
+
+- **CRD & API Types** — `HibernateNotification` CRD with sink types (Slack, Webhook, Discord, Teams), hook point enum, and `NotificationContext` for templating.
+- **Provider Integration** — `fetchAllNotifications()` integrated into Provider reconciler with field index by namespace and selector matching. Wired into `PlanContext.Notifications` and delivered via `watchable.Map`.
+- **NotificationDispatcher** — Standalone `Runnable` with buffered channel, goroutine pool, per-sink rate limiting, 5-second HTTP timeout, and Prometheus metrics (`hibernator_notification_sent_total`, `hibernator_notification_errors_total`).
+- **Template Engine** — `text/template` with Sprig function library, built-in default templates per sink type, ConfigMap lookup for custom templates, 1-second render timeout with fallback.
+- **Hook Wiring** — PreHook/PostHook closures in all state handlers dispatching `Start`, `Success`, `Failure`, `Recovery`, `PhaseChange`, and `ExecutionProgress` events.
+- **Testing** — Unit tests for selector matching, template rendering, sink adapters, rate limiting; integration tests via envtest; E2E tests with mock webhook endpoints.
+- **Documentation** — CRD reference, user guides, sample manifests, and troubleshooting documentation published.
+
+See [roadmap](../website/docs/roadmap.md) for current project status.
 
 ## Motivation
 

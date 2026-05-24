@@ -6,6 +6,11 @@ build:
   os: ubuntu-24.04
   tools:
     python: "3.13"
+  jobs:
+    pre_build:
+      # Copy install script to website docs so it's accessible from the site
+      - cp scripts/install-cli.sh website/docs/install-cli.sh
+      - chmod +x website/docs/install-cli.sh
 
 # Build documentation with Mkdocs
 mkdocs:

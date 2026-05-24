@@ -16,7 +16,8 @@ For detailed design documents, see the [proposals directory](https://github.com/
 | **Helm Chart** | :white_check_mark: Implemented | [Available](getting-started/installation.md#using-helm-recommended) |
 | **CI/CD Pipeline** | :white_check_mark: Implemented | GitHub Actions |
 | **kubectl hibernator CLI** | :white_check_mark: Implemented | [Available](user-guides/cli.md) |
-| **Notification System** | :rocket: In Progress | [RFC-0006](https://github.com/ardikabs/hibernator/tree/main/docs/proposals/0006-notification-system.md) |
+| **Notification System** | :white_check_mark: Implemented | Slack, email, webhook ([RFC-0006](https://github.com/ardikabs/hibernator/tree/main/docs/proposals/0006-notification-system.md)) |
+| **WorkloadScaler Executor** | :white_check_mark: Implemented | Kubernetes scale subresource |
 | **CLI One-Line Installer** | :hourglass: Pending | curl + bash installer |
 | **GCP Executors** | :zzz: On-Demand | Implemented when use case arises |
 | **Azure Executors** | :zzz: On-Demand | Implemented when use case arises |
@@ -35,6 +36,7 @@ For detailed design documents, see the [proposals directory](https://github.com/
 ### Executor Ecosystem
 
 - [x] AWS Executors: EKS (node groups + Karpenter), RDS, EC2
+- [x] Kubernetes Executor: WorkloadScaler (scale subresource)
 - [x] Executor registration and pluggable interface
 - [x] Per-executor parameter validation
 - [x] Restore metadata capture and persistence
@@ -72,6 +74,7 @@ For detailed design documents, see the [proposals directory](https://github.com/
 
 - [x] Stateless error reporting via Kubernetes Termination Messages
 - [x] Async phase-driven reconciler (Coordinator/Worker actor model)
+- [x] Error recovery with exponential backoff and manual retry (`retry-now` annotation)
 - [x] E2E test framework (lifecycle, execution strategies, schedule exceptions, error recovery)
 - [x] Helm Chart packaging
 - [x] CI/CD pipeline (GitHub Actions)
@@ -81,12 +84,13 @@ For detailed design documents, see the [proposals directory](https://github.com/
 
 ### Near-Term
 
-- **Notification System** — Slack, email, and webhook notifications for hibernation events ([RFC-0006](https://github.com/ardikabs/hibernator/tree/main/docs/proposals/0006-notification-system.md))
 - **CLI One-Line Installer** — `curl | bash` style installer for `kubectl-hibernator` via custom URL
 - **Lifecycle Processors for Connectors** — Introduce active status monitoring and lifecycle management for `K8SCluster` and `CloudProvider` resources.
+- **Concrete E2E Tests with Floci** — Integrate [floci](https://github.com/floci-io/floci) for real-world end-to-end validation against live cloud environments (AWS, GCP, Azure), validating full hibernation/wakeup cycles on actual infrastructure rather than mocks.
 
 ### Medium-Term
 
+- **ScheduleException Target Override** — Allow `ScheduleException` to override specific targets within a plan rather than the entire schedule. For example, keep the database running during a maintenance window while hibernating compute resources, or vice versa. This enables fine-grained per-target exception control.
 - **Exception Approval Workflows** — Slack/email-based approvals (Phase 6+)
 
 ### Long-Term
