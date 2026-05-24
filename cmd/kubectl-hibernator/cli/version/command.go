@@ -23,6 +23,14 @@ func NewCommand() *cobra.Command {
 		RunE: output.WrapRunE(func(ctx context.Context, args []string) error {
 			out := output.FromContext(ctx)
 			out.Info("kubectl-hibernator: %s", version.GetVersion())
+
+			// Check for updates (silently ignore errors)
+			checker := NewChecker()
+			if newVersion, hasUpdate := checker.CheckForUpdate(ctx); hasUpdate {
+				out.Info("")
+				out.Info(FormatUpdateMessage(newVersion))
+			}
+
 			return nil
 		}),
 	}

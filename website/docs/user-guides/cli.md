@@ -4,7 +4,31 @@ This guide covers how to use the `kubectl-hibernator` plugin for managing Hibern
 
 ## Installation
 
-Download the binary for your platform from the [GitHub Releases](https://github.com/ardikabs/hibernator/releases) page and place it on your `PATH`.
+### One-Line Installer (Recommended)
+
+The fastest way to install `kubectl-hibernator` is using the install script:
+
+```bash
+curl -sSL https://hibernator.ardikabs.com/install-cli.sh | bash
+```
+
+This automatically detects your operating system and architecture, downloads the latest release, verifies the checksum, and installs to `/usr/local/bin`.
+
+**Install a specific version:**
+
+```bash
+curl -sSL https://hibernator.ardikabs.com/install-cli.sh | bash -s -- --version v1.5.0
+```
+
+**Install to a custom directory:**
+
+```bash
+curl -sSL https://hibernator.ardikabs.com/install-cli.sh | bash -s -- --install-dir ~/bin
+```
+
+### Manual Installation
+
+Alternatively, download the binary for your platform from the [GitHub Releases](https://github.com/ardikabs/hibernator/releases) page and place it on your `PATH`.
 
 === "Linux (amd64)"
 
@@ -47,6 +71,22 @@ Verify the installation:
 ```bash
 kubectl hibernator version
 ```
+
+### Automatic Version Check
+
+The CLI automatically checks for updates when you run `kubectl hibernator version`. If a newer version is available (including release candidates), you'll see a message with installation instructions:
+
+```
+📦 A new version is available: v1.6.0-rc.1
+   Current version: v1.5.0 (abc1234)
+   Install with:
+   curl -sSL https://hibernator.ardikabs.com/install-cli.sh | bash -s -- --version v1.6.0-rc.1
+```
+
+**Key behaviors:**
+- **Release Candidate Preference**: When available, the CLI prefers release candidate versions (e.g., `v1.6.0-rc.1`) over stable versions, giving you access to the latest features.
+- **Offline Safe**: If the version check fails (no internet connection, GitHub API rate limit, etc.), the command completes silently without errors.
+- **Dev Builds Skipped**: Development builds (built from source without version tags) skip the update check entirely.
 
 ## Global Flags
 
