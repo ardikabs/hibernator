@@ -18,7 +18,7 @@ For detailed design documents, see the [proposals directory](https://github.com/
 | **kubectl hibernator CLI** | :white_check_mark: Implemented | [Available](user-guides/cli.md) |
 | **Notification System** | :white_check_mark: Implemented | Slack, email, webhook ([RFC-0006](https://github.com/ardikabs/hibernator/tree/main/docs/proposals/0006-notification-system.md)) |
 | **WorkloadScaler Executor** | :white_check_mark: Implemented | Kubernetes scale subresource |
-| **CLI One-Line Installer** | :hourglass: Pending | curl + bash installer |
+| **CLI One-Line Installer** | :white_check_mark: Implemented | curl + bash installer with tarball distribution and checksum verification |
 | **GCP Executors** | :zzz: On-Demand | Implemented when use case arises |
 | **Azure Executors** | :zzz: On-Demand | Implemented when use case arises |
 
@@ -79,12 +79,12 @@ For detailed design documents, see the [proposals directory](https://github.com/
 - [x] Helm Chart packaging
 - [x] CI/CD pipeline (GitHub Actions)
 - [x] kubectl hibernator CLI plugin
+- [x] One-line CLI installer (`curl | bash`) with tarball distribution and checksum verification
 
 ## Planned
 
 ### Near-Term
 
-- **CLI One-Line Installer** — `curl | bash` style installer for `kubectl-hibernator` via custom URL
 - **Lifecycle Processors for Connectors** — Introduce active status monitoring and lifecycle management for `K8SCluster` and `CloudProvider` resources.
 - **Concrete E2E Tests with Floci** — Integrate [floci](https://github.com/floci-io/floci) for real-world end-to-end validation against live cloud environments (AWS, GCP, Azure), validating full hibernation/wakeup cycles on actual infrastructure rather than mocks.
 
