@@ -287,7 +287,7 @@ install_binary() {
     # Check if binary already exists
     if [ -f "$target_path" ] && [ "$FORCE" != "true" ]; then
         print_warning "Binary already exists at $target_path"
-        read -p "Overwrite? [y/N] " -n 1 -r
+        read -p "Overwrite? [y/N] " -n 1 -r < /dev/tty
         echo
         if [[ ! $REPLY =~ ^[Yy]$ ]]; then
             print_info "Installation cancelled"
