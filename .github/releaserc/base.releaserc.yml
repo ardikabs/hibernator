@@ -59,7 +59,7 @@ plugins:
     {
       "assets": [
         {
-          "path": "dist/kubectl-hibernator/**/kubectl-hibernator-*",
+          "path": "dist/kubectl-hibernator/**/*",
         },
       ]
     }

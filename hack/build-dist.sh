@@ -1,10 +1,17 @@
 #!/bin/bash
+#
+# Build kubectl-hibernator CLI distribution for all platforms
+# Creates tarballs with checksums for the one-line installer
+#
+# Usage: ./hack/build-dist.sh [OPTIONS]
 
 set -euo pipefail
 
 help() {
 cat <<EOF
 Build kubectl-hibernator CLI distribution for all platforms
+Creates tarballs with SHA256 checksums
+
 Usage: ./hack/build-dist.sh [OPTIONS]
 
 Options:
@@ -14,6 +21,13 @@ Options:
   --go-cmd CMD              Go command to use (default: go)
   --platforms PLATFORMS     Platforms to build (default: darwin/amd64 darwin/arm64 linux/amd64 linux/arm64)
   --help                    Show this help message
+
+Outputs:
+  - Tarballs: kubectl-hibernator_<version>_<os>_<arch>.tar.gz
+  - Checksums: checksums.txt (SHA256 of all tarballs)
+
+Install:
+  curl -sSL https://hibernator.ardikabs.com/install-cli.sh | bash
 EOF
   exit 0
 }
@@ -80,7 +94,6 @@ if [ -z "$OUTPUT_DIR" ]; then
   OUTPUT_DIR="dist/kubectl-hibernator/${VERSION}"
 fi
 
-
 # Create output directory
 mkdir -p "$OUTPUT_DIR"
 
@@ -91,30 +104,66 @@ msg ""
 # Build LDFLAGS
 LDFLAGS=(-ldflags "-X github.com/ardikabs/hibernator/internal/version.Version=${VERSION} -X github.com/ardikabs/hibernator/internal/version.CommitHash=${COMMIT_HASH}")
 
+# Temporary directory for tarball contents
+TMP_DIR=$(mktemp -d)
+trap "rm -rf $TMP_DIR" EXIT
+
+# Array to store tarball paths for checksum generation
+declare -a TARBALLS=()
+
 # Build for each platform
 for platform in $PLATFORMS; do
   OS=$(echo "$platform" | cut -d'/' -f1)
   ARCH=$(echo "$platform" | cut -d'/' -f2)
+
+  # Names
   BINARY_NAME="kubectl-hibernator-${OS}-${ARCH}"
-  BINARY_PATH="${OUTPUT_DIR}/${BINARY_NAME}"
+  TARBALL_NAME="kubectl-hibernator_${VERSION}_${OS}_${ARCH}.tar.gz"
+  TARBALL_PATH="${OUTPUT_DIR}/${TARBALL_NAME}"
 
   msg "${CYAN}  Building for ${OS}/${ARCH}...${RESET}"
 
+  # Build binary in temp directory
+  TEMP_BINARY="${TMP_DIR}/${BINARY_NAME}"
   # shellcheck disable=SC2086
-  CGO_ENABLED=0 GOOS="$OS" GOARCH="$ARCH" $GO_CMD build "${LDFLAGS[@]}" -o "$BINARY_PATH" ./cmd/kubectl-hibernator
+  CGO_ENABLED=0 GOOS="$OS" GOARCH="$ARCH" $GO_CMD build "${LDFLAGS[@]}" -o "$TEMP_BINARY" ./cmd/kubectl-hibernator
 
-  if [ -f "$BINARY_PATH" ]; then
-    SIZE=$(ls -lh "$BINARY_PATH" | awk '{print $5}')
-    msg "${GREEN}    ✓ Built: ${BINARY_NAME} (${SIZE})${RESET}"
-  else
+  if [ ! -f "$TEMP_BINARY" ]; then
     msg "${RED}    ✗ Failed to build: ${BINARY_NAME}${RESET}"
     exit 1
   fi
+
+  # Create tarball
+  tar -czf "$TARBALL_PATH" -C "$TMP_DIR" "${BINARY_NAME}"
+  TARBALL_SIZE=$(ls -lh "$TARBALL_PATH" | awk '{print $5}')
+  TARBALLS+=("$TARBALL_PATH")
+  msg "${GREEN}    ✓ ${TARBALL_NAME} (${TARBALL_SIZE})${RESET}"
 done
 
 msg ""
+
+# Generate checksums.txt
+if [ ${#TARBALLS[@]} -gt 0 ]; then
+  CHECKSUM_FILE="${OUTPUT_DIR}/checksums.txt"
+  msg "${CYAN}  Generating checksums...${RESET}"
+
+  # Generate SHA256 checksums for all tarballs
+  sha256sum "${OUTPUT_DIR}"/kubectl-hibernator*.tar.gz > $CHECKSUM_FILE
+
+  msg "${GREEN}    ✓ checksums.txt${RESET}"
+fi
+
+msg ""
 msg "${GREEN}CLI distribution built in ${OUTPUT_DIR}${RESET}"
-msg "${GREEN}Run: ls -lh ${OUTPUT_DIR}${RESET}"
+msg ""
+msg "${CYAN}Artifacts:${RESET}"
+ls -lh "$OUTPUT_DIR" | tail -n +2 | awk '{printf "  %-10s %s\n", $5, $9}'
+msg ""
+msg "${CYAN}Install:${RESET}"
+msg "  curl -sSL https://hibernator.ardikabs.com/install-cli.sh | bash${RESET}"
 
 # Set outputs for GitHub Actions
-echo "new_release_git_sha_short=${COMMIT_HASH}" >> "${GITHUB_OUTPUT:-/dev/null}"
+if [ -n "${GITHUB_OUTPUT:-}" ]; then
+  echo "new_release_git_sha_short=${COMMIT_HASH}" >> "$GITHUB_OUTPUT"
+  echo "output_dir=${OUTPUT_DIR}" >> "$GITHUB_OUTPUT"
+fi
