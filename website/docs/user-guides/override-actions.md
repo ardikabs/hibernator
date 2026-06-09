@@ -176,11 +176,14 @@ Restart is a **one-shot** action that re-triggers the last executor operation as
 | **Behaviour** | Persistent | One-shot | One-shot |
 | **When to use** | Bypass schedule entirely | Re-run last operation | Recover from Error phase |
 | **Required phase** | Active or Hibernated | Active or Hibernated | Error |
+| **Respects schedule?** | No (bypasses) | No (replays last) | **No (replays original failure)** |
 | **Annotation consumed?** | No (user removes) | Yes (atomic) | Yes |
 | **CLI command** | `kubectl hibernator override` | `kubectl hibernator restart` | `kubectl hibernator retry` |
 
 !!! note "Retry vs Restart"
     **Retry** is for plans stuck in the `Error` phase — it clears error state and re-attempts the failed operation. **Restart** is for plans already at a stable phase (Active or Hibernated) — it voluntarily re-triggers the last operation. Use the right tool for the situation.
+
+    ⚠️ **Retry does not re-evaluate the schedule**. If the schedule window has shifted since the failure, `retry-now` will retry the *wrong* operation. See the [Error Recovery guide](error-recovery.md#schedule-window-mismatch) for workarounds.
 
 ## Annotation Reference
 

@@ -159,6 +159,35 @@ Common issues and their solutions.
       --tail=200 | grep -i error
     ```
 
+## Plan Failed But Schedule Window Has Changed
+
+**Symptoms**: Plan is in `Error` phase, but the current time is in the *opposite* schedule window (e.g., failed during hibernation but it's now wakeup time).
+
+**Root cause**: `retry-now` retries the **original** operation stored in `.status.currentOperation`, not the current schedule. This is intentional for safety — a recovery attempt must resume from the point of failure to avoid corrupting resource state.
+
+**Check**:
+
+1. Verify the current schedule window:
+    ```bash
+    kubectl get hibernateplan <name> -n hibernator-system \
+      -o jsonpath='{.status.currentOperation}'
+    # This shows the operation that will be retried
+    ```
+
+2. Check the controller logs for the warning:
+    ```bash
+    kubectl logs -n hibernator-system -l app=hibernator-controller \
+      --tail=100 | grep "conflicts with current schedule"
+    ```
+
+**Solutions**:
+
+1. **Suspend until the next schedule** (safest): Use the CLI or `suspend-until` annotation to suspend the plan with a deadline. When the deadline is reached, the controller automatically resumes the plan and evaluates the current schedule.
+
+2. **Resubmit the plan**: Delete and re-create the plan to reset all status fields. This is fast but loses execution history.
+
+For detailed steps, see the [Error Recovery](error-recovery.md#how-to-skip-a-failed-cycle-and-follow-the-current-schedule) guide.
+
 ## Getting Help
 
 If the issue persists:
