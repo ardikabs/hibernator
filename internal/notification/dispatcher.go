@@ -393,8 +393,8 @@ func (d *Dispatcher) drainSlot(slot keyedworker.Slot[Request]) {
 }
 
 // dispatch processes a single DispatchRequest: resolves credentials, builds
-// SendOptions with the Renderer and optional custom template, and delegates
-// formatting + delivery to the sink.
+// SendOptions with the optional custom template, and delegates formatting +
+// delivery to the sink.
 func (d *Dispatcher) dispatch(ctx context.Context, req Request) {
 	start := time.Now()
 	log := d.log.WithValues(

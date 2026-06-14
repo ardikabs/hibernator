@@ -1,6 +1,6 @@
 ---
 date: May 14, 2026
-status: investigated
+status: resolved
 component: Plan Worker Timer
 ---
 

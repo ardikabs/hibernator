@@ -40,87 +40,6 @@ bd prime              # Get workflow context + persistent memories
 
 Lifecycle: `Active → Hibernating → Hibernated → WakingUp`
 
-## Configuration Reference
-
-```yaml
-# Schedule format
-schedule:
-  timezone: "America/New_York"
-  offHours:
-    - start: "20:00"      # HH:MM 24-hour
-      end: "06:00"        # Next day if < start
-      daysOfWeek: ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday"]
-
-# Execution strategy
-execution:
-  strategy:
-    type: DAG             # Sequential | Parallel | DAG | Staged
-    maxConcurrency: 3
-    dependencies:         # Only for DAG
-      - from: database
-        to: application
-
-# Targets
-targets:
-  - name: my-target
-    type: eks
-    connectorRef:
-      kind: CloudProvider
-      name: aws-prod
-    parameters:
-      computePolicy:
-        mode: Both
-        order: [karpenter, managedNodeGroups]
-```
-
-## Key Implementation Details
-
-| Aspect | Details |
-|--------|---------|
-| **Restore Persistence** | ConfigMap `restore-data-{plan}`. Key: `{executor}_{target}`. JSON-encoded. |
-| **Runner Isolation** | Isolated K8s Jobs. Ephemeral ServiceAccounts + IRSA. Per-execution Secret mounting. |
-| **DAG Execution** | Kahn's algorithm topological sort. Cycle detection at admission. |
-| **Streaming** | gRPC preferred, webhook fallback. TokenReview auth. |
-| **Error Recovery** | Exponential backoff: `min(60s * 2^attempt, 30m)`. Max retries 0-10, default 3. |
-
-## Testing
-
-```bash
-# Target specific packages (PREFERRED)
-go test ./internal/executor/eks/... -v
-go test ./pkg/executorparams/... -v
-
-# Controller tests (requires envtest)
-go test ./internal/controller/...
-
-# E2E tests (NEVER run automatically - always ask!)
-go test ./test/e2e/... -v
-```
-
-## Common Tasks
-
-**Add new executor**:
-1. `internal/executor/{type}/{type}.go`
-2. Implement `Validate`, `Shutdown`, `WakeUp`
-3. Register in `cmd/runner/main.go`
-4. Add tests
-5. Document
-
-**Modify CRD**:
-1. Edit `api/v1alpha1/*_types.go`
-2. Run `make generate manifests`
-3. Update webhook validation
-4. Update samples in `config/samples/`
-
-## Documentation References
-
-| Category | Location |
-|----------|----------|
-| RFC Proposals | `docs/proposals/` |
-| User Journeys | `docs/user-journey/` |
-| Findings | `docs/findings/` |
-| Code of Conduct | `CONTRIBUTING.md` |
-
 ## RFC Registry
 
 | RFC | Status | Keywords |
@@ -134,23 +53,6 @@ go test ./test/e2e/... -v
 | [RFC-0007](docs/proposals/0007-kubectl-hibernator-cli-plugin.md) | Implemented | kubectl plugin, CLI |
 | [RFC-0008](docs/proposals/0008-async-phase-driven-reconciler.md) | Implemented | AsyncReconciler, WatchablePipeline, Coordinator |
 | [RFC-0009](docs/proposals/0009-slack-block-kit-notification-format.md) | Proposed | Slack, Block-Kit, Formatting |
-
-## User Journey Standards
-
-User journeys are created **at RFC approval time** (not after implementation).
-
-- **Location**: `docs/user-journey/`
-- **Tiers**: MVP (core), Enhanced (operational), Advanced (enterprise)
-- **Status badges**: Implemented, In Progress, Planned, Proposed, Maintenance, Obsolete
-
-## Findings Standards
-
-Findings track root cause investigations.
-
-- **Location**: `docs/findings/`
-- **Template**: `docs/findings/TEMPLATE.md`
-- **Status**: investigated, resolved, acked, deferred
-- **Required frontmatter**: `date`, `status`, `component`
 
 ---
 
