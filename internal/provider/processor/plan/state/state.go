@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/go-logr/logr"
+	"github.com/samber/lo"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/utils/ptr"
@@ -226,6 +227,100 @@ func (s *state) patchAndPreserveStatus(ctx context.Context, plan *hibernatorv1al
 // plan is a convenience shortcut to the current HibernatePlan.
 func (b *state) plan() *hibernatorv1alpha1.HibernatePlan {
 	return b.PlanCtx.Plan
+}
+
+// findActiveExceptionOverride finds the active exception with execution overrides
+// for the current plan. If multiple active exceptions have overrides, the most
+// recent one (by CreationTimestamp) is selected to ensure deterministic behavior.
+// Returns nil if no such exception exists.
+func (s *state) findActiveExceptionOverride() *hibernatorv1alpha1.ScheduleException {
+	now := s.Clock.Now()
+
+	var result *hibernatorv1alpha1.ScheduleException
+	for i := range s.PlanCtx.Exceptions {
+		exc := &s.PlanCtx.Exceptions[i]
+		if exc.Status.State != hibernatorv1alpha1.ExceptionStateActive {
+			continue
+		}
+		if exc.Spec.Type == hibernatorv1alpha1.ExceptionSuspend {
+			continue
+		}
+		if !exc.Spec.ValidFrom.Time.Before(now) || !now.Before(exc.Spec.ValidUntil.Time) {
+			continue
+		}
+		if len(exc.Spec.TargetOverrides) > 0 || exc.Spec.ExecutionOverride != nil {
+			if result == nil || exc.CreationTimestamp.After(result.CreationTimestamp.Time) {
+				result = exc
+			}
+		}
+	}
+
+	return result
+}
+
+// buildEffectivePlan creates a copy of the plan with execution overrides applied.
+// The returned plan is a deep copy; the original plan is never modified.
+// If no active exception has execution overrides, returns nil.
+func (s *state) buildEffectivePlan(plan *hibernatorv1alpha1.HibernatePlan) *hibernatorv1alpha1.HibernatePlan {
+	activeException := s.findActiveExceptionOverride()
+	if activeException == nil {
+		return nil
+	}
+
+	log := s.Log.WithValues("plan", s.Key.String(), "exception", activeException.Name)
+	log.V(1).Info("building effective plan with execution overrides", "type", activeException.Spec.Type)
+
+	// Deep copy the plan so the original is never modified
+	effectivePlan := plan.DeepCopy()
+
+	// Apply execution override
+	if activeException.Spec.ExecutionOverride != nil {
+		override := activeException.Spec.ExecutionOverride
+		if override.Strategy != nil {
+			effectivePlan.Spec.Execution.Strategy = *override.Strategy
+			log.V(1).Info("applied execution strategy override", "strategyType", override.Strategy.Type)
+		}
+		if override.Behavior != nil {
+			effectivePlan.Spec.Behavior = *override.Behavior
+			log.V(1).Info("applied behavior override", "mode", override.Behavior.Mode)
+		}
+	}
+
+	// Apply target overrides
+	if len(activeException.Spec.TargetOverrides) > 0 {
+		// First pass: remove disabled targets
+		for _, override := range activeException.Spec.TargetOverrides {
+			if override.Disabled {
+				effectivePlan.Spec.Targets = lo.Filter(effectivePlan.Spec.Targets, func(t hibernatorv1alpha1.Target, _ int) bool {
+					return t.Name != override.TargetName
+				})
+				log.V(1).Info("disabled target", "targetName", override.TargetName)
+			}
+		}
+
+		// Second pass: apply parameter overrides
+		// Build target map after filtering so pointers reference the correct slice.
+		targetMap := make(map[string]*hibernatorv1alpha1.Target)
+		for i := range effectivePlan.Spec.Targets {
+			targetMap[effectivePlan.Spec.Targets[i].Name] = &effectivePlan.Spec.Targets[i]
+		}
+		for _, override := range activeException.Spec.TargetOverrides {
+			if override.Disabled {
+				continue
+			}
+			target, ok := targetMap[override.TargetName]
+			if !ok {
+				log.V(1).Info("target override references non-existent target, skipping", "targetName", override.TargetName)
+				continue
+			}
+			if override.Parameters != nil {
+				target.Parameters = override.Parameters
+				log.V(1).Info("applied parameter override", "targetName", override.TargetName)
+			}
+		}
+	}
+
+	return effectivePlan
 }
 
 // nextStage moves the plan to the next execution stage.

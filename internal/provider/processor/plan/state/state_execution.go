@@ -28,6 +28,7 @@ import (
 	"github.com/ardikabs/hibernator/internal/restore"
 	"github.com/ardikabs/hibernator/internal/scheduler"
 	"github.com/ardikabs/hibernator/internal/wellknown"
+	"github.com/ardikabs/hibernator/pkg/executorparams"
 	"github.com/ardikabs/hibernator/pkg/k8sutil"
 )
 
@@ -47,34 +48,53 @@ func (s *state) execute(
 ) (StateResult, error) {
 	plan := s.plan()
 
-	jobs, err := s.getCurrentCycleJobs(ctx, plan)
+	// Build effective plan with execution overrides applied.
+	// The effective plan is a deep copy; the original plan is never modified.
+	// Execution logic uses the effective plan for spec-related decisions (strategy, targets, behavior).
+	// Status mutations are still applied to the original plan via PlanStatuses.Send.
+	var effectivePlan = plan
+	if ep := s.buildEffectivePlan(plan); ep != nil {
+		effectivePlan = ep
+	}
+
+	jobs, err := s.getCurrentCycleJobs(ctx, effectivePlan)
 	if err != nil {
 		log.Error(err, "failed to get current cycle jobs")
 		return StateResult{}, err
 	}
 	log.V(1).Info("job list fetched", "operation", operation, "jobCount", len(jobs))
 
-	s.updateExecutionStatuses(ctx, log, plan, jobs)
+	s.updateExecutionStatuses(ctx, log, effectivePlan, jobs)
 
-	execPlan, err := s.buildExecutionPlan(plan, reverse)
+	// Runtime validation: validate execution overrides before dispatching any jobs.
+	// This is the second validation layer (webhook is the first) that catches
+	// force-applied exceptions or plan changes after exception creation.
+	if effectivePlan.Status.CurrentStageIndex == 0 {
+		if err := s.validateRuntimeOverrides(ctx, log, effectivePlan); err != nil {
+			log.Error(err, "runtime validation of execution overrides failed")
+			return StateResult{}, AsPlanError(fmt.Errorf("runtime validation failed: %w", err))
+		}
+	}
+
+	execPlan, err := s.buildExecutionPlan(effectivePlan, reverse)
 	if err != nil {
 		return StateResult{}, AsPlanError(fmt.Errorf("failed to build execution plan: %w", err))
 	}
 
 	log.V(1).Info("execution plan built",
 		"totalStages", len(execPlan.Stages),
-		"currentStageIndex", plan.Status.CurrentStageIndex)
+		"currentStageIndex", effectivePlan.Status.CurrentStageIndex)
 
-	if plan.Status.CurrentStageIndex >= len(execPlan.Stages) {
+	if effectivePlan.Status.CurrentStageIndex >= len(execPlan.Stages) {
 		onFinalizeCallback(ctx, execPlan)
 		return StateResult{}, nil
 	}
 
-	targetStage := execPlan.Stages[plan.Status.CurrentStageIndex]
-	stageStatus := GetStageStatus(log, plan, targetStage)
+	targetStage := execPlan.Stages[effectivePlan.Status.CurrentStageIndex]
+	stageStatus := GetStageStatus(log, effectivePlan, targetStage)
 
 	log.V(1).Info("current stage status",
-		"stageIndex", plan.Status.CurrentStageIndex,
+		"stageIndex", effectivePlan.Status.CurrentStageIndex,
 		"targets", targetStage.Targets,
 		"allTerminal", stageStatus.AllTerminal,
 		"completedCount", stageStatus.CompletedCount,
@@ -82,14 +102,14 @@ func (s *state) execute(
 
 	if stageStatus.AllTerminal {
 		log.Info("stage reached terminal state",
-			"stageIndex", plan.Status.CurrentStageIndex,
+			"stageIndex", effectivePlan.Status.CurrentStageIndex,
 			"completedCount", stageStatus.CompletedCount,
 			"failedCount", stageStatus.FailedCount)
 
 		if stageStatus.FailedCount > 0 &&
-			plan.Spec.Behavior.Mode == hibernatorv1alpha1.BehaviorStrict {
+			effectivePlan.Spec.Behavior.Mode == hibernatorv1alpha1.BehaviorStrict {
 			var failedTargets []string
-			for _, exec := range plan.Status.Executions {
+			for _, exec := range effectivePlan.Status.Executions {
 				if exec.State != hibernatorv1alpha1.StateFailed {
 					continue
 				}
@@ -101,13 +121,13 @@ func (s *state) execute(
 			return StateResult{}, AsPlanError(fmt.Errorf("one or more targets failed: %s", strings.Join(failedTargets, ", ")))
 		}
 
-		nextStageIndex := plan.Status.CurrentStageIndex + 1
+		nextStageIndex := effectivePlan.Status.CurrentStageIndex + 1
 		if nextStageIndex < len(execPlan.Stages) {
-			log.V(1).Info("advancing to next stage", "currentStage", plan.Status.CurrentStageIndex, "nextStage", nextStageIndex)
+			log.V(1).Info("advancing to next stage", "currentStage", effectivePlan.Status.CurrentStageIndex, "nextStage", nextStageIndex)
 			onAdvanceStageCallback(nextStageIndex)
 
 			targetStage = execPlan.Stages[nextStageIndex]
-			return s.executeForStage(ctx, log, plan, jobs, targetStage, operation)
+			return s.executeForStage(ctx, log, effectivePlan, jobs, targetStage, operation)
 		}
 
 		onFinalizeCallback(ctx, execPlan)
@@ -115,11 +135,72 @@ func (s *state) execute(
 	}
 
 	if stageStatus.HasPending {
-		log.V(1).Info("filling pending slots in current stage", "stageIndex", plan.Status.CurrentStageIndex, "targetStages", targetStage.Targets)
-		return s.executeForStage(ctx, log, plan, jobs, targetStage, operation)
+		log.V(1).Info("filling pending slots in current stage", "stageIndex", effectivePlan.Status.CurrentStageIndex, "targetStages", targetStage.Targets)
+		return s.executeForStage(ctx, log, effectivePlan, jobs, targetStage, operation)
 	}
 
 	return StateResult{RequeueAfter: wellknown.RequeueIntervalDuringStage}, nil
+}
+
+// validateRuntimeOverrides performs the second validation layer for execution overrides.
+// It is called before dispatching any runner Job in a cycle (when CurrentStageIndex == 0).
+// This catches force-applied exceptions or plan changes after exception creation.
+func (s *state) validateRuntimeOverrides(ctx context.Context, log logr.Logger, plan *hibernatorv1alpha1.HibernatePlan) error {
+	// Find active exception with execution overrides
+	var activeException *hibernatorv1alpha1.ScheduleException
+	now := s.Clock.Now()
+
+	for i := range s.PlanCtx.Exceptions {
+		exc := &s.PlanCtx.Exceptions[i]
+		if exc.Status.State != hibernatorv1alpha1.ExceptionStateActive {
+			continue
+		}
+		if exc.Spec.Type == hibernatorv1alpha1.ExceptionSuspend {
+			continue
+		}
+		if !exc.Spec.ValidFrom.Time.Before(now) || !now.Before(exc.Spec.ValidUntil.Time) {
+			continue
+		}
+		if len(exc.Spec.TargetOverrides) > 0 || exc.Spec.ExecutionOverride != nil {
+			activeException = exc
+			break
+		}
+	}
+
+	if activeException == nil {
+		return nil
+	}
+
+	log.V(1).Info("runtime validation of execution overrides", "exception", activeException.Name)
+
+	// Validate targetOverrides
+	if len(activeException.Spec.TargetOverrides) > 0 {
+		for _, override := range activeException.Spec.TargetOverrides {
+			if override.Parameters != nil && len(override.Parameters.Raw) > 0 {
+				// Find the target type
+				var targetType string
+				for _, t := range plan.Spec.Targets {
+					if t.Name == override.TargetName {
+						targetType = t.Type
+						break
+					}
+				}
+				if targetType == "" {
+					log.V(1).Info("runtime validation: target not found in plan, skipping parameter validation", "targetName", override.TargetName)
+					continue
+				}
+
+				result := executorparams.ValidateParams(targetType, override.Parameters.Raw)
+				if result != nil && result.HasErrors() {
+					log.Error(fmt.Errorf("validation errors: %v", result.Errors), "runtime validation failed for target", "targetName", override.TargetName)
+					return fmt.Errorf("target %q: %v", override.TargetName, strings.Join(result.Errors, "; "))
+				}
+			}
+		}
+	}
+
+	log.V(1).Info("runtime validation passed", "exception", activeException.Name)
+	return nil
 }
 
 // executeForStage executes the operation for the targets in the given stage.

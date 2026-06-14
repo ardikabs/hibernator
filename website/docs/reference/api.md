@@ -62,6 +62,7 @@ Behavior defines execution behavior.
 
 
 _Appears in:_
+- [ExecutionOverride](#executionoverride)
 - [HibernatePlanSpec](#hibernateplanspec)
 
 | Field | Description | Default | Validation |
@@ -329,6 +330,24 @@ _Appears in:_
 | `errorMessage` _string_ | ErrorMessage contains error details if the operation failed. |  | Optional: \{\} <br /> |
 
 
+#### ExecutionOverride
+
+
+
+ExecutionOverride defines a full replacement of the execution strategy
+and behavior for the exception window.
+
+
+
+_Appears in:_
+- [ScheduleExceptionSpec](#scheduleexceptionspec)
+
+| Field | Description | Default | Validation |
+| --- | --- | --- | --- |
+| `strategy` _[ExecutionStrategy](#executionstrategy)_ | Strategy is a full replacement of the plan's execution strategy.<br />If omitted, the base plan's strategy is used. |  | Optional: \{\} <br /> |
+| `behavior` _[Behavior](#behavior)_ | Behavior is a full replacement of the plan's execution behavior.<br />If omitted, the base plan's behavior is used. |  | Optional: \{\} <br /> |
+
+
 #### ExecutionState
 
 _Underlying type:_ _string_
@@ -389,6 +408,7 @@ ExecutionStrategy defines how targets are executed.
 
 _Appears in:_
 - [Execution](#execution)
+- [ExecutionOverride](#executionoverride)
 
 | Field | Description | Default | Validation |
 | --- | --- | --- | --- |
@@ -555,6 +575,7 @@ _Appears in:_
 | `lastRetryTime` _[Time](https://kubernetes.io/docs/reference/generated/kubernetes-api/v1.33/#time-v1-meta)_ | LastRetryTime is when the last retry attempt was made. |  | Optional: \{\} <br /> |
 | `errorMessage` _string_ | ErrorMessage provides details about the error that caused PhaseError.<br />This field is persistent within a cycle (shutdown + wakeup pair): it is set<br />when the plan enters PhaseError, replaced if a subsequent retry produces a<br />different error, and only cleared when a new cycle begins. Consequently, a<br />plan that recovered via retry may still carry the ErrorMessage from the<br />earlier failure until the next cycle starts. A non-empty ErrorMessage on a<br />completed operation indicates that the operation succeeded after a recovery<br />attempt. |  | Optional: \{\} <br /> |
 | `exceptionReferences` _[ExceptionReference](#exceptionreference) array_ | ExceptionReferences is the history of schedule exceptions for this plan.<br />Maximum 10 entries, ordered by: active state first (most relevant), then by ValidFrom descending (most recent first).<br />Oldest entries are pruned when limit is exceeded. |  | Optional: \{\} <br /> |
+| `appliedExceptionOverride` _string_ | AppliedExceptionOverride records the name of the ScheduleException whose<br />execution overrides are currently active for this cycle. Empty when no<br />overrides are applied. Set at the start of a new cycle and cleared when<br />the cycle ends. |  | Optional: \{\} <br /> |
 | `currentStageIndex` _integer_ | CurrentStageIndex tracks which stage is currently executing (0-based).<br />Reset to 0 when starting new hibernation/wakeup cycle. |  | Optional: \{\} <br /> |
 | `currentOperation` _[PlanOperation](#planoperation)_ | CurrentOperation tracks the current operation type (shutdown or wakeup).<br />Used to determine which phase to transition to when stages complete. |  | Enum: [shutdown wakeup] <br />Optional: \{\} <br /> |
 | `executionHistory` _[ExecutionCycle](#executioncycle) array_ | ExecutionHistory records historical execution cycles (max 5).<br />Each cycle contains shutdown and wakeup operation summaries.<br />Oldest cycles are pruned when limit is exceeded. |  | Optional: \{\} <br /> |
@@ -827,6 +848,7 @@ EKSParameters, RDSParameters, EC2Parameters, KarpenterParameters).
 
 _Appears in:_
 - [Target](#target)
+- [TargetOverride](#targetoverride)
 
 
 
@@ -964,6 +986,8 @@ _Appears in:_
 | `type` _[ExceptionType](#exceptiontype)_ | Type specifies the exception type: extend, suspend, or replace. |  | Enum: [extend suspend replace] <br />Required: \{\} <br /> |
 | `leadTime` _string_ | LeadTime specifies buffer period before suspension window.<br />Only valid when Type is "suspend".<br />Format: duration string (e.g., "30m", "1h", "3600s").<br />Prevents NEW hibernation starts within this buffer before suspension. |  | Optional: \{\} <br />Pattern: `^([0-9]+(\.[0-9]+)?(ns\|us\|µs\|ms\|s\|m\|h))+$` <br /> |
 | `windows` _[OffHourWindow](#offhourwindow) array_ | Windows defines the time windows for this exception.<br />Meaning depends on Type:<br />- extend: Additional hibernation windows (union with base schedule)<br />- suspend: Windows to prevent hibernation (carve-out from schedule)<br />- replace: Complete replacement schedule (ignore base schedule) |  | MinItems: 1 <br /> |
+| `targetOverrides` _[TargetOverride](#targetoverride) array_ | TargetOverrides defines per-target overrides for the exception window.<br />Only valid when Type is "extend" or "replace". |  | Optional: \{\} <br />Optional: \{\} <br /> |
+| `executionOverride` _[ExecutionOverride](#executionoverride)_ | ExecutionOverride defines a full replacement of the execution strategy<br />and behavior for the exception window.<br />Only valid when Type is "extend" or "replace". |  | Optional: \{\} <br />Optional: \{\} <br /> |
 
 
 #### ScheduleExceptionStatus
@@ -1094,5 +1118,24 @@ _Appears in:_
 | `startedAt` _[Time](https://kubernetes.io/docs/reference/generated/kubernetes-api/v1.33/#time-v1-meta)_ | StartedAt is when execution started. |  | Optional: \{\} <br /> |
 | `finishedAt` _[Time](https://kubernetes.io/docs/reference/generated/kubernetes-api/v1.33/#time-v1-meta)_ | FinishedAt is when execution finished. |  | Optional: \{\} <br /> |
 | `message` _string_ | Message provides details about the execution outcome. |  | Optional: \{\} <br /> |
+
+
+#### TargetOverride
+
+
+
+TargetOverride defines a per-target override for the exception window.
+The base target's parameters and execution strategy are fully replaced (not merged).
+
+
+
+_Appears in:_
+- [ScheduleExceptionSpec](#scheduleexceptionspec)
+
+| Field | Description | Default | Validation |
+| --- | --- | --- | --- |
+| `targetName` _string_ | TargetName is the name of the target in the referenced HibernatePlan. |  | Required: \{\} <br /> |
+| `parameters` _[Parameters](#parameters)_ | Parameters is a full replacement of the target's base parameters.<br />When set, the executor receives these parameters instead of the base target's parameters. |  | Optional: \{\} <br /> |
+| `disabled` _boolean_ | Disabled, when true, excludes the target from both shutdown and wakeup<br />for the entire exception window. | false | Optional: \{\} <br /> |
 
 

@@ -1,0 +1,75 @@
+# Sample: Extend Exception with Target Overrides
+# This example shows how to add additional hibernation windows while overriding
+# target parameters for a specific event.
+
+apiVersion: hibernator.ardikabs.com/v1alpha1
+kind: ScheduleException
+metadata:
+  name: weekend-event-override
+  namespace: hibernator-system
+spec:
+  planRef:
+    name: production-plan
+  type: extend
+  validFrom: "2026-06-15T00:00:00Z"
+  validUntil: "2026-06-20T23:59:59Z"
+  windows:
+    - start: "06:00"
+      end: "11:00"
+      daysOfWeek: ["Saturday", "Sunday"]
+  targetOverrides:
+    - targetName: frontend
+      parameters:
+        selector:
+          tags:
+            Environment: "event-mode"
+    - targetName: database
+      disabled: true
+  # Note: executionOverride is not specified, so base plan strategy is used
+---
+# Base HibernatePlan for reference
+apiVersion: hibernator.ardikabs.com/v1alpha1
+kind: HibernatePlan
+metadata:
+  name: production-plan
+  namespace: hibernator-system
+spec:
+  schedule:
+    timezone: "America/New_York"
+    offHours:
+      - start: "20:00"
+        end: "06:00"
+        daysOfWeek: ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday"]
+  execution:
+    strategy:
+      type: Parallel
+      maxConcurrency: 2
+  behavior:
+    mode: Strict
+    retries: 3
+  targets:
+    - name: frontend
+      type: ec2
+      connectorRef:
+        kind: CloudProvider
+        name: aws
+      parameters:
+        selector:
+          tags:
+            Environment: "production"
+    - name: backend
+      type: eks
+      connectorRef:
+        kind: CloudProvider
+        name: aws
+      parameters:
+        clusterName: "production-cluster"
+    - name: database
+      type: rds
+      connectorRef:
+        kind: CloudProvider
+        name: aws
+      parameters:
+        selector:
+          tags:
+            Environment: "production"

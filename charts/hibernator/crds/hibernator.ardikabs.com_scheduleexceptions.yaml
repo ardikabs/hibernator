@@ -60,6 +60,114 @@ spec:
           spec:
             description: Spec defines the desired state of ScheduleException.
             properties:
+              executionOverride:
+                description: |-
+                  ExecutionOverride defines a full replacement of the execution strategy
+                  and behavior for the exception window.
+                  Only valid when Type is "extend" or "replace".
+                properties:
+                  behavior:
+                    description: |-
+                      Behavior is a full replacement of the plan's execution behavior.
+                      If omitted, the base plan's behavior is used.
+                    properties:
+                      failFast:
+                        default: true
+                        description: |-
+                          FailFast stops execution on first failure.
+
+                          Strict mode already implies fail-fast behavior.
+                          Deprecated: FailFast is deprecated and will be removed in a future release. Use Mode=Strict for fail-fast behavior.
+                        type: boolean
+                      mode:
+                        default: Strict
+                        description: Mode determines how failures are handled.
+                        enum:
+                        - Strict
+                        - BestEffort
+                        type: string
+                      retries:
+                        default: 3
+                        description: Retries is the maximum number of retry attempts
+                          for failed operations.
+                        format: int32
+                        maximum: 10
+                        minimum: 0
+                        type: integer
+                    type: object
+                  strategy:
+                    description: |-
+                      Strategy is a full replacement of the plan's execution strategy.
+                      If omitted, the base plan's strategy is used.
+                    properties:
+                      dependencies:
+                        description: Dependencies define DAG edges (only valid when
+                          Type=DAG).
+                        items:
+                          description: Dependency represents a DAG edge (from -> to).
+                          properties:
+                            from:
+                              description: From is the source target name.
+                              type: string
+                            to:
+                              description: To is the destination target name that
+                                depends on From.
+                              type: string
+                          required:
+                          - from
+                          - to
+                          type: object
+                        type: array
+                      maxConcurrency:
+                        description: MaxConcurrency limits concurrent executions (for
+                          Parallel/DAG/Staged).
+                        format: int32
+                        minimum: 1
+                        type: integer
+                      stages:
+                        description: Stages define execution groups (only valid when
+                          Type=Staged).
+                        items:
+                          description: Stage defines a group of targets to execute
+                            together.
+                          properties:
+                            maxConcurrency:
+                              description: MaxConcurrency limits parallelism within
+                                this stage.
+                              format: int32
+                              minimum: 1
+                              type: integer
+                            name:
+                              description: Name of the stage.
+                              type: string
+                            parallel:
+                              default: false
+                              description: Parallel indicates if targets in this stage
+                                run in parallel.
+                              type: boolean
+                            targets:
+                              description: Targets are the names of targets in this
+                                stage.
+                              items:
+                                type: string
+                              type: array
+                          required:
+                          - name
+                          - targets
+                          type: object
+                        type: array
+                      type:
+                        description: Type of execution strategy.
+                        enum:
+                        - Sequential
+                        - Parallel
+                        - DAG
+                        - Staged
+                        type: string
+                    required:
+                    - type
+                    type: object
+                type: object
               leadTime:
                 description: |-
                   LeadTime specifies buffer period before suspension window.
@@ -83,6 +191,35 @@ spec:
                 required:
                 - name
                 type: object
+              targetOverrides:
+                description: |-
+                  TargetOverrides defines per-target overrides for the exception window.
+                  Only valid when Type is "extend" or "replace".
+                items:
+                  description: |-
+                    TargetOverride defines a per-target override for the exception window.
+                    The base target's parameters and execution strategy are fully replaced (not merged).
+                  properties:
+                    disabled:
+                      default: false
+                      description: |-
+                        Disabled, when true, excludes the target from both shutdown and wakeup
+                        for the entire exception window.
+                      type: boolean
+                    parameters:
+                      description: |-
+                        Parameters is a full replacement of the target's base parameters.
+                        When set, the executor receives these parameters instead of the base target's parameters.
+                      type: object
+                      x-kubernetes-preserve-unknown-fields: true
+                    targetName:
+                      description: TargetName is the name of the target in the referenced
+                        HibernatePlan.
+                      type: string
+                  required:
+                  - targetName
+                  type: object
+                type: array
               type:
                 description: 'Type specifies the exception type: extend, suspend,
                   or replace.'

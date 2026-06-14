@@ -52,6 +52,40 @@ type PlanReference struct {
 	Namespace string `json:"namespace,omitempty"`
 }
 
+// TargetOverride defines a per-target override for the exception window.
+// The base target's parameters and execution strategy are fully replaced (not merged).
+type TargetOverride struct {
+	// TargetName is the name of the target in the referenced HibernatePlan.
+	// +kubebuilder:validation:Required
+	TargetName string `json:"targetName"`
+
+	// Parameters is a full replacement of the target's base parameters.
+	// When set, the executor receives these parameters instead of the base target's parameters.
+	// +kubebuilder:pruning:PreserveUnknownFields
+	// +optional
+	Parameters *Parameters `json:"parameters,omitempty"`
+
+	// Disabled, when true, excludes the target from both shutdown and wakeup
+	// for the entire exception window.
+	// +kubebuilder:default=false
+	// +optional
+	Disabled bool `json:"disabled,omitempty"`
+}
+
+// ExecutionOverride defines a full replacement of the execution strategy
+// and behavior for the exception window.
+type ExecutionOverride struct {
+	// Strategy is a full replacement of the plan's execution strategy.
+	// If omitted, the base plan's strategy is used.
+	// +optional
+	Strategy *ExecutionStrategy `json:"strategy,omitempty"`
+
+	// Behavior is a full replacement of the plan's execution behavior.
+	// If omitted, the base plan's behavior is used.
+	// +optional
+	Behavior *Behavior `json:"behavior,omitempty"`
+}
+
 // ScheduleExceptionSpec defines the desired state of ScheduleException.
 type ScheduleExceptionSpec struct {
 	// PlanRef references the HibernatePlan this exception applies to.
@@ -89,6 +123,19 @@ type ScheduleExceptionSpec struct {
 	// - replace: Complete replacement schedule (ignore base schedule)
 	// +kubebuilder:validation:MinItems=1
 	Windows []OffHourWindow `json:"windows"`
+
+	// TargetOverrides defines per-target overrides for the exception window.
+	// Only valid when Type is "extend" or "replace".
+	// +kubebuilder:validation:Optional
+	// +optional
+	TargetOverrides []TargetOverride `json:"targetOverrides,omitempty"`
+
+	// ExecutionOverride defines a full replacement of the execution strategy
+	// and behavior for the exception window.
+	// Only valid when Type is "extend" or "replace".
+	// +kubebuilder:validation:Optional
+	// +optional
+	ExecutionOverride *ExecutionOverride `json:"executionOverride,omitempty"`
 }
 
 // ScheduleExceptionStatus defines the observed state of ScheduleException.

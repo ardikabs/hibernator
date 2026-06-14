@@ -78,10 +78,21 @@ func (state *idleState) transitionToHibernating(ctx context.Context, log logr.Lo
 		log.V(1).Info("reusing existing cycle ID from live restore data", "cycleID", cycleID)
 	}
 
+	// Build effective plan with execution overrides applied at the start of the new cycle.
+	// The effective plan is a deep copy; the original plan is never modified.
+	var effectivePlan = plan
+	appliedExceptionName := ""
+	if ep := state.buildEffectivePlan(plan); ep != nil {
+		effectivePlan = ep
+		if exc := state.findActiveExceptionOverride(); exc != nil {
+			appliedExceptionName = exc.Name
+		}
+	}
+
 	now := state.Clock.Now()
 
-	executions := make([]hibernatorv1alpha1.ExecutionStatus, len(plan.Spec.Targets))
-	for i, t := range plan.Spec.Targets {
+	executions := make([]hibernatorv1alpha1.ExecutionStatus, len(effectivePlan.Spec.Targets))
+	for i, t := range effectivePlan.Spec.Targets {
 		executions[i] = hibernatorv1alpha1.ExecutionStatus{
 			Target:   t.Name,
 			Executor: t.Type,
@@ -100,6 +111,7 @@ func (state *idleState) transitionToHibernating(ctx context.Context, log logr.Lo
 			p.Status.CurrentStageIndex = 0
 			p.Status.CurrentOperation = hibernatorv1alpha1.OperationHibernate
 			p.Status.Executions = executions
+			p.Status.AppliedExceptionOverride = appliedExceptionName
 			p.Status.LastTransitionTime = ptr.To(metav1.NewTime(now))
 		}),
 		PostHook: chainHooks(
@@ -118,10 +130,22 @@ func (state *idleState) transitionToHibernating(ctx context.Context, log logr.Lo
 // and returns Requeue so the worker immediately drives the WakingUp phase handler.
 func (state *idleState) transitionToWakingUp(log logr.Logger) (StateResult, error) {
 	plan := state.plan()
+
+	// Build effective plan with execution overrides applied at the start of the new cycle.
+	// The effective plan is a deep copy; the original plan is never modified.
+	var effectivePlan = plan
+	appliedExceptionName := ""
+	if ep := state.buildEffectivePlan(plan); ep != nil {
+		effectivePlan = ep
+		if exc := state.findActiveExceptionOverride(); exc != nil {
+			appliedExceptionName = exc.Name
+		}
+	}
+
 	now := state.Clock.Now()
 
-	executions := make([]hibernatorv1alpha1.ExecutionStatus, len(plan.Spec.Targets))
-	for i, t := range plan.Spec.Targets {
+	executions := make([]hibernatorv1alpha1.ExecutionStatus, len(effectivePlan.Spec.Targets))
+	for i, t := range effectivePlan.Spec.Targets {
 		executions[i] = hibernatorv1alpha1.ExecutionStatus{
 			Target:   t.Name,
 			Executor: t.Type,
@@ -139,6 +163,7 @@ func (state *idleState) transitionToWakingUp(log logr.Logger) (StateResult, erro
 			p.Status.CurrentStageIndex = 0
 			p.Status.CurrentOperation = hibernatorv1alpha1.OperationWakeUp
 			p.Status.Executions = executions
+			p.Status.AppliedExceptionOverride = appliedExceptionName
 			p.Status.LastTransitionTime = ptr.To(metav1.NewTime(now))
 		}),
 		PostHook: chainHooks(

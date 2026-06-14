@@ -450,6 +450,13 @@ type HibernatePlanStatus struct {
 	// +optional
 	ExceptionReferences []ExceptionReference `json:"exceptionReferences,omitempty"`
 
+	// AppliedExceptionOverride records the name of the ScheduleException whose
+	// execution overrides are currently active for this cycle. Empty when no
+	// overrides are applied. Set at the start of a new cycle and cleared when
+	// the cycle ends.
+	// +optional
+	AppliedExceptionOverride string `json:"appliedExceptionOverride,omitempty"`
+
 	// CurrentStageIndex tracks which stage is currently executing (0-based).
 	// Reset to 0 when starting new hibernation/wakeup cycle.
 	// +optional

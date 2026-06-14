@@ -19,6 +19,7 @@ import (
 
 	hibernatorv1alpha1 "github.com/ardikabs/hibernator/api/v1alpha1"
 	"github.com/ardikabs/hibernator/internal/wellknown"
+	"github.com/ardikabs/hibernator/pkg/executorparams"
 	"github.com/go-logr/logr"
 )
 
@@ -89,6 +90,9 @@ func (v *ScheduleExceptionValidator) validate(ctx context.Context, exception *hi
 
 	activeErrs := v.validateNoOverlappingExceptions(ctx, exception)
 	allErrs = append(allErrs, activeErrs...)
+
+	overrideErrs := v.validateExecutionOverrides(ctx, exception)
+	allErrs = append(allErrs, overrideErrs...)
 
 	if len(allErrs) > 0 {
 		return warnings, apierrors.NewInvalid(
@@ -255,6 +259,181 @@ func (v *ScheduleExceptionValidator) validateWindows(exception *hibernatorv1alph
 	}
 
 	return allErrs
+}
+
+// validateExecutionOverrides validates the execution override fields.
+// It rejects overrides on suspend exceptions, validates target existence,
+// and validates parameters using executor-specific validators.
+func (v *ScheduleExceptionValidator) validateExecutionOverrides(ctx context.Context, exception *hibernatorv1alpha1.ScheduleException) field.ErrorList {
+	var allErrs field.ErrorList
+	specPath := field.NewPath("spec")
+
+	// Rule 1: Reject overrides on suspend exceptions
+	if exception.Spec.Type == hibernatorv1alpha1.ExceptionSuspend {
+		if len(exception.Spec.TargetOverrides) > 0 {
+			allErrs = append(allErrs, field.Forbidden(
+				specPath.Child("targetOverrides"),
+				"targetOverrides are not allowed for 'suspend' type exceptions",
+			))
+		}
+		if exception.Spec.ExecutionOverride != nil {
+			allErrs = append(allErrs, field.Forbidden(
+				specPath.Child("executionOverride"),
+				"executionOverride is not allowed for 'suspend' type exceptions",
+			))
+		}
+		return allErrs
+	}
+
+	// Rule 2: Validate targetOverrides exist in the referenced plan
+	if len(exception.Spec.TargetOverrides) > 0 {
+		// Fetch the referenced plan
+		targetNamespace := exception.Spec.PlanRef.Namespace
+		if targetNamespace == "" {
+			targetNamespace = exception.Namespace
+		}
+
+		plan := &hibernatorv1alpha1.HibernatePlan{}
+		planKey := client.ObjectKey{
+			Namespace: targetNamespace,
+			Name:      exception.Spec.PlanRef.Name,
+		}
+
+		if err := v.client.Get(ctx, planKey, plan); err != nil {
+			if !apierrors.IsNotFound(err) {
+				allErrs = append(allErrs, field.InternalError(
+					specPath.Child("planRef"),
+					fmt.Errorf("failed to verify HibernatePlan for targetOverrides: %w", err),
+				))
+			}
+			// If plan is not found, we can't validate targetOverrides - let validatePlanRef handle the warning
+		} else {
+			// Build target name map
+			targetMap := make(map[string]*hibernatorv1alpha1.Target)
+			for i := range plan.Spec.Targets {
+				targetMap[plan.Spec.Targets[i].Name] = &plan.Spec.Targets[i]
+			}
+
+			for i, override := range exception.Spec.TargetOverrides {
+				overridePath := specPath.Child("targetOverrides").Index(i)
+
+				// Validate targetName exists
+				target, ok := targetMap[override.TargetName]
+				if !ok {
+					allErrs = append(allErrs, field.NotFound(
+						overridePath.Child("targetName"),
+						override.TargetName,
+					))
+					continue
+				}
+
+				// Validate parameters using executor-specific validators
+				if override.Parameters != nil && len(override.Parameters.Raw) > 0 {
+					result := executorparams.ValidateParams(target.Type, override.Parameters.Raw)
+					if result != nil && result.HasErrors() {
+						for _, err := range result.Errors {
+							allErrs = append(allErrs, field.Invalid(
+								overridePath.Child("parameters"),
+								string(override.Parameters.Raw),
+								err,
+							))
+						}
+					}
+				}
+
+				// Validate disabled doesn't break DAG dependencies
+				if override.Disabled {
+					if hasDependencyOn(plan, override.TargetName) {
+						allErrs = append(allErrs, field.Invalid(
+							overridePath.Child("disabled"),
+							true,
+							fmt.Sprintf("cannot disable target %q: other targets have dependencies on it", override.TargetName),
+						))
+					}
+				}
+			}
+		}
+	}
+
+	// Rule 3: Validate executionOverride fields
+	if exception.Spec.ExecutionOverride != nil {
+		override := exception.Spec.ExecutionOverride
+
+		// Validate strategy type
+		if override.Strategy != nil {
+			strategyPath := specPath.Child("executionOverride", "strategy")
+			validStrategyTypes := map[string]bool{
+				string(hibernatorv1alpha1.StrategySequential): true,
+				string(hibernatorv1alpha1.StrategyParallel):    true,
+				string(hibernatorv1alpha1.StrategyDAG):        true,
+				string(hibernatorv1alpha1.StrategyStaged):     true,
+			}
+			if !validStrategyTypes[string(override.Strategy.Type)] {
+				allErrs = append(allErrs, field.NotSupported(
+					strategyPath.Child("type"),
+					override.Strategy.Type,
+					[]string{"Sequential", "Parallel", "DAG", "Staged"},
+				))
+			}
+		}
+	}
+
+	// Rule 4: Only one active exception may have execution overrides per plan
+	if len(exception.Spec.TargetOverrides) > 0 || exception.Spec.ExecutionOverride != nil {
+		targetNamespace := exception.Spec.PlanRef.Namespace
+		if targetNamespace == "" {
+			targetNamespace = exception.Namespace
+		}
+
+		exceptionList := &hibernatorv1alpha1.ScheduleExceptionList{}
+		listOpts := []client.ListOption{
+			client.InNamespace(targetNamespace),
+			client.MatchingLabels{
+				wellknown.LabelPlan: exception.Spec.PlanRef.Name,
+			},
+		}
+
+		if err := v.client.List(ctx, exceptionList, listOpts...); err == nil {
+			for _, existing := range exceptionList.Items {
+				if existing.Namespace == exception.Namespace && existing.Name == exception.Name {
+					continue
+				}
+				if existing.Status.State == hibernatorv1alpha1.ExceptionStateExpired ||
+					existing.Status.State == hibernatorv1alpha1.ExceptionStateDetached {
+					continue
+				}
+				if !existing.Spec.ValidFrom.Time.Before(exception.Spec.ValidUntil.Time) ||
+					!exception.Spec.ValidFrom.Time.Before(existing.Spec.ValidUntil.Time) {
+					continue // Disjoint validity periods
+				}
+				if len(existing.Spec.TargetOverrides) > 0 || existing.Spec.ExecutionOverride != nil {
+					allErrs = append(allErrs, field.Forbidden(
+						specPath,
+						fmt.Sprintf(
+							"only one active exception may have execution overrides per plan; existing exception %q already has overrides",
+							existing.Name,
+						),
+					))
+					break
+				}
+			}
+		}
+	}
+
+	return allErrs
+}
+
+// hasDependencyOn checks if any target in the plan depends on the given target.
+func hasDependencyOn(plan *hibernatorv1alpha1.HibernatePlan, targetName string) bool {
+	if plan.Spec.Execution.Strategy.Type != hibernatorv1alpha1.StrategyDAG {
+		return false
+	}
+	for _, dep := range plan.Spec.Execution.Strategy.Dependencies {
+		if dep.From == targetName {
+			return true
+		}
+	}
+	return false
 }
 
 // validateNoOverlappingExceptions checks that the incoming exception does not

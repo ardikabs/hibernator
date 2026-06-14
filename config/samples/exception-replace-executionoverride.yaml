@@ -1,0 +1,74 @@
+# Sample: Replace Exception with Execution Override
+# This example shows how to completely replace the schedule during a holiday period
+# and change the execution strategy for that period.
+
+apiVersion: hibernator.ardikabs.com/v1alpha1
+kind: ScheduleException
+metadata:
+  name: holiday-mode
+  namespace: hibernator-system
+spec:
+  planRef:
+    name: production-plan
+  type: replace
+  validFrom: "2026-12-24T00:00:00Z"
+  validUntil: "2026-12-31T23:59:59Z"
+  windows:
+    - start: "00:00"
+      end: "23:59"
+      daysOfWeek: ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"]
+  # Override execution strategy for the holiday period
+  executionOverride:
+    strategy:
+      type: Sequential
+    behavior:
+      mode: BestEffort
+      retries: 1
+  # Note: targetOverrides is not specified, so base plan targets are used
+---
+# Base HibernatePlan for reference
+apiVersion: hibernator.ardikabs.com/v1alpha1
+kind: HibernatePlan
+metadata:
+  name: production-plan
+  namespace: hibernator-system
+spec:
+  schedule:
+    timezone: "America/New_York"
+    offHours:
+      - start: "20:00"
+        end: "06:00"
+        daysOfWeek: ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday"]
+  execution:
+    strategy:
+      type: Parallel
+      maxConcurrency: 2
+  behavior:
+    mode: Strict
+    retries: 3
+  targets:
+    - name: frontend
+      type: ec2
+      connectorRef:
+        kind: CloudProvider
+        name: aws
+      parameters:
+        selector:
+          tags:
+            Environment: "production"
+    - name: backend
+      type: eks
+      connectorRef:
+        kind: CloudProvider
+        name: aws
+      parameters:
+        clusterName: "production-cluster"
+    - name: database
+      type: rds
+      connectorRef:
+        kind: CloudProvider
+        name: aws
+      parameters:
+        selector:
+          tags:
+            Environment: "production"
