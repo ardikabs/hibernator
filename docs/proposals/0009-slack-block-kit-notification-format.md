@@ -1,9 +1,9 @@
 ---
 rfc: RFC-0009
 title: Slack Notification Formatting Modes (Text and JSON)
-status: Proposed
+status: Implemented ✅
 date: 2026-04-13
-last-updated: 2026-04-13
+last-updated: 2026-05-23
 ---
 
 # RFC 0009 - Slack Notification Formatting Modes (Text and JSON)

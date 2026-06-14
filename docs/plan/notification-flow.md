@@ -121,55 +121,54 @@ sequenceDiagram
 
 ---
 
-## 3. Dispatcher Internals — From Channel to Sink
+## 3. Dispatcher Internals — Keyed Stream Workers
 
 ```mermaid
 flowchart LR
     subgraph SUBMIT["Submit() — called from hook closure"]
-        S1{Channel\nfull?}
-        S2[Enqueue\nDispatchRequest]
-        S3[Append to\nOverflow Queue]
-        S4[Signal Drainer]
+        S1[Compute stream key\nplan+cycle+sink+operation]
+        S2[Deliver to\nkeyedworker.Pool]
+        S3[Drop + metric\nif slot full]
     end
 
-    subgraph DRAINER["Drainer Goroutine"]
-        DR1[Wait for signal]
-        DR2[Transfer overflow\nbatch → channel]
-    end
+    subgraph POOL["keyedworker.Pool"]
+        direction TB
+        SK1[Stream Key A\n(plan-a, slack)]
+        SK2[Stream Key B\n(plan-b, telegram)]
+        SK3[Stream Key C\n(plan-a, webhook)]
 
-    subgraph POOL["Worker Goroutines × 4"]
-        W1[Worker 1]
-        W2[Worker 2]
-        W3[Worker 3]
-        W4[Worker 4]
+        SK1 --> WK1[Worker A\nFIFO slot]
+        SK2 --> WK2[Worker B\nFIFO slot]
+        SK3 --> WK3[Worker C\nFIFO slot]
     end
 
     subgraph DISPATCH["dispatch(ctx, req)"]
         D1[Lookup Sink\nin Registry]
         D2[Resolve Secret\nfrom informer cache]
         D3[Resolve Custom Template\nfrom ConfigMap — optional]
-        D4[sink.Send\nwith 5s timeout]
+        D4[sink.Send\nwith timeout]
         D5{Error?}
         D6[Record\nNotificationSentTotal\nNotificationLatency]
         D7[Record\nNotificationErrorsTotal\nNotificationLatency]
     end
 
-    DispatchRequest --> S1
-    S1 -- No --> S2
-    S1 -- Yes --> S3 --> S4
+    StreamKey --> S1
+    S1 --> S2
+    S2 -- buffer full --> S3
 
-    S4 -.-> DR1
-    DR1 --> DR2
-    DR2 --> Channel
-
-    S2 --> Channel[(Channel\ncap 256)]
-    Channel --> W1 & W2 & W3 & W4
-    W1 & W2 & W3 & W4 --> D1
+    S2 --> SK1 & SK2 & SK3
+    WK1 & WK2 & WK3 --> D1
 
     D1 --> D2 --> D3 --> D4 --> D5
     D5 -- No error --> D6
     D5 -- Error --> D7
 ```
+
+**Key properties**:
+- Each stream (plan+cycle+sink+operation) has its own FIFO slot with bounded capacity
+- Workers spawn lazily on first delivery, reap after idle TTL
+- No global overflow queue — drops are per-stream and counted in `NotificationDropTotal`
+- Ordering guaranteed per stream; parallelism across streams
 
 ---
 
