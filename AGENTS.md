@@ -57,3 +57,21 @@ Lifecycle: `Active → Hibernating → Hibernated → WakingUp`
 ---
 
 **See `bd prime` for persistent project memories injected at session start.**
+
+---
+
+## Workflow Pattern
+
+1. **Triage**: Run `bd ready` to find available work
+2. **Claim**: Use `bd update <id> --claim` and set assignee based on git user:
+   ```bash
+   bd update <id> --claim --assignee="$(git config user.name)"
+   ```
+3. **Work**: Implement the task
+4. **Complete**: Use `bd close <id> --reason="..."` with a detailed explanation of what was done, why, and any relevant context. The reason becomes the permanent record of the work.
+5. **Capture Findings**: During work, if you discover interesting findings, bugs, or potential follow-ups, convert them into beads issues with `discovered-from` dependency on the current work:
+   ```bash
+   bd create --title="..." --description="..." --type=task
+   bd dep add <new-id> <current-work-id> --type discovered-from
+   ```
+   This ensures discussion context is preserved and nothing falls through the cracks.
