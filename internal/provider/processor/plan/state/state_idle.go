@@ -113,6 +113,15 @@ func (state *idleState) transitionToHibernating(ctx context.Context, log logr.Lo
 			p.Status.Executions = executions
 			p.Status.AppliedExceptionOverride = appliedExceptionName
 			p.Status.LastTransitionTime = ptr.To(metav1.NewTime(now))
+			if appliedExceptionName != "" {
+				p.Status.PlanSnapshot = &hibernatorv1alpha1.PlanSnapshot{
+					CycleID:       cycleID,
+					ExceptionName: appliedExceptionName,
+					Targets:       effectivePlan.Spec.Targets,
+					Execution:     effectivePlan.Spec.Execution,
+					Behavior:      effectivePlan.Spec.Behavior,
+				}
+			}
 		}),
 		PostHook: chainHooks(
 			state.notifyHook(hibernatorv1alpha1.EventStart, func(p *hibernatorv1alpha1.HibernatePlan) notification.Payload {
@@ -165,6 +174,15 @@ func (state *idleState) transitionToWakingUp(log logr.Logger) (StateResult, erro
 			p.Status.Executions = executions
 			p.Status.AppliedExceptionOverride = appliedExceptionName
 			p.Status.LastTransitionTime = ptr.To(metav1.NewTime(now))
+			if appliedExceptionName != "" {
+				p.Status.PlanSnapshot = &hibernatorv1alpha1.PlanSnapshot{
+					CycleID:       plan.Status.CurrentCycleID,
+					ExceptionName: appliedExceptionName,
+					Targets:       effectivePlan.Spec.Targets,
+					Execution:     effectivePlan.Spec.Execution,
+					Behavior:      effectivePlan.Spec.Behavior,
+				}
+			}
 		}),
 		PostHook: chainHooks(
 			state.notifyHook(hibernatorv1alpha1.EventStart, func(p *hibernatorv1alpha1.HibernatePlan) notification.Payload {

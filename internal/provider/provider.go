@@ -340,7 +340,7 @@ func (r *PlanReconciler) filterActiveExceptions(allExceptions []hibernatorv1alph
 	now := r.Clock.Now()
 
 	activeExceptions := lo.Filter(allExceptions, func(exc hibernatorv1alpha1.ScheduleException, _ int) bool {
-		return now.After(exc.Spec.ValidFrom.Time) && now.Before(exc.Spec.ValidUntil.Time)
+		return now.After(exc.Spec.ValidFrom.Time) && now.Before(exc.Spec.ValidUntil.Time) && exc.DeletionTimestamp.IsZero()
 	})
 
 	// Sort by CreationTimestamp descending (newest first)

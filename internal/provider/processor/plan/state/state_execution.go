@@ -52,10 +52,9 @@ func (s *state) execute(
 	// The effective plan is a deep copy; the original plan is never modified.
 	// Execution logic uses the effective plan for spec-related decisions (strategy, targets, behavior).
 	// Status mutations are still applied to the original plan via PlanStatuses.Send.
-	var effectivePlan = plan
-	if ep := s.buildEffectivePlan(plan); ep != nil {
-		effectivePlan = ep
-	}
+	// When a PlanSnapshot exists for the current cycle, it is used instead of
+	// rebuilding from live exceptions, ensuring mid-cycle stability.
+	effectivePlan := s.effectivePlan(plan)
 
 	jobs, err := s.getCurrentCycleJobs(ctx, effectivePlan)
 	if err != nil {
@@ -145,7 +144,15 @@ func (s *state) execute(
 // validateRuntimeOverrides performs the second validation layer for execution overrides.
 // It is called before dispatching any runner Job in a cycle (when CurrentStageIndex == 0).
 // This catches force-applied exceptions or plan changes after exception creation.
+// When a PlanSnapshot is present, validation is performed against the snapshot so the
+// exception resource does not need to remain present.
 func (s *state) validateRuntimeOverrides(ctx context.Context, log logr.Logger, plan *hibernatorv1alpha1.HibernatePlan) error {
+	// If a snapshot is locked for this cycle, validate against the snapshot.
+	if snap := plan.Status.PlanSnapshot; snap != nil && snap.CycleID == plan.Status.CurrentCycleID {
+		log.V(1).Info("runtime validation of locked plan snapshot", "exception", snap.ExceptionName)
+		return s.validateTargetOverrides(log, plan, snap.Targets)
+	}
+
 	// Find active exception with execution overrides
 	var activeException *hibernatorv1alpha1.ScheduleException
 	now := s.Clock.Now()
@@ -161,6 +168,9 @@ func (s *state) validateRuntimeOverrides(ctx context.Context, log logr.Logger, p
 		if !exc.Spec.ValidFrom.Time.Before(now) || !now.Before(exc.Spec.ValidUntil.Time) {
 			continue
 		}
+		if !exc.DeletionTimestamp.IsZero() {
+			continue
+		}
 		if len(exc.Spec.TargetOverrides) > 0 || exc.Spec.ExecutionOverride != nil {
 			activeException = exc
 			break
@@ -172,34 +182,21 @@ func (s *state) validateRuntimeOverrides(ctx context.Context, log logr.Logger, p
 	}
 
 	log.V(1).Info("runtime validation of execution overrides", "exception", activeException.Name)
+	return s.validateTargetOverrides(log, plan, plan.Spec.Targets)
+}
 
-	// Validate targetOverrides
-	if len(activeException.Spec.TargetOverrides) > 0 {
-		for _, override := range activeException.Spec.TargetOverrides {
-			if override.Parameters != nil && len(override.Parameters.Raw) > 0 {
-				// Find the target type
-				var targetType string
-				for _, t := range plan.Spec.Targets {
-					if t.Name == override.TargetName {
-						targetType = t.Type
-						break
-					}
-				}
-				if targetType == "" {
-					log.V(1).Info("runtime validation: target not found in plan, skipping parameter validation", "targetName", override.TargetName)
-					continue
-				}
-
-				result := executorparams.ValidateParams(targetType, override.Parameters.Raw)
-				if result != nil && result.HasErrors() {
-					log.Error(fmt.Errorf("validation errors: %v", result.Errors), "runtime validation failed for target", "targetName", override.TargetName)
-					return fmt.Errorf("target %q: %v", override.TargetName, strings.Join(result.Errors, "; "))
-				}
+// validateTargetOverrides validates target parameters against the provided targets.
+func (s *state) validateTargetOverrides(log logr.Logger, plan *hibernatorv1alpha1.HibernatePlan, targets []hibernatorv1alpha1.Target) error {
+	for _, target := range targets {
+		if target.Parameters != nil && len(target.Parameters.Raw) > 0 {
+			result := executorparams.ValidateParams(target.Type, target.Parameters.Raw)
+			if result != nil && result.HasErrors() {
+				log.Error(fmt.Errorf("validation errors: %v", result.Errors), "runtime validation failed for target", "targetName", target.Name)
+				return fmt.Errorf("target %q: %v", target.Name, strings.Join(result.Errors, "; "))
 			}
 		}
 	}
-
-	log.V(1).Info("runtime validation passed", "exception", activeException.Name)
+	log.V(1).Info("runtime validation passed")
 	return nil
 }
 

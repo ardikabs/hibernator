@@ -6,6 +6,7 @@ Licensed under the Apache License, Version 2.0.
 package state
 
 import (
+	"fmt"
 	"testing"
 	"time"
 
@@ -14,6 +15,7 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 
 	hibernatorv1alpha1 "github.com/ardikabs/hibernator/api/v1alpha1"
+	"github.com/ardikabs/hibernator/internal/scheduler"
 )
 
 // ---------------------------------------------------------------------------
@@ -599,6 +601,259 @@ func TestBuildEffectivePlan_FullOverride(t *testing.T) {
 	assert.Equal(t, "app", plan.Spec.Targets[1].Name)
 	assert.Equal(t, hibernatorv1alpha1.StrategyParallel, plan.Spec.Execution.Strategy.Type)
 	assert.Equal(t, hibernatorv1alpha1.BehaviorStrict, plan.Spec.Behavior.Mode)
+}
+
+// ---------------------------------------------------------------------------
+// PlanSnapshot
+// ---------------------------------------------------------------------------
+
+func TestEffectivePlan_UsesSnapshot_WhenCycleIDMatches(t *testing.T) {
+	plan := basePlanForState("p", hibernatorv1alpha1.PhaseHibernating)
+	plan.Status.CurrentCycleID = "cycle-001"
+	plan.Status.PlanSnapshot = &hibernatorv1alpha1.PlanSnapshot{
+		CycleID:       "cycle-001",
+		ExceptionName: "override-exc",
+		Targets: []hibernatorv1alpha1.Target{
+			{Name: "snap-target", Type: "rds"},
+		},
+		Execution: hibernatorv1alpha1.Execution{
+			Strategy: hibernatorv1alpha1.ExecutionStrategy{Type: hibernatorv1alpha1.StrategySequential},
+		},
+		Behavior: hibernatorv1alpha1.Behavior{Mode: hibernatorv1alpha1.BehaviorBestEffort},
+	}
+
+	c := newHandlerFakeClient(plan)
+	st := newHandlerState(plan, c)
+
+	effective := st.effectivePlan(plan)
+	require.NotNil(t, effective)
+	assert.Equal(t, "snap-target", effective.Spec.Targets[0].Name)
+	assert.Equal(t, hibernatorv1alpha1.StrategySequential, effective.Spec.Execution.Strategy.Type)
+	assert.Equal(t, hibernatorv1alpha1.BehaviorBestEffort, effective.Spec.Behavior.Mode)
+}
+
+func TestEffectivePlan_FallsBackToBuildEffectivePlan_WhenNoSnapshot(t *testing.T) {
+	plan := basePlanForState("p", hibernatorv1alpha1.PhaseHibernating)
+	plan.Spec.Targets = []hibernatorv1alpha1.Target{
+		{Name: "db", Type: "rds"},
+	}
+	plan.Status.CurrentCycleID = "cycle-001"
+
+	exc := &hibernatorv1alpha1.ScheduleException{
+		ObjectMeta: metav1.ObjectMeta{Name: "override-exc", Namespace: "default"},
+		Status:     hibernatorv1alpha1.ScheduleExceptionStatus{State: hibernatorv1alpha1.ExceptionStateActive},
+		Spec: hibernatorv1alpha1.ScheduleExceptionSpec{
+			Type:       hibernatorv1alpha1.ExceptionExtend,
+			ValidFrom:  metav1.Time{Time: time.Now().Add(-24 * time.Hour)},
+			ValidUntil: metav1.Time{Time: time.Now().Add(24 * time.Hour)},
+			Windows: []hibernatorv1alpha1.OffHourWindow{{Start: "00:00", End: "23:59", DaysOfWeek: []string{"MON"}}},
+			TargetOverrides: []hibernatorv1alpha1.TargetOverride{
+				{TargetName: "db", Disabled: true},
+			},
+		},
+	}
+
+	c := newHandlerFakeClient(plan, exc)
+	st := newHandlerState(plan, c)
+	st.PlanCtx.Exceptions = []hibernatorv1alpha1.ScheduleException{*exc}
+
+	effective := st.effectivePlan(plan)
+	require.NotNil(t, effective)
+	// Should have no targets because the exception disables "db"
+	assert.Empty(t, effective.Spec.Targets)
+}
+
+func TestFindActiveExceptionOverride_SkipsDeletionTimestamp(t *testing.T) {
+	plan := basePlanForState("p", hibernatorv1alpha1.PhaseActive)
+	now := time.Now()
+
+	exc := &hibernatorv1alpha1.ScheduleException{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:              "override-exc",
+			Namespace:         "default",
+			DeletionTimestamp: &metav1.Time{Time: now},
+			Finalizers:        []string{"hibernator.ardikabs.com/exception-finalizer"},
+		},
+		Status: hibernatorv1alpha1.ScheduleExceptionStatus{State: hibernatorv1alpha1.ExceptionStateActive},
+		Spec: hibernatorv1alpha1.ScheduleExceptionSpec{
+			Type:       hibernatorv1alpha1.ExceptionExtend,
+			ValidFrom:  metav1.Time{Time: now.Add(-24 * time.Hour)},
+			ValidUntil: metav1.Time{Time: now.Add(24 * time.Hour)},
+			Windows:    []hibernatorv1alpha1.OffHourWindow{{Start: "00:00", End: "23:59", DaysOfWeek: []string{"MON"}}},
+			ExecutionOverride: &hibernatorv1alpha1.ExecutionOverride{
+				Strategy: &hibernatorv1alpha1.ExecutionStrategy{Type: hibernatorv1alpha1.StrategySequential},
+			},
+		},
+	}
+
+	c := newHandlerFakeClient(plan, exc)
+	st := newHandlerState(plan, c)
+	st.PlanCtx.Exceptions = []hibernatorv1alpha1.ScheduleException{*exc}
+
+	result := st.findActiveExceptionOverride()
+	assert.Nil(t, result, "exception with DeletionTimestamp should be skipped")
+}
+
+func TestTransitionToHibernating_CapturesPlanSnapshot(t *testing.T) {
+	plan := basePlanForState("p", hibernatorv1alpha1.PhaseActive)
+	plan.Spec.Targets = []hibernatorv1alpha1.Target{
+		{Name: "db", Type: "rds"},
+		{Name: "app", Type: "eks"},
+	}
+
+	exc := &hibernatorv1alpha1.ScheduleException{
+		ObjectMeta: metav1.ObjectMeta{Name: "override-exc", Namespace: "default"},
+		Status:     hibernatorv1alpha1.ScheduleExceptionStatus{State: hibernatorv1alpha1.ExceptionStateActive},
+		Spec: hibernatorv1alpha1.ScheduleExceptionSpec{
+			Type:       hibernatorv1alpha1.ExceptionExtend,
+			ValidFrom:  metav1.Time{Time: time.Now().Add(-24 * time.Hour)},
+			ValidUntil: metav1.Time{Time: time.Now().Add(24 * time.Hour)},
+			Windows:    []hibernatorv1alpha1.OffHourWindow{{Start: "00:00", End: "23:59", DaysOfWeek: []string{"MON"}}},
+			TargetOverrides: []hibernatorv1alpha1.TargetOverride{
+				{TargetName: "db", Disabled: true},
+			},
+			ExecutionOverride: &hibernatorv1alpha1.ExecutionOverride{
+				Strategy: &hibernatorv1alpha1.ExecutionStrategy{Type: hibernatorv1alpha1.StrategySequential},
+			},
+		},
+	}
+
+	c := newHandlerFakeClient(plan, exc)
+	st := newHandlerState(plan, c)
+	st.PlanCtx.Exceptions = []hibernatorv1alpha1.ScheduleException{*exc}
+
+	h := &idleState{state: st}
+	_, err := h.transitionToHibernating(nil, st.Log)
+	require.NoError(t, err)
+
+	upd := <-planStatuses(st).C()
+	require.NotNil(t, upd.Mutator)
+
+	testPlan := plan.DeepCopy()
+	upd.Mutator.Mutate(testPlan)
+
+	require.NotNil(t, testPlan.Status.PlanSnapshot)
+	assert.Equal(t, "override-exc", testPlan.Status.PlanSnapshot.ExceptionName)
+	assert.Equal(t, hibernatorv1alpha1.StrategySequential, testPlan.Status.PlanSnapshot.Execution.Strategy.Type)
+	require.Len(t, testPlan.Status.PlanSnapshot.Targets, 1)
+	assert.Equal(t, "app", testPlan.Status.PlanSnapshot.Targets[0].Name)
+}
+
+func TestHibernatingState_Finalize_ClearsPlanSnapshot(t *testing.T) {
+	plan := basePlanForState("p", hibernatorv1alpha1.PhaseHibernating)
+	plan.Status.CurrentCycleID = "cycle-001"
+	plan.Status.PlanSnapshot = &hibernatorv1alpha1.PlanSnapshot{
+		CycleID:       "cycle-001",
+		ExceptionName: "override-exc",
+	}
+	plan.Status.Executions = []hibernatorv1alpha1.ExecutionStatus{
+		{Target: "db", State: hibernatorv1alpha1.StateCompleted},
+	}
+
+	c := newHandlerFakeClient(plan)
+	st := newHandlerState(plan, c)
+	h := &hibernatingState{state: st}
+
+	h.finalize(nil, st.Log, scheduler.ExecutionPlan{})
+
+	upd := <-planStatuses(st).C()
+	require.NotNil(t, upd.Mutator)
+
+	testPlan := plan.DeepCopy()
+	upd.Mutator.Mutate(testPlan)
+
+	assert.Nil(t, testPlan.Status.PlanSnapshot)
+	assert.Empty(t, testPlan.Status.AppliedExceptionOverride)
+}
+
+func TestWakingUpState_Finalize_ClearsPlanSnapshot(t *testing.T) {
+	plan := basePlanForState("p", hibernatorv1alpha1.PhaseWakingUp)
+	plan.Status.CurrentCycleID = "cycle-001"
+	plan.Status.PlanSnapshot = &hibernatorv1alpha1.PlanSnapshot{
+		CycleID:       "cycle-001",
+		ExceptionName: "override-exc",
+	}
+	plan.Status.Executions = []hibernatorv1alpha1.ExecutionStatus{
+		{Target: "db", State: hibernatorv1alpha1.StateCompleted},
+	}
+
+	c := newHandlerFakeClient(plan)
+	st := newHandlerState(plan, c)
+	h := &wakingUpState{state: st}
+
+	h.finalize(nil, st.Log, scheduler.ExecutionPlan{})
+
+	upd := <-planStatuses(st).C()
+	require.NotNil(t, upd.Mutator)
+
+	testPlan := plan.DeepCopy()
+	upd.Mutator.Mutate(testPlan)
+
+	assert.Nil(t, testPlan.Status.PlanSnapshot)
+	assert.Empty(t, testPlan.Status.AppliedExceptionOverride)
+}
+
+func TestSetError_KeepsPlanSnapshot(t *testing.T) {
+	plan := basePlanForState("p", hibernatorv1alpha1.PhaseHibernating)
+	plan.Status.CurrentCycleID = "cycle-001"
+	plan.Status.PlanSnapshot = &hibernatorv1alpha1.PlanSnapshot{
+		CycleID:       "cycle-001",
+		ExceptionName: "override-exc",
+	}
+
+	c := newHandlerFakeClient(plan)
+	st := newHandlerState(plan, c)
+
+	st.setError(nil, fmt.Errorf("test error"))
+
+	upd := <-planStatuses(st).C()
+	require.NotNil(t, upd.Mutator)
+
+	testPlan := plan.DeepCopy()
+	upd.Mutator.Mutate(testPlan)
+
+	assert.Equal(t, hibernatorv1alpha1.PhaseError, testPlan.Status.Phase)
+	require.NotNil(t, testPlan.Status.PlanSnapshot)
+	assert.Equal(t, "override-exc", testPlan.Status.PlanSnapshot.ExceptionName)
+	assert.Equal(t, "cycle-001", testPlan.Status.PlanSnapshot.CycleID)
+}
+
+func TestHandleRetry_UsesPlanSnapshot(t *testing.T) {
+	plan := basePlanForState("p", hibernatorv1alpha1.PhaseError)
+	plan.Spec.Targets = []hibernatorv1alpha1.Target{
+		{Name: "db", Type: "rds"},
+	}
+	plan.Spec.Execution.Strategy = hibernatorv1alpha1.ExecutionStrategy{Type: hibernatorv1alpha1.StrategyParallel}
+	plan.Status.CurrentCycleID = "cycle-001"
+	plan.Status.CurrentOperation = hibernatorv1alpha1.OperationHibernate
+	plan.Status.PlanSnapshot = &hibernatorv1alpha1.PlanSnapshot{
+		CycleID:       "cycle-001",
+		ExceptionName: "override-exc",
+		Targets: []hibernatorv1alpha1.Target{
+			{Name: "snap-target", Type: "rds"},
+		},
+		Execution: hibernatorv1alpha1.Execution{
+			Strategy: hibernatorv1alpha1.ExecutionStrategy{Type: hibernatorv1alpha1.StrategySequential},
+		},
+	}
+
+	c := newHandlerFakeClient(plan)
+	st := newHandlerState(plan, c)
+	h := &recoveryState{state: st}
+
+	_, err := h.handleRetry(nil, st.Log, fmt.Errorf("test error"))
+	require.NoError(t, err)
+
+	upd := <-planStatuses(st).C()
+	require.NotNil(t, upd.Mutator)
+
+	testPlan := plan.DeepCopy()
+	upd.Mutator.Mutate(testPlan)
+
+	assert.Equal(t, hibernatorv1alpha1.PhaseHibernating, testPlan.Status.Phase)
+	// PlanSnapshot should still be present after retry transition
+	require.NotNil(t, testPlan.Status.PlanSnapshot)
+	assert.Equal(t, "override-exc", testPlan.Status.PlanSnapshot.ExceptionName)
 }
 
 

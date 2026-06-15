@@ -102,6 +102,7 @@ func (state *hibernatingState) finalize(_ context.Context, log logr.Logger, _ sc
 			p.Status.LastRetryTime = nil
 			p.Status.ErrorMessage = ""
 			p.Status.AppliedExceptionOverride = ""
+			p.Status.PlanSnapshot = nil
 		}),
 		PostHook: chainHooks(
 			state.notifyHook(hibernatorv1alpha1.EventSuccess, func(p *hibernatorv1alpha1.HibernatePlan) notification.Payload {

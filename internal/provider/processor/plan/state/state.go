@@ -248,6 +248,10 @@ func (s *state) findActiveExceptionOverride() *hibernatorv1alpha1.ScheduleExcept
 		if !exc.Spec.ValidFrom.Time.Before(now) || !now.Before(exc.Spec.ValidUntil.Time) {
 			continue
 		}
+		// Skip exceptions being deleted; they should not influence fresh cycles.
+		if !exc.DeletionTimestamp.IsZero() {
+			continue
+		}
 		if len(exc.Spec.TargetOverrides) > 0 || exc.Spec.ExecutionOverride != nil {
 			if result == nil || exc.CreationTimestamp.After(result.CreationTimestamp.Time) {
 				result = exc
@@ -256,6 +260,26 @@ func (s *state) findActiveExceptionOverride() *hibernatorv1alpha1.ScheduleExcept
 	}
 
 	return result
+}
+
+// effectivePlan returns the plan to use for execution.
+// If a PlanSnapshot exists for the current cycle, it reconstructs the plan with
+// the snapshot's spec, preserving the current status. Otherwise it falls back to
+// buildEffectivePlan.
+func (s *state) effectivePlan(plan *hibernatorv1alpha1.HibernatePlan) *hibernatorv1alpha1.HibernatePlan {
+	if snap := plan.Status.PlanSnapshot; snap != nil && snap.CycleID == plan.Status.CurrentCycleID {
+		log := s.Log.WithValues("plan", s.Key.String(), "cycleID", snap.CycleID)
+		log.V(1).Info("using locked plan snapshot for execution", "exception", snap.ExceptionName)
+		effective := plan.DeepCopy()
+		effective.Spec.Targets = snap.Targets
+		effective.Spec.Execution = snap.Execution
+		effective.Spec.Behavior = snap.Behavior
+		return effective
+	}
+	if ep := s.buildEffectivePlan(plan); ep != nil {
+		return ep
+	}
+	return plan
 }
 
 // buildEffectivePlan creates a copy of the plan with execution overrides applied.
@@ -352,6 +376,8 @@ func (b *state) setError(_ context.Context, phaseErr error) {
 			p.Status.Phase = hibernatorv1alpha1.PhaseError
 			p.Status.LastTransitionTime = ptr.To(metav1.NewTime(b.Clock.Now()))
 			p.Status.ErrorMessage = errMsg
+			// Keep PlanSnapshot: PhaseError is still mid-cycle, and retry/resume
+			// must continue using the locked exception intent.
 		}),
 		PostHook: chainHooks(
 			b.notifyHook(hibernatorv1alpha1.EventFailure, func(p *hibernatorv1alpha1.HibernatePlan) notification.Payload {
