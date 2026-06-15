@@ -133,6 +133,68 @@ You can apply compatible exceptions to the same plan simultaneously. For example
 
 For detailed scenarios covering all type combinations (extend + suspend, replace + extend, replace + suspend) and validation rules, see [Composing Multiple Exceptions](composing-multiple-exceptions.md).
 
+## Execution Overrides (Advanced)
+
+`extend` and `replace` exceptions can also override the **execution intent** for a cycle: which targets run, their parameters, the execution strategy, and failure behavior. This is useful when the same schedule does not fit all targets, for example during a maintenance window where only compute should hibernate while databases stay online.
+
+```yaml
+apiVersion: hibernator.ardikabs.com/v1alpha1
+kind: ScheduleException
+metadata:
+  name: maintenance-override
+  namespace: hibernator-system
+spec:
+  planRef:
+    name: prod-plan
+  type: extend
+  validFrom: "2026-03-15T00:00:00Z"
+  validUntil: "2026-03-16T23:59:59Z"
+  windows:
+    - start: "00:00"
+      end: "23:59"
+      daysOfWeek: ["SUN"]
+  targetOverrides:
+    - targetName: database
+      disabled: true
+    - targetName: compute
+      parameters:
+        instanceIds:
+          - i-1234567890abcdef0
+  executionOverride:
+    strategy:
+      type: Sequential
+    behavior:
+      mode: BestEffort
+```
+
+In this example:
+
+- The `database` target is skipped entirely for the cycle.
+- The `compute` target uses overridden parameters.
+- Targets run sequentially, and a single failure does not stop the cycle.
+
+!!! warning "Execution overrides are an advanced feature"
+    Because execution overrides change the shape of a hibernation/wakeup cycle, they are best suited for operators who understand the target resources and failure modes. Misconfigured overrides can leave resources in an unexpected state.
+
+## Operational Semantics: Retry, Resume, and Restart
+
+The controller locks the resolved execution intent when a cycle starts. This locked intent is preserved for the lifetime of the cycle, including transient errors and recovery:
+
+| Operation | What happens to the exception intent |
+|-----------|--------------------------------------|
+| **Automatic retry** after a transient error | Keeps the locked intent. The same targets, strategy, and behavior are retried. |
+| **Manual retry** (`retry-now` annotation) | Keeps the locked intent. |
+| **Resume from suspension** mid-cycle | Keeps the locked intent. |
+| **Restart** (`restart=true` annotation) | Starts a **new cycle** and re-evaluates the exception from the latest live state. |
+| **Manual override** (`override-action=true`) | Starts a **new cycle** and re-evaluates the exception from the latest live state. |
+
+This means you can safely delete or modify a `ScheduleException` while a cycle is running:
+
+- An **in-flight** cycle (including one in `PhaseError` waiting for retry) continues with the intent it started with.
+- A **new** cycle, triggered by restart or override, picks up the current plan and exception state.
+
+If you need to abort the locked intent and start fresh, use the `restart` annotation or wait for the cycle to complete.
+
 ## Cleaning Up
 
 Exceptions expire automatically based on `validUntil`. You can delete them early:

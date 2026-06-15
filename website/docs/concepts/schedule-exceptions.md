@@ -140,6 +140,29 @@ The controller uses `mergeByType` semantics — windows of the same type are mer
 
 For practical scenarios showing how to combine exceptions (extend + suspend, replace + extend, replace + suspend), see the [Composing Multiple Exceptions](../user-guides/composing-multiple-exceptions.md) operational guide.
 
+## Execution Overrides
+
+Schedule exceptions can optionally override the execution properties used during a hibernation or wakeup cycle. This lets a single plan behave differently when the exception is active without permanently changing the base plan.
+
+Overrideable fields include:
+
+- `targetOverrides`: enable, disable, or parameterize individual targets for the cycle
+- `executionOverride`: change the `strategy`, `behavior`, `maxRetries`, or `retryBackoff` for the cycle
+
+When a cycle starts while an exception with overrides is active, the controller merges the exception overrides onto the base plan and **locks the result**. The locked intent is recorded in the plan status and used for the remainder of the cycle, regardless of later changes to the exception.
+
+## Cycle Intent Locking
+
+Once a hibernation or wakeup cycle begins, the controller resolves the effective execution intent and stores it in the plan's `status.planSnapshot`. This snapshot includes the merged targets, execution strategy, behavior, and the identity of the exception that produced it.
+
+Intent locking guarantees that:
+
+- A cycle runs with a consistent configuration from start to finish.
+- Editing or deleting an active exception does not change the behavior of an in-flight cycle.
+- Automatic retry, manual retry, and resume-from-suspension all use the same locked intent.
+
+To force the controller to re-evaluate exceptions and start a new cycle, use the `restart` or `override-action` annotations. These discard the locked snapshot and begin a fresh cycle against the current live state.
+
 ## Validation Rules
 
 - `validUntil` must be after `validFrom`

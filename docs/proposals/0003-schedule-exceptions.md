@@ -596,3 +596,65 @@ The full webhook validation for `ScheduleException` now enforces:
 ### Schedule Evaluation Semantics (Phase 6)
 
 The evaluation semantics from Phase 5 remain unchanged. The override is applied to the effective plan at the start of the execution cycle, after the schedule has been evaluated.
+
+---
+
+## Phase 7 Addendum: Exception Intent Locking
+
+**Date:** 2026-06-15
+**Status:** Implemented
+
+### Overview
+
+When a user edits or deletes a `ScheduleException` while a plan is mid-cycle (`Hibernating`, `Hibernated`, `WakingUp`, or `PhaseError`), the controller must guarantee that the in-flight cycle continues with the intent it started with. Phase 7 introduces **cycle intent locking** via `PlanSnapshot` and secondary safeguards (finalizer + validating webhook) to prevent mid-cycle exception tampering from altering runtime behavior.
+
+### PlanSnapshot
+
+When a cycle starts, the controller resolves the effective execution intent (merged schedule + overrides) and stores it in the plan status:
+
+```yaml
+status:
+  planSnapshot:
+    cycleID: "hibernate-2026-06-15-20-00-00"
+    exceptionName: "wednesday-holiday"
+    targets: [...]          # resolved targets after overrides
+    execution: {...}       # resolved strategy/behavior after overrides
+    behavior: {...}        # resolved failure behavior
+```
+
+**Rules:**
+
+- **Capture**: Snapshot is taken at the start of a shutdown or wakeup cycle (`Idle` → `Hibernating` / `Idle` → `WakingUp`).
+- **Usage**: All subsequent states (`Hibernating`, `Hibernated`, `WakingUp`, `PhaseError`) use the snapshot instead of re-evaluating the live exception.
+- **Retention**: Snapshot is preserved during `PhaseError` so retry/resume operations continue with the locked intent.
+- **Clear**: Snapshot is cleared only when the cycle completes (`Idle`) or is explicitly restarted (`restart=true` annotation).
+
+### Secondary Safeguards
+
+In addition to the snapshot, two runtime safeguards prevent tampering:
+
+1. **Finalizer**: The controller adds a finalizer to the exception when the plan enters a non-Idle phase. The finalizer prevents exception deletion while the cycle is in flight. It is removed when the plan returns to `Idle`.
+2. **Validating Webhook**: The webhook denies updates to `targetOverrides` and `executionOverride` fields while the plan is mid-cycle. This prevents the user from silently changing execution intent without deleting and recreating the exception.
+
+### Operational Semantics
+
+| Operation | What happens to the exception intent |
+|-----------|--------------------------------------|
+| **Automatic retry** after a transient error | Keeps the locked snapshot. The same targets, strategy, and behavior are retried. |
+| **Manual retry** (`retry-now` annotation) | Keeps the locked snapshot. |
+| **Resume from suspension** mid-cycle | Keeps the locked snapshot. |
+| **Restart** (`restart=true` annotation) | Starts a **new cycle** and re-evaluates the exception from the latest live state. |
+| **Manual override** (`override-action=true`) | Starts a **new cycle** and re-evaluates the exception from the latest live state. |
+| **Exception edited mid-cycle** | Webhook blocks `targetOverrides`/`executionOverride` changes. Other fields (e.g., `validUntil`) are allowed. |
+| **Exception deleted mid-cycle** | Finalizer blocks deletion until the cycle completes. |
+
+### Retry vs Resume vs Restart
+
+- **Retry**: Attempt the same locked intent again (e.g., after a transient cloud API failure). Use the `retry-now` annotation.
+- **Resume**: Continue a partially completed cycle (e.g., after waking up from a suspended state). The controller continues with the locked snapshot.
+- **Restart**: Abandon the current cycle and start fresh. Use the `restart=true` annotation. This discards the snapshot and re-evaluates the live exception state.
+
+### Migration Notes
+
+- **No breaking changes**: `PlanSnapshot` is a new status field; existing plans without it continue to operate normally.
+- **Backward compatibility**: Plans that were already mid-cycle when the controller was upgraded will not have a snapshot. The controller falls back to live evaluation until the next cycle start, at which point the snapshot is captured.
