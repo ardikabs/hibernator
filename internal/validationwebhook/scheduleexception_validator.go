@@ -9,6 +9,7 @@ import (
 	"context"
 	"fmt"
 	"regexp"
+	"slices"
 	"time"
 
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
@@ -56,12 +57,131 @@ func (v *ScheduleExceptionValidator) ValidateUpdate(ctx context.Context, oldObj,
 		return nil, fmt.Errorf("expected ScheduleException but got %T", newObj)
 	}
 	v.log.V(1).Info("validate update", "name", exception.Name)
+
+	// Check if the update modifies override fields while the plan is mid-cycle.
+	oldExc, ok := oldObj.(*hibernatorv1alpha1.ScheduleException)
+	if ok && v.overrideFieldsChanged(oldExc, exception) {
+		if err := v.checkMidCycleBlock(ctx, exception); err != nil {
+			return nil, err
+		}
+	}
+
 	return v.validate(ctx, exception)
 }
 
 // ValidateDelete implements webhook.CustomValidator.
 func (v *ScheduleExceptionValidator) ValidateDelete(ctx context.Context, obj runtime.Object) (admission.Warnings, error) {
+	exception, ok := obj.(*hibernatorv1alpha1.ScheduleException)
+	if !ok {
+		return nil, fmt.Errorf("expected ScheduleException but got %T", obj)
+	}
+	if err := v.checkMidCycleBlock(ctx, exception); err != nil {
+		return nil, err
+	}
 	return nil, nil
+}
+
+// overrideFieldsChanged returns true if targetOverrides or executionOverride changed.
+func (v *ScheduleExceptionValidator) overrideFieldsChanged(old, new *hibernatorv1alpha1.ScheduleException) bool {
+	if len(old.Spec.TargetOverrides) != len(new.Spec.TargetOverrides) {
+		return true
+	}
+	for i := range old.Spec.TargetOverrides {
+		if old.Spec.TargetOverrides[i].TargetName != new.Spec.TargetOverrides[i].TargetName ||
+			old.Spec.TargetOverrides[i].Disabled != new.Spec.TargetOverrides[i].Disabled ||
+			!parametersEqual(old.Spec.TargetOverrides[i].Parameters, new.Spec.TargetOverrides[i].Parameters) {
+			return true
+		}
+	}
+	if (old.Spec.ExecutionOverride == nil) != (new.Spec.ExecutionOverride == nil) {
+		return true
+	}
+	if old.Spec.ExecutionOverride != nil && new.Spec.ExecutionOverride != nil {
+		if !executionStrategyEqual(old.Spec.ExecutionOverride.Strategy, new.Spec.ExecutionOverride.Strategy) ||
+			!behaviorEqual(old.Spec.ExecutionOverride.Behavior, new.Spec.ExecutionOverride.Behavior) {
+			return true
+		}
+	}
+	return false
+}
+
+// parametersEqual compares two Parameters pointers for equality.
+func parametersEqual(a, b *hibernatorv1alpha1.Parameters) bool {
+	if (a == nil) != (b == nil) {
+		return false
+	}
+	if a == nil {
+		return true
+	}
+	return string(a.Raw) == string(b.Raw)
+}
+
+// executionStrategyEqual compares two ExecutionStrategy pointers for equality.
+func executionStrategyEqual(a, b *hibernatorv1alpha1.ExecutionStrategy) bool {
+	if (a == nil) != (b == nil) {
+		return false
+	}
+	if a == nil {
+		return true
+	}
+	if a.Type != b.Type || !ptrEqual(a.MaxConcurrency, b.MaxConcurrency) {
+		return false
+	}
+	if !slices.EqualFunc(a.Dependencies, b.Dependencies, func(d1, d2 hibernatorv1alpha1.Dependency) bool {
+		return d1.From == d2.From && d1.To == d2.To
+	}) {
+		return false
+	}
+	return slices.EqualFunc(a.Stages, b.Stages, func(s1, s2 hibernatorv1alpha1.Stage) bool {
+		if s1.Name != s2.Name || s1.Parallel != s2.Parallel || !ptrEqual(s1.MaxConcurrency, s2.MaxConcurrency) {
+			return false
+		}
+		return slices.Equal(s1.Targets, s2.Targets)
+	})
+}
+
+// behaviorEqual compares two Behavior pointers for equality.
+func behaviorEqual(a, b *hibernatorv1alpha1.Behavior) bool {
+	if (a == nil) != (b == nil) {
+		return false
+	}
+	if a == nil {
+		return true
+	}
+	return a.Mode == b.Mode && a.FailFast == b.FailFast && ptrEqual(a.Retries, b.Retries)
+}
+
+// ptrEqual compares two *int32 pointers for equality.
+func ptrEqual(a, b *int32) bool {
+	if (a == nil) != (b == nil) {
+		return false
+	}
+	if a == nil {
+		return true
+	}
+	return *a == *b
+}
+
+// checkMidCycleBlock returns an error if the referenced plan is mid-cycle with this exception.
+func (v *ScheduleExceptionValidator) checkMidCycleBlock(ctx context.Context, exception *hibernatorv1alpha1.ScheduleException) error {
+	planKey := client.ObjectKey{
+		Name:      exception.Spec.PlanRef.Name,
+		Namespace: exception.Namespace,
+	}
+	plan := new(hibernatorv1alpha1.HibernatePlan)
+	if err := v.client.Get(ctx, planKey, plan); err != nil {
+		if apierrors.IsNotFound(err) {
+			return nil
+		}
+		return fmt.Errorf("failed to fetch referenced plan %s for mid-cycle check: %w", planKey, err)
+	}
+	if plan.Status.Phase == hibernatorv1alpha1.PhaseHibernating || plan.Status.Phase == hibernatorv1alpha1.PhaseWakingUp {
+		if plan.Status.AppliedExceptionOverride == exception.Name {
+			return fmt.Errorf("cannot modify or delete ScheduleException %s/%s while plan %s is mid-cycle (%s) with this exception's override",
+				exception.Namespace, exception.Name, planKey.Name, plan.Status.Phase)
+		}
+	}
+	return nil
 }
 
 // validate performs validation on the ScheduleException.

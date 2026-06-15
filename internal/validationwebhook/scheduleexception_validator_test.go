@@ -970,3 +970,136 @@ func TestScheduleExceptionValidator_ValidateCreate_ExtendWithExistingOverride_Re
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "only one active exception may have execution overrides")
 }
+
+func TestScheduleExceptionValidator_ValidateDelete_MidCycleBlocked(t *testing.T) {
+	exc := validException()
+	exc.Spec.TargetOverrides = []hibernatorv1alpha1.TargetOverride{
+		{TargetName: "db", Disabled: true},
+	}
+
+	plan := &hibernatorv1alpha1.HibernatePlan{
+		ObjectMeta: metav1.ObjectMeta{Name: "test-plan", Namespace: "default"},
+		Status: hibernatorv1alpha1.HibernatePlanStatus{
+			Phase:                    hibernatorv1alpha1.PhaseHibernating,
+			AppliedExceptionOverride:   exc.Name,
+			CurrentCycleID:             "cycle-001",
+		},
+	}
+	c := setupTestClient(plan, exc)
+	v := NewScheduleExceptionValidator(logr.Discard(), c)
+
+	_, err := v.ValidateDelete(context.Background(), exc)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "cannot modify or delete")
+}
+
+func TestScheduleExceptionValidator_ValidateDelete_NotMidCycleAllowed(t *testing.T) {
+	exc := validException()
+	exc.Spec.TargetOverrides = []hibernatorv1alpha1.TargetOverride{
+		{TargetName: "db", Disabled: true},
+	}
+
+	plan := &hibernatorv1alpha1.HibernatePlan{
+		ObjectMeta: metav1.ObjectMeta{Name: "test-plan", Namespace: "default"},
+		Status: hibernatorv1alpha1.HibernatePlanStatus{
+			Phase:                  hibernatorv1alpha1.PhaseActive,
+			AppliedExceptionOverride: "",
+		},
+	}
+	c := setupTestClient(plan, exc)
+	v := NewScheduleExceptionValidator(logr.Discard(), c)
+
+	_, err := v.ValidateDelete(context.Background(), exc)
+	require.NoError(t, err)
+}
+
+func TestScheduleExceptionValidator_ValidateUpdate_MidCycleOverrideChangeBlocked(t *testing.T) {
+	oldExc := validException()
+	oldExc.Spec.TargetOverrides = []hibernatorv1alpha1.TargetOverride{
+		{TargetName: "db", Disabled: true},
+	}
+
+	newExc := validException()
+	newExc.Spec.TargetOverrides = []hibernatorv1alpha1.TargetOverride{
+		{TargetName: "db", Disabled: false},
+	}
+
+	plan := &hibernatorv1alpha1.HibernatePlan{
+		ObjectMeta: metav1.ObjectMeta{Name: "test-plan", Namespace: "default"},
+		Spec: hibernatorv1alpha1.HibernatePlanSpec{
+			Targets: []hibernatorv1alpha1.Target{
+				{Name: "db", Type: "rds"},
+			},
+		},
+		Status: hibernatorv1alpha1.HibernatePlanStatus{
+			Phase:                    hibernatorv1alpha1.PhaseHibernating,
+			AppliedExceptionOverride: oldExc.Name,
+			CurrentCycleID:             "cycle-001",
+		},
+	}
+	c := setupTestClient(plan, oldExc)
+	v := NewScheduleExceptionValidator(logr.Discard(), c)
+
+	_, err := v.ValidateUpdate(context.Background(), oldExc, newExc)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "cannot modify or delete")
+}
+
+func TestScheduleExceptionValidator_ValidateUpdate_MidCycleNonOverrideChangeAllowed(t *testing.T) {
+	oldExc := validException()
+	oldExc.Spec.TargetOverrides = []hibernatorv1alpha1.TargetOverride{
+		{TargetName: "db", Disabled: true},
+	}
+
+	newExc := validException()
+	newExc.Spec.ValidUntil = metav1.Time{Time: time.Now().Add(14 * 24 * time.Hour)}
+	newExc.Spec.TargetOverrides = []hibernatorv1alpha1.TargetOverride{
+		{TargetName: "db", Disabled: true},
+	}
+
+	plan := &hibernatorv1alpha1.HibernatePlan{
+		ObjectMeta: metav1.ObjectMeta{Name: "test-plan", Namespace: "default"},
+		Spec: hibernatorv1alpha1.HibernatePlanSpec{
+			Targets: []hibernatorv1alpha1.Target{
+				{Name: "db", Type: "rds"},
+			},
+		},
+		Status: hibernatorv1alpha1.HibernatePlanStatus{
+			Phase:                    hibernatorv1alpha1.PhaseHibernating,
+			AppliedExceptionOverride: oldExc.Name,
+			CurrentCycleID:             "cycle-001",
+		},
+	}
+	c := setupTestClient(plan, oldExc)
+	v := NewScheduleExceptionValidator(logr.Discard(), c)
+
+	_, err := v.ValidateUpdate(context.Background(), oldExc, newExc)
+	require.NoError(t, err)
+}
+
+func TestScheduleExceptionValidator_ValidateUpdate_MidCycleExecutionOverrideUnchangedAllowed(t *testing.T) {
+	oldExc := validException()
+	oldExc.Spec.ExecutionOverride = &hibernatorv1alpha1.ExecutionOverride{
+		Strategy: &hibernatorv1alpha1.ExecutionStrategy{Type: hibernatorv1alpha1.StrategySequential},
+	}
+
+	newExc := validException()
+	newExc.Spec.ExecutionOverride = &hibernatorv1alpha1.ExecutionOverride{
+		Strategy: &hibernatorv1alpha1.ExecutionStrategy{Type: hibernatorv1alpha1.StrategySequential},
+	}
+	newExc.Spec.ValidUntil = metav1.Time{Time: time.Now().Add(14 * 24 * time.Hour)}
+
+	plan := &hibernatorv1alpha1.HibernatePlan{
+		ObjectMeta: metav1.ObjectMeta{Name: "test-plan", Namespace: "default"},
+		Status: hibernatorv1alpha1.HibernatePlanStatus{
+			Phase:                    hibernatorv1alpha1.PhaseHibernating,
+			AppliedExceptionOverride: oldExc.Name,
+			CurrentCycleID:             "cycle-001",
+		},
+	}
+	c := setupTestClient(plan, oldExc)
+	v := NewScheduleExceptionValidator(logr.Discard(), c)
+
+	_, err := v.ValidateUpdate(context.Background(), oldExc, newExc)
+	require.NoError(t, err)
+}
