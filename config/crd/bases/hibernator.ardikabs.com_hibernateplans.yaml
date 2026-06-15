@@ -594,6 +594,171 @@ spec:
                 - Suspended
                 - Error
                 type: string
+              planSnapshot:
+                description: |-
+                  PlanSnapshot records the resolved execution intent for the current cycle.
+                  It is captured at cycle start and cleared when the cycle ends.
+                properties:
+                  behavior:
+                    description: Behavior is the effective behavior after applying
+                      overrides.
+                    properties:
+                      failFast:
+                        default: true
+                        description: |-
+                          FailFast stops execution on first failure.
+
+                          Strict mode already implies fail-fast behavior.
+                          Deprecated: FailFast is deprecated and will be removed in a future release. Use Mode=Strict for fail-fast behavior.
+                        type: boolean
+                      mode:
+                        default: Strict
+                        description: Mode determines how failures are handled.
+                        enum:
+                        - Strict
+                        - BestEffort
+                        type: string
+                      retries:
+                        default: 3
+                        description: Retries is the maximum number of retry attempts
+                          for failed operations.
+                        format: int32
+                        maximum: 10
+                        minimum: 0
+                        type: integer
+                    type: object
+                  cycleID:
+                    description: CycleID is the cycle this snapshot belongs to.
+                    type: string
+                  exceptionName:
+                    description: |-
+                      ExceptionName is the name of the ScheduleException whose overrides
+                      produced this snapshot. Empty when no override was applied.
+                    type: string
+                  execution:
+                    description: Execution is the effective execution configuration
+                      after applying overrides.
+                    properties:
+                      strategy:
+                        description: Strategy defines how targets are executed.
+                        properties:
+                          dependencies:
+                            description: Dependencies define DAG edges (only valid
+                              when Type=DAG).
+                            items:
+                              description: Dependency represents a DAG edge (from
+                                -> to).
+                              properties:
+                                from:
+                                  description: From is the source target name.
+                                  type: string
+                                to:
+                                  description: To is the destination target name that
+                                    depends on From.
+                                  type: string
+                              required:
+                              - from
+                              - to
+                              type: object
+                            type: array
+                          maxConcurrency:
+                            description: MaxConcurrency limits concurrent executions
+                              (for Parallel/DAG/Staged).
+                            format: int32
+                            minimum: 1
+                            type: integer
+                          stages:
+                            description: Stages define execution groups (only valid
+                              when Type=Staged).
+                            items:
+                              description: Stage defines a group of targets to execute
+                                together.
+                              properties:
+                                maxConcurrency:
+                                  description: MaxConcurrency limits parallelism within
+                                    this stage.
+                                  format: int32
+                                  minimum: 1
+                                  type: integer
+                                name:
+                                  description: Name of the stage.
+                                  type: string
+                                parallel:
+                                  default: false
+                                  description: Parallel indicates if targets in this
+                                    stage run in parallel.
+                                  type: boolean
+                                targets:
+                                  description: Targets are the names of targets in
+                                    this stage.
+                                  items:
+                                    type: string
+                                  type: array
+                              required:
+                              - name
+                              - targets
+                              type: object
+                            type: array
+                          type:
+                            description: Type of execution strategy.
+                            enum:
+                            - Sequential
+                            - Parallel
+                            - DAG
+                            - Staged
+                            type: string
+                        required:
+                        - type
+                        type: object
+                    required:
+                    - strategy
+                    type: object
+                  targets:
+                    description: Targets is the effective target list after applying
+                      overrides.
+                    items:
+                      description: Target defines a hibernation target.
+                      properties:
+                        connectorRef:
+                          description: ConnectorRef references the connector for this
+                            target.
+                          properties:
+                            kind:
+                              description: Kind of the connector (CloudProvider or
+                                K8SCluster).
+                              enum:
+                              - CloudProvider
+                              - K8SCluster
+                              type: string
+                            name:
+                              description: Name of the connector resource.
+                              type: string
+                            namespace:
+                              description: Namespace of the connector resource (defaults
+                                to plan namespace).
+                              type: string
+                          required:
+                          - kind
+                          - name
+                          type: object
+                        name:
+                          description: Name is the unique identifier for this target
+                            within the plan.
+                          type: string
+                        parameters:
+                          description: Parameters are executor-specific configuration.
+                          type: object
+                          x-kubernetes-preserve-unknown-fields: true
+                        type:
+                          description: Type of the target (e.g., eks, rds, ec2).
+                          type: string
+                      required:
+                      - connectorRef
+                      - name
+                      - type
+                      type: object
+                    type: array
+                type: object
               retryCount:
                 description: RetryCount tracks the number of retry attempts for error
                   recovery.

@@ -64,6 +64,7 @@ Behavior defines execution behavior.
 _Appears in:_
 - [ExecutionOverride](#executionoverride)
 - [HibernatePlanSpec](#hibernateplanspec)
+- [PlanSnapshot](#plansnapshot)
 
 | Field | Description | Default | Validation |
 | --- | --- | --- | --- |
@@ -285,6 +286,7 @@ Execution holds strategy configuration.
 
 _Appears in:_
 - [HibernatePlanSpec](#hibernateplanspec)
+- [PlanSnapshot](#plansnapshot)
 
 | Field | Description | Default | Validation |
 | --- | --- | --- | --- |
@@ -576,6 +578,7 @@ _Appears in:_
 | `errorMessage` _string_ | ErrorMessage provides details about the error that caused PhaseError.<br />This field is persistent within a cycle (shutdown + wakeup pair): it is set<br />when the plan enters PhaseError, replaced if a subsequent retry produces a<br />different error, and only cleared when a new cycle begins. Consequently, a<br />plan that recovered via retry may still carry the ErrorMessage from the<br />earlier failure until the next cycle starts. A non-empty ErrorMessage on a<br />completed operation indicates that the operation succeeded after a recovery<br />attempt. |  | Optional: \{\} <br /> |
 | `exceptionReferences` _[ExceptionReference](#exceptionreference) array_ | ExceptionReferences is the history of schedule exceptions for this plan.<br />Maximum 10 entries, ordered by: active state first (most relevant), then by ValidFrom descending (most recent first).<br />Oldest entries are pruned when limit is exceeded. |  | Optional: \{\} <br /> |
 | `appliedExceptionOverride` _string_ | AppliedExceptionOverride records the name of the ScheduleException whose<br />execution overrides are currently active for this cycle. Empty when no<br />overrides are applied. Set at the start of a new cycle and cleared when<br />the cycle ends. |  | Optional: \{\} <br /> |
+| `planSnapshot` _[PlanSnapshot](#plansnapshot)_ | PlanSnapshot records the resolved execution intent for the current cycle.<br />It is captured at cycle start and cleared when the cycle ends. |  | Optional: \{\} <br /> |
 | `currentStageIndex` _integer_ | CurrentStageIndex tracks which stage is currently executing (0-based).<br />Reset to 0 when starting new hibernation/wakeup cycle. |  | Optional: \{\} <br /> |
 | `currentOperation` _[PlanOperation](#planoperation)_ | CurrentOperation tracks the current operation type (shutdown or wakeup).<br />Used to determine which phase to transition to when stages complete. |  | Enum: [shutdown wakeup] <br />Optional: \{\} <br /> |
 | `executionHistory` _[ExecutionCycle](#executioncycle) array_ | ExecutionHistory records historical execution cycles (max 5).<br />Each cycle contains shutdown and wakeup operation summaries.<br />Oldest cycles are pruned when limit is exceeded. |  | Optional: \{\} <br /> |
@@ -914,6 +917,29 @@ _Appears in:_
 | `namespace` _string_ | Namespace of the HibernatePlan.<br />If empty, defaults to the exception's namespace. |  | Optional: \{\} <br /> |
 
 
+#### PlanSnapshot
+
+
+
+PlanSnapshot records the resolved execution intent for a cycle.
+It is captured at the start of a Hibernating/WakingUp cycle when an
+exception override is active, and is used for the duration of that cycle
+regardless of subsequent changes to the ScheduleException resource.
+
+
+
+_Appears in:_
+- [HibernatePlanStatus](#hibernateplanstatus)
+
+| Field | Description | Default | Validation |
+| --- | --- | --- | --- |
+| `cycleID` _string_ | CycleID is the cycle this snapshot belongs to. |  |  |
+| `exceptionName` _string_ | ExceptionName is the name of the ScheduleException whose overrides<br />produced this snapshot. Empty when no override was applied. |  |  |
+| `targets` _[Target](#target) array_ | Targets is the effective target list after applying overrides. |  | Optional: \{\} <br /> |
+| `execution` _[Execution](#execution)_ | Execution is the effective execution configuration after applying overrides. |  | Optional: \{\} <br /> |
+| `behavior` _[Behavior](#behavior)_ | Behavior is the effective behavior after applying overrides. |  | Optional: \{\} <br /> |
+
+
 #### ProviderRef
 
 
@@ -1089,6 +1115,7 @@ Target defines a hibernation target.
 
 _Appears in:_
 - [HibernatePlanSpec](#hibernateplanspec)
+- [PlanSnapshot](#plansnapshot)
 
 | Field | Description | Default | Validation |
 | --- | --- | --- | --- |

@@ -405,6 +405,32 @@ type ExecutionCycle struct {
 	WakeupExecution *ExecutionOperationSummary `json:"wakeupExecution,omitempty"`
 }
 
+// PlanSnapshot records the resolved execution intent for a cycle.
+// It is captured at the start of a Hibernating/WakingUp cycle when an
+// exception override is active, and is used for the duration of that cycle
+// regardless of subsequent changes to the ScheduleException resource.
+// +optional
+type PlanSnapshot struct {
+	// CycleID is the cycle this snapshot belongs to.
+	CycleID string `json:"cycleID,omitempty"`
+
+	// ExceptionName is the name of the ScheduleException whose overrides
+	// produced this snapshot. Empty when no override was applied.
+	ExceptionName string `json:"exceptionName,omitempty"`
+
+	// Targets is the effective target list after applying overrides.
+	// +optional
+	Targets []Target `json:"targets,omitempty"`
+
+	// Execution is the effective execution configuration after applying overrides.
+	// +optional
+	Execution Execution `json:"execution,omitempty"`
+
+	// Behavior is the effective behavior after applying overrides.
+	// +optional
+	Behavior Behavior `json:"behavior,omitempty"`
+}
+
 // HibernatePlanStatus defines the observed state of HibernatePlan.
 type HibernatePlanStatus struct {
 	// CurrentCycleID is the current hibernation cycle identifier.
@@ -456,6 +482,11 @@ type HibernatePlanStatus struct {
 	// the cycle ends.
 	// +optional
 	AppliedExceptionOverride string `json:"appliedExceptionOverride,omitempty"`
+
+	// PlanSnapshot records the resolved execution intent for the current cycle.
+	// It is captured at cycle start and cleared when the cycle ends.
+	// +optional
+	PlanSnapshot *PlanSnapshot `json:"planSnapshot,omitempty"`
 
 	// CurrentStageIndex tracks which stage is currently executing (0-based).
 	// Reset to 0 when starting new hibernation/wakeup cycle.
