@@ -1,0 +1,86 @@
+# Sample: Extend Exception with Both Target Overrides and Execution Override
+# This example shows a comprehensive override for a special event where both
+# target parameters and execution strategy are modified.
+
+apiVersion: hibernator.ardikabs.com/v1alpha1
+kind: ScheduleException
+metadata:
+  name: special-event-full-override
+  namespace: hibernator-system
+spec:
+  planRef:
+    name: production-plan
+  type: extend
+  validFrom: "2026-07-01T00:00:00Z"
+  validUntil: "2026-07-07T23:59:59Z"
+  windows:
+    - start: "06:00"
+      end: "11:00"
+      daysOfWeek: ["Saturday", "Sunday"]
+    - start: "01:00"
+      end: "06:00"
+      daysOfWeek: ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday"]
+  targetOverrides:
+    - targetName: frontend
+      parameters:
+        selector:
+          tags:
+            Environment: "event-mode"
+    - targetName: database
+      disabled: true
+    - targetName: backend
+      parameters:
+        clusterName: "event-cluster"
+  executionOverride:
+    strategy:
+      type: Sequential
+    behavior:
+      mode: BestEffort
+      retries: 1
+---
+# Base HibernatePlan for reference
+apiVersion: hibernator.ardikabs.com/v1alpha1
+kind: HibernatePlan
+metadata:
+  name: production-plan
+  namespace: hibernator-system
+spec:
+  schedule:
+    timezone: "America/New_York"
+    offHours:
+      - start: "20:00"
+        end: "06:00"
+        daysOfWeek: ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday"]
+  execution:
+    strategy:
+      type: Parallel
+      maxConcurrency: 2
+  behavior:
+    mode: Strict
+    retries: 3
+  targets:
+    - name: frontend
+      type: ec2
+      connectorRef:
+        kind: CloudProvider
+        name: aws
+      parameters:
+        selector:
+          tags:
+            Environment: "production"
+    - name: backend
+      type: eks
+      connectorRef:
+        kind: CloudProvider
+        name: aws
+      parameters:
+        clusterName: "production-cluster"
+    - name: database
+      type: rds
+      connectorRef:
+        kind: CloudProvider
+        name: aws
+      parameters:
+        selector:
+          tags:
+            Environment: "production"

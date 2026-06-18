@@ -20,6 +20,7 @@ import (
 	clocktesting "k8s.io/utils/clock/testing"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
+	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
 
 	hibernatorv1alpha1 "github.com/ardikabs/hibernator/api/v1alpha1"
 	"github.com/ardikabs/hibernator/internal/message"
@@ -315,6 +316,38 @@ func TestHandleUpdate_DeletionTimestamp_RemovesFromResources(t *testing.T) {
 	updated := &hibernatorv1alpha1.ScheduleException{}
 	err := p.Get(context.Background(), key, updated)
 	assert.True(t, client.IgnoreNotFound(err) == nil, "exception should be deleted after finalizer removal")
+}
+
+func TestHandleExceptionDelete_MidCyclePhaseError_KeepsFinalizer(t *testing.T) {
+	plan := &hibernatorv1alpha1.HibernatePlan{
+		ObjectMeta: metav1.ObjectMeta{Name: "plan-a", Namespace: "default"},
+		Status: hibernatorv1alpha1.HibernatePlanStatus{
+			Phase:                    hibernatorv1alpha1.PhaseError,
+			AppliedExceptionOverride: "ex-err",
+			CurrentCycleID:             "cycle-001",
+		},
+	}
+	ex := baseScheduleException("ex-err", "plan-a")
+	ex.Finalizers = []string{wellknown.ExceptionFinalizerName}
+	nowTime := metav1.Now()
+	ex.DeletionTimestamp = &nowTime
+
+	p, _ := newTestProcessor(t, plan, ex)
+	key := types.NamespacedName{Name: "ex-err", Namespace: "default"}
+
+	errChan := make(chan error, 1)
+	p.handleExceptionDelete(context.Background(), logr.Discard(), key, errChan)
+
+	select {
+	case err := <-errChan:
+		t.Fatalf("unexpected error during deletion handling: %v", err)
+	default:
+	}
+
+	updated := &hibernatorv1alpha1.ScheduleException{}
+	require.NoError(t, p.Get(context.Background(), key, updated))
+	assert.True(t, controllerutil.ContainsFinalizer(updated, wellknown.ExceptionFinalizerName),
+		"finalizer should be retained while plan is mid-cycle in PhaseError")
 }
 
 // ---------------------------------------------------------------------------

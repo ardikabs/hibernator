@@ -423,6 +423,38 @@ func (p *LifecycleProcessor) handleExceptionDelete(ctx context.Context, log logr
 	)
 	log.V(1).Info("handling exception deletion")
 
+	// Check if the referenced plan is mid-cycle with this exception's override.
+	// If so, block finalizer removal to prevent the exception from disappearing
+	// while the plan is still using its overrides.
+	planKey := types.NamespacedName{
+		Name:      exception.Spec.PlanRef.Name,
+		Namespace: exception.Namespace,
+	}
+	plan := new(hibernatorv1alpha1.HibernatePlan)
+	if err := p.Get(ctx, planKey, plan); err != nil {
+		if client.IgnoreNotFound(err) == nil {
+			log.V(1).Info("referenced plan no longer exists, allowing finalizer removal")
+		} else {
+			log.Error(err, "failed to fetch referenced plan for mid-cycle check", "plan", planKey)
+			// Proceed cautiously: do not block finalizer removal on infrastructure errors.
+		}
+	} else if plan.Status.Phase == hibernatorv1alpha1.PhaseHibernating ||
+		plan.Status.Phase == hibernatorv1alpha1.PhaseWakingUp ||
+		plan.Status.Phase == hibernatorv1alpha1.PhaseError {
+		if plan.Status.AppliedExceptionOverride == exception.Name {
+			log.Info("blocking exception finalizer removal: plan is mid-cycle with this exception's override",
+				"plan", planKey,
+				"phase", plan.Status.Phase,
+				"cycleID", plan.Status.CurrentCycleID)
+			// Remove from plan status but keep the finalizer so the exception persists
+			// until the cycle ends.
+			if err := p.removeFromPlanStatus(ctx, log, exception); err != nil {
+				errChan <- fmt.Errorf("exception %s/%s: failed to remove from plan status: %w", exception.Namespace, exception.Name, err)
+			}
+			return
+		}
+	}
+
 	// Remove exception from plan status
 	if err := p.removeFromPlanStatus(ctx, log, exception); err != nil {
 		errChan <- fmt.Errorf("exception %s/%s: failed to remove from plan status: %w", exception.Namespace, exception.Name, err)

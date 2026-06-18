@@ -74,6 +74,20 @@ const (
 	//   # Re-run hibernation executor while plan is already Hibernated
 	//   kubectl annotate hibernateplan <name> hibernator.ardikabs.com/restart=true
 	AnnotationRestart = "hibernator.ardikabs.com/restart"
+
+	// AnnotationFresh is a companion annotation that can be used with AnnotationRestart
+	// or AnnotationOverrideAction to indicate that the operator wants to start a new
+	// cycle and rebuild PlanSnapshot from the live ScheduleException state, rather than
+	// preserving the locked intent from the previous cycle.
+	//
+	// Value: must be "true" — any other value is treated as absent.
+	//
+	//   # Re-run wakeup with a fresh snapshot from the current exception
+	//   kubectl annotate hibernateplan <name> hibernator.ardikabs.com/restart=true hibernator.ardikabs.com/fresh=true
+	//
+	//   # Force wakeup with a fresh snapshot from the current exception
+	//   kubectl annotate hibernateplan <name> hibernator.ardikabs.com/override-action=true hibernator.ardikabs.com/override-phase-target=wakeup hibernator.ardikabs.com/fresh=true
+	AnnotationFresh = "hibernator.ardikabs.com/fresh"
 )
 
 // Override phase target values for AnnotationOverridePhaseTarget.

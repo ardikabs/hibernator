@@ -108,7 +108,10 @@ func (state *recoveryState) handleRetry(ctx context.Context, log logr.Logger, la
 	operation := state.determineRetryOperation(log, plan)
 	shouldHibernate := operation == hibernatorv1alpha1.OperationHibernate
 
-	execPlan, err := state.buildExecutionPlan(plan, operation == hibernatorv1alpha1.OperationWakeUp)
+	// Use the locked effective plan so retry/resume preserves the original
+	// exception intent captured at cycle start.
+	effectivePlan := state.effectivePlan(plan)
+	execPlan, err := state.buildExecutionPlan(effectivePlan, operation == hibernatorv1alpha1.OperationWakeUp)
 	if err != nil {
 		log.Error(err, "failed to rebuild execution plan during recovery, repeat may be attempted if this is a transient error")
 		return StateResult{}, err

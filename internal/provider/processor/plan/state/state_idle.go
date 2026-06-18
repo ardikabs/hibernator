@@ -43,7 +43,7 @@ func (state *idleState) Handle(ctx context.Context) (StateResult, error) {
 	case hibernatorv1alpha1.PhaseActive:
 		if shouldHibernate {
 			log.Info("schedule indicates hibernation, transitioning to Hibernating")
-			return state.transitionToHibernating(ctx, log)
+			return state.transitionToHibernating(ctx, log, false)
 		}
 
 		log.V(1).Info("schedule indicates active period, no transition needed")
@@ -64,24 +64,46 @@ func (state *idleState) Handle(ctx context.Context) (StateResult, error) {
 
 // transitionToHibernating initialises the shutdown operation, queues a status update,
 // and returns Requeue so the worker immediately drives the Hibernating phase handler.
-func (state *idleState) transitionToHibernating(ctx context.Context, log logr.Logger) (StateResult, error) {
+//
+// When fresh is true, a new cycle ID is always generated and the PlanSnapshot is rebuilt
+// from the live ScheduleException state. This is used when the operator explicitly requests
+// a fresh cycle via the hibernator.ardikabs.com/fresh annotation.
+func (state *idleState) transitionToHibernating(ctx context.Context, log logr.Logger, fresh bool) (StateResult, error) {
 	plan := state.plan()
 
-	// For idempotent restart: reuse cycle ID from existing live restore data if available.
-	// This ensures that if the runner restarts mid-operation, the same cycle ID is used
-	// and the ManagedByCycleIDs markers remain valid for preserving already-processed state.
-	cycleID := state.getExistingCycleIDForHibernation(ctx, log, plan)
-	if cycleID == "" {
+	var cycleID string
+	if fresh {
+		// Fresh cycle: ignore any existing live restore data cycle ID and start anew.
 		cycleID = uuid.New().String()[:8]
-		log.V(1).Info("generated new cycle ID for hibernation", "cycleID", cycleID)
+		log.V(1).Info("generated new cycle ID for fresh hibernation", "cycleID", cycleID)
 	} else {
-		log.V(1).Info("reusing existing cycle ID from live restore data", "cycleID", cycleID)
+		// For idempotent restart: reuse cycle ID from existing live restore data if available.
+		// This ensures that if the runner restarts mid-operation, the same cycle ID is used
+		// and the ManagedByCycleIDs markers remain valid for preserving already-processed state.
+		cycleID = state.getExistingCycleIDForHibernation(ctx, log, plan)
+		if cycleID == "" {
+			cycleID = uuid.New().String()[:8]
+			log.V(1).Info("generated new cycle ID for hibernation", "cycleID", cycleID)
+		} else {
+			log.V(1).Info("reusing existing cycle ID from live restore data", "cycleID", cycleID)
+		}
+	}
+
+	// Build effective plan with execution overrides applied at the start of the new cycle.
+	// The effective plan is a deep copy; the original plan is never modified.
+	var effectivePlan = plan
+	appliedExceptionName := ""
+	if ep := state.buildEffectivePlan(plan); ep != nil {
+		effectivePlan = ep
+		if exc := state.findActiveExceptionOverride(); exc != nil {
+			appliedExceptionName = exc.Name
+		}
 	}
 
 	now := state.Clock.Now()
 
-	executions := make([]hibernatorv1alpha1.ExecutionStatus, len(plan.Spec.Targets))
-	for i, t := range plan.Spec.Targets {
+	executions := make([]hibernatorv1alpha1.ExecutionStatus, len(effectivePlan.Spec.Targets))
+	for i, t := range effectivePlan.Spec.Targets {
 		executions[i] = hibernatorv1alpha1.ExecutionStatus{
 			Target:   t.Name,
 			Executor: t.Type,
@@ -100,7 +122,17 @@ func (state *idleState) transitionToHibernating(ctx context.Context, log logr.Lo
 			p.Status.CurrentStageIndex = 0
 			p.Status.CurrentOperation = hibernatorv1alpha1.OperationHibernate
 			p.Status.Executions = executions
+			p.Status.AppliedExceptionOverride = appliedExceptionName
 			p.Status.LastTransitionTime = ptr.To(metav1.NewTime(now))
+			if appliedExceptionName != "" {
+				p.Status.PlanSnapshot = &hibernatorv1alpha1.PlanSnapshot{
+					CycleID:       cycleID,
+					ExceptionName: appliedExceptionName,
+					Targets:       effectivePlan.Spec.Targets,
+					Execution:     effectivePlan.Spec.Execution,
+					Behavior:      effectivePlan.Spec.Behavior,
+				}
+			}
 		}),
 		PostHook: chainHooks(
 			state.notifyHook(hibernatorv1alpha1.EventStart, func(p *hibernatorv1alpha1.HibernatePlan) notification.Payload {
@@ -116,12 +148,33 @@ func (state *idleState) transitionToHibernating(ctx context.Context, log logr.Lo
 
 // transitionToWakingUp initialises the wakeup operation, queues a status update,
 // and returns Requeue so the worker immediately drives the WakingUp phase handler.
+//
+// The existing PlanSnapshot is reused when its CycleID matches the plan's CurrentCycleID,
+// ensuring cycle intent locking. If no snapshot exists, the live plan spec targets are used
+// as a backward-compatible fallback.
 func (state *idleState) transitionToWakingUp(log logr.Logger) (StateResult, error) {
 	plan := state.plan()
+
 	now := state.Clock.Now()
 
-	executions := make([]hibernatorv1alpha1.ExecutionStatus, len(plan.Spec.Targets))
-	for i, t := range plan.Spec.Targets {
+	// Use the existing PlanSnapshot targets if available for this cycle.
+	// The snapshot was captured during transitionToHibernating and should be
+	// reused for the wakeup operation to ensure cycle intent locking.
+	var targetList []hibernatorv1alpha1.Target
+	if snap := plan.Status.PlanSnapshot; snap != nil && snap.CycleID == plan.Status.CurrentCycleID {
+		targetList = snap.Targets
+		log.V(1).Info("reusing plan snapshot targets for wakeup", "cycleID", snap.CycleID, "exception", snap.ExceptionName)
+	} else if snap != nil {
+		targetList = plan.Spec.Targets
+		log.V(1).Info("plan snapshot cycleID mismatch, using live plan targets",
+			"snapshotCycleID", snap.CycleID, "currentCycleID", plan.Status.CurrentCycleID)
+	} else {
+		targetList = plan.Spec.Targets
+		log.V(1).Info("no plan snapshot for current cycle, using live plan targets")
+	}
+
+	executions := make([]hibernatorv1alpha1.ExecutionStatus, len(targetList))
+	for i, t := range targetList {
 		executions[i] = hibernatorv1alpha1.ExecutionStatus{
 			Target:   t.Name,
 			Executor: t.Type,
@@ -140,6 +193,8 @@ func (state *idleState) transitionToWakingUp(log logr.Logger) (StateResult, erro
 			p.Status.CurrentOperation = hibernatorv1alpha1.OperationWakeUp
 			p.Status.Executions = executions
 			p.Status.LastTransitionTime = ptr.To(metav1.NewTime(now))
+			// CurrentCycleID, AppliedExceptionOverride, and PlanSnapshot are preserved
+			// from hibernation to maintain cycle intent locking.
 		}),
 		PostHook: chainHooks(
 			state.notifyHook(hibernatorv1alpha1.EventStart, func(p *hibernatorv1alpha1.HibernatePlan) notification.Payload {

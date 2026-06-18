@@ -167,6 +167,21 @@ Restart is a **one-shot** action that re-triggers the last executor operation as
 !!! tip "Restart + Override"
     Restart works both standalone and alongside Override Action. While an override is active and the plan has reached the target phase, you can annotate `restart=true` to re-run the executor one more time.
 
+### Fresh Restart
+
+By default, restart re-runs the last operation using the existing locked cycle intent (`status.planSnapshot`). To discard the locked intent and start a **new hibernation cycle** with the current live exception state, add `hibernator.ardikabs.com/fresh=true`:
+
+```bash
+kubectl annotate hibernateplan dev-offhours -n hibernator-system \
+  hibernator.ardikabs.com/restart=true \
+  hibernator.ardikabs.com/fresh=true
+```
+
+!!! warning "Fresh is hibernate-only"
+    `fresh=true` only affects hibernate operations. Wakeup restarts ignore `fresh` and always preserve the existing cycle intent, because wakeup depends on restore data captured during the original shutdown. This is an intentional asymmetry: a fresh hibernation starts a new cycle, but a fresh wakeup would lose the restore state needed to bring resources back online.
+
+For the conceptual background on why intent is locked and how `ScheduleException` resources participate, see [Cycle Intent Locking](../concepts/hibernateplan.md#cycle-intent-locking) and the [Schedule Exceptions operational semantics](schedule-exceptions.md#operational-semantics-retry-resume-and-restart).
+
 ---
 
 ## Quick Comparison
@@ -193,4 +208,5 @@ Restart is a **one-shot** action that re-triggers the last executor operation as
 | `hibernator.ardikabs.com/override-phase-target` | `hibernate` or `wakeup` | Specifies the target phase for override. |
 | `hibernator.ardikabs.com/override-until` | RFC3339 UTC (e.g., `2026-01-15T14:30:00Z`) | Optional deadline for automatic override expiration. When current time exceeds this value, the controller automatically deactivates the override. |
 | `hibernator.ardikabs.com/restart` | `"true"` | One-shot re-trigger of last executor operation. Consumed by controller. |
+| `hibernator.ardikabs.com/fresh` | `"true"` | Companion to `restart` or `override-action`. Starts a new hibernation cycle and rebuilds `status.planSnapshot` from the live `ScheduleException`. Ignored for wakeup operations. Consumed by controller. |
 | `hibernator.ardikabs.com/retry-now` | `"true"` | One-shot retry for Error phase plans. Consumed by controller. |

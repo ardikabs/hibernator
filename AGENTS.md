@@ -1,29 +1,136 @@
 # Hibernator Operator - AI Agent Instructions
 
-This project uses **bd (beads)** for issue tracking and persistent project memories.
+**Superpowers** = Strategy Layer (design, architecture, planning)
+**Beads** = System of Record (task tracking, persistent memories, execution state)
+
+---
+
+## Critical Rules
+
+1. **Verify Before Acting**: Never make assumptions. If unclear, verify. Only start work when goals/objectives are clearly defined.
+2. **Git**: NEVER auto-commit. All commits require explicit user request.
+3. **E2E tests**: NEVER run automatically (`test/e2e/...`). Always ask first.
+4. **Build**: All Go binaries to `bin/`. Use `make build` or `go build -o bin/{name}`.
+
+---
+
+## Workflow Architecture
+
+### Layer 1: Superpowers (Strategy)
+
+| Skill | Purpose | Output |
+|-------|---------|--------|
+| `brainstorming` | Design phase - understand what to build | `docs/superpowers/specs/YYYY-MM-DD-<topic>-design.md` |
+| `writing-plans` | Planning phase - define how to build it | `docs/superpowers/plans/YYYY-MM-DD-<feature>.md` |
+
+**Rules:**
+- Always use `brainstorming` first for architectural decisions
+- Always use `writing-plans` after design approval
+- Source of truth: `docs/superpowers/specs/` (designs), `docs/superpowers/plans/` (plans)
+- **Execution boundary**: Plans in `docs/superpowers/plans/` are for planning ONLY, NOT active task tracking
+
+### Layer 2: Beads (Execution)
+
+| Command | Purpose |
+|---------|---------|
+| `bd ready` | Find available work |
+| `bd show <id>` | View issue details |
+| `bd update <id> --claim` | Claim work |
+| `bd close <id>` | Complete work |
+| `bd prime` | Get workflow context + persistent memories |
+
+**Rules:**
+- Every major feature/RFC = `type=epic`
+- Break plans into granular (2-5 min) `type=task` items
+- Use `bd dep add` to enforce execution order from Superpowers plan
+
+### The Bridge (Design → Execution)
+
+```
+1. Run brainstorming skill
+   → Design spec saved to docs/superpowers/specs/
+
+2. Run writing-plans skill
+   → Implementation plan saved to docs/superpowers/plans/
+
+3. Translate approved plan → Beads epic + child tasks
+   → bd create --title="..." --type=epic
+   → bd create --title="..." --type=task (granular items)
+   → bd dep add <task> <epic> --type blocks
+
+4. Execute via Beads workflow
+   → bd ready → bd update <id> --claim → bd close <id>
+```
+
+---
+
+## Two Workflows: Feature Development vs Findings
+
+### Feature Development (Superpowers + Beads)
+
+**Use for:** New features, RFCs, architectural changes, planned improvements
+
+**Workflow:**
+```
+brainstorming → writing-plans → Beads epic/tasks → execution
+```
+
+**Output:**
+- `docs/superpowers/specs/` - Design specs
+- `docs/superpowers/plans/` - Implementation plans
+- `docs/proposals/` - RFCs (human-maintained)
+
+### Findings (Investigative)
+
+**Use for:** Bug reports, feedback analysis, reproducing issues, root cause investigation
+
+**Workflow:**
+```
+Document findings → If actionable, create Beads issue → If design needed, use brainstorming
+```
+
+**Output:**
+- `docs/findings/` - Investigation results (NOT tracked as Beads tasks)
+
+**When findings reveal actionable work:**
+1. Create findings doc in `docs/findings/` using TEMPLATE.md
+2. Create Beads issue with `discovered-from` dependency
+   ```bash
+   bd create --title="Fix: ..." --type=bug
+   bd dep add <fix-issue> <finding-issue> --type discovered-from
+   ```
+3. If fix requires design work, use `brainstorming` skill for the solution
+
+**Key distinction:** Findings are for investigation and documentation. Feature development is for planned implementation work.
+
+---
 
 ## Quick Start
+
+### Beads Workflow (Execution Layer)
 
 ```bash
 bd ready              # Find available work
 bd show <id>          # View issue details
-bd update <id> --claim  # Claim work atomically
+bd update <id> --claim  # Claim work
 bd close <id>         # Complete work
 bd prime              # Get workflow context + persistent memories
 ```
 
-## Critical Rules
+### Superpowers Workflow (Strategy Layer)
 
-- **File ops**: NEVER use heredoc/redirect. Always use `edit`/`write` tools with 3-5 lines context.
-- **Git**: NEVER auto-commit. All commits require explicit user request.
-- **E2E tests**: NEVER run automatically (`test/e2e/...`). Always ask first.
-- **Build**: All Go binaries go to `bin/`. `make build` or `go build -o bin/{name}`.
+```
+brainstorming skill   # Design phase - understand what to build
+writing-plans skill   # Planning phase - define how to build it
+```
+
+---
 
 ## Project Overview
 
 **Hibernator Operator** is a Kubernetes-native operator that manages time-based hibernation and wakeup of cloud infrastructure resources. It orchestrates coordinated shutdown and restoration of heterogeneous resources (EKS, RDS, EC2, Karpenter) based on user-defined schedules.
 
-## Terminology (Critical)
+## Terminology
 
 - **`HibernatePlan`**: Primary CRD (NOT "Hibernator"). Defines schedule, targets, execution strategy.
 - **`CloudProvider`**: CRD for cloud credentials (IRSA preferred, static fallback)
@@ -39,21 +146,20 @@ bd prime              # Get workflow context + persistent memories
 **Executors (Hands)**: Own implementation. Core never knows "how" to shutdown—only "what intent" to apply.
 
 Lifecycle: `Active → Hibernating → Hibernated → WakingUp`
-
-## RFC Registry
-
-| RFC | Status | Keywords |
-|-----|--------|----------|
-| [RFC-0001](docs/proposals/0001-hibernate-operator.md) | Implemented | Architecture, Executors, Streaming, Job-Lifecycle |
-| [RFC-0002](docs/proposals/0002-schedule-format-migration.md) | Implemented | Schedule-Format, Cron-Conversion, Timezone-Aware |
-| [RFC-0003](docs/proposals/0003-schedule-exceptions.md) | Implemented | Schedule-Exceptions, Extend, Suspend, Replace |
-| [RFC-0004](docs/proposals/0004-scale-subresource-executor.md) | Implemented | Scale-Subresource, Downscale, WorkloadScaler |
-| [RFC-0005](docs/proposals/0005-serviceaccount-semantic-enhancements.md) | Proposed | ServiceAccount, IRSA, Multi-Cloud |
-| [RFC-0006](docs/proposals/0006-notification-system.md) | Implemented | Notifications, Slack, Webhook |
-| [RFC-0007](docs/proposals/0007-kubectl-hibernator-cli-plugin.md) | Implemented | kubectl plugin, CLI |
-| [RFC-0008](docs/proposals/0008-async-phase-driven-reconciler.md) | Implemented | AsyncReconciler, WatchablePipeline, Coordinator |
-| [RFC-0009](docs/proposals/0009-slack-block-kit-notification-format.md) | Proposed | Slack, Block-Kit, Formatting |
+Situational: `Pending`, `Suspended`, and `Error`
 
 ---
 
-**See `bd prime` for persistent project memories injected at session start.**
+## Documentation Output
+
+| Type | Location |
+|------|----------|
+| Design specs | `docs/superpowers/specs/` |
+| Implementation plans | `docs/superpowers/plans/` |
+| RFCs | `docs/proposals/` |
+| Findings | `docs/findings/` |
+| Historical plans | `docs/plan/` (deprecated, reference only) |
+
+## RFC Registry
+
+RFCs are maintained in `docs/proposals/` for human reference.

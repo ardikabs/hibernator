@@ -3,14 +3,14 @@ rfc: RFC-0003
 title: Temporary Schedule Exceptions via Independent CRD
 status: Implemented
 date: 2026-01-29
-updated: 2026-03-25
+updated: 2026-06-14
 ---
 
 # RFC 0003 — Temporary Schedule Exceptions via Independent CRD
 
-**Keywords:** Schedule-Exceptions, Maintenance-Windows, Lead-Time, Time-Bound, Extend, Suspend, Replace, Emergency-Events, Validation, Status-Tracking, Independent-CRD, GitOps
+**Keywords:** Schedule-Exceptions, Maintenance-Windows, Lead-Time, Time-Bound, Extend, Suspend, Replace, Emergency-Events, Validation, Status-Tracking, Independent-CRD, GitOps, Execution-Overrides
 
-**Status:** Implemented ✅ (Phases 1-5 Complete — approval workflows are future work; see [Future Considerations](#future-considerations-exception-approval-workflow))
+**Status:** Implemented ✅ (Phases 1-6 Complete — execution override support added)
 
 ## Summary
 
@@ -460,3 +460,202 @@ The original evaluation semantics in §[Schedule Evaluation Semantics](#schedule
 
 **No deterministic single-winner selection**: All active exceptions participate. The composition order
 (replace → extend → suspend) determines the final effective schedule.
+
+---
+
+## Phase 6 Addendum: Execution Overrides
+
+**Date:** 2026-06-14
+**Status:** Implemented ✅
+
+### Overview
+
+Phase 6 adds execution override capabilities to `ScheduleException`. In addition to modifying *when* hibernation occurs (schedule), exceptions can now temporarily modify *how* and *what* is executed during the exception window.
+
+### Execution Override Scope
+
+Execution overrides are **only supported** for `extend` and `replace` exceptions. `suspend` type remains schedule-only and rejects any override fields.
+
+#### Target Overrides
+
+Override per-target parameters or disable targets entirely:
+
+```yaml
+spec:
+  targetOverrides:
+    - targetName: frontend
+      parameters:
+        selector:
+          tags:
+            Environment: "event-mode"
+    - targetName: database
+      disabled: true
+```
+
+- **`parameters`**: Full replacement of the target's base parameters (not a deep merge)
+- **`disabled`**: When `true`, the target is excluded from both shutdown and wakeup for the entire exception window
+
+#### Execution Strategy Override
+
+Override the plan's execution strategy and behavior:
+
+```yaml
+spec:
+  executionOverride:
+    strategy:
+      type: Sequential
+    behavior:
+      mode: BestEffort
+      retries: 1
+```
+
+- **`strategy`**: Full replacement of `execution.strategy` (all sub-fields)
+- **`behavior`**: Full replacement of `behavior` (all sub-fields)
+
+### Application Semantics
+
+**Critical Rule**: Overrides are only applied at the **start of a new cycle** (shutdown or wakeup).
+
+| Scenario | Behavior |
+|----------|----------|
+| Exception created during `Active` phase | Override applies on the **next shutdown** cycle |
+| Exception created during `Hibernating` phase | Override **ignored** until wakeup completes and a new cycle begins |
+| Exception created during `Hibernated` phase | Override applies on the **next wakeup** |
+| Exception created during `WakingUp` phase | Override **ignored** until wakeup completes and a new cycle begins |
+| Exception expires mid-cycle | Override continues for the **current cycle** |
+
+### Validation
+
+**Two-layer validation** ensures safety:
+
+1. **Webhook (Admission)**:
+   - Rejects `targetOverrides` and `executionOverride` on `suspend` type
+   - Validates `targetOverrides[*].targetName` exists in the referenced plan
+   - Validates `targetOverrides[*].parameters` using executor-specific validators
+   - Validates `executionOverride` fields match `ExecutionStrategy` and `Behavior` schema
+   - If `disabled: true`, validates no DAG dependency is broken
+
+2. **Runtime (Server-side)**:
+   - Re-validates resolved override configuration before dispatching the first runner Job
+   - Uses the same executor-specific validators as the webhook
+   - If validation fails, transitions plan to `PhaseError` with clear error message
+   - No cloud or cluster resources are modified if validation fails
+
+### Full Example
+
+```yaml
+apiVersion: hibernator.ardikabs.com/v1alpha1
+kind: ScheduleException
+metadata:
+  name: event-override
+  namespace: hibernator-system
+spec:
+  planRef:
+    name: production-plan
+  type: extend
+  validFrom: "2026-06-15T00:00:00Z"
+  validUntil: "2026-06-20T23:59:59Z"
+  windows:
+    - start: "06:00"
+      end: "11:00"
+      daysOfWeek: ["Saturday", "Sunday"]
+  targetOverrides:
+    - targetName: frontend
+      parameters:
+        selector:
+          tags:
+            Environment: "event-mode"
+    - targetName: database
+      disabled: true
+  executionOverride:
+    strategy:
+      type: Sequential
+    behavior:
+      mode: BestEffort
+      retries: 1
+```
+
+### Updated Validation Rules (Phase 6)
+
+The full webhook validation for `ScheduleException` now enforces:
+
+1. `planRef.name` must reference existing HibernatePlan *(unchanged)*
+2. `planRef.namespace` must equal exception namespace *(unchanged)*
+3. `validFrom <= validUntil` *(unchanged)*
+4. `validUntil - validFrom <= 90 days` *(unchanged)*
+5. `type` must be one of: `extend`, `suspend`, `replace` *(unchanged)*
+6. For `suspend` type: `leadTime` must be valid duration format *(unchanged)*
+7. `windows[]` must follow OffHourWindow format *(unchanged)*
+8. **[NEW]** `targetOverrides` and `executionOverride` are **forbidden** for `suspend` type exceptions
+9. **[NEW]** `targetOverrides[*].targetName` must exist in the referenced plan
+10. **[NEW]** `targetOverrides[*].parameters` must be valid for the target's executor type
+11. **[NEW]** `targetOverrides[*].disabled=true` must not break DAG dependencies
+12. **[NEW]** `executionOverride` must match `ExecutionStrategy` and `Behavior` schema
+13. Exception name must be unique within namespace *(unchanged)*
+
+### Schedule Evaluation Semantics (Phase 6)
+
+The evaluation semantics from Phase 5 remain unchanged. The override is applied to the effective plan at the start of the execution cycle, after the schedule has been evaluated.
+
+---
+
+## Phase 7 Addendum: Exception Intent Locking
+
+**Date:** 2026-06-15
+**Status:** Implemented
+
+### Overview
+
+When a user edits or deletes a `ScheduleException` while a plan is mid-cycle (`Hibernating`, `Hibernated`, `WakingUp`, or `PhaseError`), the controller must guarantee that the in-flight cycle continues with the intent it started with. Phase 7 introduces **cycle intent locking** via `PlanSnapshot` and secondary safeguards (finalizer + validating webhook) to prevent mid-cycle exception tampering from altering runtime behavior.
+
+### PlanSnapshot
+
+When a cycle starts, the controller resolves the effective execution intent (merged schedule + overrides) and stores it in the plan status:
+
+```yaml
+status:
+  planSnapshot:
+    cycleID: "hibernate-2026-06-15-20-00-00"
+    exceptionName: "wednesday-holiday"
+    targets: [...]          # resolved targets after overrides
+    execution: {...}       # resolved strategy/behavior after overrides
+    behavior: {...}        # resolved failure behavior
+```
+
+**Rules:**
+
+- **Capture**: Snapshot is taken at the start of a shutdown cycle (`Idle` → `Hibernating`). It is then reused for the wakeup half of the same cycle.
+- **Usage**: All subsequent states (`Hibernating`, `Hibernated`, `WakingUp`, `PhaseError`) use the snapshot instead of re-evaluating the live exception.
+- **Retention**: Snapshot is preserved during `PhaseError` so retry/resume operations continue with the locked intent. It is also preserved after the cycle completes (`Idle`) and is only replaced when the next shutdown cycle starts or when an explicit `fresh` cycle is requested.
+- **Clear**: Snapshot is replaced at the start of a new shutdown cycle (`Idle` → `Hibernating`). It is also discarded when an explicit `fresh` cycle is requested via `restart=true`/`override-action=true` paired with `fresh=true`.
+
+### Secondary Safeguards
+
+In addition to the snapshot, two runtime safeguards prevent tampering:
+
+1. **Finalizer**: The controller adds a finalizer to the exception when the plan enters a non-Idle phase. The finalizer prevents exception deletion while the cycle is in flight. It is removed when the plan returns to `Idle`.
+2. **Validating Webhook**: The webhook denies updates to `targetOverrides` and `executionOverride` fields while the plan is mid-cycle. This prevents the user from silently changing execution intent without deleting and recreating the exception.
+
+### Operational Semantics
+
+| Operation | What happens to the exception intent |
+|-----------|--------------------------------------|
+| **Automatic retry** after a transient error | Keeps the locked snapshot. The same targets, strategy, and behavior are retried. |
+| **Manual retry** (`retry-now` annotation) | Keeps the locked snapshot. |
+| **Resume from suspension** mid-cycle | Keeps the locked snapshot. |
+| **Restart** (`restart=true` annotation) | Keeps the locked snapshot by default. Add `fresh=true` to start a new cycle and re-evaluate from the latest live state. |
+| **Manual override** (`override-action=true`) | Keeps the locked snapshot by default. Add `fresh=true` to start a new cycle and re-evaluate from the latest live state. |
+| **Exception edited mid-cycle** | Webhook blocks `targetOverrides`/`executionOverride` changes. Other fields (e.g., `validUntil`) are allowed. |
+| **Exception deleted mid-cycle** | Finalizer blocks deletion until the cycle completes. |
+
+### Retry vs Resume vs Restart vs Fresh
+
+- **Retry**: Attempt the same locked intent again (e.g., after a transient cloud API failure). Use the `retry-now` annotation.
+- **Resume**: Continue a partially completed cycle (e.g., after waking up from a suspended state). The controller continues with the locked snapshot.
+- **Restart**: Re-run the last operation using the locked snapshot. Use the `restart=true` annotation.
+- **Fresh**: Abandon the current cycle and start fresh. Use `restart=true` or `override-action=true` together with `fresh=true`. This discards the snapshot and re-evaluates the live exception state. `fresh=true` only affects hibernate operations; wakeup operations ignore it because they depend on restore data captured during the original shutdown.
+
+### Migration Notes
+
+- **No breaking changes**: `PlanSnapshot` is a new status field; existing plans without it continue to operate normally.
+- **Backward compatibility**: Plans that were already mid-cycle when the controller was upgraded will not have a snapshot. The controller falls back to live evaluation until the next cycle start, at which point the snapshot is captured.

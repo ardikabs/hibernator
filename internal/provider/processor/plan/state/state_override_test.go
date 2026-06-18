@@ -8,6 +8,7 @@ package state
 import (
 	"context"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -253,6 +254,63 @@ func TestOverrideActionState_Hibernate_FromActive_DuringActiveWindow_Transitions
 	assert.GreaterOrEqual(t, planStatuses(st).Len(), 1, "at least one status update must be queued")
 }
 
+// Fresh override hibernate from Active must start a new cycle and rebuild snapshot.
+func TestOverrideActionState_Hibernate_FromActive_Fresh(t *testing.T) {
+	plan := basePlanForState("p", hibernatorv1alpha1.PhaseActive)
+	plan.Status.CurrentCycleID = "cycle-001"
+	plan.Status.AppliedExceptionOverride = "old-exc"
+	plan.Status.PlanSnapshot = &hibernatorv1alpha1.PlanSnapshot{
+		CycleID:       "cycle-001",
+		ExceptionName: "old-exc",
+		Targets:       []hibernatorv1alpha1.Target{{Name: "db", Type: "rds"}},
+	}
+	plan.Spec.Targets = []hibernatorv1alpha1.Target{
+		{Name: "app", Type: "eks"},
+		{Name: "db", Type: "rds"},
+	}
+
+	exc := &hibernatorv1alpha1.ScheduleException{
+		ObjectMeta: metav1.ObjectMeta{Name: "new-exc", Namespace: "default"},
+		Status:     hibernatorv1alpha1.ScheduleExceptionStatus{State: hibernatorv1alpha1.ExceptionStateActive},
+		Spec: hibernatorv1alpha1.ScheduleExceptionSpec{
+			Type:       hibernatorv1alpha1.ExceptionExtend,
+			ValidFrom:  metav1.Time{Time: time.Now().Add(-24 * time.Hour)},
+			ValidUntil: metav1.Time{Time: time.Now().Add(24 * time.Hour)},
+			Windows:    []hibernatorv1alpha1.OffHourWindow{{Start: "00:00", End: "23:59", DaysOfWeek: []string{"MON"}}},
+			TargetOverrides: []hibernatorv1alpha1.TargetOverride{
+				{TargetName: "app", Disabled: true},
+			},
+		},
+	}
+
+	plan.Annotations = map[string]string{
+		wellknown.AnnotationOverrideAction:      "true",
+		wellknown.AnnotationOverridePhaseTarget: wellknown.OverridePhaseTargetHibernate,
+		wellknown.AnnotationFresh:               "true",
+	}
+	sr := &message.ScheduleEvaluation{ShouldHibernate: false}
+	st := newOverrideActionState(plan, sr, false)
+	st.PlanCtx.Exceptions = []hibernatorv1alpha1.ScheduleException{*exc}
+	h := &overrideActionState{idleState: &idleState{state: st}}
+
+	result, err := h.Handle(context.Background())
+	require.NoError(t, err)
+
+	assert.True(t, result.Requeue)
+	assert.Equal(t, hibernatorv1alpha1.PhaseHibernating, plan.Status.Phase)
+	assert.NotContains(t, plan.Annotations, wellknown.AnnotationFresh)
+
+	upd := <-planStatuses(st).C()
+	require.NotNil(t, upd.Mutator)
+	testPlan := plan.DeepCopy()
+	upd.Mutator.Mutate(testPlan)
+
+	assert.NotEqual(t, "cycle-001", testPlan.Status.CurrentCycleID)
+	assert.Equal(t, "new-exc", testPlan.Status.AppliedExceptionOverride)
+	require.NotNil(t, testPlan.Status.PlanSnapshot)
+	assert.Equal(t, "new-exc", testPlan.Status.PlanSnapshot.ExceptionName)
+}
+
 // Even if schedule also says hibernate, override must behave identically.
 func TestOverrideActionState_Hibernate_FromActive_ScheduleAgreesHibernate_TransitionsToHibernating(t *testing.T) {
 	plan := basePlanForState("p", hibernatorv1alpha1.PhaseActive)
@@ -332,6 +390,65 @@ func TestOverrideActionState_Wakeup_FromHibernated_WithRestoreData_TransitionsTo
 	assert.True(t, result.Requeue)
 	assert.Equal(t, hibernatorv1alpha1.PhaseWakingUp, plan.Status.Phase)
 	assert.GreaterOrEqual(t, planStatuses(st).Len(), 1)
+}
+
+// Plan is Hibernated with restore data and fresh=true — fresh is ignored for wakeup;
+// wakeup is forced with the existing cycle intent.
+func TestOverrideActionState_Wakeup_FromHibernated_Fresh_Ignored(t *testing.T) {
+	plan := basePlanForState("p", hibernatorv1alpha1.PhaseHibernated)
+	plan.Status.CurrentCycleID = "cycle-001"
+	plan.Status.AppliedExceptionOverride = "old-exc"
+	plan.Status.PlanSnapshot = &hibernatorv1alpha1.PlanSnapshot{
+		CycleID:       "cycle-001",
+		ExceptionName: "old-exc",
+		Targets:       []hibernatorv1alpha1.Target{{Name: "db", Type: "rds"}},
+	}
+	plan.Spec.Targets = []hibernatorv1alpha1.Target{
+		{Name: "app", Type: "eks"},
+		{Name: "db", Type: "rds"},
+	}
+
+	exc := &hibernatorv1alpha1.ScheduleException{
+		ObjectMeta: metav1.ObjectMeta{Name: "new-exc", Namespace: "default"},
+		Status:     hibernatorv1alpha1.ScheduleExceptionStatus{State: hibernatorv1alpha1.ExceptionStateActive},
+		Spec: hibernatorv1alpha1.ScheduleExceptionSpec{
+			Type:       hibernatorv1alpha1.ExceptionExtend,
+			ValidFrom:  metav1.Time{Time: time.Now().Add(-24 * time.Hour)},
+			ValidUntil: metav1.Time{Time: time.Now().Add(24 * time.Hour)},
+			Windows:    []hibernatorv1alpha1.OffHourWindow{{Start: "00:00", End: "23:59", DaysOfWeek: []string{"MON"}}},
+			TargetOverrides: []hibernatorv1alpha1.TargetOverride{
+				{TargetName: "app", Disabled: true},
+			},
+		},
+	}
+
+	plan.Annotations = map[string]string{
+		wellknown.AnnotationOverrideAction:      "true",
+		wellknown.AnnotationOverridePhaseTarget: wellknown.OverridePhaseTargetWakeup,
+		wellknown.AnnotationFresh:               "true",
+	}
+	sr := &message.ScheduleEvaluation{ShouldHibernate: true}
+	st := newOverrideActionState(plan, sr, true)
+	st.PlanCtx.Exceptions = []hibernatorv1alpha1.ScheduleException{*exc}
+	h := &overrideActionState{idleState: &idleState{state: st}}
+
+	result, err := h.Handle(context.Background())
+	require.NoError(t, err)
+
+	assert.True(t, result.Requeue)
+	assert.Equal(t, hibernatorv1alpha1.PhaseWakingUp, plan.Status.Phase)
+	assert.NotContains(t, plan.Annotations, wellknown.AnnotationFresh)
+
+	upd := <-planStatuses(st).C()
+	require.NotNil(t, upd.Mutator)
+	testPlan := plan.DeepCopy()
+	upd.Mutator.Mutate(testPlan)
+
+	// Fresh is ignored for wakeup: existing cycle and snapshot are preserved.
+	assert.Equal(t, "cycle-001", testPlan.Status.CurrentCycleID)
+	assert.Equal(t, "old-exc", testPlan.Status.AppliedExceptionOverride)
+	require.NotNil(t, testPlan.Status.PlanSnapshot)
+	assert.Equal(t, "old-exc", testPlan.Status.PlanSnapshot.ExceptionName)
 }
 
 // Hibernated with no restore data — wakeup cannot proceed.

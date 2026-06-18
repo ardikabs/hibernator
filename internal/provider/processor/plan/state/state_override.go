@@ -66,6 +66,7 @@ type overrideActionState struct {
 func (s *overrideActionState) Handle(ctx context.Context) (StateResult, error) {
 	plan := s.PlanCtx.Plan
 	target := plan.Annotations[wellknown.AnnotationOverridePhaseTarget]
+	fresh := plan.Annotations[wellknown.AnnotationFresh] == "true"
 
 	log := s.Log.
 		WithName("override").
@@ -73,6 +74,7 @@ func (s *overrideActionState) Handle(ctx context.Context) (StateResult, error) {
 			"plan", s.Key.String(),
 			"phase", plan.Status.Phase,
 			"overridePhaseTarget", target,
+			"fresh", fresh,
 		)
 
 	res := s.initStateResult(log, plan)
@@ -85,14 +87,20 @@ func (s *overrideActionState) Handle(ctx context.Context) (StateResult, error) {
 		switch plan.Status.Phase {
 		case hibernatorv1alpha1.PhaseActive:
 			log.Info("manual override: forcing hibernation, transitioning to Hibernating")
-			return s.transitionToHibernating(ctx, log)
+			if err := s.consumeFresh(ctx, plan); err != nil {
+				return res, err
+			}
+			return s.transitionToHibernating(ctx, log, fresh)
 
 		case hibernatorv1alpha1.PhaseHibernated:
 			if restart, err := s.consumeRestart(ctx, plan); err != nil {
 				return res, err
 			} else if restart {
 				log.Info("restart: re-triggering hibernation executor")
-				return s.transitionToHibernating(ctx, log)
+				if err := s.consumeFresh(ctx, plan); err != nil {
+					return res, err
+				}
+				return s.transitionToHibernating(ctx, log, fresh)
 			}
 			// Target already reached — stay quiet until the user removes the annotations.
 			log.V(1).Info("manual override: plan is already Hibernated; " +
@@ -103,7 +111,14 @@ func (s *overrideActionState) Handle(ctx context.Context) (StateResult, error) {
 		switch plan.Status.Phase {
 		case hibernatorv1alpha1.PhaseHibernated:
 			if s.PlanCtx.HasRestoreData {
-				log.Info("manual override: forcing wakeup, transitioning to WakingUp")
+				if fresh {
+					log.Info("manual override: fresh=true is ignored for wakeup; forcing wakeup with existing cycle intent")
+				} else {
+					log.Info("manual override: forcing wakeup, transitioning to WakingUp")
+				}
+				if err := s.consumeFresh(ctx, plan); err != nil {
+					return res, err
+				}
 				return s.transitionToWakingUp(log)
 			}
 			// No restore data — leave annotations so the user sees it is still pending.
@@ -123,7 +138,14 @@ func (s *overrideActionState) Handle(ctx context.Context) (StateResult, error) {
 			}
 			if restart {
 				if s.PlanCtx.HasRestoreData {
-					log.Info("restart: re-triggering wakeup executor")
+					if fresh {
+						log.Info("restart: fresh=true is ignored for wakeup; re-triggering wakeup with existing cycle intent")
+					} else {
+						log.Info("restart: re-triggering wakeup executor")
+					}
+					if err := s.consumeFresh(ctx, plan); err != nil {
+						return res, err
+					}
 					return s.transitionToWakingUp(log)
 				}
 				log.Info("restart: wakeup re-trigger requested but no restore data available; " +
@@ -200,4 +222,18 @@ func (s *overrideActionState) consumeRestart(ctx context.Context, plan *hibernat
 		return false, fmt.Errorf("failed to consume %s annotation: %w", wellknown.AnnotationRestart, err)
 	}
 	return true, nil
+}
+
+// consumeFresh removes the fresh annotation if present. It is consumed as a one-shot
+// modifier whenever an override-driven transition is triggered.
+func (s *overrideActionState) consumeFresh(ctx context.Context, plan *hibernatorv1alpha1.HibernatePlan) error {
+	if plan.Annotations[wellknown.AnnotationFresh] != "true" {
+		return nil
+	}
+	orig := plan.DeepCopy()
+	delete(plan.Annotations, wellknown.AnnotationFresh)
+	if err := s.patchAndPreserveStatus(ctx, plan, client.MergeFrom(orig)); err != nil {
+		return fmt.Errorf("failed to consume %s annotation: %w", wellknown.AnnotationFresh, err)
+	}
+	return nil
 }

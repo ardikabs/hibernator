@@ -131,7 +131,7 @@ func TestIdleState_TransitionToHibernating_StartNotificationUsesMutatedPendingTa
 	}}
 
 	h := &idleState{state: st}
-	_, err := h.transitionToHibernating(context.Background(), st.Log)
+	_, err := h.transitionToHibernating(context.Background(), st.Log, false)
 	require.NoError(t, err)
 
 	upd := <-planStatuses(st).C()
@@ -223,7 +223,7 @@ func TestIdleState_TransitionToHibernating_ReusesExistingCycleIDFromLiveRestoreD
 	require.NoError(t, err)
 
 	h := &idleState{state: st}
-	_, err = h.transitionToHibernating(context.Background(), st.Log)
+	_, err = h.transitionToHibernating(context.Background(), st.Log, false)
 	require.NoError(t, err)
 
 	// Verify the plan was updated with the existing cycle ID, not a new one
@@ -250,7 +250,7 @@ func TestIdleState_TransitionToHibernating_GeneratesNewCycleIDWhenNoLiveData(t *
 	// No restore data pre-populated
 
 	h := &idleState{state: st}
-	_, err := h.transitionToHibernating(context.Background(), st.Log)
+	_, err := h.transitionToHibernating(context.Background(), st.Log, false)
 	require.NoError(t, err)
 
 	// Verify the plan was updated with a new cycle ID

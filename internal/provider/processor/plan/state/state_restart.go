@@ -28,6 +28,7 @@ type restartState struct {
 func (s *restartState) Handle(ctx context.Context) (StateResult, error) {
 	plan := s.PlanCtx.Plan
 	op := plan.Status.CurrentOperation
+	fresh := plan.Annotations[wellknown.AnnotationFresh] == "true"
 
 	log := s.Log.
 		WithName("restart").
@@ -35,11 +36,13 @@ func (s *restartState) Handle(ctx context.Context) (StateResult, error) {
 			"plan", s.Key.String(),
 			"phase", plan.Status.Phase,
 			"currentOperation", op,
+			"fresh", fresh,
 		)
 
 	// Consume the annotation atomically before acting — one-shot regardless of outcome.
 	orig := plan.DeepCopy()
 	delete(plan.Annotations, wellknown.AnnotationRestart)
+	delete(plan.Annotations, wellknown.AnnotationFresh)
 	if err := s.patchAndPreserveStatus(ctx, plan, client.MergeFrom(orig)); err != nil {
 		return StateResult{}, fmt.Errorf("failed to consume %s annotation: %w", wellknown.AnnotationRestart, err)
 	}
@@ -52,7 +55,7 @@ func (s *restartState) Handle(ctx context.Context) (StateResult, error) {
 			return StateResult{}, nil
 		}
 		log.Info("restart: re-triggering hibernation executor based on CurrentOperation")
-		return s.transitionToHibernating(ctx, log)
+		return s.transitionToHibernating(ctx, log, fresh)
 
 	case hibernatorv1alpha1.OperationWakeUp:
 		if plan.Status.Phase != hibernatorv1alpha1.PhaseActive {
@@ -63,6 +66,9 @@ func (s *restartState) Handle(ctx context.Context) (StateResult, error) {
 		if !s.PlanCtx.HasRestoreData {
 			log.Info("restart: CurrentOperation=wakeup but no restore data available; no-op")
 			return StateResult{}, nil
+		}
+		if fresh {
+			log.Info("restart: fresh=true is ignored for wakeup; re-running wakeup with existing cycle intent")
 		}
 		log.Info("restart: re-triggering wakeup executor based on CurrentOperation")
 		return s.transitionToWakingUp(log)

@@ -140,6 +140,21 @@ The controller uses `mergeByType` semantics — windows of the same type are mer
 
 For practical scenarios showing how to combine exceptions (extend + suspend, replace + extend, replace + suspend), see the [Composing Multiple Exceptions](../user-guides/composing-multiple-exceptions.md) operational guide.
 
+## Execution Overrides
+
+Schedule exceptions can optionally override the execution properties used during a hibernation or wakeup cycle. This lets a single plan behave differently when the exception is active without permanently changing the base plan.
+
+Overrideable fields include:
+
+- `targetOverrides`: enable, disable, or parameterize individual targets for the cycle
+- `executionOverride`: change the `strategy`, `behavior`, `maxRetries`, or `retryBackoff` for the cycle
+
+When a cycle starts while an exception with overrides is active, the controller merges the exception overrides onto the base plan and **locks the result**. The locked intent is recorded in the plan status and used for the remainder of the cycle, regardless of later changes to the exception.
+
+## Cycle Intent Locking
+
+Schedule exceptions participate in the `HibernatePlan` cycle intent locking mechanism. When a cycle starts, the controller composes active exceptions into the plan's `status.planSnapshot`, and that locked intent is used for the remainder of the cycle regardless of later exception changes. For the full explanation of intent locking, including the `restart`, `override-action`, and `fresh=true` annotations, see the [HibernatePlan concept](../concepts/hibernateplan.md#cycle-intent-locking).
+
 ## Validation Rules
 
 - `validUntil` must be after `validFrom`
