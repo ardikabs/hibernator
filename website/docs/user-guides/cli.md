@@ -198,6 +198,9 @@ kubectl hibernator restart my-plan -n production
 
 The plan must have completed at least one full hibernation cycle (`.status.currentOperation` must be recorded).
 
+!!! tip "Fresh restart"
+    To discard the locked cycle intent and start a new hibernation cycle, add the `hibernator.ardikabs.com/fresh=true` annotation alongside `restart=true`. See [Manual Actions](override-actions.md#fresh-restart) for details. CLI support for `--fresh` is tracked separately.
+
 ---
 
 ### `retry`

@@ -153,15 +153,7 @@ When a cycle starts while an exception with overrides is active, the controller 
 
 ## Cycle Intent Locking
 
-Once a hibernation or wakeup cycle begins, the controller resolves the effective execution intent and stores it in the plan's `status.planSnapshot`. This snapshot includes the merged targets, execution strategy, behavior, and the identity of the exception that produced it.
-
-Intent locking guarantees that:
-
-- A cycle runs with a consistent configuration from start to finish.
-- Editing or deleting an active exception does not change the behavior of an in-flight cycle.
-- Automatic retry, manual retry, and resume-from-suspension all use the same locked intent.
-
-To force the controller to re-evaluate exceptions and start a new cycle, use the `restart` or `override-action` annotations. These discard the locked snapshot and begin a fresh cycle against the current live state.
+Schedule exceptions participate in the `HibernatePlan` cycle intent locking mechanism. When a cycle starts, the controller composes active exceptions into the plan's `status.planSnapshot`, and that locked intent is used for the remainder of the cycle regardless of later exception changes. For the full explanation of intent locking, including the `restart`, `override-action`, and `fresh=true` annotations, see the [HibernatePlan concept](../concepts/hibernateplan.md#cycle-intent-locking).
 
 ## Validation Rules
 

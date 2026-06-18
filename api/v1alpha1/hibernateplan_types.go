@@ -478,13 +478,13 @@ type HibernatePlanStatus struct {
 
 	// AppliedExceptionOverride records the name of the ScheduleException whose
 	// execution overrides are currently active for this cycle. Empty when no
-	// overrides are applied. Set at the start of a new cycle and cleared when
-	// the cycle ends.
+	// overrides are applied. Set at the start of a new cycle and preserved
+	// until the next cycle begins.
 	// +optional
 	AppliedExceptionOverride string `json:"appliedExceptionOverride,omitempty"`
 
 	// PlanSnapshot records the resolved execution intent for the current cycle.
-	// It is captured at cycle start and cleared when the cycle ends.
+	// It is captured at cycle start and preserved until the next cycle begins.
 	// +optional
 	PlanSnapshot *PlanSnapshot `json:"planSnapshot,omitempty"`
 

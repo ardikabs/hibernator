@@ -400,7 +400,7 @@ func TestTransitionToHibernating_NoOverride_AppliedExceptionOverrideEmpty(t *tes
 	st := newHandlerState(plan, c)
 
 	h := &idleState{state: st}
-	_, err := h.transitionToHibernating(nil, st.Log)
+	_, err := h.transitionToHibernating(nil, st.Log, false)
 	require.NoError(t, err)
 
 	upd := <-planStatuses(st).C()
@@ -440,7 +440,7 @@ func TestTransitionToHibernating_UsesEffectivePlanTargets(t *testing.T) {
 	st.PlanCtx.Exceptions = []hibernatorv1alpha1.ScheduleException{*exc}
 
 	h := &idleState{state: st}
-	_, err := h.transitionToHibernating(nil, st.Log)
+	_, err := h.transitionToHibernating(nil, st.Log, false)
 	require.NoError(t, err)
 
 	upd := <-planStatuses(st).C()
@@ -462,31 +462,24 @@ func TestTransitionToHibernating_UsesEffectivePlanTargets(t *testing.T) {
 	assert.Equal(t, "app", plan.Spec.Targets[1].Name)
 }
 
-func TestTransitionToWakingUp_UsesEffectivePlanTargets(t *testing.T) {
+func TestTransitionToWakingUp_UsesPlanSnapshotTargets(t *testing.T) {
 	plan := basePlanForState("p", hibernatorv1alpha1.PhaseHibernated)
 	plan.Spec.Targets = []hibernatorv1alpha1.Target{
 		{Name: "db", Type: "rds"},
 		{Name: "app", Type: "eks"},
 	}
 	plan.Status.CurrentCycleID = "cycle-001"
-
-	exc := &hibernatorv1alpha1.ScheduleException{
-		ObjectMeta: metav1.ObjectMeta{Name: "override-exc", Namespace: "default"},
-		Status:     hibernatorv1alpha1.ScheduleExceptionStatus{State: hibernatorv1alpha1.ExceptionStateActive},
-		Spec: hibernatorv1alpha1.ScheduleExceptionSpec{
-			Type:       hibernatorv1alpha1.ExceptionExtend,
-			ValidFrom:  metav1.Time{Time: time.Now().Add(-24 * time.Hour)},
-			ValidUntil: metav1.Time{Time: time.Now().Add(24 * time.Hour)},
-			Windows: []hibernatorv1alpha1.OffHourWindow{{Start: "00:00", End: "23:59", DaysOfWeek: []string{"MON"}}},
-			TargetOverrides: []hibernatorv1alpha1.TargetOverride{
-				{TargetName: "db", Disabled: true},
-			},
+	plan.Status.PlanSnapshot = &hibernatorv1alpha1.PlanSnapshot{
+		CycleID:       "cycle-001",
+		ExceptionName: "override-exc",
+		Targets: []hibernatorv1alpha1.Target{
+			{Name: "app", Type: "eks"},
 		},
 	}
+	plan.Status.AppliedExceptionOverride = "override-exc"
 
-	c := newHandlerFakeClient(plan, exc)
+	c := newHandlerFakeClient(plan)
 	st := newHandlerState(plan, c)
-	st.PlanCtx.Exceptions = []hibernatorv1alpha1.ScheduleException{*exc}
 
 	h := &idleState{state: st}
 	_, err := h.transitionToWakingUp(st.Log)
@@ -498,11 +491,11 @@ func TestTransitionToWakingUp_UsesEffectivePlanTargets(t *testing.T) {
 	testPlan := plan.DeepCopy()
 	upd.Mutator.Mutate(testPlan)
 
-	// Executions should be built from effective plan (only "app", not "db")
+	// Executions should be built from plan snapshot (only "app", not "db")
 	require.Len(t, testPlan.Status.Executions, 1)
 	assert.Equal(t, "app", testPlan.Status.Executions[0].Target)
 
-	// AppliedExceptionOverride should be recorded
+	// AppliedExceptionOverride should be preserved from hibernation
 	assert.Equal(t, "override-exc", testPlan.Status.AppliedExceptionOverride)
 }
 
@@ -723,7 +716,7 @@ func TestTransitionToHibernating_CapturesPlanSnapshot(t *testing.T) {
 	st.PlanCtx.Exceptions = []hibernatorv1alpha1.ScheduleException{*exc}
 
 	h := &idleState{state: st}
-	_, err := h.transitionToHibernating(nil, st.Log)
+	_, err := h.transitionToHibernating(nil, st.Log, false)
 	require.NoError(t, err)
 
 	upd := <-planStatuses(st).C()
@@ -739,13 +732,14 @@ func TestTransitionToHibernating_CapturesPlanSnapshot(t *testing.T) {
 	assert.Equal(t, "app", testPlan.Status.PlanSnapshot.Targets[0].Name)
 }
 
-func TestHibernatingState_Finalize_ClearsPlanSnapshot(t *testing.T) {
+func TestHibernatingState_Finalize_PreservesPlanSnapshot(t *testing.T) {
 	plan := basePlanForState("p", hibernatorv1alpha1.PhaseHibernating)
 	plan.Status.CurrentCycleID = "cycle-001"
 	plan.Status.PlanSnapshot = &hibernatorv1alpha1.PlanSnapshot{
 		CycleID:       "cycle-001",
 		ExceptionName: "override-exc",
 	}
+	plan.Status.AppliedExceptionOverride = "override-exc"
 	plan.Status.Executions = []hibernatorv1alpha1.ExecutionStatus{
 		{Target: "db", State: hibernatorv1alpha1.StateCompleted},
 	}
@@ -762,17 +756,19 @@ func TestHibernatingState_Finalize_ClearsPlanSnapshot(t *testing.T) {
 	testPlan := plan.DeepCopy()
 	upd.Mutator.Mutate(testPlan)
 
-	assert.Nil(t, testPlan.Status.PlanSnapshot)
-	assert.Empty(t, testPlan.Status.AppliedExceptionOverride)
+	assert.NotNil(t, testPlan.Status.PlanSnapshot)
+	assert.Equal(t, "override-exc", testPlan.Status.PlanSnapshot.ExceptionName)
+	assert.Equal(t, "override-exc", testPlan.Status.AppliedExceptionOverride)
 }
 
-func TestWakingUpState_Finalize_ClearsPlanSnapshot(t *testing.T) {
+func TestWakingUpState_Finalize_PreservesPlanSnapshot(t *testing.T) {
 	plan := basePlanForState("p", hibernatorv1alpha1.PhaseWakingUp)
 	plan.Status.CurrentCycleID = "cycle-001"
 	plan.Status.PlanSnapshot = &hibernatorv1alpha1.PlanSnapshot{
 		CycleID:       "cycle-001",
 		ExceptionName: "override-exc",
 	}
+	plan.Status.AppliedExceptionOverride = "override-exc"
 	plan.Status.Executions = []hibernatorv1alpha1.ExecutionStatus{
 		{Target: "db", State: hibernatorv1alpha1.StateCompleted},
 	}
@@ -789,8 +785,9 @@ func TestWakingUpState_Finalize_ClearsPlanSnapshot(t *testing.T) {
 	testPlan := plan.DeepCopy()
 	upd.Mutator.Mutate(testPlan)
 
-	assert.Nil(t, testPlan.Status.PlanSnapshot)
-	assert.Empty(t, testPlan.Status.AppliedExceptionOverride)
+	assert.NotNil(t, testPlan.Status.PlanSnapshot)
+	assert.Equal(t, "override-exc", testPlan.Status.PlanSnapshot.ExceptionName)
+	assert.Equal(t, "override-exc", testPlan.Status.AppliedExceptionOverride)
 }
 
 func TestSetError_KeepsPlanSnapshot(t *testing.T) {
@@ -854,6 +851,133 @@ func TestHandleRetry_UsesPlanSnapshot(t *testing.T) {
 	// PlanSnapshot should still be present after retry transition
 	require.NotNil(t, testPlan.Status.PlanSnapshot)
 	assert.Equal(t, "override-exc", testPlan.Status.PlanSnapshot.ExceptionName)
+}
+
+func TestTransitionToWakingUp_ReusesPlanSnapshot(t *testing.T) {
+	plan := basePlanForState("p", hibernatorv1alpha1.PhaseHibernated)
+	plan.Status.CurrentCycleID = "cycle-001"
+	plan.Status.PlanSnapshot = &hibernatorv1alpha1.PlanSnapshot{
+		CycleID:       "cycle-001",
+		ExceptionName: "override-exc",
+		Targets: []hibernatorv1alpha1.Target{
+			{Name: "db", Type: "rds"},
+		},
+		Execution: hibernatorv1alpha1.Execution{
+			Strategy: hibernatorv1alpha1.ExecutionStrategy{Type: hibernatorv1alpha1.StrategySequential},
+		},
+	}
+	plan.Status.AppliedExceptionOverride = "override-exc"
+	plan.Spec.Targets = []hibernatorv1alpha1.Target{
+		{Name: "app", Type: "eks"},
+		{Name: "db", Type: "rds"},
+	}
+
+	c := newHandlerFakeClient(plan)
+	st := newHandlerState(plan, c)
+	i := &idleState{state: st}
+
+	_, err := i.transitionToWakingUp(st.Log)
+	require.NoError(t, err)
+
+	upd := <-planStatuses(st).C()
+	require.NotNil(t, upd.Mutator)
+
+	testPlan := plan.DeepCopy()
+	upd.Mutator.Mutate(testPlan)
+
+	assert.Equal(t, hibernatorv1alpha1.PhaseWakingUp, testPlan.Status.Phase)
+	// Should reuse snapshot targets (only "db"), not live spec targets ("app" + "db")
+	require.Len(t, testPlan.Status.Executions, 1)
+	assert.Equal(t, "db", testPlan.Status.Executions[0].Target)
+	// Snapshot and override should be preserved
+	require.NotNil(t, testPlan.Status.PlanSnapshot)
+	assert.Equal(t, "override-exc", testPlan.Status.PlanSnapshot.ExceptionName)
+	assert.Equal(t, "override-exc", testPlan.Status.AppliedExceptionOverride)
+}
+
+func TestTransitionToWakingUp_FallsBackToLiveWhenNoSnapshot(t *testing.T) {
+	plan := basePlanForState("p", hibernatorv1alpha1.PhaseHibernated)
+	plan.Status.CurrentCycleID = "cycle-001"
+	// No PlanSnapshot set
+	plan.Spec.Targets = []hibernatorv1alpha1.Target{
+		{Name: "app", Type: "eks"},
+		{Name: "db", Type: "rds"},
+	}
+
+	c := newHandlerFakeClient(plan)
+	st := newHandlerState(plan, c)
+	i := &idleState{state: st}
+
+	_, err := i.transitionToWakingUp(st.Log)
+	require.NoError(t, err)
+
+	upd := <-planStatuses(st).C()
+	require.NotNil(t, upd.Mutator)
+
+	testPlan := plan.DeepCopy()
+	upd.Mutator.Mutate(testPlan)
+
+	assert.Equal(t, hibernatorv1alpha1.PhaseWakingUp, testPlan.Status.Phase)
+	// Should use live spec targets
+	require.Len(t, testPlan.Status.Executions, 2)
+	assert.Equal(t, "app", testPlan.Status.Executions[0].Target)
+	assert.Equal(t, "db", testPlan.Status.Executions[1].Target)
+}
+
+func TestTransitionToHibernating_FreshSnapshot(t *testing.T) {
+	plan := basePlanForState("p", hibernatorv1alpha1.PhaseActive)
+	plan.Status.CurrentCycleID = "cycle-001"
+	plan.Status.PlanSnapshot = &hibernatorv1alpha1.PlanSnapshot{
+		CycleID:       "cycle-001",
+		ExceptionName: "old-exc",
+		Targets: []hibernatorv1alpha1.Target{
+			{Name: "db", Type: "rds"},
+		},
+	}
+	plan.Status.AppliedExceptionOverride = "old-exc"
+	plan.Spec.Targets = []hibernatorv1alpha1.Target{
+		{Name: "app", Type: "eks"},
+		{Name: "db", Type: "rds"},
+	}
+
+	exc := &hibernatorv1alpha1.ScheduleException{
+		ObjectMeta: metav1.ObjectMeta{Name: "new-exc", Namespace: "default"},
+		Status:     hibernatorv1alpha1.ScheduleExceptionStatus{State: hibernatorv1alpha1.ExceptionStateActive},
+		Spec: hibernatorv1alpha1.ScheduleExceptionSpec{
+			Type:       hibernatorv1alpha1.ExceptionExtend,
+			ValidFrom:  metav1.Time{Time: time.Now().Add(-24 * time.Hour)},
+			ValidUntil: metav1.Time{Time: time.Now().Add(24 * time.Hour)},
+			Windows:    []hibernatorv1alpha1.OffHourWindow{{Start: "00:00", End: "23:59", DaysOfWeek: []string{"MON"}}},
+			TargetOverrides: []hibernatorv1alpha1.TargetOverride{
+				{TargetName: "app", Disabled: true},
+			},
+		},
+	}
+
+	c := newHandlerFakeClient(plan, exc)
+	st := newHandlerState(plan, c)
+	st.PlanCtx.Exceptions = []hibernatorv1alpha1.ScheduleException{*exc}
+
+	i := &idleState{state: st}
+	_, err := i.transitionToHibernating(nil, st.Log, true)
+	require.NoError(t, err)
+
+	upd := <-planStatuses(st).C()
+	require.NotNil(t, upd.Mutator)
+
+	testPlan := plan.DeepCopy()
+	upd.Mutator.Mutate(testPlan)
+
+	assert.Equal(t, hibernatorv1alpha1.PhaseHibernating, testPlan.Status.Phase)
+	// Fresh cycle should use live exception targets (only "db", "app" disabled)
+	require.Len(t, testPlan.Status.Executions, 1)
+	assert.Equal(t, "db", testPlan.Status.Executions[0].Target)
+	// New cycle ID and snapshot from live exception
+	assert.NotEqual(t, "cycle-001", testPlan.Status.CurrentCycleID)
+	assert.Equal(t, "new-exc", testPlan.Status.AppliedExceptionOverride)
+	require.NotNil(t, testPlan.Status.PlanSnapshot)
+	assert.Equal(t, "new-exc", testPlan.Status.PlanSnapshot.ExceptionName)
+	assert.Equal(t, testPlan.Status.CurrentCycleID, testPlan.Status.PlanSnapshot.CycleID)
 }
 
 

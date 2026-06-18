@@ -624,10 +624,10 @@ status:
 
 **Rules:**
 
-- **Capture**: Snapshot is taken at the start of a shutdown or wakeup cycle (`Idle` → `Hibernating` / `Idle` → `WakingUp`).
+- **Capture**: Snapshot is taken at the start of a shutdown cycle (`Idle` → `Hibernating`). It is then reused for the wakeup half of the same cycle.
 - **Usage**: All subsequent states (`Hibernating`, `Hibernated`, `WakingUp`, `PhaseError`) use the snapshot instead of re-evaluating the live exception.
-- **Retention**: Snapshot is preserved during `PhaseError` so retry/resume operations continue with the locked intent.
-- **Clear**: Snapshot is cleared only when the cycle completes (`Idle`) or is explicitly restarted (`restart=true` annotation).
+- **Retention**: Snapshot is preserved during `PhaseError` so retry/resume operations continue with the locked intent. It is also preserved after the cycle completes (`Idle`) and is only replaced when the next shutdown cycle starts or when an explicit `fresh` cycle is requested.
+- **Clear**: Snapshot is replaced at the start of a new shutdown cycle (`Idle` → `Hibernating`). It is also discarded when an explicit `fresh` cycle is requested via `restart=true`/`override-action=true` paired with `fresh=true`.
 
 ### Secondary Safeguards
 
@@ -643,16 +643,17 @@ In addition to the snapshot, two runtime safeguards prevent tampering:
 | **Automatic retry** after a transient error | Keeps the locked snapshot. The same targets, strategy, and behavior are retried. |
 | **Manual retry** (`retry-now` annotation) | Keeps the locked snapshot. |
 | **Resume from suspension** mid-cycle | Keeps the locked snapshot. |
-| **Restart** (`restart=true` annotation) | Starts a **new cycle** and re-evaluates the exception from the latest live state. |
-| **Manual override** (`override-action=true`) | Starts a **new cycle** and re-evaluates the exception from the latest live state. |
+| **Restart** (`restart=true` annotation) | Keeps the locked snapshot by default. Add `fresh=true` to start a new cycle and re-evaluate from the latest live state. |
+| **Manual override** (`override-action=true`) | Keeps the locked snapshot by default. Add `fresh=true` to start a new cycle and re-evaluate from the latest live state. |
 | **Exception edited mid-cycle** | Webhook blocks `targetOverrides`/`executionOverride` changes. Other fields (e.g., `validUntil`) are allowed. |
 | **Exception deleted mid-cycle** | Finalizer blocks deletion until the cycle completes. |
 
-### Retry vs Resume vs Restart
+### Retry vs Resume vs Restart vs Fresh
 
 - **Retry**: Attempt the same locked intent again (e.g., after a transient cloud API failure). Use the `retry-now` annotation.
 - **Resume**: Continue a partially completed cycle (e.g., after waking up from a suspended state). The controller continues with the locked snapshot.
-- **Restart**: Abandon the current cycle and start fresh. Use the `restart=true` annotation. This discards the snapshot and re-evaluates the live exception state.
+- **Restart**: Re-run the last operation using the locked snapshot. Use the `restart=true` annotation.
+- **Fresh**: Abandon the current cycle and start fresh. Use `restart=true` or `override-action=true` together with `fresh=true`. This discards the snapshot and re-evaluates the live exception state. `fresh=true` only affects hibernate operations; wakeup operations ignore it because they depend on restore data captured during the original shutdown.
 
 ### Migration Notes
 

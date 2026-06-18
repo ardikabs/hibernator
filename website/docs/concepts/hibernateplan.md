@@ -195,6 +195,24 @@ Supported sink types: `slack`, `telegram`, `webhook`.
 
 See [User Guide: Notifications](../user-guides/notifications.md) for full configuration, custom templates, and advanced options.
 
+## Cycle Intent Locking
+
+Once a hibernation or wakeup cycle begins, the controller resolves the complete execution intent and stores it in `.status.planSnapshot`. This snapshot locks the effective targets, execution strategy, failure behavior, and any overrides for the lifetime of the cycle.
+
+Intent locking guarantees that:
+
+- A cycle runs with a consistent configuration from start to finish.
+- Automatic retry, manual retry, resume-from-suspension, and restart all use the same locked intent.
+- Changes made after a cycle starts do not affect that cycle.
+
+### Relevance to ScheduleException
+
+`ScheduleException` resources are a primary source of variability in the execution intent. When a cycle starts while one or more exceptions are active, the controller composes the base plan and all active exceptions, applies any `targetOverrides` or `executionOverride`, and records the result in the snapshot. From that point onward, the cycle is decoupled from the exceptions that produced it. Editing or deleting an active `ScheduleException` does not change the behavior of an in-flight cycle.
+
+To force the controller to re-evaluate exceptions and start a new cycle, use the `restart` or `override-action` annotations together with `fresh=true`. By default, those actions preserve the locked snapshot and re-run the same intent; adding `fresh=true` discards the locked snapshot and begins a fresh cycle against the current live plan and exception state. The `fresh` modifier is only relevant for hibernating intent — wakeup operations always continue with the existing locked snapshot because they depend on restore data captured during the original shutdown.
+
+See the [Override Actions user guide](../user-guides/override-actions.md) for the operational details of restart, override, and the `fresh` annotation.
+
 ## Suspension
 
 Temporarily disable a plan without deleting it:

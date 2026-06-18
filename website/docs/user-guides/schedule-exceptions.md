@@ -185,15 +185,15 @@ The controller locks the resolved execution intent when a cycle starts. This loc
 | **Automatic retry** after a transient error | Keeps the locked intent. The same targets, strategy, and behavior are retried. |
 | **Manual retry** (`retry-now` annotation) | Keeps the locked intent. |
 | **Resume from suspension** mid-cycle | Keeps the locked intent. |
-| **Restart** (`restart=true` annotation) | Starts a **new cycle** and re-evaluates the exception from the latest live state. |
-| **Manual override** (`override-action=true`) | Starts a **new cycle** and re-evaluates the exception from the latest live state. |
+| **Restart** (`restart=true` annotation) | Keeps the locked intent by default. Add `fresh=true` to start a new cycle and re-evaluate from live state. |
+| **Manual override** (`override-action=true`) | Keeps the locked intent by default. Add `fresh=true` to start a new cycle and re-evaluate from live state. |
 
 This means you can safely delete or modify a `ScheduleException` while a cycle is running:
 
 - An **in-flight** cycle (including one in `PhaseError` waiting for retry) continues with the intent it started with.
-- A **new** cycle, triggered by restart or override, picks up the current plan and exception state.
+- A **new** cycle, triggered by `restart`/`override-action` with `fresh=true`, picks up the current plan and exception state.
 
-If you need to abort the locked intent and start fresh, use the `restart` annotation or wait for the cycle to complete.
+If you need to abort the locked intent and start fresh, use `restart=true` together with `fresh=true`, or wait for the cycle to complete. For detailed command examples and the complete annotation reference, see the [Override Actions guide](override-actions.md).
 
 ## Cleaning Up
 
