@@ -561,7 +561,7 @@ func (e *Executor) waitForNodesDeleted(ctx context.Context, log logr.Logger, cli
 		"timeout", timeout,
 	)
 
-	w, err := waiter.NewWaiter(ctx, log, timeout)
+	w, err := waiter.NewWaiter(ctx, log, waiter.WithTimeoutString(timeout))
 	if err != nil {
 		return fmt.Errorf("create waiter: %w", err)
 	}
@@ -598,7 +598,7 @@ func (e *Executor) waitForNodeGroupActive(ctx context.Context, log logr.Logger, 
 		"timeout", timeout,
 	)
 
-	w, err := waiter.NewWaiter(ctx, log, timeout)
+	w, err := waiter.NewWaiter(ctx, log, waiter.WithTimeoutString(timeout))
 	if err != nil {
 		return err
 	}
