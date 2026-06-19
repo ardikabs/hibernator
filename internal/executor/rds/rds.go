@@ -532,8 +532,6 @@ func (e *Executor) handleShutdownAwaitCompletion(ctx context.Context, log logr.L
 		stats.pending -= failedCount
 	}
 
-	msg = formatShutdownMessage(stats)
-
 	if failedCount > 0 {
 		resourceNoun := "resource"
 		if failedCount > 1 {
@@ -645,8 +643,6 @@ func (e *Executor) handleWakeupAwaitCompletion(ctx context.Context, log logr.Log
 		stats.failed += failedCount
 		stats.pending -= failedCount
 	}
-
-	msg = formatWakeUpMessage(stats)
 
 	if failedCount > 0 {
 		resourceNoun := "resource"
