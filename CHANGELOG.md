@@ -1,11 +1,19 @@
+<a name="v1.6.2"></a>
+
+## [v1.6.2](https://github.com/ardikabs/hibernator/compare/v1.6.1...v1.6.2) (2026-06-19)
+
+### 🐛 Bug Fixes
+
+* rds executor on handling pending failed ([#176](https://github.com/ardikabs/hibernator/issues/176))
+
+
 <a name="v1.6.1"></a>
 
 ## [v1.6.1](https://github.com/ardikabs/hibernator/compare/v1.6.0...v1.6.1) (2026-05-23)
 
-### 🐛 Bug Fixes
+### 🧹 Miscellaneous
 
-* prevent concurrent map read/write when marking jobs stale ([#160](https://github.com/ardikabs/hibernator/issues/160))
-* suspension during state selection ([#161](https://github.com/ardikabs/hibernator/issues/161))
+* [release/v1.6] hotfix ([#163](https://github.com/ardikabs/hibernator/issues/163))
 
 <a name="v1.6.0"></a>
 
