@@ -13,11 +13,13 @@ import (
 	"strings"
 	"sync"
 	"sync/atomic"
+	"time"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/service/rds"
 	"github.com/aws/aws-sdk-go-v2/service/sts"
 	"github.com/go-logr/logr"
+	"github.com/samber/lo"
 
 	"github.com/ardikabs/hibernator/internal/executor"
 	"github.com/ardikabs/hibernator/pkg/awsutil"
@@ -76,6 +78,7 @@ type operationStats struct {
 	skippedStale int
 	skippedKey   int
 	pending      int
+	failed       int
 }
 
 func formatShutdownMessage(stats *operationStats) string {
@@ -252,6 +255,7 @@ func (e *Executor) Shutdown(ctx context.Context, log logr.Logger, spec executor.
 		"stopped", stats.applied,
 		"skippedStale", stats.skippedStale,
 		"pending", stats.pending,
+		"failed", stats.failed,
 	)
 
 	return &executor.Result{Message: msg}, nil
@@ -303,6 +307,7 @@ func (e *Executor) WakeUp(ctx context.Context, log logr.Logger, spec executor.Sp
 		"skippedStale", stats.skippedStale,
 		"skippedUnknownKey", stats.skippedKey,
 		"pending", stats.pending,
+		"failed", stats.failed,
 	)
 
 	return &executor.Result{Message: msg}, nil
@@ -442,9 +447,21 @@ func (e *Executor) handleShutdownAwaitCompletion(ctx context.Context, log logr.L
 		timeout = DefaultWaitTimeout
 	}
 
-	var timedOut atomic.Int32
-	var pendingFailed atomic.Int32
-	var pendingApplied atomic.Int32
+	timeoutDur, err := time.ParseDuration(timeout)
+	if err != nil {
+		// Invalid timeout should have been caught by validation; fall back to default.
+		timeoutDur = lo.Must(time.ParseDuration(DefaultWaitTimeout))
+	}
+
+	// All resources (pending and waiting) share the same overall deadline.
+	deadlineCtx, cancel := context.WithTimeout(ctx, timeoutDur)
+	defer cancel()
+
+	var (
+		timedOut       atomic.Int32
+		pendingApplied atomic.Int32
+		failures       executor.ErrorList
+	)
 
 	// Start all operations concurrently - both pending and waiting share the same timeout window
 	for resourceType, tracker := range e.trackers {
@@ -457,16 +474,16 @@ func (e *Executor) handleShutdownAwaitCompletion(ctx context.Context, log logr.L
 				defer e.completionWg.Done()
 
 				// Wait for resource to become available
-				if err := s.WaitForAvailable(ctx, log, client, p.id, timeout); err != nil {
-					pendingFailed.Add(1)
+				if err := s.WaitForAvailable(deadlineCtx, log, client, p.id, timeout); err != nil {
+					failures.Addf("%s %s: %w", rt, p.id, err)
 					log.Error(err, "failed to wait for resource to become available", "resourceType", rt, "id", p.id)
 					return
 				}
 
 				// Stop the resource
-				stopState, err := s.Stop(ctx, log, client, p.id, p.snapshotBefore, params, nil)
+				stopState, err := s.Stop(deadlineCtx, log, client, p.id, p.snapshotBefore, params, nil)
 				if err != nil {
-					pendingFailed.Add(1)
+					failures.Addf("%s %s: %w", rt, p.id, err)
 					log.Error(err, "failed to stop pending resource", "resourceType", rt, "id", p.id)
 					return
 				}
@@ -474,7 +491,7 @@ func (e *Executor) handleShutdownAwaitCompletion(ctx context.Context, log logr.L
 				if stopState.GetOutcome() == operationOutcomeApplied {
 					pendingApplied.Add(1)
 					// Continue to wait for the resource to reach stopped state
-					if err := s.WaitForStopped(ctx, log, client, p.id, timeout); err != nil {
+					if err := s.WaitForStopped(deadlineCtx, log, client, p.id, timeout); err != nil {
 						timedOut.Add(1)
 						log.Error(err, "failed to wait for pending resource stopped", "resourceType", rt, "id", p.id)
 					}
@@ -487,7 +504,7 @@ func (e *Executor) handleShutdownAwaitCompletion(ctx context.Context, log logr.L
 			e.completionWg.Add(1)
 			go func(resourceID string, s ResourceStrategy, rt ResourceType) {
 				defer e.completionWg.Done()
-				if err := s.WaitForStopped(ctx, log, client, resourceID, timeout); err != nil {
+				if err := s.WaitForStopped(deadlineCtx, log, client, resourceID, timeout); err != nil {
 					timedOut.Add(1)
 					log.Error(err, "failed to wait for resource stopped", "resourceType", rt, "id", resourceID)
 				}
@@ -503,16 +520,30 @@ func (e *Executor) handleShutdownAwaitCompletion(ctx context.Context, log logr.L
 		totalOperations += len(tracker.getAllWaitingIDs()) + len(tracker.getAllPending())
 	}
 
-	if failed := int(timedOut.Load()); failed > 0 {
-		msg += fmt.Sprintf("; %d of %d resource(s) not yet stopped after %s timeout", failed, totalOperations, timeout)
-	} else {
-		msg += "; all resources confirmed stopped"
-	}
-
 	// Update stats for pending resources that were processed
 	if pendingCount := int(pendingApplied.Load()); pendingCount > 0 {
 		stats.applied += pendingCount
 		stats.pending -= pendingCount
+	}
+
+	failedCount := failures.Len()
+	if failedCount > 0 {
+		stats.failed += failedCount
+		stats.pending -= failedCount
+	}
+
+	if failedCount > 0 {
+		resourceNoun := "resource"
+		if failedCount > 1 {
+			resourceNoun = "resources"
+		}
+		msg += fmt.Sprintf("; %d pending %s failed to transition: %s", failedCount, resourceNoun, failures.Join(", "))
+	}
+
+	if timedOutCount := int(timedOut.Load()); timedOutCount > 0 {
+		msg += fmt.Sprintf("; %d of %d resource(s) not yet stopped after %s timeout", timedOutCount, totalOperations, timeout)
+	} else if failedCount == 0 {
+		msg += "; all resources confirmed stopped"
 	}
 
 	return msg
@@ -528,9 +559,21 @@ func (e *Executor) handleWakeupAwaitCompletion(ctx context.Context, log logr.Log
 		timeout = DefaultWaitTimeout
 	}
 
-	var timedOut atomic.Int32
-	var pendingFailed atomic.Int32
-	var pendingApplied atomic.Int32
+	timeoutDur, err := time.ParseDuration(timeout)
+	if err != nil {
+		// Invalid timeout should have been caught by validation; fall back to default.
+		timeoutDur = lo.Must(time.ParseDuration(DefaultWaitTimeout))
+	}
+
+	// All resources (pending and waiting) share the same overall deadline.
+	deadlineCtx, cancel := context.WithTimeout(ctx, timeoutDur)
+	defer cancel()
+
+	var (
+		timedOut       atomic.Int32
+		pendingApplied atomic.Int32
+		failures       executor.ErrorList
+	)
 
 	// Start all operations concurrently - both pending and waiting share the same timeout window
 	for resourceType, tracker := range e.trackers {
@@ -543,16 +586,16 @@ func (e *Executor) handleWakeupAwaitCompletion(ctx context.Context, log logr.Log
 				defer e.completionWg.Done()
 
 				// Wait for resource to become stopped
-				if err := s.WaitForStopped(ctx, log, client, p.id, timeout); err != nil {
-					pendingFailed.Add(1)
+				if err := s.WaitForStopped(deadlineCtx, log, client, p.id, timeout); err != nil {
+					failures.Addf("%s %s: %w", rt, p.id, err)
 					log.Error(err, "failed to wait for resource to become stopped", "resourceType", rt, "id", p.id)
 					return
 				}
 
 				// Start the resource
-				startState, err := s.Start(ctx, log, client, p.id, params)
+				startState, err := s.Start(deadlineCtx, log, client, p.id, params)
 				if err != nil {
-					pendingFailed.Add(1)
+					failures.Addf("%s %s: %w", rt, p.id, err)
 					log.Error(err, "failed to start pending resource", "resourceType", rt, "id", p.id)
 					return
 				}
@@ -560,7 +603,7 @@ func (e *Executor) handleWakeupAwaitCompletion(ctx context.Context, log logr.Log
 				if startState.GetOutcome() == operationOutcomeApplied {
 					pendingApplied.Add(1)
 					// Continue to wait for the resource to reach available state
-					if err := s.WaitForAvailable(ctx, log, client, p.id, timeout); err != nil {
+					if err := s.WaitForAvailable(deadlineCtx, log, client, p.id, timeout); err != nil {
 						timedOut.Add(1)
 						log.Error(err, "failed to wait for pending resource available", "resourceType", rt, "id", p.id)
 					}
@@ -573,7 +616,7 @@ func (e *Executor) handleWakeupAwaitCompletion(ctx context.Context, log logr.Log
 			e.completionWg.Add(1)
 			go func(resourceID string, s ResourceStrategy, rt ResourceType) {
 				defer e.completionWg.Done()
-				if err := s.WaitForAvailable(ctx, log, client, resourceID, timeout); err != nil {
+				if err := s.WaitForAvailable(deadlineCtx, log, client, resourceID, timeout); err != nil {
 					timedOut.Add(1)
 					log.Error(err, "failed to wait for resource available", "resourceType", rt, "id", resourceID)
 				}
@@ -589,16 +632,30 @@ func (e *Executor) handleWakeupAwaitCompletion(ctx context.Context, log logr.Log
 		totalOperations += len(tracker.getAllWaitingIDs()) + len(tracker.getAllPending())
 	}
 
-	if failed := int(timedOut.Load()); failed > 0 {
-		msg += fmt.Sprintf("; %d of %d resource(s) not yet available after %s timeout", failed, totalOperations, timeout)
-	} else {
-		msg += "; all resources confirmed available"
-	}
-
 	// Update stats for pending resources that were processed
 	if pendingCount := int(pendingApplied.Load()); pendingCount > 0 {
 		stats.applied += pendingCount
 		stats.pending -= pendingCount
+	}
+
+	failedCount := failures.Len()
+	if failedCount > 0 {
+		stats.failed += failedCount
+		stats.pending -= failedCount
+	}
+
+	if failedCount > 0 {
+		resourceNoun := "resource"
+		if failedCount > 1 {
+			resourceNoun = "resources"
+		}
+		msg += fmt.Sprintf("; %d pending %s failed to transition: %s", failedCount, resourceNoun, failures.Join(", "))
+	}
+
+	if timedOutCount := int(timedOut.Load()); timedOutCount > 0 {
+		msg += fmt.Sprintf("; %d of %d resource(s) not yet available after %s timeout", timedOutCount, totalOperations, timeout)
+	} else if failedCount == 0 {
+		msg += "; all resources confirmed available"
 	}
 
 	return msg

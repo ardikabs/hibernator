@@ -9,6 +9,7 @@ import (
 	"context"
 	"encoding/json"
 	"testing"
+	"time"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/service/rds"
@@ -1017,6 +1018,285 @@ func TestParameters_JSON(t *testing.T) {
 
 func TestExecutorType_Constant(t *testing.T) {
 	assert.Equal(t, "rds", ExecutorType)
+}
+
+func TestShutdown_PendingResourceFailsAwaitCompletion(t *testing.T) {
+	ctx := context.Background()
+	mockRDS := &mocks.RDSClient{}
+	mockSTS := &mocks.STSClient{}
+
+	// Stop path: instance is in a transitional state, so it is marked pending.
+	mockRDS.On("DescribeDBInstances", mock.Anything, &rds.DescribeDBInstancesInput{
+		DBInstanceIdentifier: aws.String("db-pending"),
+	}).Return(&rds.DescribeDBInstancesOutput{
+		DBInstances: []types.DBInstance{
+			{
+				DBInstanceIdentifier: aws.String("db-pending"),
+				DBInstanceStatus:     aws.String("starting"),
+				DBInstanceClass:      aws.String("db.t3.micro"),
+			},
+		},
+	}, nil).Once()
+
+	// WaitForAvailable path: describe fails, so the pending resource is recorded as failed.
+	mockRDS.On("DescribeDBInstances", mock.Anything, &rds.DescribeDBInstancesInput{
+		DBInstanceIdentifier: aws.String("db-pending"),
+	}).Return((*rds.DescribeDBInstancesOutput)(nil), assert.AnError).Once()
+
+	e := NewWithClients(
+		func(cfg aws.Config) RDSClient { return mockRDS },
+		func(cfg aws.Config) STSClient { return mockSTS },
+		nil,
+	)
+
+	spec := executor.Spec{
+		TargetName: "test-db",
+		TargetType: "rds",
+		Parameters: json.RawMessage(`{"selector": {"InstanceIds": ["db-pending"]}, "awaitCompletion": {"enabled": true, "timeout": "5s"}}`),
+		ConnectorConfig: executor.ConnectorConfig{
+			AWS: &executor.AWSConnectorConfig{Region: "us-east-1"},
+		},
+	}
+
+	result, err := e.Shutdown(ctx, logr.Discard(), spec)
+	assert.NoError(t, err)
+	assert.NotNil(t, result)
+	assert.Contains(t, result.Message, "pending resource failed to transition")
+	assert.Contains(t, result.Message, "db-pending")
+	assert.Contains(t, result.Message, assert.AnError.Error())
+	assert.NotContains(t, result.Message, "all resources confirmed stopped")
+
+	mockRDS.AssertExpectations(t)
+}
+
+func TestWakeUp_PendingResourceFailsAwaitCompletion(t *testing.T) {
+	ctx := context.Background()
+	mockRDS := &mocks.RDSClient{}
+	mockSTS := &mocks.STSClient{}
+
+	// Start path: instance is in a transitional state, so it is marked pending.
+	mockRDS.On("DescribeDBInstances", mock.Anything, &rds.DescribeDBInstancesInput{
+		DBInstanceIdentifier: aws.String("db-pending"),
+	}).Return(&rds.DescribeDBInstancesOutput{
+		DBInstances: []types.DBInstance{
+			{
+				DBInstanceIdentifier: aws.String("db-pending"),
+				DBInstanceStatus:     aws.String("starting"),
+			},
+		},
+	}, nil).Once()
+
+	// WaitForStopped path: describe fails, so the pending resource is recorded as failed.
+	mockRDS.On("DescribeDBInstances", mock.Anything, &rds.DescribeDBInstancesInput{
+		DBInstanceIdentifier: aws.String("db-pending"),
+	}).Return((*rds.DescribeDBInstancesOutput)(nil), assert.AnError).Once()
+
+	e := NewWithClients(
+		func(cfg aws.Config) RDSClient { return mockRDS },
+		func(cfg aws.Config) STSClient { return mockSTS },
+		nil,
+	)
+
+	instanceState, _ := json.Marshal(DBInstanceState{InstanceId: "db-pending", WasRunning: true})
+
+	spec := executor.Spec{
+		TargetName: "test-db",
+		TargetType: "rds",
+		Parameters: json.RawMessage(`{"selector": {"InstanceIds": ["db-pending"]}, "awaitCompletion": {"enabled": true, "timeout": "5s"}}`),
+		ConnectorConfig: executor.ConnectorConfig{
+			AWS: &executor.AWSConnectorConfig{Region: "us-east-1"},
+		},
+	}
+
+	result, err := e.WakeUp(ctx, logr.Discard(), spec, executor.RestoreData{
+		Data: map[string]json.RawMessage{"instance:db-pending": instanceState},
+	})
+	assert.NoError(t, err)
+	assert.NotNil(t, result)
+	assert.Contains(t, result.Message, "pending resource failed to transition")
+	assert.Contains(t, result.Message, "db-pending")
+	assert.Contains(t, result.Message, assert.AnError.Error())
+	assert.NotContains(t, result.Message, "all resources confirmed available")
+
+	mockRDS.AssertExpectations(t)
+}
+
+func TestShutdown_PendingResourceRespectsSharedTimeout(t *testing.T) {
+	ctx := context.Background()
+	mockRDS := &mocks.RDSClient{}
+	mockSTS := &mocks.STSClient{}
+
+	// Stop path: instance is in a transitional state, so it is marked pending.
+	mockRDS.On("DescribeDBInstances", mock.Anything, &rds.DescribeDBInstancesInput{
+		DBInstanceIdentifier: aws.String("db-pending"),
+	}).Return(&rds.DescribeDBInstancesOutput{
+		DBInstances: []types.DBInstance{
+			{
+				DBInstanceIdentifier: aws.String("db-pending"),
+				DBInstanceStatus:     aws.String("starting"),
+				DBInstanceClass:      aws.String("db.t3.micro"),
+			},
+		},
+	}, nil).Once()
+
+	// WaitForAvailable path: returns available after a short delay, consuming part of the budget.
+	mockRDS.On("DescribeDBInstances", mock.Anything, &rds.DescribeDBInstancesInput{
+		DBInstanceIdentifier: aws.String("db-pending"),
+	}).Run(func(args mock.Arguments) {
+		time.Sleep(50 * time.Millisecond)
+	}).Return(&rds.DescribeDBInstancesOutput{
+		DBInstances: []types.DBInstance{
+			{
+				DBInstanceIdentifier: aws.String("db-pending"),
+				DBInstanceStatus:     aws.String("available"),
+				DBInstanceClass:      aws.String("db.t3.micro"),
+			},
+		},
+	}, nil).Once()
+
+	// Second Stop call: resource is now available, so stop it.
+	mockRDS.On("DescribeDBInstances", mock.Anything, &rds.DescribeDBInstancesInput{
+		DBInstanceIdentifier: aws.String("db-pending"),
+	}).Return(&rds.DescribeDBInstancesOutput{
+		DBInstances: []types.DBInstance{
+			{
+				DBInstanceIdentifier: aws.String("db-pending"),
+				DBInstanceStatus:     aws.String("available"),
+				DBInstanceClass:      aws.String("db.t3.micro"),
+			},
+		},
+	}, nil).Once()
+
+	mockRDS.On("StopDBInstance", mock.Anything, mock.Anything).Return(&rds.StopDBInstanceOutput{}, nil).Once()
+
+	// WaitForStopped path: resource is still stopping, so it will hit the shared deadline.
+	mockRDS.On("DescribeDBInstances", mock.Anything, &rds.DescribeDBInstancesInput{
+		DBInstanceIdentifier: aws.String("db-pending"),
+	}).Return(&rds.DescribeDBInstancesOutput{
+		DBInstances: []types.DBInstance{
+			{
+				DBInstanceIdentifier: aws.String("db-pending"),
+				DBInstanceStatus:     aws.String("stopping"),
+			},
+		},
+	}, nil).Once()
+
+	e := NewWithClients(
+		func(cfg aws.Config) RDSClient { return mockRDS },
+		func(cfg aws.Config) STSClient { return mockSTS },
+		nil,
+	)
+
+	spec := executor.Spec{
+		TargetName: "test-db",
+		TargetType: "rds",
+		Parameters: json.RawMessage(`{"selector": {"InstanceIds": ["db-pending"]}, "awaitCompletion": {"enabled": true, "timeout": "200ms"}}`),
+		ConnectorConfig: executor.ConnectorConfig{
+			AWS: &executor.AWSConnectorConfig{Region: "us-east-1"},
+		},
+	}
+
+	start := time.Now()
+	result, err := e.Shutdown(ctx, logr.Discard(), spec)
+	elapsed := time.Since(start)
+
+	assert.NoError(t, err)
+	assert.NotNil(t, result)
+	assert.Contains(t, result.Message, "not yet stopped after 200ms timeout")
+	assert.NotContains(t, result.Message, "failed to transition")
+	// Should time out near the shared 200ms deadline, not after the full per-wait timeout.
+	assert.Less(t, elapsed, 500*time.Millisecond, "expected shared deadline to bound total wait time")
+
+	mockRDS.AssertExpectations(t)
+}
+
+func TestWakeUp_PendingResourceRespectsSharedTimeout(t *testing.T) {
+	ctx := context.Background()
+	mockRDS := &mocks.RDSClient{}
+	mockSTS := &mocks.STSClient{}
+
+	// Start path: instance is in a transitional state, so it is marked pending.
+	mockRDS.On("DescribeDBInstances", mock.Anything, &rds.DescribeDBInstancesInput{
+		DBInstanceIdentifier: aws.String("db-pending"),
+	}).Return(&rds.DescribeDBInstancesOutput{
+		DBInstances: []types.DBInstance{
+			{
+				DBInstanceIdentifier: aws.String("db-pending"),
+				DBInstanceStatus:     aws.String("starting"),
+			},
+		},
+	}, nil).Once()
+
+	// WaitForStopped path: returns stopped after a short delay, consuming part of the budget.
+	mockRDS.On("DescribeDBInstances", mock.Anything, &rds.DescribeDBInstancesInput{
+		DBInstanceIdentifier: aws.String("db-pending"),
+	}).Run(func(args mock.Arguments) {
+		time.Sleep(50 * time.Millisecond)
+	}).Return(&rds.DescribeDBInstancesOutput{
+		DBInstances: []types.DBInstance{
+			{
+				DBInstanceIdentifier: aws.String("db-pending"),
+				DBInstanceStatus:     aws.String("stopped"),
+			},
+		},
+	}, nil).Once()
+
+	// Second Start call: resource is now stopped, so start it.
+	mockRDS.On("DescribeDBInstances", mock.Anything, &rds.DescribeDBInstancesInput{
+		DBInstanceIdentifier: aws.String("db-pending"),
+	}).Return(&rds.DescribeDBInstancesOutput{
+		DBInstances: []types.DBInstance{
+			{
+				DBInstanceIdentifier: aws.String("db-pending"),
+				DBInstanceStatus:     aws.String("stopped"),
+			},
+		},
+	}, nil).Once()
+
+	mockRDS.On("StartDBInstance", mock.Anything, mock.Anything).Return(&rds.StartDBInstanceOutput{}, nil).Once()
+
+	// WaitForAvailable path: resource is still starting, so it will hit the shared deadline.
+	mockRDS.On("DescribeDBInstances", mock.Anything, &rds.DescribeDBInstancesInput{
+		DBInstanceIdentifier: aws.String("db-pending"),
+	}).Return(&rds.DescribeDBInstancesOutput{
+		DBInstances: []types.DBInstance{
+			{
+				DBInstanceIdentifier: aws.String("db-pending"),
+				DBInstanceStatus:     aws.String("starting"),
+			},
+		},
+	}, nil).Once()
+
+	e := NewWithClients(
+		func(cfg aws.Config) RDSClient { return mockRDS },
+		func(cfg aws.Config) STSClient { return mockSTS },
+		nil,
+	)
+
+	instanceState, _ := json.Marshal(DBInstanceState{InstanceId: "db-pending", WasRunning: true})
+
+	spec := executor.Spec{
+		TargetName: "test-db",
+		TargetType: "rds",
+		Parameters: json.RawMessage(`{"selector": {"InstanceIds": ["db-pending"]}, "awaitCompletion": {"enabled": true, "timeout": "200ms"}}`),
+		ConnectorConfig: executor.ConnectorConfig{
+			AWS: &executor.AWSConnectorConfig{Region: "us-east-1"},
+		},
+	}
+
+	start := time.Now()
+	result, err := e.WakeUp(ctx, logr.Discard(), spec, executor.RestoreData{
+		Data: map[string]json.RawMessage{"instance:db-pending": instanceState},
+	})
+	elapsed := time.Since(start)
+
+	assert.NoError(t, err)
+	assert.NotNil(t, result)
+	assert.Contains(t, result.Message, "not yet available after 200ms timeout")
+	assert.NotContains(t, result.Message, "failed to transition")
+	assert.Less(t, elapsed, 500*time.Millisecond, "expected shared deadline to bound total wait time")
+
+	mockRDS.AssertExpectations(t)
 }
 
 func TestFormatMessages(t *testing.T) {

@@ -16,7 +16,7 @@ import (
 
 const testInterval = time.Millisecond
 
-func TestNewWaiter_ValidTimeout(t *testing.T) {
+func TestNewWaiter_ValidTimeoutString(t *testing.T) {
 	tests := []struct {
 		name        string
 		timeoutStr  string
@@ -33,7 +33,7 @@ func TestNewWaiter_ValidTimeout(t *testing.T) {
 			ctx := context.Background()
 			log := logr.Discard()
 
-			waiter, err := NewWaiter(ctx, log, tt.timeoutStr)
+			waiter, err := NewWaiter(ctx, log, WithTimeoutString(tt.timeoutStr))
 			if err != nil {
 				t.Fatalf("NewWaiter() error = %v, want nil", err)
 			}
@@ -42,6 +42,44 @@ func TestNewWaiter_ValidTimeout(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestNewWaiter_ValidTimeoutDuration(t *testing.T) {
+	ctx := context.Background()
+	log := logr.Discard()
+
+	waiter, err := NewWaiter(ctx, log, WithTimeout(5*time.Minute))
+	if err != nil {
+		t.Fatalf("NewWaiter() error = %v", err)
+	}
+	if waiter.timeout != 5*time.Minute {
+		t.Errorf("timeout = %v, want %v", waiter.timeout, 5*time.Minute)
+	}
+}
+
+func TestNewWaiter_LastTimeoutOptionWins(t *testing.T) {
+	ctx := context.Background()
+	log := logr.Discard()
+
+	t.Run("duration after string", func(t *testing.T) {
+		waiter, err := NewWaiter(ctx, log, WithTimeoutString("2m"), WithTimeout(1*time.Minute))
+		if err != nil {
+			t.Fatalf("NewWaiter() error = %v", err)
+		}
+		if waiter.timeout != 1*time.Minute {
+			t.Errorf("timeout = %v, want 1m", waiter.timeout)
+		}
+	})
+
+	t.Run("string after duration", func(t *testing.T) {
+		waiter, err := NewWaiter(ctx, log, WithTimeout(1*time.Minute), WithTimeoutString("2m"))
+		if err != nil {
+			t.Fatalf("NewWaiter() error = %v", err)
+		}
+		if waiter.timeout != 2*time.Minute {
+			t.Errorf("timeout = %v, want 2m", waiter.timeout)
+		}
+	})
 }
 
 func TestNewWaiter_InvalidTimeout(t *testing.T) {
@@ -58,7 +96,7 @@ func TestNewWaiter_InvalidTimeout(t *testing.T) {
 			ctx := context.Background()
 			log := logr.Discard()
 
-			_, err := NewWaiter(ctx, log, tt.timeoutStr)
+			_, err := NewWaiter(ctx, log, WithTimeoutString(tt.timeoutStr))
 			if err == nil {
 				t.Error("NewWaiter() error = nil, want error")
 			}
@@ -70,7 +108,7 @@ func TestPoll_ImmediateSuccess(t *testing.T) {
 	ctx := context.Background()
 	log := logr.Discard()
 
-	waiter, err := NewWaiter(ctx, log, "1m", WithInterval(testInterval))
+	waiter, err := NewWaiter(ctx, log, WithTimeoutString("1m"), WithInterval(testInterval))
 	if err != nil {
 		t.Fatalf("NewWaiter() error = %v", err)
 	}
@@ -94,7 +132,7 @@ func TestPoll_EventualSuccess(t *testing.T) {
 	ctx := context.Background()
 	log := logr.Discard()
 
-	waiter, err := NewWaiter(ctx, log, "1m", WithInterval(testInterval))
+	waiter, err := NewWaiter(ctx, log, WithTimeoutString("1m"), WithInterval(testInterval))
 	if err != nil {
 		t.Fatalf("NewWaiter() error = %v", err)
 	}
@@ -121,7 +159,7 @@ func TestPoll_Timeout(t *testing.T) {
 	ctx := context.Background()
 	log := logr.Discard()
 
-	waiter, err := NewWaiter(ctx, log, "50ms", WithInterval(testInterval))
+	waiter, err := NewWaiter(ctx, log, WithTimeoutString("50ms"), WithInterval(testInterval))
 	if err != nil {
 		t.Fatalf("NewWaiter() error = %v", err)
 	}
@@ -146,7 +184,7 @@ func TestPoll_ContextCancellation(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	log := logr.Discard()
 
-	waiter, err := NewWaiter(ctx, log, "1m", WithInterval(testInterval))
+	waiter, err := NewWaiter(ctx, log, WithTimeoutString("1m"), WithInterval(testInterval))
 	if err != nil {
 		t.Fatalf("NewWaiter() error = %v", err)
 	}
@@ -173,7 +211,7 @@ func TestPoll_CheckFuncError(t *testing.T) {
 	ctx := context.Background()
 	log := logr.Discard()
 
-	waiter, err := NewWaiter(ctx, log, "1m", WithInterval(testInterval))
+	waiter, err := NewWaiter(ctx, log, WithTimeoutString("1m"), WithInterval(testInterval))
 	if err != nil {
 		t.Fatalf("NewWaiter() error = %v", err)
 	}
@@ -196,7 +234,7 @@ func TestPoll_NoTimeout(t *testing.T) {
 	ctx := context.Background()
 	log := logr.Discard()
 
-	waiter, err := NewWaiter(ctx, log, "", WithInterval(testInterval)) // Empty timeout = no timeout
+	waiter, err := NewWaiter(ctx, log, WithTimeoutString(""), WithInterval(testInterval)) // Empty timeout = no timeout
 	if err != nil {
 		t.Fatalf("NewWaiter() error = %v", err)
 	}
