@@ -35,37 +35,59 @@ type Waiter struct {
 }
 
 // Option configures a Waiter.
-type Option func(*Waiter)
+type Option func(*Waiter) error
 
 // WithInterval sets the polling interval.
 func WithInterval(d time.Duration) Option {
-	return func(w *Waiter) {
+	return func(w *Waiter) error {
 		w.interval = d
+		return nil
 	}
 }
 
-// NewWaiter creates a new Waiter with the specified timeout.
-// If timeoutStr is empty, the waiter will wait indefinitely (no timeout).
-// Returns error if timeoutStr is non-empty but invalid format.
-func NewWaiter(ctx context.Context, log logr.Logger, timeoutStr string, opts ...Option) (*Waiter, error) {
-	var timeout time.Duration
-	if timeoutStr != "" {
-		d, err := time.ParseDuration(timeoutStr)
-		if err != nil {
-			return nil, fmt.Errorf("invalid timeout format %q: %w", timeoutStr, err)
-		}
-		timeout = d
+// WithTimeout sets the timeout as a time.Duration.
+func WithTimeout(d time.Duration) Option {
+	return func(w *Waiter) error {
+		w.timeout = d
+		return nil
 	}
+}
 
+// WithTimeoutString sets the timeout by parsing a duration string (e.g., "5m", "200ms").
+// An empty string means no timeout (wait until the context is canceled).
+func WithTimeoutString(s string) Option {
+	return func(w *Waiter) error {
+		if s == "" {
+			return nil
+		}
+
+		d, err := time.ParseDuration(s)
+		if err != nil {
+			return fmt.Errorf("invalid timeout format %q: %w", s, err)
+
+		}
+
+		w.timeout = d
+		return nil
+	}
+}
+
+// NewWaiter creates a new Waiter.
+// If no timeout option is provided, the waiter will wait indefinitely (until the context is canceled).
+// If multiple timeout options are supplied, they are applied in order and the last one wins.
+func NewWaiter(ctx context.Context, log logr.Logger, opts ...Option) (*Waiter, error) {
 	w := &Waiter{
 		ctx:      ctx,
 		log:      log,
-		timeout:  timeout,
 		interval: DefaultPollInterval,
 	}
+
 	for _, opt := range opts {
-		opt(w)
+		if err := opt(w); err != nil {
+			return nil, err
+		}
 	}
+
 	return w, nil
 }
 

@@ -399,7 +399,7 @@ func isInstanceNotFound(err error) bool {
 
 // waitForInstancesStopped waits for all instances to reach stopped state.
 func (e *Executor) waitForInstancesStopped(ctx context.Context, log logr.Logger, client EC2Client, instanceIds []string, timeout string) error {
-	w, err := waiter.NewWaiter(ctx, log, timeout)
+	w, err := waiter.NewWaiter(ctx, log, waiter.WithTimeoutString(timeout))
 	if err != nil {
 		return fmt.Errorf("create waiter: %w", err)
 	}
@@ -438,7 +438,7 @@ func (e *Executor) waitForInstancesStopped(ctx context.Context, log logr.Logger,
 
 // waitForInstancesRunning waits for all instances to reach running state.
 func (e *Executor) waitForInstancesRunning(ctx context.Context, log logr.Logger, client EC2Client, instanceIds []string, timeout string) error {
-	w, err := waiter.NewWaiter(ctx, log, timeout)
+	w, err := waiter.NewWaiter(ctx, log, waiter.WithTimeoutString(timeout))
 	if err != nil {
 		return fmt.Errorf("create waiter: %w", err)
 	}

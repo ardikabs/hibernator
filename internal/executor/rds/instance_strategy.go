@@ -260,7 +260,7 @@ func (s *instanceStrategy) WaitForAvailable(ctx context.Context, log logr.Logger
 		"timeout", timeout,
 	)
 
-	w, err := waiter.NewWaiter(ctx, log, timeout)
+	w, err := waiter.NewWaiter(ctx, log, waiter.WithTimeoutString(timeout))
 	if err != nil {
 		return err
 	}
@@ -292,7 +292,7 @@ func (s *instanceStrategy) WaitForStopped(ctx context.Context, log logr.Logger, 
 		timeout = DefaultWaitTimeout
 	}
 
-	w, err := waiter.NewWaiter(ctx, log, timeout)
+	w, err := waiter.NewWaiter(ctx, log, waiter.WithTimeoutString(timeout))
 	if err != nil {
 		return err
 	}

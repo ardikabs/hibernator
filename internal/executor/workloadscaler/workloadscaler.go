@@ -635,7 +635,7 @@ func (e *Executor) waitForReplicasScaled(ctx context.Context, log logr.Logger, c
 		"timeout", timeout,
 	)
 
-	w, err := waiter.NewWaiter(ctx, log, timeout)
+	w, err := waiter.NewWaiter(ctx, log, waiter.WithTimeoutString(timeout))
 	if err != nil {
 		return fmt.Errorf("create waiter: %w", err)
 	}
