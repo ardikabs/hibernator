@@ -531,7 +531,7 @@ func (e *Executor) waitForNodePoolReady(ctx context.Context, log logr.Logger, cl
 		"timeout", timeout,
 	)
 
-	w, err := waiter.NewWaiter(ctx, log, timeout)
+	w, err := waiter.NewWaiter(ctx, log, waiter.WithTimeoutString(timeout))
 	if err != nil {
 		return fmt.Errorf("create waiter: %w", err)
 	}
@@ -589,7 +589,7 @@ func (e *Executor) waitForNodePoolDeleted(ctx context.Context, log logr.Logger, 
 		"timeout", timeout,
 	)
 
-	w, err := waiter.NewWaiter(ctx, log, timeout)
+	w, err := waiter.NewWaiter(ctx, log, waiter.WithTimeoutString(timeout))
 	if err != nil {
 		return fmt.Errorf("create waiter: %w", err)
 	}
