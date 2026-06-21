@@ -1,3 +1,12 @@
+<a name="v1.6.3"></a>
+
+## [v1.6.3](https://github.com/ardikabs/hibernator/compare/v1.6.2...v1.6.3) (2026-06-21)
+
+### 🐛 Bug Fixes
+
+* RDS executor handleShutdownAwaitCompletion missing callback and stale message ([#179](https://github.com/ardikabs/hibernator/issues/179))
+
+
 <a name="v1.6.2"></a>
 
 ## [v1.6.2](https://github.com/ardikabs/hibernator/compare/v1.6.1...v1.6.2) (2026-06-19)
