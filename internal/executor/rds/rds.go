@@ -245,9 +245,11 @@ func (e *Executor) Shutdown(ctx context.Context, log logr.Logger, spec executor.
 	}
 
 	// Handle await completion
-	msg := formatShutdownMessage(stats)
+	result := &executor.Result{}
 	if params.AwaitCompletion.Enabled {
-		msg = e.handleShutdownAwaitCompletion(ctx, log, client, params, msg, stats)
+		result.Message = e.handleShutdownAwaitCompletion(ctx, log, client, params, stats, spec.ReportStateCallback)
+	} else {
+		result.Message = formatShutdownMessage(stats)
 	}
 
 	log.Info("shutdown completed",
@@ -258,7 +260,7 @@ func (e *Executor) Shutdown(ctx context.Context, log logr.Logger, spec executor.
 		"failed", stats.failed,
 	)
 
-	return &executor.Result{Message: msg}, nil
+	return result, nil
 }
 
 // WakeUp starts RDS instances/clusters.
@@ -296,9 +298,11 @@ func (e *Executor) WakeUp(ctx context.Context, log logr.Logger, spec executor.Sp
 	}
 
 	// Handle await completion
-	msg := formatWakeUpMessage(stats)
+	result := &executor.Result{}
 	if params.AwaitCompletion.Enabled {
-		msg = e.handleWakeupAwaitCompletion(ctx, log, client, params, msg, stats)
+		result.Message = e.handleWakeupAwaitCompletion(ctx, log, client, params, stats)
+	} else {
+		result.Message = formatWakeUpMessage(stats)
 	}
 
 	log.Info("wakeup completed",
@@ -310,7 +314,7 @@ func (e *Executor) WakeUp(ctx context.Context, log logr.Logger, spec executor.Sp
 		"failed", stats.failed,
 	)
 
-	return &executor.Result{Message: msg}, nil
+	return result, nil
 }
 
 // determineResourceTypes determines which resource types to discover based on params
@@ -441,7 +445,7 @@ func (e *Executor) restoreResource(ctx context.Context, log logr.Logger, client 
 // All resources (pending and waiting) share the same timeout window concurrently.
 // For pending resources: wait for available → stop → wait for stopped (all in one goroutine)
 // For waiting resources: just wait for stopped
-func (e *Executor) handleShutdownAwaitCompletion(ctx context.Context, log logr.Logger, client RDSClient, params Parameters, msg string, stats *operationStats) string {
+func (e *Executor) handleShutdownAwaitCompletion(ctx context.Context, log logr.Logger, client RDSClient, params Parameters, stats *operationStats, callback executor.ReportStateCallback) string {
 	timeout := params.AwaitCompletion.Timeout
 	if timeout == "" {
 		timeout = DefaultWaitTimeout
@@ -481,7 +485,7 @@ func (e *Executor) handleShutdownAwaitCompletion(ctx context.Context, log logr.L
 				}
 
 				// Stop the resource
-				stopState, err := s.Stop(deadlineCtx, log, client, p.id, p.snapshotBefore, params, nil)
+				stopState, err := s.Stop(deadlineCtx, log, client, p.id, p.snapshotBefore, params, callback)
 				if err != nil {
 					failures.Addf("%s %s: %w", rt, p.id, err)
 					log.Error(err, "failed to stop pending resource", "resourceType", rt, "id", p.id)
@@ -532,6 +536,10 @@ func (e *Executor) handleShutdownAwaitCompletion(ctx context.Context, log logr.L
 		stats.pending -= failedCount
 	}
 
+	// Format base message with finalized stats
+	msg := formatShutdownMessage(stats)
+
+	// Append supplementary info
 	if failedCount > 0 {
 		resourceNoun := "resource"
 		if failedCount > 1 {
@@ -553,7 +561,7 @@ func (e *Executor) handleShutdownAwaitCompletion(ctx context.Context, log logr.L
 // All resources (pending and waiting) share the same timeout window concurrently.
 // For pending resources: wait for stopped → start → wait for available (all in one goroutine)
 // For waiting resources: just wait for available
-func (e *Executor) handleWakeupAwaitCompletion(ctx context.Context, log logr.Logger, client RDSClient, params Parameters, msg string, stats *operationStats) string {
+func (e *Executor) handleWakeupAwaitCompletion(ctx context.Context, log logr.Logger, client RDSClient, params Parameters, stats *operationStats) string {
 	timeout := params.AwaitCompletion.Timeout
 	if timeout == "" {
 		timeout = DefaultWaitTimeout
@@ -593,6 +601,7 @@ func (e *Executor) handleWakeupAwaitCompletion(ctx context.Context, log logr.Log
 				}
 
 				// Start the resource
+				// Note: Start() doesn't take callback - restore data was already captured during Shutdown
 				startState, err := s.Start(deadlineCtx, log, client, p.id, params)
 				if err != nil {
 					failures.Addf("%s %s: %w", rt, p.id, err)
@@ -644,6 +653,10 @@ func (e *Executor) handleWakeupAwaitCompletion(ctx context.Context, log logr.Log
 		stats.pending -= failedCount
 	}
 
+	// Format base message with finalized stats
+	msg := formatWakeUpMessage(stats)
+
+	// Append supplementary info
 	if failedCount > 0 {
 		resourceNoun := "resource"
 		if failedCount > 1 {
