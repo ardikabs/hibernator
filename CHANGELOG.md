@@ -1,3 +1,12 @@
+<a name="v1.6.4"></a>
+
+## [v1.6.4](https://github.com/ardikabs/hibernator/compare/v1.6.3...v1.6.4) (2026-07-21)
+
+### 🐛 Bug Fixes
+
+* [exec/rds] graceful skip for invalid state ([#182](https://github.com/ardikabs/hibernator/issues/182))
+
+
 <a name="v1.6.3"></a>
 
 ## [v1.6.3](https://github.com/ardikabs/hibernator/compare/v1.6.2...v1.6.3) (2026-06-21)
