@@ -14,6 +14,7 @@ import (
 	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/service/rds"
 	"github.com/aws/aws-sdk-go-v2/service/rds/types"
+	"github.com/aws/smithy-go"
 	"github.com/go-logr/logr"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/mock"
@@ -1314,4 +1315,186 @@ func TestFormatMessages(t *testing.T) {
 
 	wakeupWithAllSkips := formatWakeUpMessage(&operationStats{applied: 5, skippedStale: 2, skippedKey: 1})
 	assert.Equal(t, "started 5 RDS resource(s), skipped 2 stale resource(s), skipped 1 unrecognized restore key(s)", wakeupWithAllSkips)
+}
+
+func TestShutdown_StopInstance_InvalidDBInstanceState(t *testing.T) {
+	ctx := context.Background()
+	mockRDS := &mocks.RDSClient{}
+	mockSTS := &mocks.STSClient{}
+
+	mockRDS.On("DescribeDBInstances", mock.Anything, mock.Anything).Return(&rds.DescribeDBInstancesOutput{
+		DBInstances: []types.DBInstance{
+			{
+				DBInstanceIdentifier: aws.String("db-instance-1"),
+				DBInstanceStatus:     aws.String("available"),
+				DBInstanceClass:      aws.String("db.t3.medium"),
+				DBInstanceArn:        aws.String("arn:aws:rds:us-east-1:123456789012:db:db-instance-1"),
+			},
+		},
+	}, nil)
+	mockRDS.On("StopDBInstance", mock.Anything, mock.Anything).Return(
+		&rds.StopDBInstanceOutput{},
+		&smithy.GenericAPIError{Code: "InvalidDBInstanceState", Message: "Cannot stop a Read Replica source"},
+	)
+
+	e := NewWithClients(
+		func(cfg aws.Config) RDSClient { return mockRDS },
+		func(cfg aws.Config) STSClient { return mockSTS },
+		nil,
+	)
+
+	spec := executor.Spec{
+		TargetName: "test-db",
+		TargetType: "rds",
+		Parameters: json.RawMessage(`{"selector": {"InstanceIds": ["db-instance-1"]}}`),
+		ConnectorConfig: executor.ConnectorConfig{
+			AWS: &executor.AWSConnectorConfig{Region: "us-east-1"},
+		},
+	}
+
+	result, err := e.Shutdown(ctx, logr.Discard(), spec)
+	assert.NoError(t, err)
+	assert.NotNil(t, result)
+	assert.Contains(t, result.Message, "skipped")
+
+	mockRDS.AssertExpectations(t)
+}
+
+func TestWakeUp_StartInstance_InvalidDBInstanceState(t *testing.T) {
+	ctx := context.Background()
+	mockRDS := &mocks.RDSClient{}
+	mockSTS := &mocks.STSClient{}
+
+	mockRDS.On("DescribeDBInstances", mock.Anything, mock.Anything).Return(&rds.DescribeDBInstancesOutput{
+		DBInstances: []types.DBInstance{
+			{
+				DBInstanceIdentifier: aws.String("db-instance-1"),
+				DBInstanceStatus:     aws.String("stopped"),
+				DBInstanceClass:      aws.String("db.t3.medium"),
+				DBInstanceArn:        aws.String("arn:aws:rds:us-east-1:123456789012:db:db-instance-1"),
+			},
+		},
+	}, nil)
+	mockRDS.On("StartDBInstance", mock.Anything, mock.Anything).Return(
+		&rds.StartDBInstanceOutput{},
+		&smithy.GenericAPIError{Code: "InvalidDBInstanceState", Message: "Cannot start in current state"},
+	)
+
+	e := NewWithClients(
+		func(cfg aws.Config) RDSClient { return mockRDS },
+		func(cfg aws.Config) STSClient { return mockSTS },
+		nil,
+	)
+
+	spec := executor.Spec{
+		TargetName: "test-db",
+		TargetType: "rds",
+		Parameters: json.RawMessage(`{"selector": {"InstanceIds": ["db-instance-1"]}}`),
+		ConnectorConfig: executor.ConnectorConfig{
+			AWS: &executor.AWSConnectorConfig{Region: "us-east-1"},
+		},
+	}
+
+	restore := executor.RestoreData{
+		Data: map[string]json.RawMessage{
+			"instance:db-instance-1": json.RawMessage(`{"instanceId":"db-instance-1","wasRunning":true}`),
+		},
+	}
+
+	result, err := e.WakeUp(ctx, logr.Discard(), spec, restore)
+	assert.NoError(t, err)
+	assert.NotNil(t, result)
+	assert.Contains(t, result.Message, "skipped")
+
+	mockRDS.AssertExpectations(t)
+}
+
+func TestShutdown_StopCluster_InvalidDBClusterState(t *testing.T) {
+	ctx := context.Background()
+	mockRDS := &mocks.RDSClient{}
+	mockSTS := &mocks.STSClient{}
+
+	mockRDS.On("DescribeDBClusters", mock.Anything, mock.Anything).Return(&rds.DescribeDBClustersOutput{
+		DBClusters: []types.DBCluster{
+			{
+				DBClusterIdentifier: aws.String("cluster-1"),
+				Status:              aws.String("available"),
+				DBClusterArn:        aws.String("arn:aws:rds:us-east-1:123456789012:cluster:cluster-1"),
+			},
+		},
+	}, nil)
+	mockRDS.On("StopDBCluster", mock.Anything, mock.Anything).Return(
+		&rds.StopDBClusterOutput{},
+		&smithy.GenericAPIError{Code: "InvalidDBClusterState", Message: "Cannot stop cluster in current state"},
+	)
+
+	e := NewWithClients(
+		func(cfg aws.Config) RDSClient { return mockRDS },
+		func(cfg aws.Config) STSClient { return mockSTS },
+		nil,
+	)
+
+	spec := executor.Spec{
+		TargetName: "test-cluster",
+		TargetType: "rds",
+		Parameters: json.RawMessage(`{"selector": {"ClusterIds": ["cluster-1"]}}`),
+		ConnectorConfig: executor.ConnectorConfig{
+			AWS: &executor.AWSConnectorConfig{Region: "us-east-1"},
+		},
+	}
+
+	result, err := e.Shutdown(ctx, logr.Discard(), spec)
+	assert.NoError(t, err)
+	assert.NotNil(t, result)
+	assert.Contains(t, result.Message, "skipped")
+
+	mockRDS.AssertExpectations(t)
+}
+
+func TestWakeUp_StartCluster_InvalidDBClusterState(t *testing.T) {
+	ctx := context.Background()
+	mockRDS := &mocks.RDSClient{}
+	mockSTS := &mocks.STSClient{}
+
+	mockRDS.On("DescribeDBClusters", mock.Anything, mock.Anything).Return(&rds.DescribeDBClustersOutput{
+		DBClusters: []types.DBCluster{
+			{
+				DBClusterIdentifier: aws.String("cluster-1"),
+				Status:              aws.String("stopped"),
+				DBClusterArn:        aws.String("arn:aws:rds:us-east-1:123456789012:cluster:cluster-1"),
+			},
+		},
+	}, nil)
+	mockRDS.On("StartDBCluster", mock.Anything, mock.Anything).Return(
+		&rds.StartDBClusterOutput{},
+		&smithy.GenericAPIError{Code: "InvalidDBClusterState", Message: "Cannot start cluster in current state"},
+	)
+
+	e := NewWithClients(
+		func(cfg aws.Config) RDSClient { return mockRDS },
+		func(cfg aws.Config) STSClient { return mockSTS },
+		nil,
+	)
+
+	spec := executor.Spec{
+		TargetName: "test-cluster",
+		TargetType: "rds",
+		Parameters: json.RawMessage(`{"selector": {"ClusterIds": ["cluster-1"]}}`),
+		ConnectorConfig: executor.ConnectorConfig{
+			AWS: &executor.AWSConnectorConfig{Region: "us-east-1"},
+		},
+	}
+
+	restore := executor.RestoreData{
+		Data: map[string]json.RawMessage{
+			"cluster:cluster-1": json.RawMessage(`{"clusterId":"cluster-1","wasRunning":true}`),
+		},
+	}
+
+	result, err := e.WakeUp(ctx, logr.Discard(), spec, restore)
+	assert.NoError(t, err)
+	assert.NotNil(t, result)
+	assert.Contains(t, result.Message, "skipped")
+
+	mockRDS.AssertExpectations(t)
 }
