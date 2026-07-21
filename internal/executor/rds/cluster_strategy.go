@@ -149,9 +149,13 @@ func (s *clusterStrategy) Stop(ctx context.Context, log logr.Logger, client RDSC
 			DBClusterIdentifier: aws.String(id),
 		}); err != nil {
 			var apiErr smithy.APIError
-			if errors.As(err, &apiErr) && apiErr.ErrorCode() == "DBClusterNotFoundFault" {
-				log.Info("cluster not found, skipping ...", "clusterId", id)
-				return DBClusterState{Outcome: operationOutcomeSkippedStale}, nil
+			if errors.As(err, &apiErr) {
+				switch apiErr.ErrorCode() {
+				case "DBClusterNotFoundFault", "InvalidDBClusterState":
+					log.Info("cluster is in an invalid state for this operation, skipping ...",
+						"clusterId", id, "errorCode", apiErr.ErrorCode())
+					return DBClusterState{Outcome: operationOutcomeSkippedStale}, nil
+				}
 			}
 			return nil, err
 		}
@@ -232,9 +236,13 @@ func (s *clusterStrategy) Start(ctx context.Context, log logr.Logger, client RDS
 	})
 	if err != nil {
 		var apiErr smithy.APIError
-		if errors.As(err, &apiErr) && apiErr.ErrorCode() == "DBClusterNotFoundFault" {
-			log.Info("cluster not found, skipping ...", "clusterId", id)
-			return DBClusterState{Outcome: operationOutcomeSkippedStale}, nil
+		if errors.As(err, &apiErr) {
+			switch apiErr.ErrorCode() {
+			case "DBClusterNotFoundFault", "InvalidDBClusterState":
+				log.Info("cluster is in an invalid state for this operation, skipping ...",
+					"clusterId", id, "errorCode", apiErr.ErrorCode())
+				return DBClusterState{Outcome: operationOutcomeSkippedStale}, nil
+			}
 		}
 		return nil, err
 	}
