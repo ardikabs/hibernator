@@ -159,9 +159,13 @@ func (s *instanceStrategy) Stop(ctx context.Context, log logr.Logger, client RDS
 			DBInstanceIdentifier: aws.String(id),
 		}); err != nil {
 			var apiErr smithy.APIError
-			if errors.As(err, &apiErr) && apiErr.ErrorCode() == "DBInstanceNotFound" {
-				log.Info("instance not found, skipping ...", "instanceId", id)
-				return DBInstanceState{Outcome: operationOutcomeSkippedStale}, nil
+			if errors.As(err, &apiErr) {
+				switch apiErr.ErrorCode() {
+				case "DBInstanceNotFound", "InvalidDBInstanceState":
+					log.Info("instance is in an invalid state for this operation, skipping ...",
+						"instanceId", id, "errorCode", apiErr.ErrorCode())
+					return DBInstanceState{Outcome: operationOutcomeSkippedStale}, nil
+				}
 			}
 			return nil, err
 		}
@@ -243,9 +247,13 @@ func (s *instanceStrategy) Start(ctx context.Context, log logr.Logger, client RD
 
 	if err != nil {
 		var apiErr smithy.APIError
-		if errors.As(err, &apiErr) && apiErr.ErrorCode() == "DBInstanceNotFound" {
-			log.Info("instance not found, skipping ...", "instanceId", id)
-			return DBInstanceState{Outcome: operationOutcomeSkippedStale}, nil
+		if errors.As(err, &apiErr) {
+			switch apiErr.ErrorCode() {
+			case "DBInstanceNotFound", "InvalidDBInstanceState":
+				log.Info("instance is in an invalid state for this operation, skipping ...",
+					"instanceId", id, "errorCode", apiErr.ErrorCode())
+				return DBInstanceState{Outcome: operationOutcomeSkippedStale}, nil
+			}
 		}
 		return nil, err
 	}
