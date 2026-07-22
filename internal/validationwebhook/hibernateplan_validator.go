@@ -17,6 +17,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/webhook/admission"
 
 	hibernatorv1alpha1 "github.com/ardikabs/hibernator/api/v1alpha1"
+	"github.com/ardikabs/hibernator/internal/wellknown"
 	"github.com/ardikabs/hibernator/pkg/executorparams"
 	"github.com/go-logr/logr"
 )
@@ -42,6 +43,15 @@ func (v *HibernatePlanValidator) ValidateCreate(ctx context.Context, obj runtime
 		return nil, fmt.Errorf("expected HibernatePlan but got %T", obj)
 	}
 	v.log.V(1).Info("validate create", "name", plan.Name)
+
+	// Revert annotation cannot be set on a new plan (new plans are never in Error phase).
+	if plan.Annotations != nil && plan.Annotations[wellknown.AnnotationRevert] == "true" {
+		return nil, field.Forbidden(
+			field.NewPath("metadata", "annotations", wellknown.AnnotationRevert),
+			"revert annotation cannot be set on a new plan",
+		)
+	}
+
 	return v.validate(plan)
 }
 
@@ -55,6 +65,17 @@ func (v *HibernatePlanValidator) ValidateUpdate(ctx context.Context, oldObj, new
 	newPlan, ok := newObj.(*hibernatorv1alpha1.HibernatePlan)
 	if !ok {
 		return nil, fmt.Errorf("expected HibernatePlan but got %T", newObj)
+	}
+
+	// Transition-based validation: revert annotation can only be added when the plan is in Error phase.
+	// Preserving or removing the annotation is always allowed so internal controller patches are not blocked.
+	oldHasRevert := oldPlan.Annotations != nil && oldPlan.Annotations[wellknown.AnnotationRevert] == "true"
+	newHasRevert := newPlan.Annotations != nil && newPlan.Annotations[wellknown.AnnotationRevert] == "true"
+	if !oldHasRevert && newHasRevert && newPlan.Status.Phase != hibernatorv1alpha1.PhaseError {
+		return nil, field.Forbidden(
+			field.NewPath("metadata", "annotations", wellknown.AnnotationRevert),
+			fmt.Sprintf("revert annotation can only be added when plan is in %s phase; current phase is %s", hibernatorv1alpha1.PhaseError, newPlan.Status.Phase),
+		)
 	}
 
 	// Allow target edits only in Active, Suspended, or Error phases

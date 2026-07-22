@@ -14,6 +14,7 @@ import (
 	"k8s.io/apimachinery/pkg/runtime"
 
 	hibernatorv1alpha1 "github.com/ardikabs/hibernator/api/v1alpha1"
+	"github.com/ardikabs/hibernator/internal/wellknown"
 	"github.com/go-logr/logr"
 )
 
@@ -561,6 +562,123 @@ func TestHibernatePlanValidator_ValidateUpdate_WrongType(t *testing.T) {
 	_, err := validator.ValidateUpdate(context.Background(), runtime.Object(plan), runtime.Object(wrongType))
 	if err == nil {
 		t.Error("ValidateUpdate() expected error for wrong type, got nil")
+	}
+}
+
+func TestHibernatePlanValidator_ValidateCreate_RevertAnnotation_Rejected(t *testing.T) {
+	validator := NewHibernatePlanValidator(logr.Discard())
+	plan := &hibernatorv1alpha1.HibernatePlan{
+		ObjectMeta: metav1.ObjectMeta{
+			Name: "test",
+			Annotations: map[string]string{
+				wellknown.AnnotationRevert: "true",
+			},
+		},
+		Spec: hibernatorv1alpha1.HibernatePlanSpec{
+			Schedule: validSchedule(),
+			Execution: hibernatorv1alpha1.Execution{
+				Strategy: hibernatorv1alpha1.ExecutionStrategy{Type: hibernatorv1alpha1.StrategySequential},
+			},
+			Targets: []hibernatorv1alpha1.Target{
+				{Name: "target1", Type: "noop", ConnectorRef: hibernatorv1alpha1.ConnectorRef{Kind: "CloudProvider", Name: "aws"}},
+			},
+		},
+	}
+
+	_, err := validator.ValidateCreate(context.Background(), runtime.Object(plan))
+	if err == nil {
+		t.Error("ValidateCreate() expected error for revert annotation on new plan, got nil")
+	}
+}
+
+func TestHibernatePlanValidator_ValidateUpdate_RevertAnnotation_TransitionValidation(t *testing.T) {
+	validator := NewHibernatePlanValidator(logr.Discard())
+
+	makeOldPlan := func(phase hibernatorv1alpha1.PlanPhase, hasRevert bool) *hibernatorv1alpha1.HibernatePlan {
+		annotations := map[string]string{}
+		if hasRevert {
+			annotations[wellknown.AnnotationRevert] = "true"
+		}
+		return &hibernatorv1alpha1.HibernatePlan{
+			ObjectMeta: metav1.ObjectMeta{Name: "test", Annotations: annotations},
+			Spec: hibernatorv1alpha1.HibernatePlanSpec{
+				Schedule: validSchedule(),
+				Execution: hibernatorv1alpha1.Execution{
+					Strategy: hibernatorv1alpha1.ExecutionStrategy{Type: hibernatorv1alpha1.StrategySequential},
+				},
+				Targets: []hibernatorv1alpha1.Target{
+					{Name: "target1", Type: "noop", ConnectorRef: hibernatorv1alpha1.ConnectorRef{Kind: "CloudProvider", Name: "aws"}},
+				},
+			},
+			Status: hibernatorv1alpha1.HibernatePlanStatus{Phase: phase},
+		}
+	}
+
+	makeNewPlan := func(phase hibernatorv1alpha1.PlanPhase, hasRevert bool) *hibernatorv1alpha1.HibernatePlan {
+		annotations := map[string]string{}
+		if hasRevert {
+			annotations[wellknown.AnnotationRevert] = "true"
+		}
+		return &hibernatorv1alpha1.HibernatePlan{
+			ObjectMeta: metav1.ObjectMeta{Name: "test", Annotations: annotations},
+			Spec: hibernatorv1alpha1.HibernatePlanSpec{
+				Schedule: validSchedule(),
+				Execution: hibernatorv1alpha1.Execution{
+					Strategy: hibernatorv1alpha1.ExecutionStrategy{Type: hibernatorv1alpha1.StrategySequential},
+				},
+				Targets: []hibernatorv1alpha1.Target{
+					{Name: "target1", Type: "noop", ConnectorRef: hibernatorv1alpha1.ConnectorRef{Kind: "CloudProvider", Name: "aws"}},
+				},
+			},
+			Status: hibernatorv1alpha1.HibernatePlanStatus{Phase: phase},
+		}
+	}
+
+	tests := []struct {
+		name    string
+		oldPlan *hibernatorv1alpha1.HibernatePlan
+		newPlan *hibernatorv1alpha1.HibernatePlan
+		wantErr bool
+	}{
+		{
+			name:    "adding revert to Active plan - rejected",
+			oldPlan: makeOldPlan(hibernatorv1alpha1.PhaseActive, false),
+			newPlan: makeNewPlan(hibernatorv1alpha1.PhaseActive, true),
+			wantErr: true,
+		},
+		{
+			name:    "adding revert to Error plan - allowed",
+			oldPlan: makeOldPlan(hibernatorv1alpha1.PhaseError, false),
+			newPlan: makeNewPlan(hibernatorv1alpha1.PhaseError, true),
+			wantErr: false,
+		},
+		{
+			name:    "preserving revert on Active plan - allowed (transition validation)",
+			oldPlan: makeOldPlan(hibernatorv1alpha1.PhaseError, true),
+			newPlan: makeNewPlan(hibernatorv1alpha1.PhaseActive, true),
+			wantErr: false,
+		},
+		{
+			name:    "removing revert from Active plan - allowed",
+			oldPlan: makeOldPlan(hibernatorv1alpha1.PhaseError, true),
+			newPlan: makeNewPlan(hibernatorv1alpha1.PhaseActive, false),
+			wantErr: false,
+		},
+		{
+			name:    "adding revert to Suspended plan - rejected",
+			oldPlan: makeOldPlan(hibernatorv1alpha1.PhaseSuspended, false),
+			newPlan: makeNewPlan(hibernatorv1alpha1.PhaseSuspended, true),
+			wantErr: true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			_, err := validator.ValidateUpdate(context.Background(), runtime.Object(tt.oldPlan), runtime.Object(tt.newPlan))
+			if (err != nil) != tt.wantErr {
+				t.Errorf("ValidateUpdate() error = %v, wantErr %v", err, tt.wantErr)
+			}
+		})
 	}
 }
 
