@@ -17,19 +17,20 @@ import (
 )
 
 // LoadRestoreData retrieves restore data from ConfigMap.
+// Returns (data, found, error) where found indicates whether restore data exists.
 // Keys that have a StaleCount > 0 are excluded: if a resource was not reported
 // during the most recent shutdown, its state may be inconsistent and should not
 // be used for restoration.
-func LoadRestoreData(ctx context.Context, restoreMgr *restore.Manager, log logr.Logger, namespace, plan, target string) (*executor.RestoreData, error) {
+func LoadRestoreData(ctx context.Context, restoreMgr *restore.Manager, log logr.Logger, namespace, plan, target string) (*executor.RestoreData, bool, error) {
 	log = log.WithValues("plan", fmt.Sprintf("%s/%s", namespace, plan), "target", target)
 
 	data, err := restoreMgr.Load(ctx, namespace, plan, target)
 	if err != nil {
-		return nil, fmt.Errorf("load from ConfigMap: %w", err)
+		return nil, false, fmt.Errorf("load from ConfigMap: %w", err)
 	}
 
 	if data == nil {
-		return nil, fmt.Errorf("no restore data found for plan=%s target=%s", plan, target)
+		return nil, false, nil
 	}
 
 	// Convert state map to unified map[string]json.RawMessage format,
@@ -45,7 +46,7 @@ func LoadRestoreData(ctx context.Context, restoreMgr *restore.Manager, log logr.
 
 		valueBytes, err := json.Marshal(value)
 		if err != nil {
-			return nil, fmt.Errorf("marshal state value for key %s: %w", key, err)
+			return nil, false, fmt.Errorf("marshal state value for key %s: %w", key, err)
 		}
 		transformedData[key] = valueBytes
 	}
@@ -62,5 +63,5 @@ func LoadRestoreData(ctx context.Context, restoreMgr *restore.Manager, log logr.
 		Type:   data.Executor,
 		Data:   transformedData,
 		IsLive: data.IsLive,
-	}, nil
+	}, true, nil
 }
