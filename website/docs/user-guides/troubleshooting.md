@@ -188,6 +188,47 @@ Common issues and their solutions.
 
 For detailed steps, see the [Error Recovery](error-recovery.md#how-to-skip-a-failed-cycle-and-follow-the-current-schedule) guide.
 
+## Revert Wins Over Retry
+
+**Symptoms**: Plan is in `Error` phase with both `revert` and `retry-now` annotations set, but only the revert operation executes.
+
+**Root cause**: `revert` is evaluated as a **pre-phase gate** that runs before the normal `PhaseError` → `recoveryState` dispatch. Because the gate fires first, the plan transitions to `WakingUp` and the `retry-now` annotation is never inspected by the recovery handler.
+
+Gate priority order:
+
+1. `deletionGate` (deletion in progress)
+2. `suspensionGate` (`spec.suspend` or `suspend-until`)
+3. **`revertGate`** (`revert=true` on `PhaseError`)
+4. Phase dispatch → `recoveryState` (handles `retry-now`)
+
+**Check**:
+
+1. Verify which annotations are present:
+    ```bash
+    kubectl get hibernateplan <name> -n hibernator-system \
+      -o jsonpath='{.metadata.annotations}' | jq
+    ```
+
+2. Check the controller logs to see which gate fired:
+    ```bash
+    kubectl logs -n hibernator-system -l app=hibernator-controller \
+      --tail=100 | grep -E "revert|recovery"
+    ```
+
+**Solutions**:
+
+1. **Remove the revert annotation** if you actually want a retry:
+    ```bash
+    kubectl annotate hibernateplan <name> hibernator.ardikabs.com/revert- --overwrite
+    ```
+
+2. **Remove the retry annotation** if you actually want a revert:
+    ```bash
+    kubectl annotate hibernateplan <name> hibernator.ardikabs.com/retry-now- --overwrite
+    ```
+
+3. **Wait for revert to finish**, then retry if still needed. Revert transitions the plan to `Active` or `Suspended`; once stable, a fresh `retry-now` will be handled by the normal recovery flow if the plan is still in `Error`.
+
 ## Getting Help
 
 If the issue persists:
