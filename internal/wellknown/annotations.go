@@ -32,6 +32,14 @@ const (
 	// AnnotationSuspendReason is the annotation key for recording the reason for suspension.
 	AnnotationSuspendReason = "hibernator.ardikabs.com/suspend-reason"
 
+	// AnnotationRevert is the annotation key used to trigger a revert operation.
+	// When set on a plan in PhaseError, the controller will transition the plan
+	// to WakingUp to restore successfully hibernated targets and skip failed ones.
+	// The annotation is consumed during the revert flow:
+	//   - During hibernation window: sets spec.suspend=true + AnnotationSuspendReason="revert"
+	//   - During active window: removed after successful revert to Active
+	AnnotationRevert = "hibernator.ardikabs.com/revert"
+
 	// AnnotationOverrideAction is the annotation key that enables manual phase override mode.
 	// While set to "true", schedule-driven phase transitions are suppressed and the direction
 	// specified by AnnotationOverridePhaseTarget is applied instead.

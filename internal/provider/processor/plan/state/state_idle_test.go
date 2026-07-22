@@ -10,9 +10,11 @@ import (
 	"testing"
 
 	"github.com/ardikabs/hibernator/internal/restore"
+	"github.com/ardikabs/hibernator/internal/wellknown"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"sigs.k8s.io/controller-runtime/pkg/client"
 
 	hibernatorv1alpha1 "github.com/ardikabs/hibernator/api/v1alpha1"
 	"github.com/ardikabs/hibernator/internal/message"
@@ -266,4 +268,55 @@ func TestIdleState_TransitionToHibernating_GeneratesNewCycleIDWhenNoLiveData(t *
 	assert.Len(t, testPlan.Status.CurrentCycleID, 8,
 		"generated cycle ID should be 8 characters (UUID[:8])")
 	assert.Equal(t, hibernatorv1alpha1.PhaseHibernating, testPlan.Status.Phase)
+}
+
+// ---------------------------------------------------------------------------
+// idleState — revert annotation consumption
+// ---------------------------------------------------------------------------
+
+func TestIdleState_Handle_ActiveRevertAnnotationActiveWindow_RemovesAnnotation(t *testing.T) {
+	plan := basePlanForState("p", hibernatorv1alpha1.PhaseActive)
+	plan.Annotations = map[string]string{
+		wellknown.AnnotationRevert: "true",
+	}
+	sr := &message.ScheduleEvaluation{ShouldHibernate: false}
+	st := newIdleState(plan, sr, false)
+	h := &idleState{state: st}
+
+	result, err := h.Handle(context.Background())
+	require.NoError(t, err)
+	assert.True(t, result.Requeue, "annotation change should request requeue")
+
+	// Annotation-only change: no status update queued.
+	assert.Zero(t, planStatuses(st).Len())
+
+	var updatedPlan hibernatorv1alpha1.HibernatePlan
+	err = st.Client.Get(context.Background(), client.ObjectKeyFromObject(plan), &updatedPlan)
+	require.NoError(t, err)
+	assert.Empty(t, updatedPlan.Annotations[wellknown.AnnotationRevert])
+	assert.False(t, updatedPlan.Spec.Suspend)
+}
+
+func TestIdleState_Handle_ActiveRevertAnnotationHibernationWindow_SuspendsPlan(t *testing.T) {
+	plan := basePlanForState("p", hibernatorv1alpha1.PhaseActive)
+	plan.Annotations = map[string]string{
+		wellknown.AnnotationRevert: "true",
+	}
+	sr := &message.ScheduleEvaluation{ShouldHibernate: true}
+	st := newIdleState(plan, sr, false)
+	h := &idleState{state: st}
+
+	result, err := h.Handle(context.Background())
+	require.NoError(t, err)
+	assert.True(t, result.Requeue, "annotation/spec change should request requeue")
+
+	// Annotation-only change: no status update queued.
+	assert.Zero(t, planStatuses(st).Len())
+
+	var updatedPlan hibernatorv1alpha1.HibernatePlan
+	err = st.Client.Get(context.Background(), client.ObjectKeyFromObject(plan), &updatedPlan)
+	require.NoError(t, err)
+	assert.Empty(t, updatedPlan.Annotations[wellknown.AnnotationRevert])
+	assert.True(t, updatedPlan.Spec.Suspend)
+	assert.Equal(t, "revert", updatedPlan.Annotations[wellknown.AnnotationSuspendReason])
 }

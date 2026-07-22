@@ -328,6 +328,57 @@ func TestSuspensionGate_SuspendUntil_AlreadySuspended_ReturnsNil(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
+// runPrePhaseGates — revertGate
+// ---------------------------------------------------------------------------
+
+func TestRevertGate_PhaseError_WithAnnotation_ReturnsRevertState(t *testing.T) {
+	plan := basePlanForState("p", hibernatorv1alpha1.PhaseError)
+	plan.Annotations = map[string]string{
+		wellknown.AnnotationRevert: "true",
+	}
+	c := newHandlerFakeClient(plan)
+	s := newHandlerState(plan, c)
+
+	h := revertGate(s)
+	require.NotNil(t, h)
+	_, ok := h.(*revertState)
+	assert.True(t, ok, "PhaseError with revert annotation should route to revertState")
+}
+
+func TestRevertGate_PhaseError_WithoutAnnotation_ReturnsNil(t *testing.T) {
+	plan := basePlanForState("p", hibernatorv1alpha1.PhaseError)
+	c := newHandlerFakeClient(plan)
+	s := newHandlerState(plan, c)
+
+	h := revertGate(s)
+	assert.Nil(t, h, "PhaseError without revert annotation should pass through")
+}
+
+func TestRevertGate_NonErrorPhase_ReturnsNil(t *testing.T) {
+	plan := basePlanForState("p", hibernatorv1alpha1.PhaseActive)
+	plan.Annotations = map[string]string{
+		wellknown.AnnotationRevert: "true",
+	}
+	c := newHandlerFakeClient(plan)
+	s := newHandlerState(plan, c)
+
+	h := revertGate(s)
+	assert.Nil(t, h, "non-PhaseError should pass through revert gate")
+}
+
+func TestRevertGate_AnnotationValueNotTrue_ReturnsNil(t *testing.T) {
+	plan := basePlanForState("p", hibernatorv1alpha1.PhaseError)
+	plan.Annotations = map[string]string{
+		wellknown.AnnotationRevert: "false",
+	}
+	c := newHandlerFakeClient(plan)
+	s := newHandlerState(plan, c)
+
+	h := revertGate(s)
+	assert.Nil(t, h, "revert annotation not equal to true should pass through")
+}
+
+// ---------------------------------------------------------------------------
 // runPrePhaseGates — priority ordering
 // ---------------------------------------------------------------------------
 
@@ -346,6 +397,21 @@ func TestRunPrePhaseGates_DeletionBeatsSuspension(t *testing.T) {
 	ls, ok := h.(*lifecycleState)
 	require.True(t, ok, "deletion gate should win over suspension gate")
 	assert.True(t, ls.delete)
+}
+
+func TestRunPrePhaseGates_SuspensionBeatsRevert(t *testing.T) {
+	plan := basePlanForState("p", hibernatorv1alpha1.PhaseError)
+	plan.Spec.Suspend = true
+	plan.Annotations = map[string]string{
+		wellknown.AnnotationRevert: "true",
+	}
+	c := newHandlerFakeClient(plan)
+	s := newHandlerState(plan, c)
+
+	h := s.runPrePhaseGates()
+	require.NotNil(t, h)
+	_, ok := h.(*preSuspensionState)
+	require.True(t, ok, "suspension gate should win over revert gate")
 }
 
 func TestRunPrePhaseGates_NoGateTriggered_ReturnsNil(t *testing.T) {

@@ -11,10 +11,12 @@ import (
 	hibernatorv1alpha1 "github.com/ardikabs/hibernator/api/v1alpha1"
 	"github.com/ardikabs/hibernator/internal/notification"
 	statusprocessor "github.com/ardikabs/hibernator/internal/provider/processor/status"
+	"github.com/ardikabs/hibernator/internal/wellknown"
 	"github.com/go-logr/logr"
 	"github.com/google/uuid"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/utils/ptr"
+	"sigs.k8s.io/controller-runtime/pkg/client"
 )
 
 // idleState handles the Active and Hibernated phases by evaluating the pre-computed
@@ -41,6 +43,33 @@ func (state *idleState) Handle(ctx context.Context) (StateResult, error) {
 
 	switch plan.Status.Phase {
 	case hibernatorv1alpha1.PhaseActive:
+		// Handle revert annotation consumption after successful revert wakeup
+		if plan.Annotations[wellknown.AnnotationRevert] == "true" {
+			if shouldHibernate {
+				// During hibernation window: suspend the plan after revert
+				log.Info("revert complete during hibernation window, suspending plan")
+				orig := plan.DeepCopy()
+				plan.Spec.Suspend = true
+				if plan.Annotations == nil {
+					plan.Annotations = make(map[string]string)
+				}
+				plan.Annotations[wellknown.AnnotationSuspendReason] = "revert"
+				delete(plan.Annotations, wellknown.AnnotationRevert)
+				if err := state.patchAndPreserveStatus(ctx, plan, client.MergeFrom(orig)); err != nil {
+					return StateResult{}, err
+				}
+				return StateResult{Requeue: true}, nil
+			}
+			// During active window: just remove the revert annotation
+			log.Info("revert complete during active window, removing revert annotation")
+			orig := plan.DeepCopy()
+			delete(plan.Annotations, wellknown.AnnotationRevert)
+			if err := state.patchAndPreserveStatus(ctx, plan, client.MergeFrom(orig)); err != nil {
+				return StateResult{}, err
+			}
+			return StateResult{Requeue: true}, nil
+		}
+
 		if shouldHibernate {
 			log.Info("schedule indicates hibernation, transitioning to Hibernating")
 			return state.transitionToHibernating(ctx, log, false)

@@ -20,7 +20,11 @@ import (
 //     when either Spec.Suspend=true or a suspend-until annotation carries a future
 //     deadline. Skipped when already in PhaseSuspended.
 //
-//  3. Phase-based dispatch — maps Status.Phase to its dedicated handler:
+//  3. Revert in progress — returns a revertState when the plan is in PhaseError
+//     and the revert annotation is set. This is a separate recovery path from the
+//     normal error recovery flow.
+//
+//  4. Phase-based dispatch — maps Status.Phase to its dedicated handler:
 //     - ""               → lifecycleState (initialisation / first-time setup)
 //     - PhaseActive      → selectIdleHandler (annotation-aware idle routing)
 //     - PhaseHibernated  → selectIdleHandler (annotation-aware idle routing)
@@ -103,6 +107,7 @@ func (s *state) runPrePhaseGates() Handler {
 	gates := []Gate{
 		deletionGate,
 		suspensionGate,
+		revertGate,
 	}
 
 	for _, check := range gates {

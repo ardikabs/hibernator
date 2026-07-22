@@ -57,6 +57,19 @@ func (state *wakingUpState) OnError(ctx context.Context, err error) StateResult 
 	var pe *PlanError
 	if errors.As(err, &pe) {
 		plan := state.plan()
+
+		// If a revert was in progress, remove the annotation before transitioning to
+		// PhaseError. This prevents the controller from immediately re-triggering
+		// another revert attempt and looping indefinitely.
+		if plan.Annotations[wellknown.AnnotationRevert] == "true" {
+			state.Log.Info("wakeup failed during revert, removing revert annotation to prevent retry loop")
+			orig := plan.DeepCopy()
+			delete(plan.Annotations, wellknown.AnnotationRevert)
+			if patchErr := state.patchAndPreserveStatus(ctx, plan, client.MergeFrom(orig)); patchErr != nil {
+				state.Log.Error(patchErr, "failed to remove revert annotation during wakeup error")
+			}
+		}
+
 		if hasExecutionProgress(plan) {
 			summary := BuildOperationSummary(state.Clock, plan, hibernatorv1alpha1.OperationWakeUp)
 			currentCycleID := plan.Status.CurrentCycleID
