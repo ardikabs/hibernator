@@ -324,7 +324,7 @@ func TestHandleExceptionDelete_MidCyclePhaseError_KeepsFinalizer(t *testing.T) {
 		Status: hibernatorv1alpha1.HibernatePlanStatus{
 			Phase:                    hibernatorv1alpha1.PhaseError,
 			AppliedExceptionOverride: "ex-err",
-			CurrentCycleID:             "cycle-001",
+			CurrentCycleID:           "cycle-001",
 		},
 	}
 	ex := baseScheduleException("ex-err", "plan-a")
