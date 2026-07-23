@@ -94,6 +94,24 @@ nav:
         - NoOp Executor: user-guides/noop-executor.md
       - CLI: user-guides/cli.md
       - Troubleshooting: user-guides/troubleshooting.md
+  - Scenarios:
+      - Overview: scenarios/index.md
+      - Basic:
+        - Nightly Full Shutdown & Wakeup: scenarios/nightly-full-shutdown.md
+        - Weekend Hibernation: scenarios/weekend-hibernation.md
+      - Intermediate:
+        - Partial Hibernation (Keep Critical Services): scenarios/partial-hibernation-critical-services.md
+        - Tolerating Partial Failures: scenarios/partial-failure-besteffort.md
+        - Suspend Scheduled Shutdown: scenarios/suspend-scheduled-shutdown.md
+        - Selective RDS Hibernation: scenarios/rds-selective-hibernation.md
+      - Advanced:
+        - Dependency-Ordered Shutdown (DAG): scenarios/dependency-ordered-shutdown.md
+        - Staged Hibernation by Criticality: scenarios/staged-hibernation-criticality.md
+        - Event-Mode Overrides: scenarios/event-mode-overrides.md
+        - Holiday Schedule Replacement: scenarios/holiday-schedule-replacement.md
+      - Expert:
+        - Dry-Run Rehearsal: scenarios/dry-run-rehearsal.md
+        - Production-Grade Setup: scenarios/production-grade-setup.md
   - Reference:
       - API Reference: reference/api.md
       - Executor Parameters: reference/executor-parameters.md
