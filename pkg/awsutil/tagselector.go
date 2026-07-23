@@ -18,6 +18,17 @@ type TagSelector struct {
 
 // TagSelectorRequirement is a selector that contains values, a key, and an operator that
 // relates the key and values.
+//
+// Operator semantics:
+//   - `In`, `NotIn`, `Exists`, `DoesNotExist` behave like Kubernetes LabelSelector matchExpressions:
+//     In/NotIn use exact string equality; `Exists`/`DoesNotExist` test key presence/absence.
+//   - `Matches` and `NotMatches` use [`path.Match`](https://pkg.go.dev/path#Match) glob pattern matching instead of exact equality.
+//     Supported syntax: `*` (any sequence), `?` (any single character), `[abc]` (character class),
+//     `[a-z]` (range), and negation with `^` or `!` inside brackets.
+//     Example: operator `Matches`, values: `["prod-*", "v1.?"]` matches `"prod-api"` and `"v1.2"`
+//     but not `"staging-api"` or `"v1.23"`.
+//
+// For Matches and NotMatches, the Values array must contain at least one valid glob pattern.
 type TagSelectorRequirement struct {
 	// Key is the tag key that the selector applies to.
 	Key string `json:"key"`
