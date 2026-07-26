@@ -273,12 +273,15 @@ var _ = Describe("Revert operation E2E", func() {
 		testutil.EventuallyPhase(ctx, k8sClient, plan, hibernatorv1alpha1.PhaseWakingUp)
 
 		By("Simulating wakeup failure for the previously-successful target")
+		cacheWakeupJob := testutil.EventuallyJobCreated(ctx, k8sClient, testNamespace, plan.Name, hibernatorv1alpha1.OperationWakeUp, "cache")
+		testutil.SimulateJobSuccess(ctx, k8sClient, cacheWakeupJob, fakeClock.Now())
 		databaseWakeupJob := testutil.EventuallyJobCreated(ctx, k8sClient, testNamespace, plan.Name, hibernatorv1alpha1.OperationWakeUp, "database")
 		testutil.SimulateJobFailure(ctx, k8sClient, databaseWakeupJob, fakeClock.Now())
 
-		By("Verifying plan returns to Error and revert annotation is removed to prevent retry loop")
+		By("Verifying plan returns to Error, revert annotation is removed, and OperationTrigger is cleared to prevent retry loop")
 		testutil.EventuallyPhase(ctx, k8sClient, plan, hibernatorv1alpha1.PhaseError)
 		testutil.EventuallyAnnotationRemoved(ctx, k8sClient, plan, wellknown.AnnotationRevert)
 		Expect(plan.Status.ErrorMessage).NotTo(BeEmpty())
+		Expect(plan.Status.OperationTrigger).To(BeEmpty(), "OperationTrigger should be cleared after failed revert to prevent retry loop")
 	})
 })

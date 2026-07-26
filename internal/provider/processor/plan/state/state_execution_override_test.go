@@ -400,7 +400,7 @@ func TestTransitionToHibernating_NoOverride_AppliedExceptionOverrideEmpty(t *tes
 	st := newHandlerState(plan, c)
 
 	h := &idleState{state: st}
-	_, err := h.transitionToHibernating(nil, st.Log, false)
+	_, err := h.transitionToHibernating(nil, st.Log, false, hibernatorv1alpha1.TriggerSchedule)
 	require.NoError(t, err)
 
 	upd := <-planStatuses(st).C()
@@ -440,7 +440,7 @@ func TestTransitionToHibernating_UsesEffectivePlanTargets(t *testing.T) {
 	st.PlanCtx.Exceptions = []hibernatorv1alpha1.ScheduleException{*exc}
 
 	h := &idleState{state: st}
-	_, err := h.transitionToHibernating(nil, st.Log, false)
+	_, err := h.transitionToHibernating(nil, st.Log, false, hibernatorv1alpha1.TriggerSchedule)
 	require.NoError(t, err)
 
 	upd := <-planStatuses(st).C()
@@ -482,7 +482,7 @@ func TestTransitionToWakingUp_UsesPlanSnapshotTargets(t *testing.T) {
 	st := newHandlerState(plan, c)
 
 	h := &idleState{state: st}
-	_, err := h.transitionToWakingUp(st.Log)
+	_, err := h.transitionToWakingUp(st.Log, hibernatorv1alpha1.TriggerSchedule)
 	require.NoError(t, err)
 
 	upd := <-planStatuses(st).C()
@@ -716,7 +716,7 @@ func TestTransitionToHibernating_CapturesPlanSnapshot(t *testing.T) {
 	st.PlanCtx.Exceptions = []hibernatorv1alpha1.ScheduleException{*exc}
 
 	h := &idleState{state: st}
-	_, err := h.transitionToHibernating(nil, st.Log, false)
+	_, err := h.transitionToHibernating(nil, st.Log, false, hibernatorv1alpha1.TriggerSchedule)
 	require.NoError(t, err)
 
 	upd := <-planStatuses(st).C()
@@ -876,7 +876,7 @@ func TestTransitionToWakingUp_ReusesPlanSnapshot(t *testing.T) {
 	st := newHandlerState(plan, c)
 	i := &idleState{state: st}
 
-	_, err := i.transitionToWakingUp(st.Log)
+	_, err := i.transitionToWakingUp(st.Log, hibernatorv1alpha1.TriggerSchedule)
 	require.NoError(t, err)
 
 	upd := <-planStatuses(st).C()
@@ -908,7 +908,7 @@ func TestTransitionToWakingUp_FallsBackToLiveWhenNoSnapshot(t *testing.T) {
 	st := newHandlerState(plan, c)
 	i := &idleState{state: st}
 
-	_, err := i.transitionToWakingUp(st.Log)
+	_, err := i.transitionToWakingUp(st.Log, hibernatorv1alpha1.TriggerSchedule)
 	require.NoError(t, err)
 
 	upd := <-planStatuses(st).C()
@@ -959,7 +959,7 @@ func TestTransitionToHibernating_FreshSnapshot(t *testing.T) {
 	st.PlanCtx.Exceptions = []hibernatorv1alpha1.ScheduleException{*exc}
 
 	i := &idleState{state: st}
-	_, err := i.transitionToHibernating(nil, st.Log, true)
+	_, err := i.transitionToHibernating(nil, st.Log, true, hibernatorv1alpha1.TriggerSchedule)
 	require.NoError(t, err)
 
 	upd := <-planStatuses(st).C()

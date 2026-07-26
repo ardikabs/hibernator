@@ -317,9 +317,12 @@ var _ = Describe("Override-Action E2E", func() {
 	// Validates that:
 	//   a) When Spec.Suspend=true and override-action=hibernate are set simultaneously,
 	//      suspension takes priority (selectHandler Priority 2 > Priority 3).
-	//   b) After un-suspending, override-action fires and the plan hibernates.
+	//   b) Suspension auto-clears conflicting annotations (override-action, override-phase-target)
+	//      to prevent stale intent from firing unexpectedly upon resume.
+	//   c) After un-suspending, the override annotations must be re-applied to trigger
+	//      hibernation; they do NOT survive the suspension boundary.
 	// -----------------------------------------------------------------------
-	It("SuspendBeatsOverrideAction: suspension wins; override-action re-activates after resume", func() {
+	It("SuspendBeatsOverrideAction: suspension wins; cleared annotations must be re-applied after resume", func() {
 		// Monday 08:00 UTC — active window.
 		fakeClock.SetTime(time.Date(2026, 6, 29, 8, 0, 0, 0, time.UTC))
 
@@ -355,16 +358,30 @@ var _ = Describe("Override-Action E2E", func() {
 		// Allow a brief window to confirm it never enters Hibernating during the suspension.
 		testutil.ConsistentllyAtPhase(ctx, k8sClient, plan, hibernatorv1alpha1.PhaseSuspended, 2*time.Second)
 
+		By("Verifying that suspension auto-cleared the conflicting override annotations")
+		Expect(k8sClient.Get(ctx, client.ObjectKeyFromObject(plan), plan)).To(Succeed())
+		Expect(plan.Annotations).NotTo(HaveKey(wellknown.AnnotationOverrideAction),
+			"suspension must auto-clear override-action to prevent stale intent on resume")
+		Expect(plan.Annotations).NotTo(HaveKey(wellknown.AnnotationOverridePhaseTarget),
+			"suspension must auto-clear override-phase-target to prevent stale intent on resume")
+
 		By("Removing Spec.Suspend=false to resume the plan")
 		Expect(k8sClient.Get(ctx, client.ObjectKeyFromObject(plan), plan)).To(Succeed())
 		orig = plan.DeepCopy()
 		plan.Spec.Suspend = false
 		Expect(k8sClient.Patch(ctx, plan, client.MergeFrom(orig))).To(Succeed())
 
-		By("Verifying override-action=hibernate fires immediately after resume: plan transitions to Hibernating")
-		// Do NOT assert PhaseActive here. The unsuspend → Active and the override-action → Hibernating
-		// transitions may be dispatched in the same reconcile pass (or back-to-back passes that settle
-		// before the poll window). Asserting Active first would be a flaky race; assert Hibernating directly.
+		By("Verifying plan resumes to PhaseActive (override annotations were cleared, so schedule takes over)")
+		testutil.EventuallyPhase(ctx, k8sClient, plan, hibernatorv1alpha1.PhaseActive)
+
+		By("Re-applying override-action=hibernate after resume (annotations must be re-applied; they don't survive suspension)")
+		Expect(k8sClient.Get(ctx, client.ObjectKeyFromObject(plan), plan)).To(Succeed())
+		orig = plan.DeepCopy()
+		plan.Annotations[wellknown.AnnotationOverrideAction] = "true"
+		plan.Annotations[wellknown.AnnotationOverridePhaseTarget] = wellknown.OverridePhaseTargetHibernate
+		Expect(k8sClient.Patch(ctx, plan, client.MergeFrom(orig))).To(Succeed())
+
+		By("Verifying override-action=hibernate fires: plan transitions to Hibernating")
 		testutil.EventuallyPhase(ctx, k8sClient, plan, hibernatorv1alpha1.PhaseHibernating)
 
 		hibernationJob := testutil.EventuallyJobCreated(ctx, k8sClient, testNamespace, plan.Name, hibernatorv1alpha1.OperationHibernate, "service")

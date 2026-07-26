@@ -135,3 +135,23 @@ func TestWakingUpState_OnError_RemovesRevertAnnotation(t *testing.T) {
 	require.NoError(t, err)
 	assert.Empty(t, updatedPlan.Annotations[wellknown.AnnotationRevert])
 }
+
+func TestWakingUpState_OnError_ClearsOperationTrigger(t *testing.T) {
+	plan := basePlanForState("p", hibernatorv1alpha1.PhaseWakingUp)
+	plan.Status.OperationTrigger = hibernatorv1alpha1.TriggerRevert
+	plan.Status.CurrentCycleID = "cycle-001"
+	plan.Status.CurrentOperation = hibernatorv1alpha1.OperationWakeUp
+	plan.Status.Executions = []hibernatorv1alpha1.ExecutionStatus{
+		{Target: "target-a", State: hibernatorv1alpha1.StateFailed},
+	}
+
+	c := newHandlerFakeClient(plan)
+	st := newHandlerState(plan, c)
+	h := &wakingUpState{state: st}
+
+	planErr := AsPlanError(assert.AnError)
+	_ = h.OnError(context.Background(), planErr)
+
+	// OperationTrigger must be cleared via the status update (setError).
+	assert.Empty(t, plan.Status.OperationTrigger, "OperationTrigger should be cleared when wakeup fails")
+}

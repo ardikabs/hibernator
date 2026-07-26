@@ -246,4 +246,19 @@ var (
 		},
 		[]string{"sink_name"},
 	)
+
+	// PlanOperationTriggerGauge tracks the active OperationTrigger for each plan.
+	// Labels: namespace, plan, trigger (Schedule|Revert|Retry|Override|Restart).
+	// A plan with no active operation has trigger="none".
+	//
+	// This enables operators to monitor which control intents are active across the fleet.
+	// Example: sum(hibernator_plan_operation_trigger{trigger="Override"}) tells you how
+	// many plans are currently under manual override.
+	PlanOperationTriggerGauge = factory.NewGaugeVec(
+		prometheus.GaugeOpts{
+			Name: "hibernator_plan_operation_trigger",
+			Help: "Active OperationTrigger per HibernatePlan (1 = active, 0 = inactive)",
+		},
+		[]string{"namespace", "plan", "trigger"},
+	)
 )

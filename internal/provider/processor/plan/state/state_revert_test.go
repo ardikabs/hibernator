@@ -165,3 +165,36 @@ func TestRevertState_Handle_MissingAnnotation_IsNoop(t *testing.T) {
 	assert.Zero(t, planStatuses(st).Len())
 	assert.Equal(t, hibernatorv1alpha1.PhaseError, plan.Status.Phase)
 }
+
+func TestRevertState_Handle_SetsOperationTrigger(t *testing.T) {
+	plan := basePlanForState("p", hibernatorv1alpha1.PhaseError)
+	plan.Annotations = map[string]string{
+		wellknown.AnnotationRevert: "true",
+	}
+	plan.Spec.Targets = []hibernatorv1alpha1.Target{
+		{Name: "db", Type: "rds"},
+	}
+	plan.Status.CurrentCycleID = "cycle-001"
+
+	c := newHandlerFakeClient(plan)
+	st := newHandlerState(plan, c)
+
+	// Save live restore data so the revert proceeds.
+	err := st.RestoreManager.Save(context.Background(), plan.Namespace, plan.Name, "db", &restore.Data{
+		Target:   "db",
+		Executor: "rds",
+		IsLive:   true,
+	})
+	require.NoError(t, err)
+
+	h := &revertState{state: st}
+	_, err = h.Handle(context.Background())
+	require.NoError(t, err)
+
+	// Verify OperationTrigger is set in the status update.
+	upd := <-planStatuses(st).C()
+	require.NotNil(t, upd.Mutator)
+	testPlan := plan.DeepCopy()
+	upd.Mutator.Mutate(testPlan)
+	assert.Equal(t, hibernatorv1alpha1.TriggerRevert, testPlan.Status.OperationTrigger, "revertState should set OperationTrigger=TriggerRevert")
+}

@@ -789,3 +789,228 @@ func TestHibernatePlanValidator_SmallGapWindowWarning(t *testing.T) {
 		})
 	}
 }
+
+// ---------------------------------------------------------------------------
+// Annotation conflict validation
+// ---------------------------------------------------------------------------
+
+func TestHibernatePlanValidator_ValidateCreate_ControlAnnotations_Conflicts(t *testing.T) {
+	validator := NewHibernatePlanValidator(logr.Discard())
+
+	makePlan := func(annotations map[string]string) *hibernatorv1alpha1.HibernatePlan {
+		return &hibernatorv1alpha1.HibernatePlan{
+			ObjectMeta: metav1.ObjectMeta{
+				Name:        "test",
+				Annotations: annotations,
+			},
+			Spec: hibernatorv1alpha1.HibernatePlanSpec{
+				Schedule: validSchedule(),
+				Execution: hibernatorv1alpha1.Execution{
+					Strategy: hibernatorv1alpha1.ExecutionStrategy{Type: hibernatorv1alpha1.StrategySequential},
+				},
+				Targets: []hibernatorv1alpha1.Target{
+					{Name: "target1", Type: "noop", ConnectorRef: hibernatorv1alpha1.ConnectorRef{Kind: "CloudProvider", Name: "aws"}},
+				},
+			},
+			Status: hibernatorv1alpha1.HibernatePlanStatus{Phase: hibernatorv1alpha1.PhaseActive},
+		}
+	}
+
+	tests := []struct {
+		name    string
+		plan    *hibernatorv1alpha1.HibernatePlan
+		wantErr bool
+	}{
+		{
+			name:    "no control annotations - allowed",
+			plan:    makePlan(map[string]string{}),
+			wantErr: false,
+		},
+		{
+			name: "only override-action - allowed",
+			plan: makePlan(map[string]string{
+				wellknown.AnnotationOverrideAction: "true",
+			}),
+			wantErr: false,
+		},
+		{
+			name: "only restart - allowed",
+			plan: makePlan(map[string]string{
+				wellknown.AnnotationRestart: "true",
+			}),
+			wantErr: false,
+		},
+		{
+			name: "only revert on new plan - rejected (ValidateCreate blocks revert on new plans)",
+			plan: makePlan(map[string]string{
+				wellknown.AnnotationRevert: "true",
+			}),
+			wantErr: true,
+		},
+		{
+			name: "override-action + restart - rejected",
+			plan: makePlan(map[string]string{
+				wellknown.AnnotationOverrideAction: "true",
+				wellknown.AnnotationRestart:        "true",
+			}),
+			wantErr: true,
+		},
+		{
+			name: "override-action + revert - rejected",
+			plan: makePlan(map[string]string{
+				wellknown.AnnotationOverrideAction: "true",
+				wellknown.AnnotationRevert:         "true",
+			}),
+			wantErr: true,
+		},
+		{
+			name: "restart + revert - rejected",
+			plan: makePlan(map[string]string{
+				wellknown.AnnotationRestart: "true",
+				wellknown.AnnotationRevert:  "true",
+			}),
+			wantErr: true,
+		},
+		{
+			name: "all three - rejected",
+			plan: makePlan(map[string]string{
+				wellknown.AnnotationOverrideAction: "true",
+				wellknown.AnnotationRestart:        "true",
+				wellknown.AnnotationRevert:         "true",
+			}),
+			wantErr: true,
+		},
+		{
+			name: "override-action + fresh modifier - allowed",
+			plan: makePlan(map[string]string{
+				wellknown.AnnotationOverrideAction: "true",
+				wellknown.AnnotationFresh:          "true",
+			}),
+			wantErr: false,
+		},
+		{
+			name: "override-action + override-until modifier - allowed",
+			plan: makePlan(map[string]string{
+				wellknown.AnnotationOverrideAction: "true",
+				wellknown.AnnotationOverrideUntil:  "2026-01-15T06:00:00Z",
+			}),
+			wantErr: false,
+		},
+		{
+			name: "override-action + override-phase-target - allowed",
+			plan: makePlan(map[string]string{
+				wellknown.AnnotationOverrideAction:      "true",
+				wellknown.AnnotationOverridePhaseTarget: "hibernate",
+			}),
+			wantErr: false,
+		},
+		{
+			name: "restart + fresh modifier - allowed",
+			plan: makePlan(map[string]string{
+				wellknown.AnnotationRestart: "true",
+				wellknown.AnnotationFresh:   "true",
+			}),
+			wantErr: false,
+		},
+		{
+			name: "override-action + restart + fresh - rejected",
+			plan: makePlan(map[string]string{
+				wellknown.AnnotationOverrideAction: "true",
+				wellknown.AnnotationRestart:        "true",
+				wellknown.AnnotationFresh:          "true",
+			}),
+			wantErr: true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			_, err := validator.ValidateCreate(context.Background(), runtime.Object(tt.plan))
+			if tt.wantErr && err == nil {
+				t.Errorf("ValidateCreate() expected error, got nil")
+			}
+			if !tt.wantErr && err != nil {
+				t.Errorf("ValidateCreate() unexpected error: %v", err)
+			}
+		})
+	}
+}
+
+func TestHibernatePlanValidator_ValidateUpdate_ControlAnnotations_Conflicts(t *testing.T) {
+	validator := NewHibernatePlanValidator(logr.Discard())
+
+	makePlan := func(annotations map[string]string) *hibernatorv1alpha1.HibernatePlan {
+		return &hibernatorv1alpha1.HibernatePlan{
+			ObjectMeta: metav1.ObjectMeta{
+				Name:        "test",
+				Annotations: annotations,
+			},
+			Spec: hibernatorv1alpha1.HibernatePlanSpec{
+				Schedule: validSchedule(),
+				Execution: hibernatorv1alpha1.Execution{
+					Strategy: hibernatorv1alpha1.ExecutionStrategy{Type: hibernatorv1alpha1.StrategySequential},
+				},
+				Targets: []hibernatorv1alpha1.Target{
+					{Name: "target1", Type: "noop", ConnectorRef: hibernatorv1alpha1.ConnectorRef{Kind: "CloudProvider", Name: "aws"}},
+				},
+			},
+			Status: hibernatorv1alpha1.HibernatePlanStatus{Phase: hibernatorv1alpha1.PhaseActive},
+		}
+	}
+
+	tests := []struct {
+		name    string
+		oldPlan *hibernatorv1alpha1.HibernatePlan
+		newPlan *hibernatorv1alpha1.HibernatePlan
+		wantErr bool
+	}{
+		{
+			name:    "adding override-action with existing restart - rejected",
+			oldPlan: makePlan(map[string]string{wellknown.AnnotationRestart: "true"}),
+			newPlan: makePlan(map[string]string{
+				wellknown.AnnotationRestart:        "true",
+				wellknown.AnnotationOverrideAction: "true",
+			}),
+			wantErr: true,
+		},
+		{
+			name:    "adding restart with existing override-action - rejected",
+			oldPlan: makePlan(map[string]string{wellknown.AnnotationOverrideAction: "true"}),
+			newPlan: makePlan(map[string]string{
+				wellknown.AnnotationOverrideAction: "true",
+				wellknown.AnnotationRestart:        "true",
+			}),
+			wantErr: true,
+		},
+		{
+			name:    "adding revert with existing override-action - rejected",
+			oldPlan: makePlan(map[string]string{wellknown.AnnotationOverrideAction: "true"}),
+			newPlan: makePlan(map[string]string{
+				wellknown.AnnotationOverrideAction: "true",
+				wellknown.AnnotationRevert:         "true",
+			}),
+			wantErr: true,
+		},
+		{
+			name:    "adding fresh to existing override-action - allowed",
+			oldPlan: makePlan(map[string]string{wellknown.AnnotationOverrideAction: "true"}),
+			newPlan: makePlan(map[string]string{
+				wellknown.AnnotationOverrideAction: "true",
+				wellknown.AnnotationFresh:          "true",
+			}),
+			wantErr: false,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			_, err := validator.ValidateUpdate(context.Background(), runtime.Object(tt.oldPlan), runtime.Object(tt.newPlan))
+			if tt.wantErr && err == nil {
+				t.Errorf("ValidateUpdate() expected error, got nil")
+			}
+			if !tt.wantErr && err != nil {
+				t.Errorf("ValidateUpdate() unexpected error: %v", err)
+			}
+		})
+	}
+}

@@ -90,7 +90,7 @@ func (s *overrideActionState) Handle(ctx context.Context) (StateResult, error) {
 			if err := s.consumeFresh(ctx, plan); err != nil {
 				return res, err
 			}
-			return s.transitionToHibernating(ctx, log, fresh)
+			return s.transitionToHibernating(ctx, log, fresh, hibernatorv1alpha1.TriggerOverride)
 
 		case hibernatorv1alpha1.PhaseHibernated:
 			if restart, err := s.consumeRestart(ctx, plan); err != nil {
@@ -100,7 +100,7 @@ func (s *overrideActionState) Handle(ctx context.Context) (StateResult, error) {
 				if err := s.consumeFresh(ctx, plan); err != nil {
 					return res, err
 				}
-				return s.transitionToHibernating(ctx, log, fresh)
+				return s.transitionToHibernating(ctx, log, fresh, hibernatorv1alpha1.TriggerOverride)
 			}
 			// Target already reached — stay quiet until the user removes the annotations.
 			log.V(1).Info("manual override: plan is already Hibernated; " +
@@ -119,7 +119,7 @@ func (s *overrideActionState) Handle(ctx context.Context) (StateResult, error) {
 				if err := s.consumeFresh(ctx, plan); err != nil {
 					return res, err
 				}
-				return s.transitionToWakingUp(log)
+				return s.transitionToWakingUp(log, hibernatorv1alpha1.TriggerOverride)
 			}
 			// No restore data — leave annotations so the user sees it is still pending.
 			log.Info("manual override: wakeup requested but no restore data available — " +
@@ -146,7 +146,7 @@ func (s *overrideActionState) Handle(ctx context.Context) (StateResult, error) {
 					if err := s.consumeFresh(ctx, plan); err != nil {
 						return res, err
 					}
-					return s.transitionToWakingUp(log)
+					return s.transitionToWakingUp(log, hibernatorv1alpha1.TriggerOverride)
 				}
 				log.Info("restart: wakeup re-trigger requested but no restore data available; " +
 					"the plan has not completed a hibernation cycle yet — " +

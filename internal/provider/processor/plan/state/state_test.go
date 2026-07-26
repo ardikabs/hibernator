@@ -378,6 +378,19 @@ func TestRevertGate_AnnotationValueNotTrue_ReturnsNil(t *testing.T) {
 	assert.Nil(t, h, "revert annotation not equal to true should pass through")
 }
 
+func TestRevertGate_OperationTriggerRevert_ReturnsNil(t *testing.T) {
+	plan := basePlanForState("p", hibernatorv1alpha1.PhaseError)
+	plan.Annotations = map[string]string{
+		wellknown.AnnotationRevert: "true",
+	}
+	plan.Status.OperationTrigger = hibernatorv1alpha1.TriggerRevert
+	c := newHandlerFakeClient(plan)
+	s := newHandlerState(plan, c)
+
+	h := revertGate(s)
+	assert.Nil(t, h, "revertGate should skip when OperationTrigger=TriggerRevert to prevent retry loop")
+}
+
 // ---------------------------------------------------------------------------
 // runPrePhaseGates — priority ordering
 // ---------------------------------------------------------------------------

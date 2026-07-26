@@ -75,6 +75,27 @@ func (s *preSuspensionState) performSuspension(ctx context.Context) (StateResult
 		plan.Spec.Suspend = true
 	}
 
+	// Clear conflicting operational annotations before entering suspension.
+	// These annotations represent competing user intents that should not persist
+	// across a suspension boundary. If they remain, they create stale intent that
+	// can fire unexpectedly when the plan is resumed.
+	conflictingAnnotations := []string{
+		wellknown.AnnotationRevert,
+		wellknown.AnnotationOverrideAction,
+		wellknown.AnnotationOverridePhaseTarget,
+		wellknown.AnnotationOverrideUntil,
+		wellknown.AnnotationRestart,
+		wellknown.AnnotationFresh,
+	}
+
+	log := s.Log.WithName("preSuspension").WithValues("plan", s.Key.String())
+	for _, key := range conflictingAnnotations {
+		if _, exists := plan.Annotations[key]; exists {
+			log.Info("suspension: clearing conflicting annotation", "annotation", key)
+			delete(plan.Annotations, key)
+		}
+	}
+
 	plan.Annotations[wellknown.AnnotationSuspendedAtPhase] = string(plan.Status.Phase)
 	if err := s.patchAndPreserveStatus(ctx, plan, client.MergeFrom(orig)); err != nil {
 		return StateResult{}, fmt.Errorf("failed to record suspended-at-phase annotation: %w", err)
@@ -86,6 +107,7 @@ func (s *preSuspensionState) performSuspension(ctx context.Context) (StateResult
 		Mutator: statusprocessor.MutatorFunc[*hibernatorv1alpha1.HibernatePlan](func(p *hibernatorv1alpha1.HibernatePlan) {
 			p.Status.Phase = hibernatorv1alpha1.PhaseSuspended
 			p.Status.ErrorMessage = ""
+			p.Status.OperationTrigger = ""
 			p.Status.LastTransitionTime = ptr.To(metav1.NewTime(s.Clock.Now()))
 		}),
 	})

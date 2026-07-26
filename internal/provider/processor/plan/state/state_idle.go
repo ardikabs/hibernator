@@ -45,6 +45,20 @@ func (state *idleState) Handle(ctx context.Context) (StateResult, error) {
 	case hibernatorv1alpha1.PhaseActive:
 		// Handle revert annotation consumption after successful revert wakeup
 		if plan.Annotations[wellknown.AnnotationRevert] == "true" {
+			// Ensure OperationTrigger is cleared when consuming the revert annotation.
+			// This handles edge cases where the plan reached Active without going
+			// through the normal wakeup finalize path (e.g., manual status patch).
+			if plan.Status.OperationTrigger == hibernatorv1alpha1.TriggerRevert {
+				log.V(1).Info("clearing OperationTrigger while consuming revert annotation")
+				state.Statuses.PlanStatuses.Send(statusprocessor.Update[*hibernatorv1alpha1.HibernatePlan]{
+					NamespacedName: state.Key,
+					Resource:       plan,
+					Mutator: statusprocessor.MutatorFunc[*hibernatorv1alpha1.HibernatePlan](func(p *hibernatorv1alpha1.HibernatePlan) {
+						p.Status.OperationTrigger = ""
+					}),
+				})
+			}
+
 			if shouldHibernate {
 				// During hibernation window: suspend the plan after revert
 				log.Info("revert complete during hibernation window, suspending plan")
@@ -72,7 +86,7 @@ func (state *idleState) Handle(ctx context.Context) (StateResult, error) {
 
 		if shouldHibernate {
 			log.Info("schedule indicates hibernation, transitioning to Hibernating")
-			return state.transitionToHibernating(ctx, log, false)
+			return state.transitionToHibernating(ctx, log, false, hibernatorv1alpha1.TriggerSchedule)
 		}
 
 		log.V(1).Info("schedule indicates active period, no transition needed")
@@ -81,7 +95,7 @@ func (state *idleState) Handle(ctx context.Context) (StateResult, error) {
 		if !shouldHibernate {
 			if planCtx.HasRestoreData {
 				log.Info("schedule indicates wake-up, transitioning to WakingUp")
-				return state.transitionToWakingUp(log)
+				return state.transitionToWakingUp(log, hibernatorv1alpha1.TriggerSchedule)
 			}
 			log.Info("schedule indicates wake-up but no restore data found, skipping")
 		} else {
@@ -97,7 +111,7 @@ func (state *idleState) Handle(ctx context.Context) (StateResult, error) {
 // When fresh is true, a new cycle ID is always generated and the PlanSnapshot is rebuilt
 // from the live ScheduleException state. This is used when the operator explicitly requests
 // a fresh cycle via the hibernator.ardikabs.com/fresh annotation.
-func (state *idleState) transitionToHibernating(ctx context.Context, log logr.Logger, fresh bool) (StateResult, error) {
+func (state *idleState) transitionToHibernating(ctx context.Context, log logr.Logger, fresh bool, trigger hibernatorv1alpha1.OperationTrigger) (StateResult, error) {
 	plan := state.plan()
 
 	var cycleID string
@@ -150,6 +164,7 @@ func (state *idleState) transitionToHibernating(ctx context.Context, log logr.Lo
 			p.Status.CurrentCycleID = cycleID
 			p.Status.CurrentStageIndex = 0
 			p.Status.CurrentOperation = hibernatorv1alpha1.OperationHibernate
+			p.Status.OperationTrigger = trigger
 			p.Status.Executions = executions
 			p.Status.AppliedExceptionOverride = appliedExceptionName
 			p.Status.LastTransitionTime = ptr.To(metav1.NewTime(now))
@@ -181,7 +196,7 @@ func (state *idleState) transitionToHibernating(ctx context.Context, log logr.Lo
 // The existing PlanSnapshot is reused when its CycleID matches the plan's CurrentCycleID,
 // ensuring cycle intent locking. If no snapshot exists, the live plan spec targets are used
 // as a backward-compatible fallback.
-func (state *idleState) transitionToWakingUp(log logr.Logger) (StateResult, error) {
+func (state *idleState) transitionToWakingUp(log logr.Logger, trigger hibernatorv1alpha1.OperationTrigger) (StateResult, error) {
 	plan := state.plan()
 
 	now := state.Clock.Now()
@@ -220,6 +235,7 @@ func (state *idleState) transitionToWakingUp(log logr.Logger) (StateResult, erro
 			p.Status.Phase = hibernatorv1alpha1.PhaseWakingUp
 			p.Status.CurrentStageIndex = 0
 			p.Status.CurrentOperation = hibernatorv1alpha1.OperationWakeUp
+			p.Status.OperationTrigger = trigger
 			p.Status.Executions = executions
 			p.Status.LastTransitionTime = ptr.To(metav1.NewTime(now))
 			// CurrentCycleID, AppliedExceptionOverride, and PlanSnapshot are preserved

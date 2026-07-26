@@ -78,6 +78,35 @@ const (
 	OperationWakeUp PlanOperation = "wakeup"
 )
 
+// OperationTrigger identifies what initiated the current operation.
+// Always set when an operation is active (Hibernating/WakingUp phases).
+// Preserved in stable states (Active/Hibernated) until replaced by the next operation.
+// Used for provenance tracking and trigger-specific control flow in gates.
+// +kubebuilder:validation:Enum=Schedule;Revert;Retry;Override;Restart
+type OperationTrigger string
+
+const (
+	// TriggerSchedule means the operation was initiated by schedule evaluation
+	// (normal time-based hibernation/wakeup, including automatic exception application).
+	TriggerSchedule OperationTrigger = "Schedule"
+
+	// TriggerRevert means the operation was initiated by the revert annotation
+	// to recover from a partial failure (Error -> WakingUp selective wakeup).
+	TriggerRevert OperationTrigger = "Revert"
+
+	// TriggerRetry means the operation was initiated by the retry-now annotation
+	// or automatic retry to recover from Error.
+	TriggerRetry OperationTrigger = "Retry"
+
+	// TriggerOverride means the operation was initiated by override-action=true
+	// to force immediate operation (bypass schedule).
+	TriggerOverride OperationTrigger = "Override"
+
+	// TriggerRestart means the operation was initiated by restart=true
+	// to re-run the last operation.
+	TriggerRestart OperationTrigger = "Restart"
+)
+
 // ExecutionState represents per-target execution state.
 // +kubebuilder:validation:Enum=Pending;Running;Completed;Failed;Aborted
 type ExecutionState string
@@ -497,6 +526,14 @@ type HibernatePlanStatus struct {
 	// Used to determine which phase to transition to when stages complete.
 	// +optional
 	CurrentOperation PlanOperation `json:"currentOperation,omitempty"`
+
+	// OperationTrigger tracks what initiated the current operation.
+	// Set when operation starts, preserved in stable states (Active/Hibernated)
+	// until replaced by the next operation trigger. Empty when plan is in
+	// stable state with no pending operation.
+	// Used for provenance tracking and trigger-specific control flow in gates.
+	// +optional
+	OperationTrigger OperationTrigger `json:"operationTrigger,omitempty"`
 
 	// ExecutionHistory records historical execution cycles (max 5).
 	// Each cycle contains shutdown and wakeup operation summaries.

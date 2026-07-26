@@ -133,7 +133,7 @@ func TestIdleState_TransitionToHibernating_StartNotificationUsesMutatedPendingTa
 	}}
 
 	h := &idleState{state: st}
-	_, err := h.transitionToHibernating(context.Background(), st.Log, false)
+	_, err := h.transitionToHibernating(context.Background(), st.Log, false, hibernatorv1alpha1.TriggerSchedule)
 	require.NoError(t, err)
 
 	upd := <-planStatuses(st).C()
@@ -179,7 +179,7 @@ func TestIdleState_TransitionToWakingUp_StartNotificationUsesMutatedPendingTarge
 	}}
 
 	h := &idleState{state: st}
-	_, err := h.transitionToWakingUp(st.Log)
+	_, err := h.transitionToWakingUp(st.Log, hibernatorv1alpha1.TriggerSchedule)
 	require.NoError(t, err)
 
 	upd := <-planStatuses(st).C()
@@ -225,7 +225,7 @@ func TestIdleState_TransitionToHibernating_ReusesExistingCycleIDFromLiveRestoreD
 	require.NoError(t, err)
 
 	h := &idleState{state: st}
-	_, err = h.transitionToHibernating(context.Background(), st.Log, false)
+	_, err = h.transitionToHibernating(context.Background(), st.Log, false, hibernatorv1alpha1.TriggerSchedule)
 	require.NoError(t, err)
 
 	// Verify the plan was updated with the existing cycle ID, not a new one
@@ -252,7 +252,7 @@ func TestIdleState_TransitionToHibernating_GeneratesNewCycleIDWhenNoLiveData(t *
 	// No restore data pre-populated
 
 	h := &idleState{state: st}
-	_, err := h.transitionToHibernating(context.Background(), st.Log, false)
+	_, err := h.transitionToHibernating(context.Background(), st.Log, false, hibernatorv1alpha1.TriggerSchedule)
 	require.NoError(t, err)
 
 	// Verify the plan was updated with a new cycle ID
@@ -319,4 +319,21 @@ func TestIdleState_Handle_ActiveRevertAnnotationHibernationWindow_SuspendsPlan(t
 	assert.Empty(t, updatedPlan.Annotations[wellknown.AnnotationRevert])
 	assert.True(t, updatedPlan.Spec.Suspend)
 	assert.Equal(t, "revert", updatedPlan.Annotations[wellknown.AnnotationSuspendReason])
+}
+
+func TestIdleState_Handle_ActiveRevertAnnotation_ClearsOperationTrigger(t *testing.T) {
+	plan := basePlanForState("p", hibernatorv1alpha1.PhaseActive)
+	plan.Annotations = map[string]string{
+		wellknown.AnnotationRevert: "true",
+	}
+	plan.Status.OperationTrigger = hibernatorv1alpha1.TriggerRevert
+	sr := &message.ScheduleEvaluation{ShouldHibernate: false}
+	st := newIdleState(plan, sr, false)
+	h := &idleState{state: st}
+
+	_, err := h.Handle(context.Background())
+	require.NoError(t, err)
+
+	// OperationTrigger should be cleared via status update.
+	assert.Empty(t, plan.Status.OperationTrigger, "idleState should clear OperationTrigger when consuming revert annotation")
 }

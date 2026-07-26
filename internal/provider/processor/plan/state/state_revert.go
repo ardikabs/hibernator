@@ -104,7 +104,8 @@ func (s *revertState) Handle(ctx context.Context) (StateResult, error) {
 			p.Status.CurrentOperation = hibernatorv1alpha1.OperationWakeUp
 			p.Status.Executions = executions
 			p.Status.LastTransitionTime = ptr.To(metav1.NewTime(now))
-			// Revert annotation is preserved - idleState will consume it after wakeup
+			p.Status.OperationTrigger = hibernatorv1alpha1.TriggerRevert
+			// Revert annotation is preserved - idleState will consume it after wakeup. OperationTrigger=Revert records the revert origin.
 		}),
 		PostHook: chainHooks(
 			s.notifyHook(hibernatorv1alpha1.EventStart, func(p *hibernatorv1alpha1.HibernatePlan) notification.Payload {

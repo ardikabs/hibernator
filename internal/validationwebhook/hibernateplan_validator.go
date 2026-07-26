@@ -104,6 +104,9 @@ func (v *HibernatePlanValidator) validate(plan *hibernatorv1alpha1.HibernatePlan
 	var allErrs field.ErrorList
 	var warnings admission.Warnings
 
+	annoErrs := v.validateAnnotations(plan)
+	allErrs = append(allErrs, annoErrs...)
+
 	scheduleErrs, scheduleWarnings := v.validateSchedule(plan)
 	allErrs = append(allErrs, scheduleErrs...)
 	warnings = append(warnings, scheduleWarnings...)
@@ -120,6 +123,49 @@ func (v *HibernatePlanValidator) validate(plan *hibernatorv1alpha1.HibernatePlan
 		return warnings, allErrs.ToAggregate()
 	}
 	return warnings, nil
+}
+
+// validateAnnotations checks for mutually exclusive control annotations.
+//
+// Control annotations (override-action, restart, revert) are mutually exclusive
+// because they represent conflicting intents. Only one control intent may be
+// active at a time. Modifier annotations (fresh, override-until, override-phase-target)
+// are allowed to coexist with their parent control annotation.
+func (v *HibernatePlanValidator) validateAnnotations(plan *hibernatorv1alpha1.HibernatePlan) field.ErrorList {
+	var errs field.ErrorList
+	annotationsPath := field.NewPath("metadata", "annotations")
+
+	if plan.Annotations == nil {
+		return errs
+	}
+
+	// Mutually exclusive control annotations.
+	// These represent primary user intent and must not conflict.
+	var controlAnnotations []string
+	if plan.Annotations[wellknown.AnnotationOverrideAction] == "true" {
+		controlAnnotations = append(controlAnnotations, wellknown.AnnotationOverrideAction)
+	}
+	if plan.Annotations[wellknown.AnnotationRestart] == "true" {
+		controlAnnotations = append(controlAnnotations, wellknown.AnnotationRestart)
+	}
+	if plan.Annotations[wellknown.AnnotationRevert] == "true" {
+		controlAnnotations = append(controlAnnotations, wellknown.AnnotationRevert)
+	}
+
+	if len(controlAnnotations) > 1 {
+		errMsg := fmt.Sprintf(
+			"cannot set multiple control annotations simultaneously: only one of %s, %s, or %s is allowed; remove conflicting annotations",
+			wellknown.AnnotationOverrideAction,
+			wellknown.AnnotationRestart,
+			wellknown.AnnotationRevert,
+		)
+		errs = append(errs, field.Forbidden(
+			annotationsPath,
+			errMsg,
+		))
+	}
+
+	return errs
 }
 
 // validateSchedule validates the schedule configuration.
