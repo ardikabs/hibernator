@@ -195,6 +195,57 @@ Supported sink types: `slack`, `telegram`, `webhook`.
 
 See [User Guide: Notifications](../user-guides/notifications.md) for full configuration, custom templates, and advanced options.
 
+## Control Intent Priority
+
+When multiple control signals are applied simultaneously, the controller resolves them using a strict priority model. This prevents conflicting intents (e.g., hibernate vs. wakeup) from fighting each other.
+
+### Priority Hierarchy
+
+```
+Tier 1: Deletion        (highest priority — always wins)
+Tier 2: Suspension
+Tier 3: Revert
+Tier 4: Override
+Tier 5: Restart         (lowest priority among user intents)
+Base:   Schedule        (default when no user intent is active)
+```
+
+| Tier | Trigger | Description |
+|------|---------|-------------|
+| **Deletion** | `kubectl delete` or `deletionTimestamp` | Immediate cleanup; no other intent can override |
+| **Suspension** | `spec.suspend=true` | Pauses all operations; auto-clears conflicting annotations |
+| **Revert** | `hibernator/revert=true` | Recovers from partial failure; only valid in `PhaseError` |
+| **Override** | `override-action=true` + `override-phase-target` | Manual phase control; suppresses schedule |
+| **Restart** | `restart=true` | One-shot re-execution of last operation |
+| **Schedule** | Time-based evaluation | Default behavior when no user intent is active |
+
+### Coexistence Matrix
+
+| Combination | Winner | Behavior |
+|-------------|--------|----------|
+| Deletion + anything | **Deletion** | Finalizer cleanup, plan removed |
+| Suspension + user intent | **Suspension** | Auto-clear lower-priority annotations |
+| Revert + Override/Restart | **Revert** | Revert proceeds; others ignored in Error |
+| Override + Restart | **Override** | Override captures tick; may handle restart internally |
+| Schedule + user intent | **User intent** | Schedule suppressed for that reconciliation |
+
+### OperationTrigger Field
+
+The `status.operationTrigger` field tracks the origin of the current operation:
+
+| Value | Meaning | Set By |
+|-------|---------|--------|
+| `Schedule` | Time-based evaluation | Schedule evaluator |
+| `Revert` | Revert annotation | `revertState` handler |
+| `Retry` | Retry annotation or backoff | `recoveryState` handler |
+| `Override` | Override annotation | `overrideActionState` handler |
+| `Restart` | Restart annotation | `restartState` handler |
+| *(empty)* | Stable state, no pending operation | After successful completion |
+
+**Preserved in stable states:** Unlike operation state fields that clear immediately, `OperationTrigger` is **preserved** in `PhaseActive` and `PhaseHibernated` so you can always see what brought the plan to its current state. It is cleared when entering `PhaseSuspended`.
+
+See [User Guide: Override Actions](../user-guides/override-actions.md) and [User Guide: Plan Suspension](../user-guides/plan-suspension.md) for operational details.
+
 ## Cycle Intent Locking
 
 Once a hibernation or wakeup cycle begins, the controller resolves the complete execution intent and stores it in `.status.planSnapshot`. This snapshot locks the effective targets, execution strategy, failure behavior, and any overrides for the lifetime of the cycle.

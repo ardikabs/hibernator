@@ -981,8 +981,8 @@ func TestScheduleExceptionValidator_ValidateDelete_MidCycleBlocked(t *testing.T)
 		ObjectMeta: metav1.ObjectMeta{Name: "test-plan", Namespace: "default"},
 		Status: hibernatorv1alpha1.HibernatePlanStatus{
 			Phase:                    hibernatorv1alpha1.PhaseHibernating,
-			AppliedExceptionOverride:   exc.Name,
-			CurrentCycleID:             "cycle-001",
+			AppliedExceptionOverride: exc.Name,
+			CurrentCycleID:           "cycle-001",
 		},
 	}
 	c := setupTestClient(plan, exc)
@@ -1002,7 +1002,7 @@ func TestScheduleExceptionValidator_ValidateDelete_NotMidCycleAllowed(t *testing
 	plan := &hibernatorv1alpha1.HibernatePlan{
 		ObjectMeta: metav1.ObjectMeta{Name: "test-plan", Namespace: "default"},
 		Status: hibernatorv1alpha1.HibernatePlanStatus{
-			Phase:                  hibernatorv1alpha1.PhaseActive,
+			Phase:                    hibernatorv1alpha1.PhaseActive,
 			AppliedExceptionOverride: "",
 		},
 	}
@@ -1034,7 +1034,7 @@ func TestScheduleExceptionValidator_ValidateUpdate_MidCycleOverrideChangeBlocked
 		Status: hibernatorv1alpha1.HibernatePlanStatus{
 			Phase:                    hibernatorv1alpha1.PhaseHibernating,
 			AppliedExceptionOverride: oldExc.Name,
-			CurrentCycleID:             "cycle-001",
+			CurrentCycleID:           "cycle-001",
 		},
 	}
 	c := setupTestClient(plan, oldExc)
@@ -1067,7 +1067,7 @@ func TestScheduleExceptionValidator_ValidateUpdate_MidCycleNonOverrideChangeAllo
 		Status: hibernatorv1alpha1.HibernatePlanStatus{
 			Phase:                    hibernatorv1alpha1.PhaseHibernating,
 			AppliedExceptionOverride: oldExc.Name,
-			CurrentCycleID:             "cycle-001",
+			CurrentCycleID:           "cycle-001",
 		},
 	}
 	c := setupTestClient(plan, oldExc)
@@ -1094,7 +1094,7 @@ func TestScheduleExceptionValidator_ValidateUpdate_MidCycleExecutionOverrideUnch
 		Status: hibernatorv1alpha1.HibernatePlanStatus{
 			Phase:                    hibernatorv1alpha1.PhaseHibernating,
 			AppliedExceptionOverride: oldExc.Name,
-			CurrentCycleID:             "cycle-001",
+			CurrentCycleID:           "cycle-001",
 		},
 	}
 	c := setupTestClient(plan, oldExc)

@@ -17,6 +17,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/webhook/admission"
 
 	hibernatorv1alpha1 "github.com/ardikabs/hibernator/api/v1alpha1"
+	"github.com/ardikabs/hibernator/internal/wellknown"
 	"github.com/ardikabs/hibernator/pkg/executorparams"
 	"github.com/go-logr/logr"
 )
@@ -42,6 +43,15 @@ func (v *HibernatePlanValidator) ValidateCreate(ctx context.Context, obj runtime
 		return nil, fmt.Errorf("expected HibernatePlan but got %T", obj)
 	}
 	v.log.V(1).Info("validate create", "name", plan.Name)
+
+	// Revert annotation cannot be set on a new plan (new plans are never in Error phase).
+	if plan.Annotations != nil && plan.Annotations[wellknown.AnnotationRevert] == "true" {
+		return nil, field.Forbidden(
+			field.NewPath("metadata", "annotations", wellknown.AnnotationRevert),
+			"revert annotation cannot be set on a new plan",
+		)
+	}
+
 	return v.validate(plan)
 }
 
@@ -55,6 +65,17 @@ func (v *HibernatePlanValidator) ValidateUpdate(ctx context.Context, oldObj, new
 	newPlan, ok := newObj.(*hibernatorv1alpha1.HibernatePlan)
 	if !ok {
 		return nil, fmt.Errorf("expected HibernatePlan but got %T", newObj)
+	}
+
+	// Transition-based validation: revert annotation can only be added when the plan is in Error phase.
+	// Preserving or removing the annotation is always allowed so internal controller patches are not blocked.
+	oldHasRevert := oldPlan.Annotations != nil && oldPlan.Annotations[wellknown.AnnotationRevert] == "true"
+	newHasRevert := newPlan.Annotations != nil && newPlan.Annotations[wellknown.AnnotationRevert] == "true"
+	if !oldHasRevert && newHasRevert && newPlan.Status.Phase != hibernatorv1alpha1.PhaseError {
+		return nil, field.Forbidden(
+			field.NewPath("metadata", "annotations", wellknown.AnnotationRevert),
+			fmt.Sprintf("revert annotation can only be added when plan is in %s phase; current phase is %s", hibernatorv1alpha1.PhaseError, newPlan.Status.Phase),
+		)
 	}
 
 	// Allow target edits only in Active, Suspended, or Error phases
@@ -83,6 +104,9 @@ func (v *HibernatePlanValidator) validate(plan *hibernatorv1alpha1.HibernatePlan
 	var allErrs field.ErrorList
 	var warnings admission.Warnings
 
+	annoErrs := v.validateAnnotations(plan)
+	allErrs = append(allErrs, annoErrs...)
+
 	scheduleErrs, scheduleWarnings := v.validateSchedule(plan)
 	allErrs = append(allErrs, scheduleErrs...)
 	warnings = append(warnings, scheduleWarnings...)
@@ -99,6 +123,49 @@ func (v *HibernatePlanValidator) validate(plan *hibernatorv1alpha1.HibernatePlan
 		return warnings, allErrs.ToAggregate()
 	}
 	return warnings, nil
+}
+
+// validateAnnotations checks for mutually exclusive control annotations.
+//
+// Control annotations (override-action, restart, revert) are mutually exclusive
+// because they represent conflicting intents. Only one control intent may be
+// active at a time. Modifier annotations (fresh, override-until, override-phase-target)
+// are allowed to coexist with their parent control annotation.
+func (v *HibernatePlanValidator) validateAnnotations(plan *hibernatorv1alpha1.HibernatePlan) field.ErrorList {
+	var errs field.ErrorList
+	annotationsPath := field.NewPath("metadata", "annotations")
+
+	if plan.Annotations == nil {
+		return errs
+	}
+
+	// Mutually exclusive control annotations.
+	// These represent primary user intent and must not conflict.
+	var controlAnnotations []string
+	if plan.Annotations[wellknown.AnnotationOverrideAction] == "true" {
+		controlAnnotations = append(controlAnnotations, wellknown.AnnotationOverrideAction)
+	}
+	if plan.Annotations[wellknown.AnnotationRestart] == "true" {
+		controlAnnotations = append(controlAnnotations, wellknown.AnnotationRestart)
+	}
+	if plan.Annotations[wellknown.AnnotationRevert] == "true" {
+		controlAnnotations = append(controlAnnotations, wellknown.AnnotationRevert)
+	}
+
+	if len(controlAnnotations) > 1 {
+		errMsg := fmt.Sprintf(
+			"cannot set multiple control annotations simultaneously: only one of %s, %s, or %s is allowed; remove conflicting annotations",
+			wellknown.AnnotationOverrideAction,
+			wellknown.AnnotationRestart,
+			wellknown.AnnotationRevert,
+		)
+		errs = append(errs, field.Forbidden(
+			annotationsPath,
+			errMsg,
+		))
+	}
+
+	return errs
 }
 
 // validateSchedule validates the schedule configuration.

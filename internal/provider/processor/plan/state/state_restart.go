@@ -55,7 +55,7 @@ func (s *restartState) Handle(ctx context.Context) (StateResult, error) {
 			return StateResult{}, nil
 		}
 		log.Info("restart: re-triggering hibernation executor based on CurrentOperation")
-		return s.transitionToHibernating(ctx, log, fresh)
+		return s.transitionToHibernating(ctx, log, fresh, hibernatorv1alpha1.TriggerRestart)
 
 	case hibernatorv1alpha1.OperationWakeUp:
 		if plan.Status.Phase != hibernatorv1alpha1.PhaseActive {
@@ -71,7 +71,7 @@ func (s *restartState) Handle(ctx context.Context) (StateResult, error) {
 			log.Info("restart: fresh=true is ignored for wakeup; re-running wakeup with existing cycle intent")
 		}
 		log.Info("restart: re-triggering wakeup executor based on CurrentOperation")
-		return s.transitionToWakingUp(log)
+		return s.transitionToWakingUp(log, hibernatorv1alpha1.TriggerRestart)
 
 	default:
 		log.Info("restart: CurrentOperation is empty or unrecognised; no-op",

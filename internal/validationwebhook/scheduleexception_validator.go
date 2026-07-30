@@ -484,7 +484,7 @@ func (v *ScheduleExceptionValidator) validateExecutionOverrides(ctx context.Cont
 			strategyPath := specPath.Child("executionOverride", "strategy")
 			validStrategyTypes := map[string]bool{
 				string(hibernatorv1alpha1.StrategySequential): true,
-				string(hibernatorv1alpha1.StrategyParallel):    true,
+				string(hibernatorv1alpha1.StrategyParallel):   true,
 				string(hibernatorv1alpha1.StrategyDAG):        true,
 				string(hibernatorv1alpha1.StrategyStaged):     true,
 			}

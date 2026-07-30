@@ -41,10 +41,10 @@ func TestBuildEffectivePlan_SuspendException_ReturnsNil(t *testing.T) {
 		ObjectMeta: metav1.ObjectMeta{Name: "suspend-exc", Namespace: "default"},
 		Status:     hibernatorv1alpha1.ScheduleExceptionStatus{State: hibernatorv1alpha1.ExceptionStateActive},
 		Spec: hibernatorv1alpha1.ScheduleExceptionSpec{
-			Type:      hibernatorv1alpha1.ExceptionSuspend,
-			ValidFrom: metav1.Time{Time: time.Now().Add(-24 * time.Hour)},
+			Type:       hibernatorv1alpha1.ExceptionSuspend,
+			ValidFrom:  metav1.Time{Time: time.Now().Add(-24 * time.Hour)},
 			ValidUntil: metav1.Time{Time: time.Now().Add(24 * time.Hour)},
-			Windows: []hibernatorv1alpha1.OffHourWindow{{Start: "00:00", End: "23:59", DaysOfWeek: []string{"MON"}}},
+			Windows:    []hibernatorv1alpha1.OffHourWindow{{Start: "00:00", End: "23:59", DaysOfWeek: []string{"MON"}}},
 			TargetOverrides: []hibernatorv1alpha1.TargetOverride{
 				{TargetName: "db", Disabled: true},
 			},
@@ -72,7 +72,7 @@ func TestBuildEffectivePlan_ParameterOverride(t *testing.T) {
 			Type:       hibernatorv1alpha1.ExceptionExtend,
 			ValidFrom:  metav1.Time{Time: time.Now().Add(-24 * time.Hour)},
 			ValidUntil: metav1.Time{Time: time.Now().Add(24 * time.Hour)},
-			Windows: []hibernatorv1alpha1.OffHourWindow{{Start: "00:00", End: "23:59", DaysOfWeek: []string{"MON"}}},
+			Windows:    []hibernatorv1alpha1.OffHourWindow{{Start: "00:00", End: "23:59", DaysOfWeek: []string{"MON"}}},
 			TargetOverrides: []hibernatorv1alpha1.TargetOverride{
 				{TargetName: "db", Parameters: &hibernatorv1alpha1.Parameters{Raw: []byte(`{"env":"event"}`)}},
 			},
@@ -110,7 +110,7 @@ func TestBuildEffectivePlan_DisabledTarget(t *testing.T) {
 			Type:       hibernatorv1alpha1.ExceptionExtend,
 			ValidFrom:  metav1.Time{Time: time.Now().Add(-24 * time.Hour)},
 			ValidUntil: metav1.Time{Time: time.Now().Add(24 * time.Hour)},
-			Windows: []hibernatorv1alpha1.OffHourWindow{{Start: "00:00", End: "23:59", DaysOfWeek: []string{"MON"}}},
+			Windows:    []hibernatorv1alpha1.OffHourWindow{{Start: "00:00", End: "23:59", DaysOfWeek: []string{"MON"}}},
 			TargetOverrides: []hibernatorv1alpha1.TargetOverride{
 				{TargetName: "db", Disabled: true},
 			},
@@ -145,7 +145,7 @@ func TestBuildEffectivePlan_StrategyOverride(t *testing.T) {
 			Type:       hibernatorv1alpha1.ExceptionReplace,
 			ValidFrom:  metav1.Time{Time: time.Now().Add(-24 * time.Hour)},
 			ValidUntil: metav1.Time{Time: time.Now().Add(24 * time.Hour)},
-			Windows: []hibernatorv1alpha1.OffHourWindow{{Start: "00:00", End: "23:59", DaysOfWeek: []string{"MON"}}},
+			Windows:    []hibernatorv1alpha1.OffHourWindow{{Start: "00:00", End: "23:59", DaysOfWeek: []string{"MON"}}},
 			ExecutionOverride: &hibernatorv1alpha1.ExecutionOverride{
 				Strategy: &hibernatorv1alpha1.ExecutionStrategy{Type: hibernatorv1alpha1.StrategySequential},
 			},
@@ -177,7 +177,7 @@ func TestBuildEffectivePlan_BehaviorOverride(t *testing.T) {
 			Type:       hibernatorv1alpha1.ExceptionReplace,
 			ValidFrom:  metav1.Time{Time: time.Now().Add(-24 * time.Hour)},
 			ValidUntil: metav1.Time{Time: time.Now().Add(24 * time.Hour)},
-			Windows: []hibernatorv1alpha1.OffHourWindow{{Start: "00:00", End: "23:59", DaysOfWeek: []string{"MON"}}},
+			Windows:    []hibernatorv1alpha1.OffHourWindow{{Start: "00:00", End: "23:59", DaysOfWeek: []string{"MON"}}},
 			ExecutionOverride: &hibernatorv1alpha1.ExecutionOverride{
 				Behavior: &hibernatorv1alpha1.Behavior{Mode: hibernatorv1alpha1.BehaviorBestEffort},
 			},
@@ -210,7 +210,7 @@ func TestBuildEffectivePlan_StatusPreserved(t *testing.T) {
 			Type:       hibernatorv1alpha1.ExceptionExtend,
 			ValidFrom:  metav1.Time{Time: time.Now().Add(-24 * time.Hour)},
 			ValidUntil: metav1.Time{Time: time.Now().Add(24 * time.Hour)},
-			Windows: []hibernatorv1alpha1.OffHourWindow{{Start: "00:00", End: "23:59", DaysOfWeek: []string{"MON"}}},
+			Windows:    []hibernatorv1alpha1.OffHourWindow{{Start: "00:00", End: "23:59", DaysOfWeek: []string{"MON"}}},
 			ExecutionOverride: &hibernatorv1alpha1.ExecutionOverride{
 				Strategy: &hibernatorv1alpha1.ExecutionStrategy{Type: hibernatorv1alpha1.StrategySequential},
 			},
@@ -247,7 +247,7 @@ func TestFindActiveExceptionOverride_MostRecentWins(t *testing.T) {
 			Type:       hibernatorv1alpha1.ExceptionExtend,
 			ValidFrom:  metav1.Time{Time: time.Now().Add(-24 * time.Hour)},
 			ValidUntil: metav1.Time{Time: time.Now().Add(24 * time.Hour)},
-			Windows: []hibernatorv1alpha1.OffHourWindow{{Start: "00:00", End: "23:59", DaysOfWeek: []string{"MON"}}},
+			Windows:    []hibernatorv1alpha1.OffHourWindow{{Start: "00:00", End: "23:59", DaysOfWeek: []string{"MON"}}},
 			ExecutionOverride: &hibernatorv1alpha1.ExecutionOverride{
 				Strategy: &hibernatorv1alpha1.ExecutionStrategy{Type: hibernatorv1alpha1.StrategySequential},
 			},
@@ -265,7 +265,7 @@ func TestFindActiveExceptionOverride_MostRecentWins(t *testing.T) {
 			Type:       hibernatorv1alpha1.ExceptionExtend,
 			ValidFrom:  metav1.Time{Time: time.Now().Add(-24 * time.Hour)},
 			ValidUntil: metav1.Time{Time: time.Now().Add(24 * time.Hour)},
-			Windows: []hibernatorv1alpha1.OffHourWindow{{Start: "00:00", End: "23:59", DaysOfWeek: []string{"MON"}}},
+			Windows:    []hibernatorv1alpha1.OffHourWindow{{Start: "00:00", End: "23:59", DaysOfWeek: []string{"MON"}}},
 			ExecutionOverride: &hibernatorv1alpha1.ExecutionOverride{
 				Strategy: &hibernatorv1alpha1.ExecutionStrategy{Type: hibernatorv1alpha1.StrategyDAG},
 			},
@@ -299,7 +299,7 @@ func TestValidateRuntimeOverrides_Valid(t *testing.T) {
 			Type:       hibernatorv1alpha1.ExceptionExtend,
 			ValidFrom:  metav1.Time{Time: time.Now().Add(-24 * time.Hour)},
 			ValidUntil: metav1.Time{Time: time.Now().Add(24 * time.Hour)},
-			Windows: []hibernatorv1alpha1.OffHourWindow{{Start: "00:00", End: "23:59", DaysOfWeek: []string{"MON"}}},
+			Windows:    []hibernatorv1alpha1.OffHourWindow{{Start: "00:00", End: "23:59", DaysOfWeek: []string{"MON"}}},
 			TargetOverrides: []hibernatorv1alpha1.TargetOverride{
 				{TargetName: "db", Parameters: &hibernatorv1alpha1.Parameters{Raw: []byte(`{"selector":{"instanceIds":["my-db"]}}`)}},
 			},
@@ -332,7 +332,7 @@ func TestValidateRuntimeOverrides_InvalidParameters(t *testing.T) {
 			Type:       hibernatorv1alpha1.ExceptionExtend,
 			ValidFrom:  metav1.Time{Time: time.Now().Add(-24 * time.Hour)},
 			ValidUntil: metav1.Time{Time: time.Now().Add(24 * time.Hour)},
-			Windows: []hibernatorv1alpha1.OffHourWindow{{Start: "00:00", End: "23:59", DaysOfWeek: []string{"MON"}}},
+			Windows:    []hibernatorv1alpha1.OffHourWindow{{Start: "00:00", End: "23:59", DaysOfWeek: []string{"MON"}}},
 			TargetOverrides: []hibernatorv1alpha1.TargetOverride{
 				{TargetName: "db", Parameters: &hibernatorv1alpha1.Parameters{Raw: []byte(`{"invalid":"params"}`)}},
 			},
@@ -365,7 +365,7 @@ func TestValidateRuntimeOverrides_NotAtStageZero(t *testing.T) {
 			Type:       hibernatorv1alpha1.ExceptionExtend,
 			ValidFrom:  metav1.Time{Time: time.Now().Add(-24 * time.Hour)},
 			ValidUntil: metav1.Time{Time: time.Now().Add(24 * time.Hour)},
-			Windows: []hibernatorv1alpha1.OffHourWindow{{Start: "00:00", End: "23:59", DaysOfWeek: []string{"MON"}}},
+			Windows:    []hibernatorv1alpha1.OffHourWindow{{Start: "00:00", End: "23:59", DaysOfWeek: []string{"MON"}}},
 			TargetOverrides: []hibernatorv1alpha1.TargetOverride{
 				{TargetName: "db", Parameters: &hibernatorv1alpha1.Parameters{Raw: []byte(`{"invalid":"params"}`)}},
 			},
@@ -400,7 +400,7 @@ func TestTransitionToHibernating_NoOverride_AppliedExceptionOverrideEmpty(t *tes
 	st := newHandlerState(plan, c)
 
 	h := &idleState{state: st}
-	_, err := h.transitionToHibernating(nil, st.Log, false)
+	_, err := h.transitionToHibernating(nil, st.Log, false, hibernatorv1alpha1.TriggerSchedule)
 	require.NoError(t, err)
 
 	upd := <-planStatuses(st).C()
@@ -428,7 +428,7 @@ func TestTransitionToHibernating_UsesEffectivePlanTargets(t *testing.T) {
 			Type:       hibernatorv1alpha1.ExceptionExtend,
 			ValidFrom:  metav1.Time{Time: time.Now().Add(-24 * time.Hour)},
 			ValidUntil: metav1.Time{Time: time.Now().Add(24 * time.Hour)},
-			Windows: []hibernatorv1alpha1.OffHourWindow{{Start: "00:00", End: "23:59", DaysOfWeek: []string{"MON"}}},
+			Windows:    []hibernatorv1alpha1.OffHourWindow{{Start: "00:00", End: "23:59", DaysOfWeek: []string{"MON"}}},
 			TargetOverrides: []hibernatorv1alpha1.TargetOverride{
 				{TargetName: "db", Disabled: true},
 			},
@@ -440,7 +440,7 @@ func TestTransitionToHibernating_UsesEffectivePlanTargets(t *testing.T) {
 	st.PlanCtx.Exceptions = []hibernatorv1alpha1.ScheduleException{*exc}
 
 	h := &idleState{state: st}
-	_, err := h.transitionToHibernating(nil, st.Log, false)
+	_, err := h.transitionToHibernating(nil, st.Log, false, hibernatorv1alpha1.TriggerSchedule)
 	require.NoError(t, err)
 
 	upd := <-planStatuses(st).C()
@@ -482,7 +482,7 @@ func TestTransitionToWakingUp_UsesPlanSnapshotTargets(t *testing.T) {
 	st := newHandlerState(plan, c)
 
 	h := &idleState{state: st}
-	_, err := h.transitionToWakingUp(st.Log)
+	_, err := h.transitionToWakingUp(st.Log, hibernatorv1alpha1.TriggerSchedule)
 	require.NoError(t, err)
 
 	upd := <-planStatuses(st).C()
@@ -518,7 +518,7 @@ func TestBuildEffectivePlan_UnknownTarget_Skipped(t *testing.T) {
 			Type:       hibernatorv1alpha1.ExceptionExtend,
 			ValidFrom:  metav1.Time{Time: time.Now().Add(-24 * time.Hour)},
 			ValidUntil: metav1.Time{Time: time.Now().Add(24 * time.Hour)},
-			Windows: []hibernatorv1alpha1.OffHourWindow{{Start: "00:00", End: "23:59", DaysOfWeek: []string{"MON"}}},
+			Windows:    []hibernatorv1alpha1.OffHourWindow{{Start: "00:00", End: "23:59", DaysOfWeek: []string{"MON"}}},
 			TargetOverrides: []hibernatorv1alpha1.TargetOverride{
 				{TargetName: "nonexistent", Disabled: true},
 			},
@@ -557,7 +557,7 @@ func TestBuildEffectivePlan_FullOverride(t *testing.T) {
 			Type:       hibernatorv1alpha1.ExceptionExtend,
 			ValidFrom:  metav1.Time{Time: time.Now().Add(-24 * time.Hour)},
 			ValidUntil: metav1.Time{Time: time.Now().Add(24 * time.Hour)},
-			Windows: []hibernatorv1alpha1.OffHourWindow{{Start: "00:00", End: "23:59", DaysOfWeek: []string{"MON"}}},
+			Windows:    []hibernatorv1alpha1.OffHourWindow{{Start: "00:00", End: "23:59", DaysOfWeek: []string{"MON"}}},
 			TargetOverrides: []hibernatorv1alpha1.TargetOverride{
 				{TargetName: "db", Disabled: true},
 				{TargetName: "app", Parameters: &hibernatorv1alpha1.Parameters{Raw: []byte(`{"cluster":"event"}`)}},
@@ -639,7 +639,7 @@ func TestEffectivePlan_FallsBackToBuildEffectivePlan_WhenNoSnapshot(t *testing.T
 			Type:       hibernatorv1alpha1.ExceptionExtend,
 			ValidFrom:  metav1.Time{Time: time.Now().Add(-24 * time.Hour)},
 			ValidUntil: metav1.Time{Time: time.Now().Add(24 * time.Hour)},
-			Windows: []hibernatorv1alpha1.OffHourWindow{{Start: "00:00", End: "23:59", DaysOfWeek: []string{"MON"}}},
+			Windows:    []hibernatorv1alpha1.OffHourWindow{{Start: "00:00", End: "23:59", DaysOfWeek: []string{"MON"}}},
 			TargetOverrides: []hibernatorv1alpha1.TargetOverride{
 				{TargetName: "db", Disabled: true},
 			},
@@ -716,7 +716,7 @@ func TestTransitionToHibernating_CapturesPlanSnapshot(t *testing.T) {
 	st.PlanCtx.Exceptions = []hibernatorv1alpha1.ScheduleException{*exc}
 
 	h := &idleState{state: st}
-	_, err := h.transitionToHibernating(nil, st.Log, false)
+	_, err := h.transitionToHibernating(nil, st.Log, false, hibernatorv1alpha1.TriggerSchedule)
 	require.NoError(t, err)
 
 	upd := <-planStatuses(st).C()
@@ -876,7 +876,7 @@ func TestTransitionToWakingUp_ReusesPlanSnapshot(t *testing.T) {
 	st := newHandlerState(plan, c)
 	i := &idleState{state: st}
 
-	_, err := i.transitionToWakingUp(st.Log)
+	_, err := i.transitionToWakingUp(st.Log, hibernatorv1alpha1.TriggerSchedule)
 	require.NoError(t, err)
 
 	upd := <-planStatuses(st).C()
@@ -908,7 +908,7 @@ func TestTransitionToWakingUp_FallsBackToLiveWhenNoSnapshot(t *testing.T) {
 	st := newHandlerState(plan, c)
 	i := &idleState{state: st}
 
-	_, err := i.transitionToWakingUp(st.Log)
+	_, err := i.transitionToWakingUp(st.Log, hibernatorv1alpha1.TriggerSchedule)
 	require.NoError(t, err)
 
 	upd := <-planStatuses(st).C()
@@ -959,7 +959,7 @@ func TestTransitionToHibernating_FreshSnapshot(t *testing.T) {
 	st.PlanCtx.Exceptions = []hibernatorv1alpha1.ScheduleException{*exc}
 
 	i := &idleState{state: st}
-	_, err := i.transitionToHibernating(nil, st.Log, true)
+	_, err := i.transitionToHibernating(nil, st.Log, true, hibernatorv1alpha1.TriggerSchedule)
 	require.NoError(t, err)
 
 	upd := <-planStatuses(st).C()
@@ -979,5 +979,3 @@ func TestTransitionToHibernating_FreshSnapshot(t *testing.T) {
 	assert.Equal(t, "new-exc", testPlan.Status.PlanSnapshot.ExceptionName)
 	assert.Equal(t, testPlan.Status.CurrentCycleID, testPlan.Status.PlanSnapshot.CycleID)
 }
-
-

@@ -55,7 +55,7 @@ var executorTypes = []struct {
 // to their markdown representation (typically a link to upstream docs).
 // These types are referenced by executor parameters but defined in external modules.
 var externalTypes = map[string]string{
-	"metav1.LabelSelector":       `[metav1.LabelSelector](https://kubernetes.io/docs/reference/generated/kubernetes-api/v1.33/#labelselector-v1-meta)`,
+	"metav1.LabelSelector":            `[metav1.LabelSelector](https://kubernetes.io/docs/reference/generated/kubernetes-api/v1.33/#labelselector-v1-meta)`,
 	"metav1.LabelSelectorRequirement": `[metav1.LabelSelectorRequirement](https://kubernetes.io/docs/reference/generated/kubernetes-api/v1.33/#labelselectorrequirement-v1-meta)`,
 }
 

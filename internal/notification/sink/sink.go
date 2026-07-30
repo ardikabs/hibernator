@@ -126,6 +126,10 @@ type Payload struct {
 	// RetryCount is the current retry attempt number (Recovery/Failure only).
 	RetryCount int32 `json:"retryCount"`
 
+	// Trigger is the operation trigger that initiated the current operation
+	// (Schedule, Revert, Retry, Override, Restart). Empty when no operation is active.
+	Trigger string `json:"trigger,omitempty"`
+
 	// SinkName is the human-readable name of the sink being dispatched to.
 	SinkName string `json:"sinkName"`
 

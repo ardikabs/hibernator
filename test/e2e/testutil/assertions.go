@@ -338,3 +338,26 @@ func EventuallyRestoreDataSaved(ctx context.Context, k8sClient client.Client, pl
 			exec.RestoreConfigMapRef != ""
 	}, DefaultTimeout, DefaultInterval).Should(BeTrueBecause("Restore data should be saved for target %d", targetIndex))
 }
+
+// EventuallyAnnotationRemoved waits until the specified annotation is removed from the plan.
+func EventuallyAnnotationRemoved(ctx context.Context, k8sClient client.Client, plan *hibernatorv1alpha1.HibernatePlan, annotationKey string) {
+	Eventually(func() bool {
+		_ = k8sClient.Get(ctx, client.ObjectKeyFromObject(plan), plan)
+		_, exists := plan.Annotations[annotationKey]
+		return !exists
+	}).
+		WithTimeout(DefaultTimeout).
+		WithPolling(DefaultInterval).
+		Should(BeTrueBecause("annotation %s should be removed from plan %s", annotationKey, plan.Name))
+}
+
+// EventuallyErrorMessageContains waits until the plan status error message contains substr.
+func EventuallyErrorMessageContains(ctx context.Context, k8sClient client.Client, plan *hibernatorv1alpha1.HibernatePlan, substr string) {
+	Eventually(func() string {
+		_ = k8sClient.Get(ctx, client.ObjectKeyFromObject(plan), plan)
+		return plan.Status.ErrorMessage
+	}).
+		WithTimeout(DefaultTimeout).
+		WithPolling(DefaultInterval).
+		Should(ContainSubstring(substr), "plan %s error message should contain %q", plan.Name, substr)
+}

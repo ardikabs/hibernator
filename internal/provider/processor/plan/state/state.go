@@ -376,6 +376,12 @@ func (b *state) setError(_ context.Context, phaseErr error) {
 			p.Status.Phase = hibernatorv1alpha1.PhaseError
 			p.Status.LastTransitionTime = ptr.To(metav1.NewTime(b.Clock.Now()))
 			p.Status.ErrorMessage = errMsg
+			// For user-intent triggers (Revert, Retry, Override, Restart), clear the trigger
+			// to prevent automatic retry loops. The user must re-apply the intent annotation.
+			// Schedule-triggered failures are handled separately by recoveryState backoff.
+			if p.Status.OperationTrigger != hibernatorv1alpha1.TriggerSchedule {
+				p.Status.OperationTrigger = ""
+			}
 			// Keep PlanSnapshot: PhaseError is still mid-cycle, and retry/resume
 			// must continue using the locked exception intent.
 		}),

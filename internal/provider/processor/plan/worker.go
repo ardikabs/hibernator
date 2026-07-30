@@ -219,6 +219,19 @@ func (s *Worker) handleWithDepth(ctx context.Context, planCtx *message.PlanConte
 		metrics.ActivePlanGauge.WithLabelValues(phaseAfter).Inc()
 	}
 
+	// PlanOperationTriggerGauge — update to reflect current trigger.
+	triggerBefore := planCtx.OperationTrigger
+	triggerAfter := string(plan.Status.OperationTrigger)
+	if triggerBefore != triggerAfter {
+		if triggerBefore != "" {
+			metrics.PlanOperationTriggerGauge.WithLabelValues(plan.Namespace, plan.Name, triggerBefore).Set(0)
+		}
+		if triggerAfter != "" {
+			metrics.PlanOperationTriggerGauge.WithLabelValues(plan.Namespace, plan.Name, triggerAfter).Set(1)
+		}
+	}
+	planCtx.OperationTrigger = triggerAfter
+
 	// Apply timer directives from StateResult.
 	if result.Requeue {
 		// Phase transition: cancel all timers then immediately re-evaluate.

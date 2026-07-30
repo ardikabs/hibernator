@@ -258,16 +258,18 @@ func TestRunner_Shutdown_ExecutorError_ReturnsError(t *testing.T) {
 	assert.True(t, fakeExec.shutdownCalled)
 }
 
-// TestRunner_Wakeup_MissingRestoreData_ReturnsError verifies that wakeup fails
-// when no ConfigMap / restore data exists for the target.
-func TestRunner_Wakeup_MissingRestoreData_ReturnsError(t *testing.T) {
+// TestRunner_Wakeup_MissingRestoreData_ReturnsSuccessNoOp verifies that wakeup
+// succeeds as a no-op when no ConfigMap / restore data exists for the target.
+// This is important for revert operations where some targets failed to hibernate.
+func TestRunner_Wakeup_MissingRestoreData_ReturnsSuccessNoOp(t *testing.T) {
 	fakeExec := &fakeExecutor{typeVal: "fake"}
 	// No preloaded ConfigMap.
 	r, _ := newTestRunner(baseConfig("wakeup", "fake"), fakeExec)
 
-	_, err := r.run(context.Background())
-	require.Error(t, err)
-	assert.Contains(t, err.Error(), "no restore data found")
+	result, err := r.run(context.Background())
+	require.NoError(t, err)
+	assert.NotNil(t, result)
+	assert.Contains(t, result.Message, "no restore data")
 	assert.False(t, fakeExec.wakeupCalled, "WakeUp should not be called when restore data is missing")
 }
 

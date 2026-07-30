@@ -99,8 +99,8 @@ func TestSlackSink_RateLimiting_10ConcurrentPlans(t *testing.T) {
 	// Create rate limit registry with faster config for quick test
 	registry := ratelimit.NewRegistry(
 		ratelimit.WithDefaultConfig(ratelimit.Config{
-			Rate: rps,
-			Burst:             burst,
+			Rate:  rps,
+			Burst: burst,
 		}),
 		ratelimit.WithLogger(logr.Discard()),
 	)
@@ -119,15 +119,14 @@ func TestSlackSink_RateLimiting_10ConcurrentPlans(t *testing.T) {
 	// Create Slack sink with rate limiting enabled
 	s := New(&stubRenderer{defaultText: "test message"},
 		WithHTTPClient(httpClient),
-		
 	)
 
 	// Configure sink with rate limit settings
 	cfg, _ := json.Marshal(config{
 		WebhookURL: server.Server.URL,
 		RateLimit: &RateLimitConfig{
-			Rate: rps,
-			Burst:             burst,
+			Rate:  rps,
+			Burst: burst,
 		},
 	})
 
@@ -359,8 +358,8 @@ func TestSlackSink_RateLimiting_ThreadMode(t *testing.T) {
 	// Create rate limit registry
 	registry := ratelimit.NewRegistry(
 		ratelimit.WithDefaultConfig(ratelimit.Config{
-			Rate: rps,
-			Burst:             burst,
+			Rate:  rps,
+			Burst: burst,
 		}),
 		ratelimit.WithLogger(logr.Discard()),
 	)
@@ -378,7 +377,7 @@ func TestSlackSink_RateLimiting_ThreadMode(t *testing.T) {
 
 	s := New(&stubRenderer{defaultText: "test message"},
 		WithHTTPClient(httpClient),
-		
+
 		withServerURL(server.URL+"/"),
 	)
 
@@ -388,8 +387,8 @@ func TestSlackSink_RateLimiting_ThreadMode(t *testing.T) {
 		ChannelID:    "C123456",
 		DeliveryMode: deliveryModeThread,
 		RateLimit: &RateLimitConfig{
-			Rate: rps,
-			Burst:             burst,
+			Rate:  rps,
+			Burst: burst,
 		},
 	})
 
@@ -434,8 +433,8 @@ func TestSlackSink_RateLimiting_ContextCancellation(t *testing.T) {
 	// This ensures the second request will have to wait ~100ms
 	registry := ratelimit.NewRegistry(
 		ratelimit.WithDefaultConfig(ratelimit.Config{
-			Rate: 10.0, // 1 request per 100ms
-			Burst:             1,    // Only 1 burst token
+			Rate:  10.0, // 1 request per 100ms
+			Burst: 1,    // Only 1 burst token
 		}),
 		ratelimit.WithLogger(logr.Discard()),
 	)
@@ -452,14 +451,13 @@ func TestSlackSink_RateLimiting_ContextCancellation(t *testing.T) {
 
 	s := New(&stubRenderer{defaultText: "test"},
 		WithHTTPClient(httpClient),
-		
 	)
 
 	cfg, _ := json.Marshal(config{
 		WebhookURL: server.URL,
 		RateLimit: &RateLimitConfig{
-			Rate: 10.0, // 1 request per 100ms
-			Burst:             1,
+			Rate:  10.0, // 1 request per 100ms
+			Burst: 1,
 		},
 	})
 
@@ -513,9 +511,8 @@ func TestSlackSink_NestedRateLimiting_ThreadMode(t *testing.T) {
 	// every subsequent call must wait ~500ms for the parent token.
 	registry := ratelimit.NewRegistry(
 		ratelimit.WithDefaultConfig(ratelimit.Config{
-			Rate: 100.0,
-			Burst:             10,
-			
+			Rate:  100.0,
+			Burst: 10,
 		}),
 		ratelimit.WithLogger(logr.Discard()),
 	)
@@ -532,7 +529,7 @@ func TestSlackSink_NestedRateLimiting_ThreadMode(t *testing.T) {
 
 	s := New(&stubRenderer{defaultText: "test message"},
 		WithHTTPClient(httpClient),
-		
+
 		withServerURL(server.URL+"/"),
 	)
 
@@ -541,9 +538,8 @@ func TestSlackSink_NestedRateLimiting_ThreadMode(t *testing.T) {
 		ChannelID:    "C123456",
 		DeliveryMode: deliveryModeThread,
 		RateLimit: &RateLimitConfig{
-			Rate: 2.0,
-			Burst:             2,
-			
+			Rate:  2.0,
+			Burst: 2,
 		},
 	})
 

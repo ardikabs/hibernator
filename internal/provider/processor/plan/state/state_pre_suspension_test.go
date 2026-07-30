@@ -202,3 +202,106 @@ func TestPreSuspensionState_AutoSuspend_SetsSuspendSpec(t *testing.T) {
 	assert.True(t, plan.Spec.Suspend,
 		"performSuspension should set Spec.Suspend=true even on the auto-suspend path")
 }
+
+// ---------------------------------------------------------------------------
+// preSuspensionState annotation cleanup
+// ---------------------------------------------------------------------------
+
+func TestPreSuspensionState_Suspension_ClearsConflictingAnnotations(t *testing.T) {
+	// Verify that suspension clears all conflicting operational annotations.
+	plan := basePlanForState("p", hibernatorv1alpha1.PhaseActive)
+	plan.Annotations = map[string]string{
+		wellknown.AnnotationRevert:              "true",
+		wellknown.AnnotationOverrideAction:      "true",
+		wellknown.AnnotationOverridePhaseTarget: "hibernate",
+		wellknown.AnnotationOverrideUntil:       "2026-01-15T06:00:00Z",
+		wellknown.AnnotationRestart:             "true",
+		wellknown.AnnotationFresh:               "true",
+	}
+	c := newHandlerFakeClient(plan)
+	ps := newPreSuspensionState(plan, c)
+
+	_, err := ps.Handle(context.Background())
+	require.NoError(t, err)
+
+	// All conflicting annotations should be removed
+	assert.NotContains(t, plan.Annotations, wellknown.AnnotationRevert,
+		"should clear revert annotation on suspension")
+	assert.NotContains(t, plan.Annotations, wellknown.AnnotationOverrideAction,
+		"should clear override-action annotation on suspension")
+	assert.NotContains(t, plan.Annotations, wellknown.AnnotationOverridePhaseTarget,
+		"should clear override-phase-target annotation on suspension")
+	assert.NotContains(t, plan.Annotations, wellknown.AnnotationOverrideUntil,
+		"should clear override-until annotation on suspension")
+	assert.NotContains(t, plan.Annotations, wellknown.AnnotationRestart,
+		"should clear restart annotation on suspension")
+	assert.NotContains(t, plan.Annotations, wellknown.AnnotationFresh,
+		"should clear fresh annotation on suspension")
+
+	// Suspended-at-phase annotation should still be present
+	assert.Equal(t, string(hibernatorv1alpha1.PhaseActive),
+		plan.Annotations[wellknown.AnnotationSuspendedAtPhase],
+		"should preserve suspended-at-phase annotation")
+}
+
+func TestPreSuspensionState_Suspension_PreservesNonConflictingAnnotations(t *testing.T) {
+	// Verify that suspension only clears conflicting annotations and preserves others.
+	plan := basePlanForState("p", hibernatorv1alpha1.PhaseActive)
+	plan.Annotations = map[string]string{
+		wellknown.AnnotationRevert:           "true",
+		wellknown.AnnotationSuspendUntil:     "2026-01-15T06:00:00Z",
+		wellknown.AnnotationSuspendReason:    "maintenance",
+		wellknown.AnnotationSuspendedAtPhase: string(hibernatorv1alpha1.PhaseActive),
+		"custom.example.com/label":           "value",
+	}
+	c := newHandlerFakeClient(plan)
+	ps := newPreSuspensionState(plan, c)
+
+	_, err := ps.Handle(context.Background())
+	require.NoError(t, err)
+
+	// Conflicting annotation should be removed
+	assert.NotContains(t, plan.Annotations, wellknown.AnnotationRevert,
+		"should clear revert annotation on suspension")
+
+	// Non-conflicting annotations should be preserved
+	assert.Equal(t, "2026-01-15T06:00:00Z", plan.Annotations[wellknown.AnnotationSuspendUntil],
+		"should preserve suspend-until annotation")
+	assert.Equal(t, "maintenance", plan.Annotations[wellknown.AnnotationSuspendReason],
+		"should preserve suspend-reason annotation")
+	assert.Equal(t, "value", plan.Annotations["custom.example.com/label"],
+		"should preserve custom annotations")
+
+	// Suspended-at-phase should be updated (not preserved from before)
+	assert.Equal(t, string(hibernatorv1alpha1.PhaseActive),
+		plan.Annotations[wellknown.AnnotationSuspendedAtPhase],
+		"should set suspended-at-phase annotation")
+}
+
+func TestPreSuspensionState_OnDeadline_ClearsConflictingAnnotations(t *testing.T) {
+	// Verify that OnDeadline also clears conflicting annotations.
+	plan := basePlanForState("p", hibernatorv1alpha1.PhaseHibernating)
+	plan.Status.Executions = []hibernatorv1alpha1.ExecutionStatus{
+		{
+			Target:   "app",
+			Executor: "eks",
+			State:    hibernatorv1alpha1.StateRunning,
+			LogsRef:  "logs-ref",
+		},
+	}
+	plan.Annotations = map[string]string{
+		wellknown.AnnotationOverrideAction: "true",
+		wellknown.AnnotationRestart:        "true",
+	}
+	c := newHandlerFakeClient(plan)
+	ps := newPreSuspensionState(plan, c)
+
+	result, err := ps.OnDeadline(context.Background())
+	require.NoError(t, err)
+	assert.True(t, result.Requeue)
+
+	assert.NotContains(t, plan.Annotations, wellknown.AnnotationOverrideAction,
+		"should clear override-action annotation on deadline suspension")
+	assert.NotContains(t, plan.Annotations, wellknown.AnnotationRestart,
+		"should clear restart annotation on deadline suspension")
+}

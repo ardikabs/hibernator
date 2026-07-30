@@ -28,7 +28,7 @@ Licensed under the Apache License, Version 2.0.
 //
 //	// Parse relative to current time
 //	deadline, err := timeparse.ParseDeadline("in 30 minutes", time.Now())
-//	
+//
 //	// Parse relative to a specific time (useful for testing)
 //	fakeNow := time.Date(2026, 1, 15, 12, 0, 0, 0, time.UTC)
 //	deadline, err := timeparse.ParseDeadline("tomorrow at 6am", fakeNow)

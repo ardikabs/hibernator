@@ -191,6 +191,10 @@ func (r *runner) run(ctx context.Context) (*executor.Result, error) {
 	}
 
 	// Wake-up success: mark target as restored for cleanup coordination
+	// TODO(hib-5m1): Skip MarkTargetRestored when the wakeup was a no-op due to missing restore data.
+	// Currently marking no-op targets as restored is pragmatic because it allows
+	// postWakeupCleanup's MarkAllTargetsRestored check to succeed and unlock restore data,
+	// but semantically it claims a target was restored when it was never hibernated.
 	if cfg.Operation == "wakeup" {
 		if err := r.restoreMgr.MarkTargetRestored(ctx, r.cfg.Namespace, r.cfg.Plan, r.cfg.Target); err != nil {
 			// Non-fatal: continue even if marking fails
@@ -244,9 +248,17 @@ func (r *runner) executeOperation(ctx context.Context, exec executor.Executor, s
 			executorResult = result
 		}
 	case "wakeup":
-		rd, err := state.LoadRestoreData(ctx, r.restoreMgr, r.log, r.cfg.Namespace, r.cfg.Plan, r.cfg.Target)
+		rd, found, err := state.LoadRestoreData(ctx, r.restoreMgr, r.log, r.cfg.Namespace, r.cfg.Plan, r.cfg.Target)
 		if err != nil {
 			operationErr = fmt.Errorf("load restore data: %w", err)
+			break
+		}
+
+		if !found {
+			// No restore data for this target - treat as successful no-op
+			// This happens during revert when target failed to hibernate
+			r.log.Info("no restore data for target, treating wakeup as no-op")
+			executorResult = &executor.Result{Message: "wakeup completed (no restore data)"}
 			break
 		}
 

@@ -43,9 +43,9 @@ const minWaitMetricsThreshold = 1 * time.Millisecond
 // DefaultConfig returns the default rate limiting configuration.
 func DefaultConfig() Config {
 	return Config{
-		Rate:  5.0,        // 5 requests per unit
+		Rate:  5.0,         // 5 requests per unit
 		Unit:  time.Second, // default unit is per-second
-		Burst: 10,         // Allow bursts up to 10
+		Burst: 10,          // Allow bursts up to 10
 	}
 }
 

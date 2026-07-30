@@ -156,6 +156,7 @@ func (state *recoveryState) handleRetry(ctx context.Context, log logr.Logger, la
 			}
 
 			p.Status.Phase = targetPhase
+			p.Status.OperationTrigger = hibernatorv1alpha1.TriggerRetry
 		}),
 		PostHook: state.phaseChangePostHook(currentPhase),
 	})

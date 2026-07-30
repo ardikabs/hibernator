@@ -10,8 +10,10 @@ import (
 	"errors"
 	"testing"
 
+	"github.com/ardikabs/hibernator/internal/wellknown"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"sigs.k8s.io/controller-runtime/pkg/client"
 
 	hibernatorv1alpha1 "github.com/ardikabs/hibernator/api/v1alpha1"
 )
@@ -104,4 +106,52 @@ func TestWakingUpState_OnError_NonPlanError_NoHistory(t *testing.T) {
 	// Non-PlanError should not write execution history
 	assert.Empty(t, plan.Status.ExecutionHistory,
 		"non-PlanError should not trigger history write")
+}
+
+func TestWakingUpState_OnError_RemovesRevertAnnotation(t *testing.T) {
+	plan := basePlanForState("p", hibernatorv1alpha1.PhaseWakingUp)
+	plan.Annotations = map[string]string{
+		wellknown.AnnotationRevert: "true",
+	}
+	plan.Status.CurrentCycleID = "cycle-001"
+	plan.Status.CurrentOperation = hibernatorv1alpha1.OperationWakeUp
+	plan.Status.Executions = []hibernatorv1alpha1.ExecutionStatus{
+		{Target: "target-a", State: hibernatorv1alpha1.StateFailed},
+	}
+
+	c := newHandlerFakeClient(plan)
+	st := newHandlerState(plan, c)
+	h := &wakingUpState{state: st}
+
+	planErr := AsPlanError(assert.AnError)
+	_ = h.OnError(context.Background(), planErr)
+
+	// Phase transition is handled by the base state.OnError.
+	assert.Equal(t, hibernatorv1alpha1.PhaseError, plan.Status.Phase)
+
+	// Revert annotation must be removed to prevent an immediate retry loop.
+	var updatedPlan hibernatorv1alpha1.HibernatePlan
+	err := c.Get(context.Background(), client.ObjectKeyFromObject(plan), &updatedPlan)
+	require.NoError(t, err)
+	assert.Empty(t, updatedPlan.Annotations[wellknown.AnnotationRevert])
+}
+
+func TestWakingUpState_OnError_ClearsOperationTrigger(t *testing.T) {
+	plan := basePlanForState("p", hibernatorv1alpha1.PhaseWakingUp)
+	plan.Status.OperationTrigger = hibernatorv1alpha1.TriggerRevert
+	plan.Status.CurrentCycleID = "cycle-001"
+	plan.Status.CurrentOperation = hibernatorv1alpha1.OperationWakeUp
+	plan.Status.Executions = []hibernatorv1alpha1.ExecutionStatus{
+		{Target: "target-a", State: hibernatorv1alpha1.StateFailed},
+	}
+
+	c := newHandlerFakeClient(plan)
+	st := newHandlerState(plan, c)
+	h := &wakingUpState{state: st}
+
+	planErr := AsPlanError(assert.AnError)
+	_ = h.OnError(context.Background(), planErr)
+
+	// OperationTrigger must be cleared via the status update (setError).
+	assert.Empty(t, plan.Status.OperationTrigger, "OperationTrigger should be cleared when wakeup fails")
 }

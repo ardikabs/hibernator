@@ -581,6 +581,7 @@ _Appears in:_
 | `planSnapshot` _[PlanSnapshot](#plansnapshot)_ | PlanSnapshot records the resolved execution intent for the current cycle.<br />It is captured at cycle start and preserved until the next cycle begins. |  | Optional: \{\} <br /> |
 | `currentStageIndex` _integer_ | CurrentStageIndex tracks which stage is currently executing (0-based).<br />Reset to 0 when starting new hibernation/wakeup cycle. |  | Optional: \{\} <br /> |
 | `currentOperation` _[PlanOperation](#planoperation)_ | CurrentOperation tracks the current operation type (shutdown or wakeup).<br />Used to determine which phase to transition to when stages complete. |  | Enum: [shutdown wakeup] <br />Optional: \{\} <br /> |
+| `operationTrigger` _[OperationTrigger](#operationtrigger)_ | OperationTrigger tracks what initiated the current operation.<br />Set when operation starts, preserved in stable states (Active/Hibernated)<br />until replaced by the next operation trigger. Empty when plan is in<br />stable state with no pending operation.<br />Used for provenance tracking and trigger-specific control flow in gates. |  | Enum: [Schedule Revert Retry Override Restart] <br />Optional: \{\} <br /> |
 | `executionHistory` _[ExecutionCycle](#executioncycle) array_ | ExecutionHistory records historical execution cycles (max 5).<br />Each cycle contains shutdown and wakeup operation summaries.<br />Oldest cycles are pruned when limit is exceeded. |  | Optional: \{\} <br /> |
 
 
@@ -836,6 +837,30 @@ _Appears in:_
 | `start` _string_ | Start time in HH:MM format (e.g., "20:00"). |  | Pattern: `^([0-1]?[0-9]\|2[0-3]):[0-5][0-9]$` <br />Required: \{\} <br /> |
 | `end` _string_ | End time in HH:MM format (e.g., "06:00"). |  | Pattern: `^([0-1]?[0-9]\|2[0-3]):[0-5][0-9]$` <br />Required: \{\} <br /> |
 | `daysOfWeek` _string array_ | DaysOfWeek specifies which days this window applies to.<br />Valid values: MON, TUE, WED, THU, FRI, SAT, SUN |  | MinItems: 1 <br />items:Enum: [MON TUE WED THU FRI SAT SUN] <br /> |
+
+
+#### OperationTrigger
+
+_Underlying type:_ _string_
+
+OperationTrigger identifies what initiated the current operation.
+Always set when an operation is active (Hibernating/WakingUp phases).
+Preserved in stable states (Active/Hibernated) until replaced by the next operation.
+Used for provenance tracking and trigger-specific control flow in gates.
+
+_Validation:_
+- Enum: [Schedule Revert Retry Override Restart]
+
+_Appears in:_
+- [HibernatePlanStatus](#hibernateplanstatus)
+
+| Field | Description |
+| --- | --- |
+| `Schedule` | TriggerSchedule means the operation was initiated by schedule evaluation<br />(normal time-based hibernation/wakeup, including automatic exception application).<br /> |
+| `Revert` | TriggerRevert means the operation was initiated by the revert annotation<br />to recover from a partial failure (Error -> WakingUp selective wakeup).<br /> |
+| `Retry` | TriggerRetry means the operation was initiated by the retry-now annotation<br />or automatic retry to recover from Error.<br /> |
+| `Override` | TriggerOverride means the operation was initiated by override-action=true<br />to force immediate operation (bypass schedule).<br /> |
+| `Restart` | TriggerRestart means the operation was initiated by restart=true<br />to re-run the last operation.<br /> |
 
 
 #### Parameters

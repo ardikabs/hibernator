@@ -112,6 +112,11 @@ type PlanContext struct {
 	// Workers and state handlers never read this field; it exists solely as a signal
 	// to watchable that a re-delivery should occur.
 	DeliveryNonce int64
+
+	// OperationTrigger tracks the last known OperationTrigger value for this plan.
+	// Used by the worker to detect trigger changes and update Prometheus metrics.
+	// Not used by state handlers.
+	OperationTrigger string
 }
 
 // DeepCopy creates a deep copy of PlanContext.
@@ -120,8 +125,9 @@ func (pc *PlanContext) DeepCopy() *PlanContext {
 		return nil
 	}
 	result := &PlanContext{
-		HasRestoreData: pc.HasRestoreData,
-		DeliveryNonce:  pc.DeliveryNonce,
+		HasRestoreData:   pc.HasRestoreData,
+		DeliveryNonce:    pc.DeliveryNonce,
+		OperationTrigger: pc.OperationTrigger,
 	}
 	if pc.Plan != nil {
 		result.Plan = pc.Plan.DeepCopy()

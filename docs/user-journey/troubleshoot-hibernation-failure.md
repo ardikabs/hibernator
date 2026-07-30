@@ -204,6 +204,84 @@ kubectl describe hibernateplan prod-offhours
 
 ---
 
+## Revert Operation
+
+When a hibernation fails partially (some targets succeed, others fail), the plan enters **PhaseError**. The **revert** operation allows you to selectively wake up targets that were successfully hibernated, while skipping targets that failed.
+
+### When to Use Revert
+
+Use revert when:
+- A partial hibernation failure leaves some targets shut down and others still running
+- You need to restore service for the successfully hibernated targets before fixing the failed ones
+- The error is permanent (won't recover with retry) and you want to restore partial state
+
+### Revert Lifecycle
+
+```
+PhaseError + revert annotation → PhaseWakingUp → [success] PhaseActive
+                                                    [failure] PhaseError (no loop)
+```
+
+### How to Trigger Revert
+
+```bash
+# Set the revert annotation (only allowed when plan is in Error phase)
+kubectl annotate hibernateplan <plan-name> hibernator.ardikabs.com/revert=true
+
+# The controller will automatically:
+# 1. Check for live restore data (only targets with restore data are reverted)
+# 2. Transition to WakingUp
+# 3. Spawn wakeup jobs for successfully hibernated targets
+# 4. Skip targets that failed hibernation (no-op)
+```
+
+### OperationTrigger Status Field
+
+The `status.operationTrigger` field tracks what initiated the current operation:
+
+| Value | Meaning |
+|-------|---------|
+| `Schedule` | Normal schedule-driven hibernation/wakeup |
+| `Revert` | Revert annotation triggered selective wakeup |
+| `Retry` | Retry annotation or automatic backoff retry |
+| `Override` | Manual override annotation forced operation |
+| `Restart` | Restart annotation re-triggered last operation |
+| *(empty)* | No active operation or operation completed |
+
+**Important:** When a revert-triggered wakeup fails and returns to PhaseError, `operationTrigger` is automatically cleared (for user-intent triggers). This prevents the controller from immediately re-triggering another revert attempt, which would create an infinite retry loop.
+
+### Manual Retry After Failed Revert
+
+If revert fails (wakeup job fails), you must manually retry:
+
+```bash
+# 1. Check status
+kubectl get hibernateplan <plan-name> -o jsonpath='{.status.phase}'
+# Output: Error
+
+# 2. Verify OperationTrigger is cleared (for user-intent triggers like Revert)
+kubectl get hibernateplan <plan-name> -o jsonpath='{.status.operationTrigger}'
+# Output: (empty)
+
+# 3. Re-apply the revert annotation to retry
+kubectl annotate hibernateplan <plan-name> hibernator.ardikabs.com/revert=true
+```
+
+### Revert During Hibernation Window
+
+If revert completes during an active window → plan becomes **PhaseActive**.
+If revert completes during a hibernation window → plan becomes **PhaseSuspended** with `spec.suspend=true` to prevent immediate re-hibernation.
+
+### Common Revert Issues
+
+| Issue | Cause | Solution |
+|-------|-------|----------|
+| "no targets have live restore data" | All targets failed hibernation | Fix root cause, retry hibernation |
+| Revert annotation rejected | Plan not in Error phase | Wait for plan to reach Error phase |
+| Revert loops indefinitely | Pre-`OperationTrigger` behavior | Upgrade controller; manual retry required |
+
+---
+
 ## Outcome
 
 ✓ Systematically diagnosed and recovered from hibernation failure; understood root cause for prevention.

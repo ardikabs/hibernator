@@ -57,6 +57,20 @@ func (state *wakingUpState) OnError(ctx context.Context, err error) StateResult 
 	var pe *PlanError
 	if errors.As(err, &pe) {
 		plan := state.plan()
+
+		// If a revert was in progress, remove the annotation and clear OperationTrigger
+		// before transitioning to PhaseError. This prevents the controller from
+		// immediately re-triggering another revert attempt and looping indefinitely.
+		if plan.Annotations[wellknown.AnnotationRevert] == "true" || plan.Status.OperationTrigger == hibernatorv1alpha1.TriggerRevert {
+			state.Log.Info("wakeup failed during revert, clearing revert state to prevent retry loop")
+			orig := plan.DeepCopy()
+			delete(plan.Annotations, wellknown.AnnotationRevert)
+			if patchErr := state.patchAndPreserveStatus(ctx, plan, client.MergeFrom(orig)); patchErr != nil {
+				state.Log.Error(patchErr, "failed to remove revert annotation during wakeup error")
+			}
+			// OperationTrigger is cleared via the status update below (OnError path)
+		}
+
 		if hasExecutionProgress(plan) {
 			summary := BuildOperationSummary(state.Clock, plan, hibernatorv1alpha1.OperationWakeUp)
 			currentCycleID := plan.Status.CurrentCycleID
@@ -103,6 +117,8 @@ func (state *wakingUpState) finalize(ctx context.Context, log logr.Logger, _ sch
 			p.Status.RetryCount = 0
 			p.Status.LastRetryTime = nil
 			p.Status.ErrorMessage = ""
+			// Clear OperationTrigger: operation completed successfully.
+			p.Status.OperationTrigger = ""
 		}),
 		PostHook: chainHooks(
 			state.notifyHook(hibernatorv1alpha1.EventSuccess, func(p *hibernatorv1alpha1.HibernatePlan) notification.Payload {

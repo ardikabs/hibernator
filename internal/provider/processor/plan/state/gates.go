@@ -76,3 +76,29 @@ func (s *state) checkAutoSuspendAnnotation() Handler {
 
 	return nil
 }
+
+// revertGate intercepts plans in PhaseError that have the revert annotation set,
+// routing them to the dedicated revert handler. Revert is not part of the normal
+// error recovery path (retry / manual recovery), so it is evaluated as a gate
+// before phase-based dispatch.
+//
+// If OperationTrigger == TriggerRevert, the gate is skipped to prevent retry loops
+// when a revert-triggered wakeup fails and returns to PhaseError. The user must
+// manually remove and re-apply the revert annotation to retry.
+func revertGate(s *state) Handler {
+	plan := s.plan()
+
+	if plan.Status.Phase != hibernatorv1alpha1.PhaseError {
+		return nil
+	}
+
+	if plan.Status.OperationTrigger == hibernatorv1alpha1.TriggerRevert {
+		return nil
+	}
+
+	if plan.Annotations != nil && plan.Annotations[wellknown.AnnotationRevert] == "true" {
+		return &revertState{state: s}
+	}
+
+	return nil
+}
