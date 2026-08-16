@@ -6,6 +6,7 @@ Licensed under the Apache License, Version 2.0.
 package scheduler
 
 import (
+	"errors"
 	"fmt"
 	"strings"
 	"time"
@@ -24,6 +25,14 @@ const (
 	ExceptionSuspend ExceptionType = "suspend"
 	// ExceptionReplace completely replaces the base schedule during the exception period.
 	ExceptionReplace ExceptionType = "replace"
+)
+
+// dayBoundaryEndHour/Minute define the last minute of a calendar day. They are
+// used to cap overnight suspension windows so they do not overrun into a day
+// that is excluded from the window's DaysOfWeek.
+const (
+	dayBoundaryEndHour   = 23
+	dayBoundaryEndMinute = 59
 )
 
 // Exception represents a schedule exception for evaluation.
@@ -341,11 +350,20 @@ func (e *ScheduleEvaluator) evaluateWindows(windows []OffHourWindow, timezone st
 		}, nil
 	}
 
-	var combined *EvaluationResult
+	var (
+		combined    *EvaluationResult
+		parseErrors []error
+	)
 	for _, w := range windows {
 		hibernateCron, wakeUpCron, err := ParseWindowToCron(w.Start, w.End, w.DaysOfWeek...)
 		if err != nil {
-			return nil, fmt.Errorf("convert window to cron: %w", err)
+			// Defense-in-depth: skip invalid windows rather than failing the entire
+			// schedule evaluation. The validating webhook is the primary guardrail;
+			// this path handles cases where the webhook was bypassed or the object
+			// was created before the validation was added. A malformed window is
+			// ignored so that the remaining valid windows can still drive hibernation.
+			parseErrors = append(parseErrors, fmt.Errorf("window %s-%s %v: %w", w.Start, w.End, w.DaysOfWeek, err))
+			continue
 		}
 
 		sw := ScheduleWindow{
@@ -380,6 +398,13 @@ func (e *ScheduleEvaluator) evaluateWindows(windows []OffHourWindow, timezone st
 		if combined.ShouldHibernate {
 			combined.CurrentState = "hibernated"
 		}
+	}
+
+	if combined == nil {
+		if len(parseErrors) > 0 {
+			return nil, fmt.Errorf("schedule evaluation failed: most likely error during converting window to cron (%d window(s) failed): %w", len(parseErrors), errors.Join(parseErrors...))
+		}
+		return nil, fmt.Errorf("schedule evaluation failed: no windows could be evaluated")
 	}
 
 	return combined, nil
@@ -581,11 +606,15 @@ func (e *ScheduleEvaluator) findNextSuspensionStart(windows []OffHourWindow, now
 }
 
 // findSuspensionEnd finds when the current or upcoming suspension window ends.
+// When multiple windows match the current time, it returns the latest end time
+// so that the suspension continues until every active window has expired.
 func (e *ScheduleEvaluator) findSuspensionEnd(windows []OffHourWindow, now time.Time) time.Time {
 	currentDay := strings.ToUpper(now.Weekday().String()[:3])
 	currentHour := now.Hour()
 	currentMin := now.Minute()
 	currentTimeMinutes := currentHour*60 + currentMin
+
+	var latestEnd time.Time
 
 	for _, w := range windows {
 		// Check if today is in the window's days
@@ -623,16 +652,47 @@ func (e *ScheduleEvaluator) findSuspensionEnd(windows []OffHourWindow, now time.
 			inWindow = currentTimeMinutes >= startMinutes || currentTimeMinutes < endMinutes
 		}
 
-		if inWindow {
-			// Calculate when this window ends
-			endTime := time.Date(now.Year(), now.Month(), now.Day(), endHour, endMin, 0, 0, now.Location())
-			if endMinutes <= startMinutes && currentTimeMinutes >= startMinutes {
-				// Overnight window, end is tomorrow
-				endTime = endTime.Add(24 * time.Hour)
+		if !inWindow {
+			continue
+		}
+
+		// Calculate when this window ends
+		endTime := time.Date(now.Year(), now.Month(), now.Day(), endHour, endMin, 0, 0, now.Location())
+		if endMinutes <= startMinutes && currentTimeMinutes >= startMinutes {
+			// Overnight window, end is tomorrow
+			endTime = endTime.Add(24 * time.Hour)
+
+			// Cap the overnight end at the day boundary if the following day is
+			// not included in the window's DaysOfWeek. This keeps findSuspensionEnd
+			// consistent with isInTimeWindows(), which only matches the current
+			// calendar day against DaysOfWeek. Without this cap, a TUE/WED
+			// 20:00→19:59 window would report its end as THU 19:59, causing the
+			// requeue processor to miss the day-boundary transition.
+			//
+			// The cap is always earlier than endTime here because endTime is on
+			// the following day (at least 00:00) while dayEnd is 23:59 today.
+			tomorrow := now.Add(24 * time.Hour)
+			if !dayInDays(tomorrow.Weekday(), w.DaysOfWeek) {
+				endTime = time.Date(now.Year(), now.Month(), now.Day(), dayBoundaryEndHour, dayBoundaryEndMinute, 0, 0, now.Location())
 			}
-			return endTime
+		}
+
+		if latestEnd.IsZero() || endTime.After(latestEnd) {
+			latestEnd = endTime
 		}
 	}
 
-	return time.Time{}
+	return latestEnd
+}
+
+// dayInDays reports whether the given weekday is listed in the supplied
+// DaysOfWeek strings (e.g., "MON", "TUE").
+func dayInDays(weekday time.Weekday, days []string) bool {
+	dayStr := strings.ToUpper(weekday.String()[:3])
+	for _, d := range days {
+		if strings.EqualFold(d, dayStr) {
+			return true
+		}
+	}
+	return false
 }
