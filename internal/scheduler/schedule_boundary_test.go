@@ -1,6 +1,7 @@
 package scheduler
 
 import (
+	"strings"
 	"testing"
 	"time"
 
@@ -512,5 +513,144 @@ func TestSuspendExceptionWeekendCarveOut(t *testing.T) {
 				t.Errorf("NextRequeueTime = %v, want %v", requeue, tt.wantRequeue)
 			}
 		})
+	}
+}
+
+// TestSuspendExceptionOvernightWindowCapsAtDayBoundary verifies that an overnight
+// suspend window does not overrun into a calendar day that is excluded from the
+// window's DaysOfWeek. Without this cap, findSuspensionEnd() would report the WED
+// 20:00→19:59 window as ending at THU 19:59, arming the requeue processor for the
+// wrong transition and keeping resources awake through THU.
+//
+// It also verifies the complementary cases: when the following day IS included in
+// DaysOfWeek the overnight end is not capped, and when multiple windows overlap
+// the latest end time is returned.
+func TestSuspendExceptionOvernightWindowCapsAtDayBoundary(t *testing.T) {
+	timezone := "UTC"
+
+	// January 28, 2026 is a Wednesday.
+	wed2030 := time.Date(2026, 1, 28, 20, 30, 0, 0, time.UTC)
+
+	tests := []struct {
+		name              string
+		now               time.Time
+		exceptionWindows  []OffHourWindow
+		wantNextHibernate time.Time
+	}{
+		{
+			name: "capped - WED window cannot extend into THU (THU not in days)",
+			now:  wed2030,
+			exceptionWindows: []OffHourWindow{
+				{Start: "20:00", End: "19:59", DaysOfWeek: []string{"TUE", "WED"}},
+			},
+			wantNextHibernate: time.Date(2026, 1, 28, 23, 59, 0, 0, time.UTC),
+		},
+		{
+			name: "not capped - WED window extends into THU (THU is in days)",
+			now:  wed2030,
+			exceptionWindows: []OffHourWindow{
+				{Start: "20:00", End: "06:00", DaysOfWeek: []string{"MON", "TUE", "WED", "THU", "FRI"}},
+			},
+			wantNextHibernate: time.Date(2026, 1, 29, 6, 0, 0, 0, time.UTC),
+		},
+		{
+			name: "multiple overlapping windows - latest end wins",
+			now:  wed2030,
+			exceptionWindows: []OffHourWindow{
+				{Start: "20:00", End: "22:00", DaysOfWeek: []string{"WED"}},
+				{Start: "20:00", End: "23:30", DaysOfWeek: []string{"WED"}},
+			},
+			wantNextHibernate: time.Date(2026, 1, 28, 23, 30, 0, 0, time.UTC),
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			baseWindows := []OffHourWindow{
+				{Start: "20:00", End: "06:00", DaysOfWeek: []string{"MON", "TUE", "WED", "THU", "FRI", "SAT", "SUN"}},
+			}
+
+			exception := &Exception{
+				Type:       ExceptionSuspend,
+				ValidFrom:  time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC),
+				ValidUntil: time.Date(2026, 12, 31, 23, 59, 59, 0, time.UTC),
+				Windows:    tt.exceptionWindows,
+			}
+
+			fakeClock := clocktesting.NewFakeClock(tt.now)
+			evaluator := NewScheduleEvaluator(fakeClock)
+
+			result, err := evaluator.Evaluate(baseWindows, timezone, []*Exception{exception})
+			if err != nil {
+				t.Fatalf("Evaluate() error = %v", err)
+			}
+
+			if result.ShouldHibernate {
+				t.Errorf("ShouldHibernate = %v, want false (inside suspension window)", result.ShouldHibernate)
+			}
+
+			if !result.NextHibernateTime.Equal(tt.wantNextHibernate) {
+				t.Errorf("NextHibernateTime = %v, want %v", result.NextHibernateTime, tt.wantNextHibernate)
+			}
+		})
+	}
+}
+
+// TestEvaluateWindowsSkipsInvalidWindow verifies that a malformed window
+// (start == end) does not cause the entire schedule evaluation to fail.
+// Defense-in-depth: the validating webhook is the primary guardrail, but if it
+// is bypassed the scheduler should ignore the invalid window and continue
+// evaluating the remaining valid windows.
+func TestEvaluateWindowsSkipsInvalidWindow(t *testing.T) {
+	// January 28, 2026 is a Wednesday.
+	now := time.Date(2026, 1, 28, 23, 0, 0, 0, time.UTC)
+	fakeClock := clocktesting.NewFakeClock(now)
+	evaluator := NewScheduleEvaluator(fakeClock)
+
+	baseWindows := []OffHourWindow{
+		// Invalid window: start == end. Should be skipped.
+		{Start: "20:00", End: "20:00", DaysOfWeek: []string{"MON", "TUE", "WED", "THU", "FRI", "SAT", "SUN"}},
+		// Valid window: hibernate 20:00-06:00 every day.
+		{Start: "20:00", End: "06:00", DaysOfWeek: []string{"MON", "TUE", "WED", "THU", "FRI", "SAT", "SUN"}},
+	}
+
+	result, err := evaluator.Evaluate(baseWindows, "UTC", nil)
+	if err != nil {
+		t.Fatalf("Evaluate() error = %v, want nil", err)
+	}
+
+	if !result.ShouldHibernate {
+		t.Errorf("ShouldHibernate = %v, want true (valid window should still hibernate)", result.ShouldHibernate)
+	}
+}
+
+// TestEvaluateWindowsAllInvalidReturnsError verifies that when every window
+// fails cron conversion, evaluateWindows returns a clear aggregated error
+// instead of a nil result with no error.
+func TestEvaluateWindowsAllInvalidReturnsError(t *testing.T) {
+	// January 28, 2026 is a Wednesday.
+	now := time.Date(2026, 1, 28, 23, 0, 0, 0, time.UTC)
+	fakeClock := clocktesting.NewFakeClock(now)
+	evaluator := NewScheduleEvaluator(fakeClock)
+
+	baseWindows := []OffHourWindow{
+		// Invalid window: start == end.
+		{Start: "20:00", End: "20:00", DaysOfWeek: []string{"MON", "TUE", "WED", "THU", "FRI", "SAT", "SUN"}},
+		// Invalid window: unsupported day value.
+		{Start: "09:00", End: "17:00", DaysOfWeek: []string{"HOLIDAY"}},
+	}
+
+	_, err := evaluator.Evaluate(baseWindows, "UTC", nil)
+	if err == nil {
+		t.Fatalf("Evaluate() error = nil, want aggregated cron conversion error")
+	}
+
+	wantSubstr := "converting window to cron"
+	if !strings.Contains(err.Error(), wantSubstr) {
+		t.Errorf("error message = %q, want substring %q", err.Error(), wantSubstr)
+	}
+
+	if !strings.Contains(err.Error(), "2 window(s) failed") {
+		t.Errorf("error message = %q, want '2 window(s) failed'", err.Error())
 	}
 }
