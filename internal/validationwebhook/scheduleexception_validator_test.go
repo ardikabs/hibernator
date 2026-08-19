@@ -308,6 +308,41 @@ func TestScheduleExceptionValidator_ValidateCreate(t *testing.T) {
 			errMsg:  "must be one of: MON, TUE, WED, THU, FRI, SAT, SUN",
 		},
 		{
+			name: "same start and end time",
+			exception: &hibernatorv1alpha1.ScheduleException{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:      "test-exception",
+					Namespace: "default",
+				},
+				Spec: hibernatorv1alpha1.ScheduleExceptionSpec{
+					PlanRef: hibernatorv1alpha1.PlanReference{
+						Name:      "test-plan",
+						Namespace: "default",
+					},
+					ValidFrom:  metav1.Time{Time: time.Now()},
+					ValidUntil: metav1.Time{Time: time.Now().Add(7 * 24 * time.Hour)},
+					Type:       "extend",
+					Windows: []hibernatorv1alpha1.OffHourWindow{
+						{Start: "06:00", End: "06:00", DaysOfWeek: []string{"SAT"}},
+					},
+				},
+			},
+			setup: func() client.Client {
+				plan := &hibernatorv1alpha1.HibernatePlan{
+					ObjectMeta: metav1.ObjectMeta{Name: "test-plan", Namespace: "default"},
+					Spec: hibernatorv1alpha1.HibernatePlanSpec{
+						Schedule: hibernatorv1alpha1.Schedule{
+							Timezone: "UTC",
+							OffHours: []hibernatorv1alpha1.OffHourWindow{{Start: "20:00", End: "06:00", DaysOfWeek: []string{"MON"}}},
+						},
+					},
+				}
+				return setupTestClient(plan)
+			},
+			wantErr: true,
+			errMsg:  "start and end times must be different",
+		},
+		{
 			name: "non-colliding same-type exceptions allowed (different days)",
 			exception: &hibernatorv1alpha1.ScheduleException{
 				ObjectMeta: metav1.ObjectMeta{

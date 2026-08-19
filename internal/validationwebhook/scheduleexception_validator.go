@@ -360,6 +360,14 @@ func (v *ScheduleExceptionValidator) validateWindows(exception *hibernatorv1alph
 			))
 		}
 
+		if window.Start == window.End {
+			allErrs = append(allErrs, field.Invalid(
+				windowPath.Child("start"),
+				window.Start,
+				"start and end times must be different; a window requires a clear start and end schedule",
+			))
+		}
+
 		if len(window.DaysOfWeek) == 0 {
 			allErrs = append(allErrs, field.Required(
 				windowPath.Child("daysOfWeek"),
