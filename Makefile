@@ -289,7 +289,7 @@ controller-gen: ## Download controller-gen locally if necessary.
 envtest: ## Download envtest locally if necessary.
 	@test -s $(ENVTEST) || { \
 		echo "$(CYAN)Installing setup-envtest...$(RESET)"; \
-		go install sigs.k8s.io/controller-runtime/tools/setup-envtest@latest; \
+		go install sigs.k8s.io/controller-runtime/tools/setup-envtest@release-0.23; \
 	}
 
 .PHONY: mockery
