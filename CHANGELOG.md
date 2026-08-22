@@ -1,3 +1,12 @@
+<a name="v1.6.5"></a>
+
+## [v1.6.5](https://github.com/ardikabs/hibernator/compare/v1.6.4...v1.6.5) (2026-08-19)
+
+### 🐛 Bug Fixes
+
+* **scheduler:** cap suspend exception overnight windows at day boundary ([#187](https://github.com/ardikabs/hibernator/issues/187))
+
+
 <a name="v1.6.4"></a>
 
 ## [v1.6.4](https://github.com/ardikabs/hibernator/compare/v1.6.3...v1.6.4) (2026-07-21)
