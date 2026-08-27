@@ -1,0 +1,51 @@
+name: Hotfix
+
+on:
+  pull_request_target:
+    types:
+      - closed
+
+permissions:
+  contents: write
+  pull-requests: write
+  issues: write
+
+jobs:
+  hotfix:
+    name: Hotfix Release
+    runs-on: ubuntu-latest
+    steps:
+      # Step 1: Cherry-pick merged PRs to hotfix branch (mode: hotfix)
+      - name: Checkout Repository
+        if: |
+          github.event.pull_request.merged == true &&
+          github.event.pull_request.base.ref == 'main'
+        uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Run Cherry-Pick Accumulator
+        if: |
+          github.event.pull_request.merged == true &&
+          github.event.pull_request.base.ref == 'main'
+        uses: ardikabs/actions/release/cherry-pick-hotfix@main
+        with:
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          mode: 'hotfix'
+          squash-sha: ${{ github.event.pull_request.merge_commit_sha }}
+          pr-number: ${{ github.event.pull_request.number }}
+          pr-title: ${{ github.event.pull_request.title }}
+          pr-url: ${{ github.event.pull_request.html_url }}
+          labels: ${{ toJson(github.event.pull_request.labels.*.name) }}
+
+      # Step 2: Resolve and label source PRs as completed when the hotfix PR merges
+      - name: Label Source PRs as Completed
+        if: |
+          github.event.pull_request.merged == true &&
+          startsWith(github.event.pull_request.base.ref, 'release/')
+        uses: ardikabs/actions/release/cherry-pick-hotfix@main
+        with:
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          mode: 'completed'
+          pr-number: ${{ github.event.pull_request.number }}
