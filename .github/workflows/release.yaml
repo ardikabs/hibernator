@@ -25,6 +25,11 @@ on:
         description: 'Short description about this release (e.g., "Release v1.5 <codename>").'
         required: true
         default: 'Next Release'
+      prerelease:
+        description: 'Mark this release as a pre-release / release candidate (RC).'
+        required: true
+        type: boolean
+        default: false
 
 jobs:
   verification:
@@ -32,7 +37,8 @@ jobs:
     runs-on: ubuntu-latest
     if: |
       (github.event_name == 'workflow_run' && github.event.workflow_run.head_branch == 'main') ||
-      (github.event_name == 'push' && startsWith(github.ref, 'refs/heads/release/v'))
+      (github.event_name == 'push' && startsWith(github.ref, 'refs/heads/release/v')) ||
+      (github.event_name == 'workflow_dispatch')
     outputs:
       should_release: ${{ steps.decision.outputs.run }}
     steps:
@@ -88,9 +94,11 @@ jobs:
           version: v1.14.2
 
       - name: Generate Semantic Release Config for App
+        env:
+          PRERELEASE: "${{ inputs.prerelease || 'false' }}"
         run: |
           chmod +x hack/generate-releaserc.sh
-          ./hack/generate-releaserc.sh "${{ github.ref_name }}" "${{ github.event_name }}"
+          ./hack/generate-releaserc.sh "${{ github.ref_name }}" "${{ github.event_name }}" "$PRERELEASE"
           cat .releaserc.yml
 
       - name: Semantic Release (App)
