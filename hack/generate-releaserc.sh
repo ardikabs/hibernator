@@ -5,6 +5,7 @@ set -e
 # --- Configuration & Inputs ---
 CURRENT_BRANCH=$1
 EVENT_NAME=$2
+PRERELEASE=$3
 BASE_FILE=".github/releaserc/base.releaserc.yml"
 OUTPUT_FILE=".releaserc.yml"
 
@@ -55,10 +56,10 @@ EOF
     local result=""
 
     if [[ "$CURRENT_BRANCH" == "main" ]]; then
-        if [[ "$EVENT_NAME" == "workflow_dispatch" ]]; then
-            result="$main_only"
-        else
+        if [[ "$EVENT_NAME" == "workflow_run" || "$PRERELEASE" == "true" ]]; then
             result="$stable_rc"
+        elif [[ "$EVENT_NAME" == "workflow_dispatch" ]]; then
+            result="$main_only"
         fi
         result="$result"$'\n'"$maintenance_pattern"
 
