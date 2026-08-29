@@ -9,7 +9,7 @@ date: 2026-03-05
 
 **Keywords:** Architecture, AsyncReconciler, WatchablePipeline, PhaseProcessors, Provider, Worker, Coordinator, LegacyMigration, FeatureFlag, StatusWriter, IdempotencyGuarantees
 
-**Status:** In Progress 🚀
+**Status:** Implemented ✅
 
 ---
 
@@ -52,7 +52,7 @@ date: 2026-03-05
 
 ## Summary
 
-This RFC proposes replacing the synchronous HibernatePlan reconciler with an asynchronous, phase-driven processing pipeline inspired by [Envoy Gateway](https://github.com/envoyproxy/gateway). The new architecture uses a `watchable.Map` pub/sub bus to decouple K8s API observation (Provider) from business logic (Phase Processors) and K8s status writes (Status Writer). A feature flag (`--legacy-reconciler`) preserves the existing stable code path untouched.
+This RFC replaced the synchronous HibernatePlan reconciler with an asynchronous, phase-driven processing pipeline inspired by [Envoy Gateway](https://github.com/envoyproxy/gateway). The architecture uses a `watchable.Map` pub/sub bus to decouple K8s API observation (Provider) from business logic (Phase Processors) and K8s status writes (Status Writer). The migration feature flag (`--legacy-reconciler`) was used during rollout and has since been removed after graduation.
 
 ---
 
@@ -141,7 +141,7 @@ Sync phase handlers for core reconcile flow plus a separate event channel for cr
 ## Goals
 
 - Replace the synchronous HibernatePlan reconciler with an async, phase-driven pipeline.
-- Zero behaviour change for existing users — legacy code path remains as default behind a feature flag.
+- Zero behavior regression during migration, followed by async pipeline graduation as the main reconciler.
 - Phase processors are independently testable without K8s client mocks.
 - Cross-cutting concerns (notifications, audit) can be added as new subscribers — no modifications to core processors.
 - All K8s status I/O is isolated to a single, dedicated Status Writer processor.
@@ -149,7 +149,7 @@ Sync phase handlers for core reconcile flow plus a separate event channel for cr
 
 ## Non-Goals
 
-- Remove or deprecate `internal/controller/` in this RFC (separate future PR).
+- Re-introduce a legacy reconciler runtime path after async graduation.
 - Implement new executor types or new CRDs.
 - Change any observable user-facing API or behaviour.
 
@@ -241,14 +241,19 @@ Replace the synchronous HibernatePlan reconciler with an asynchronous pipeline:
 
 ### Feature Flag Strategy
 
-To preserve all existing stable code untouched, the new architecture lives alongside the current reconcilers behind a feature flag:
+During migration, the architecture lived behind a feature flag:
 
 ```bash
---legacy-reconciler=true   (default)  → loads existing reconcilers from internal/controller/
---legacy-reconciler=false              → loads new pipeline from internal/provider/ + internal/provider/processor/
+--legacy-reconciler=true   (migration phase)  → load existing reconcilers from internal/controller/
+--legacy-reconciler=false  (migration phase)  → load async pipeline from internal/provider/ + internal/provider/processor/
 ```
 
-**Implementation in `cmd/controller/app/app.go`**:
+Current state:
+
+- Async reconciler is the main reconciler path.
+- Legacy reconciler runtime switching has been removed.
+
+**Historical implementation in `cmd/controller/app/app.go`**:
 
 ```go
 // In Run():
@@ -444,7 +449,7 @@ Worker delegates to state handlers via `buildConfig()` + `dispatch()`:
 
 #### Phase 5: Wiring — Composition Root
 
-In `cmd/controller/app/app.go`, behind `--legacy-reconciler=false`:
+During migration, in `cmd/controller/app/app.go` behind `--legacy-reconciler=false`:
 
 1. Create shared `message.ControllerResources` and `message.ControllerStatuses`.
 2. Create and register Provider reconcilers via `SetupWithManager`.
@@ -555,7 +560,7 @@ No separate timers needed in Workers during execution. During idle phases, the p
 | **`updateExecutionStatuses` drift detection** | Snapshot execution states before mutation; only `Send()` when drift is detected. Eliminates redundant writes on poll ticks where jobs haven't progressed. |
 | **`forceWakeUpOnResume` via Hibernated dispatch** | Routes to `idleState` which calls canonical `transitionToWakingUp()` — correctly initialises fresh Executions, new CycleID, StageIndex=0. Avoids stale execution state from pre-suspension cycle. |
 | **Provider pre-computes schedule evaluation** | Keeps Workers pure (act on pre-computed data) while maintaining the provider's requeue-based schedule polling. |
-| **Feature flag with legacy default** | Zero risk to existing stable code. New architecture can be tested in parallel without affecting production users. |
+| **Feature flag during migration** | Gave zero-risk rollout while validating the async path. Runtime legacy switching was removed after graduation. |
 
 ---
 
@@ -565,7 +570,7 @@ No separate timers needed in Workers during execution. During idle phases, the p
 
 The following key decisions were made during the initial implementation on 2026-03-01:
 
-1. **Feature Flag Default**: `--legacy-reconciler=true` — existing reconcilers remain the default. New pipeline loads only with `--legacy-reconciler=false`.
+1. **Feature Flag During Migration**: `--legacy-reconciler` was used during rollout to switch between legacy and async paths, then removed after async graduation.
 
 2. **Coordinator + Worker over per-phase processors**: Consolidated from the design doc's original processor-per-phase with `SubscribeSubset`. Eliminates sequential `HandleSubscription` bottleneck and makes the state machine natural.
 
@@ -631,7 +636,7 @@ Scope: ~5,300 new lines across 29 files. Branch `feat/async-reconciler`, single 
 
 2. **`StatusQueue` with Drop-on-Full**: Combined with the status writer's `isPlanStatusEqual` guard and `RetryOnConflict`, dropped updates are genuinely safe.
 
-3. **Feature Flag Isolation**: The `--legacy-reconciler` flag with clean branching in `cmd/controller/app/app.go` means zero risk to the existing stable code path.
+3. **Feature Flag Isolation (Migration Phase)**: Clean branching in `cmd/controller/app/app.go` enabled low-risk rollout before removing runtime legacy switching.
 
 4. **Provider Predicates**: `GenerationChangedPredicate | AnnotationChangedPredicate` correctly breaks the status-write feedback loop. `configMapDataChangedPredicate` filtering annotation-only writes on restore ConfigMaps prevents spurious reconciles during wakeup.
 
@@ -648,7 +653,7 @@ Scope: ~5,300 new lines across 29 files. Branch `feat/async-reconciler`, single 
 | ID | Issue | Status |
 |----|-------|--------|
 | C1 | `ScheduleExceptionProcessor.removeFromPlanStatus` directly called `p.Status().Update()` — bypasses the Status Writer and violates the core architectural invariant | ✅ Fixed: Rewrote to queue via `PlanStatuses.Send()` with mutation closure |
-| C2 | No Job watches in Provider — event detection relies solely on the 5s poll timer (0–5s detection lag) | ⏳ Deferred: Functional with poll timer; `.Owns(&batchv1.Job{})` can be added as a performance enhancement |
+| C2 | No Job watches in Provider — event detection relied solely on the 5s poll timer (0–5s detection lag) | ✅ Fixed: Job watches are now added in Provider for event-driven execution updates |
 | C3 | `handleDelete` received potentially stale exception from watchable Delete event — finalizer patch had no retry | ✅ Fixed: Re-fetch from `APIReader` at entry; finalizer patch wrapped in `RetryOnConflict` with re-fetch per iteration |
 
 #### High
@@ -707,7 +712,7 @@ Four additional fixes closed race conditions in the optimistic status pipeline t
 | `go test ./internal/metrics/...` — 18/18 pass | ✅ |
 | `go test ./api/...` — all pass | ✅ |
 | `go test ./internal/scheduler/... ./internal/restore/... ./internal/recovery/...` | ✅ |
-| Unit tests for `internal/provider/processor/...` packages | ⚠️ Gap |
+| Unit tests for `internal/provider/processor/...` packages | ✅ In place |
 
 **Status Write Path Integrity** — only the StatusWriter writes status sub-resources. All 14 mutation sites in plan state handlers route through `PlanStatuses.Send()`. Exception `removeFromPlanStatus` routes through `PlanStatuses.Send()`.
 
@@ -717,19 +722,18 @@ Four additional fixes closed race conditions in the optimistic status pipeline t
 
 | ID | Severity | Risk | Action |
 |----|----------|------|--------|
-| C2 | Critical | Low | No Job watches — 0–5s detection lag via poll timer. Functional but sub-optimal. Add `.Owns(&batchv1.Job{})` as follow-up. |
 | M1 | Medium | Very Low | Max dispatch depth ~4 in practice. Optional `maxDispatchDepth` guard. |
 | M3 | Medium | Low | Exception processor serial; bottleneck unlikely below ~100 concurrent exceptions. |
 | L4 | Low | None | Design doc directory structure mismatch — cosmetic. |
 | L5 | Low | None | Missing rapid-coalescing integration test. |
 
-### Conditions for Flipping `--legacy-reconciler=false` as Default
+### Graduation Checklist
 
-Before graduating the async pipeline as default, the following must be completed:
+The following graduation requirements are complete:
 
-1. **Unit tests** for `internal/provider/processor/...` packages — currently zero coverage on state handlers, Worker, Coordinator, and Status Writer.
-2. **E2E validation** of a full hibernation → wakeup → error → recovery cycle under `--legacy-reconciler=false`.
-3. **C2 (Job watches)** — adding `.Owns(&batchv1.Job{})` to the provider is strongly recommended for production readiness.
+1. **Unit tests** for `internal/provider/processor/...` packages are in place.
+2. **E2E validation** covers full hibernation → wakeup → error → recovery use cases in actual environments.
+3. **Job watches** are added to the provider for event-driven execution tracking.
 
 ---
 
@@ -779,12 +783,12 @@ Verify coalescing, initial state bootstrap, panic recovery, metrics.
 | 2 | Provider Layer: HibernatePlan + ScheduleException providers | ✅ Done |
 | 3 | Coordinator + Worker + all state handlers | ✅ Done |
 | 4 | Status Writer processor | ✅ Done |
-| 5 | Wiring in `app.go` behind `--legacy-reconciler=false` | ✅ Done |
-| 6 | Unit tests for processor packages | ⏳ Pending |
-| 7 | E2E test: full hibernation/wakeup/error/recovery cycle | ⏳ Pending |
-| 8 | C2: Add Job watches to provider | ⏳ Pending |
-| 9 | Flip default: `--legacy-reconciler=false` | ⏳ Pending (after 6–8) |
-| 10 | Remove `internal/controller/` legacy code (separate PR) | ⏳ Future |
+| 5 | Wiring in `app.go` behind migration flag | ✅ Done |
+| 6 | Unit tests for processor packages | ✅ Done |
+| 7 | E2E coverage for hibernation/wakeup/error/recovery | ✅ Done |
+| 8 | C2: Add Job watches to provider | ✅ Done |
+| 9 | Graduate async reconciler as main path and remove runtime legacy switch | ✅ Done |
+| 10 | Legacy cleanup follow-up (if any remaining non-runtime code) | 🔧 Ongoing |
 
 ---
 

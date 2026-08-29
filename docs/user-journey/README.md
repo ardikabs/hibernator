@@ -23,6 +23,12 @@ Journeys cross multiple RFCs and represent the user's perspective, not technical
 4. **Check RFC context**: Each journey links to relevant RFCs for deeper technical background.
 5. **Check status**: Each journey shows its implementation status (see legend below).
 
+### Current Adoption Context (2026-04)
+
+- **Primary users today**: Internal platform teams.
+- **Most proven use case**: On-demand operations across `HibernatePlan` + `ScheduleException`.
+- **Policy posture**: Intent and governance affecting features are strict by default; cosmetic UX concerns are handled warning-first.
+
 ---
 
 ## Status Legend
@@ -84,8 +90,8 @@ Core features that are production-ready and actively used.
 | **Create K8SCluster Connector** | Configure Kubernetes cluster access (EKS, GKE, on-prem) | Cluster Operator, DevOps | ✅ Implemented | RFC-0001 | [Details](./create-k8scluster-connector.md) |
 | **Wakeup and Restore Resources** | Automatically restore resources from hibernation to normal operation | SRE, Platform Engineer | ✅ Implemented | RFC-0001 | [Details](./wakeup-and-restore-resources.md) |
 | **Discover Hibernation Impact** | Understand how hibernation affects application deployments | End User, Application Team | ✅ Implemented | RFC-0002 | [Details](./discover-hibernation-impact.md) |
-| **Validate Schedule Before Deployment** | Verify hibernation schedule correctness with dry-run validation before applying | DevOps Engineer, Platform Engineer | 🚀 In Progress | RFC-0007 | [Details](./validate-schedule-before-deployment.md) |
-| **Manage Hibernation via CLI Plugin** | Use kubectl hibernator CLI for operational tasks (status, suspend, retry, logs) | SRE, On-Call Engineer, DevOps | 🚀 In Progress | RFC-0007 | [Details](./manage-hibernation-via-cli.md) |
+| **Validate Schedule Before Deployment** | Verify hibernation schedule correctness with dry-run validation before applying | DevOps Engineer, Platform Engineer | ✅ Implemented | RFC-0007 | [Details](./validate-schedule-before-deployment.md) |
+| **Manage Hibernation via CLI Plugin** | Use kubectl hibernator CLI for operational tasks (status, suspend, retry, logs) | SRE, On-Call Engineer, DevOps | ✅ Implemented | RFC-0007 | [Details](./manage-hibernation-via-cli.md) |
 
 ### Enhanced Tier — Exceptions, Approvals, Workloads (7 journeys)
 
@@ -186,5 +192,5 @@ Found an issue or have suggestions? [Open an issue](https://github.com/ardikasap
 
 ---
 
-**Last Updated**: February 2026
-**Total Journeys**: 23 (11 MVP + 7 Enhanced + 5 Advanced)
+**Last Updated**: April 2026
+**Total Journeys**: 27 (13 MVP + 9 Enhanced + 5 Advanced)
