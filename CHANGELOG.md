@@ -1,3 +1,26 @@
+<a name="v1.7.0-rc.1"></a>
+
+## [v1.7.0-rc.1](https://github.com/ardikabs/hibernator/compare/v1.6.5...v1.7.0-rc.1) (2026-08-28)
+
+### ✨ Features
+
+* revert operation ([#185](https://github.com/ardikabs/hibernator/issues/185))
+* schedule exception with overrides ([#175](https://github.com/ardikabs/hibernator/issues/175))
+* one-line installer bash script, and check for update support for cli ([#168](https://github.com/ardikabs/hibernator/issues/168))
+
+### 🐛 Bug Fixes
+
+* [exec/rds] graceful skip for invalid state ([#182](https://github.com/ardikabs/hibernator/issues/182))
+* RDS executor handleShutdownAwaitCompletion missing callback and stale message ([#179](https://github.com/ardikabs/hibernator/issues/179))
+* rds executor on handling pending failed ([#176](https://github.com/ardikabs/hibernator/issues/176))
+* suspension during state selection ([#161](https://github.com/ardikabs/hibernator/issues/161))
+* prevent concurrent map read/write when marking jobs stale ([#160](https://github.com/ardikabs/hibernator/issues/160))
+* **scheduler:** cap suspend exception overnight windows at day boundary ([#187](https://github.com/ardikabs/hibernator/issues/187))
+
+### 🧹 Miscellaneous
+
+* transition to beads for issue tracking ([#174](https://github.com/ardikabs/hibernator/issues/174))
+
 <a name="v1.6.5"></a>
 
 ## [v1.6.5](https://github.com/ardikabs/hibernator/compare/v1.6.4...v1.6.5) (2026-08-19)
