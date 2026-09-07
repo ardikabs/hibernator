@@ -351,7 +351,8 @@ func shouldSuppressExecutionProgress(payload sink.Payload, cfg config) bool {
 	switch hibernatorv1alpha1.ExecutionState(payload.TargetExecution.State) {
 	case hibernatorv1alpha1.StateCompleted,
 		hibernatorv1alpha1.StateFailed,
-		hibernatorv1alpha1.StateAborted:
+		hibernatorv1alpha1.StateAborted,
+		hibernatorv1alpha1.StateSkipped:
 		return false
 	default:
 		return true

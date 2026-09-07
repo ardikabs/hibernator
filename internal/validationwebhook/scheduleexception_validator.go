@@ -388,21 +388,19 @@ func (v *ScheduleExceptionValidator) validateExecutionOverrides(ctx context.Cont
 	var allErrs field.ErrorList
 	specPath := field.NewPath("spec")
 
-	// Rule 1: Reject overrides on suspend exceptions
+	// Rule 1: executionOverride is forbidden on suspend. targetOverrides fall
+	// through to Rule 2 below so all field errors are reported together.
+	// suspend without any overrides returns clean.
 	if exception.Spec.Type == hibernatorv1alpha1.ExceptionSuspend {
-		if len(exception.Spec.TargetOverrides) > 0 {
-			allErrs = append(allErrs, field.Forbidden(
-				specPath.Child("targetOverrides"),
-				"targetOverrides are not allowed for 'suspend' type exceptions",
-			))
-		}
 		if exception.Spec.ExecutionOverride != nil {
 			allErrs = append(allErrs, field.Forbidden(
 				specPath.Child("executionOverride"),
 				"executionOverride is not allowed for 'suspend' type exceptions",
 			))
 		}
-		return allErrs
+		if len(exception.Spec.TargetOverrides) == 0 {
+			return allErrs
+		}
 	}
 
 	// Rule 2: Validate targetOverrides exist in the referenced plan
@@ -458,17 +456,6 @@ func (v *ScheduleExceptionValidator) validateExecutionOverrides(ctx context.Cont
 								err,
 							))
 						}
-					}
-				}
-
-				// Validate disabled doesn't break DAG dependencies
-				if override.Disabled {
-					if hasDependencyOn(plan, override.TargetName) {
-						allErrs = append(allErrs, field.Invalid(
-							overridePath.Child("disabled"),
-							true,
-							fmt.Sprintf("cannot disable target %q: other targets have dependencies on it", override.TargetName),
-						))
 					}
 				}
 			}
@@ -541,19 +528,6 @@ func (v *ScheduleExceptionValidator) validateExecutionOverrides(ctx context.Cont
 	}
 
 	return allErrs
-}
-
-// hasDependencyOn checks if any target in the plan depends on the given target.
-func hasDependencyOn(plan *hibernatorv1alpha1.HibernatePlan, targetName string) bool {
-	if plan.Spec.Execution.Strategy.Type != hibernatorv1alpha1.StrategyDAG {
-		return false
-	}
-	for _, dep := range plan.Spec.Execution.Strategy.Dependencies {
-		if dep.From == targetName {
-			return true
-		}
-	}
-	return false
 }
 
 // validateNoOverlappingExceptions checks that the incoming exception does not

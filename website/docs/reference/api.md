@@ -357,7 +357,7 @@ _Underlying type:_ _string_
 ExecutionState represents per-target execution state.
 
 _Validation:_
-- Enum: [Pending Running Completed Failed Aborted]
+- Enum: [Pending Running Completed Failed Aborted Skipped]
 
 _Appears in:_
 - [ExecutionStatus](#executionstatus)
@@ -370,6 +370,7 @@ _Appears in:_
 | `Completed` | StateCompleted means the target execution finished successfully.<br /> |
 | `Failed` | StateFailed means the target execution finished with failure (e.g., runner Job failed).<br /> |
 | `Aborted` | StateAborted indicates the target was not executed because an upstream<br />dependency failed (DAG pruning). Distinct from StateFailed which means<br />the target's own Job execution failed.<br />Currently only relevant with DAG strategy and BestEffort behavior,<br />but may be extended to other strategies/behaviors in the future.<br /> |
+| `Skipped` | StateSkipped indicates the target was not executed because it was disabled<br />by a ScheduleException target override. Terminal and success-family: stages<br />advance, cycles complete, and Strict behavior is unaffected — the mirror of<br />StateAborted, which is terminal but failure-family.<br /> |
 
 
 #### ExecutionStatus
@@ -387,7 +388,7 @@ _Appears in:_
 | --- | --- | --- | --- |
 | `target` _string_ | Target identifier (type/name). |  |  |
 | `executor` _string_ | Executor used for this target. |  |  |
-| `state` _[ExecutionState](#executionstate)_ | State of execution. |  | Enum: [Pending Running Completed Failed Aborted] <br /> |
+| `state` _[ExecutionState](#executionstate)_ | State of execution. |  | Enum: [Pending Running Completed Failed Aborted Skipped] <br /> |
 | `startedAt` _[Time](https://kubernetes.io/docs/reference/generated/kubernetes-api/v1.33/#time-v1-meta)_ | StartedAt is when execution started. |  | Optional: \{\} <br /> |
 | `finishedAt` _[Time](https://kubernetes.io/docs/reference/generated/kubernetes-api/v1.33/#time-v1-meta)_ | FinishedAt is when execution finished. |  | Optional: \{\} <br /> |
 | `attempts` _integer_ | Attempts is the number of execution attempts. |  |  |
@@ -1037,8 +1038,8 @@ _Appears in:_
 | `type` _[ExceptionType](#exceptiontype)_ | Type specifies the exception type: extend, suspend, or replace. |  | Enum: [extend suspend replace] <br />Required: \{\} <br /> |
 | `leadTime` _string_ | LeadTime specifies buffer period before suspension window.<br />Only valid when Type is "suspend".<br />Format: duration string (e.g., "30m", "1h", "3600s").<br />Prevents NEW hibernation starts within this buffer before suspension. |  | Optional: \{\} <br />Pattern: `^([0-9]+(\.[0-9]+)?(ns\|us\|µs\|ms\|s\|m\|h))+$` <br /> |
 | `windows` _[OffHourWindow](#offhourwindow) array_ | Windows defines the time windows for this exception.<br />Meaning depends on Type:<br />- extend: Additional hibernation windows (union with base schedule)<br />- suspend: Windows to prevent hibernation (carve-out from schedule)<br />- replace: Complete replacement schedule (ignore base schedule) |  | MinItems: 1 <br /> |
-| `targetOverrides` _[TargetOverride](#targetoverride) array_ | TargetOverrides defines per-target overrides for the exception window.<br />Only valid when Type is "extend" or "replace". |  | Optional: \{\} <br />Optional: \{\} <br /> |
-| `executionOverride` _[ExecutionOverride](#executionoverride)_ | ExecutionOverride defines a full replacement of the execution strategy<br />and behavior for the exception window.<br />Only valid when Type is "extend" or "replace". |  | Optional: \{\} <br />Optional: \{\} <br /> |
+| `targetOverrides` _[TargetOverride](#targetoverride) array_ | TargetOverrides defines per-target overrides for the exception window.<br />Valid when Type is "extend", "replace", or "suspend".<br />For "suspend", only per-target disabled/parameters are honored; see ExecutionOverride.<br />Unlisted targets and unlisted fields follow the base HibernatePlan spec as-is. |  | Optional: \{\} <br />Optional: \{\} <br /> |
+| `executionOverride` _[ExecutionOverride](#executionoverride)_ | ExecutionOverride defines a full replacement of the execution strategy<br />and behavior for the exception window.<br />Only valid when Type is "extend" or "replace". Forbidden on "suspend". |  | Optional: \{\} <br />Optional: \{\} <br /> |
 
 
 #### ScheduleExceptionStatus
@@ -1164,7 +1165,7 @@ _Appears in:_
 | Field | Description | Default | Validation |
 | --- | --- | --- | --- |
 | `target` _string_ | Target is the target identifier (type/name). |  |  |
-| `state` _[ExecutionState](#executionstate)_ | State is the final execution state (Completed or Failed). |  | Enum: [Pending Running Completed Failed Aborted] <br /> |
+| `state` _[ExecutionState](#executionstate)_ | State is the final execution state (Completed or Failed). |  | Enum: [Pending Running Completed Failed Aborted Skipped] <br /> |
 | `attempts` _integer_ | Attempts is the number of attempts made. |  |  |
 | `executionId` _string_ | ExecutionID is the unique identifier for this target execution. |  | Optional: \{\} <br /> |
 | `startedAt` _[Time](https://kubernetes.io/docs/reference/generated/kubernetes-api/v1.33/#time-v1-meta)_ | StartedAt is when execution started. |  | Optional: \{\} <br /> |
@@ -1188,6 +1189,6 @@ _Appears in:_
 | --- | --- | --- | --- |
 | `targetName` _string_ | TargetName is the name of the target in the referenced HibernatePlan. |  | Required: \{\} <br /> |
 | `parameters` _[Parameters](#parameters)_ | Parameters is a full replacement of the target's base parameters.<br />When set, the executor receives these parameters instead of the base target's parameters. |  | Optional: \{\} <br /> |
-| `disabled` _boolean_ | Disabled, when true, excludes the target from both shutdown and wakeup<br />for the entire exception window. | false | Optional: \{\} <br /> |
+| `disabled` _boolean_ | Disabled, when true, excludes the target from both shutdown and wakeup<br />for the entire exception window. When Disabled is true, Parameters<br />on the same entry is ignored. | false | Optional: \{\} <br /> |
 
 

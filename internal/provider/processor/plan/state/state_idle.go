@@ -134,26 +134,21 @@ func (state *idleState) transitionToHibernating(ctx context.Context, log logr.Lo
 
 	// Build effective plan with execution overrides applied at the start of the new cycle.
 	// The effective plan is a deep copy; the original plan is never modified.
+	// Disabled targets stay listed; they are seeded instantly-completed below (D1).
 	var effectivePlan = plan
 	appliedExceptionName := ""
+	var hibernateOverrides []hibernatorv1alpha1.TargetOverride
 	if ep := state.buildEffectivePlan(plan); ep != nil {
 		effectivePlan = ep
 		if exc := state.findActiveExceptionOverride(); exc != nil {
 			appliedExceptionName = exc.Name
+			hibernateOverrides = exc.Spec.TargetOverrides
 		}
 	}
 
 	now := state.Clock.Now()
 
-	executions := make([]hibernatorv1alpha1.ExecutionStatus, len(effectivePlan.Spec.Targets))
-	for i, t := range effectivePlan.Spec.Targets {
-		executions[i] = hibernatorv1alpha1.ExecutionStatus{
-			Target:   t.Name,
-			Executor: t.Type,
-			State:    hibernatorv1alpha1.StatePending,
-			Message:  "Target pending hibernation",
-		}
-	}
+	executions := buildExecutionsWithSeededSkips(effectivePlan.Spec.Targets, hibernateOverrides, appliedExceptionName, "Target pending hibernation")
 
 	previousPhase := plan.Status.Phase
 	state.Statuses.PlanStatuses.Send(statusprocessor.Update[*hibernatorv1alpha1.HibernatePlan]{
@@ -201,9 +196,10 @@ func (state *idleState) transitionToWakingUp(log logr.Logger, trigger hibernator
 
 	now := state.Clock.Now()
 
-	// Use the existing PlanSnapshot targets if available for this cycle.
-	// The snapshot was captured during transitionToHibernating and should be
-	// reused for the wakeup operation to ensure cycle intent locking.
+	// Resolve the wakeup target list: snapshot for cycle intent locking,
+	// live base as fallback. Disabled targets stay listed (D1); a suspend
+	// override active now only seeds their executions as skipped below.
+	// Snapshot/AppliedExceptionOverride are preserved for Monday revert.
 	var targetList []hibernatorv1alpha1.Target
 	if snap := plan.Status.PlanSnapshot; snap != nil && snap.CycleID == plan.Status.CurrentCycleID {
 		targetList = snap.Targets
@@ -217,15 +213,14 @@ func (state *idleState) transitionToWakingUp(log logr.Logger, trigger hibernator
 		log.V(1).Info("no plan snapshot for current cycle, using live plan targets")
 	}
 
-	executions := make([]hibernatorv1alpha1.ExecutionStatus, len(targetList))
-	for i, t := range targetList {
-		executions[i] = hibernatorv1alpha1.ExecutionStatus{
-			Target:   t.Name,
-			Executor: t.Type,
-			State:    hibernatorv1alpha1.StatePending,
-			Message:  "Target pending wakeup",
-		}
+	var wakeOverrides []hibernatorv1alpha1.TargetOverride
+	wakeExcName := ""
+	if sus := state.findActiveSuspendOverride(); sus != nil {
+		wakeOverrides = sus.Spec.TargetOverrides
+		wakeExcName = sus.Name
+		log.V(1).Info("seeding skipped executions for suspend wakeup", "exception", sus.Name)
 	}
+	executions := buildExecutionsWithSeededSkips(targetList, wakeOverrides, wakeExcName, "Target pending wakeup")
 
 	previousPhase := plan.Status.Phase
 	state.Statuses.PlanStatuses.Send(statusprocessor.Update[*hibernatorv1alpha1.HibernatePlan]{

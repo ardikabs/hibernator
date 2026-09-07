@@ -108,6 +108,20 @@ func TestGetStageStatus_SomeAborted(t *testing.T) {
 	assert.Equal(t, 1, ss.CompletedCount)
 }
 
+func TestGetStageStatus_SomeSkipped(t *testing.T) {
+	plan := planWithStatuses(
+		execSt("t1", hibernatorv1alpha1.StateCompleted),
+		execSt("t2", hibernatorv1alpha1.StateSkipped),
+	)
+	ss := GetStageStatus(logr.Discard(), plan, targetStage("t1", "t2"))
+
+	assert.True(t, ss.AllTerminal)
+	assert.Equal(t, 0, ss.FailedCount, "skipped targets must not count as failed")
+	assert.Equal(t, 1, ss.CompletedCount)
+	assert.Equal(t, 1, ss.SkippedCount)
+	assert.False(t, ss.HasPending)
+}
+
 func TestGetStageStatus_SomeRunning_NotAllTerminal(t *testing.T) {
 	plan := planWithStatuses(
 		execSt("t1", hibernatorv1alpha1.StateCompleted),

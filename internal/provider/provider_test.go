@@ -221,6 +221,9 @@ func TestFilterActiveExceptions_SortsNewestFirst(t *testing.T) {
 			Type:       hibernatorv1alpha1.ExceptionSuspend,
 			Windows:    []hibernatorv1alpha1.OffHourWindow{{Start: "08:00", End: "22:00", DaysOfWeek: []string{"MON"}}},
 		},
+		Status: hibernatorv1alpha1.ScheduleExceptionStatus{
+			State: hibernatorv1alpha1.ExceptionStateActive,
+		},
 	}
 	newer := hibernatorv1alpha1.ScheduleException{
 		ObjectMeta: metav1.ObjectMeta{
@@ -233,6 +236,9 @@ func TestFilterActiveExceptions_SortsNewestFirst(t *testing.T) {
 			ValidUntil: metav1.NewTime(now.Add(1 * time.Hour)),
 			Type:       hibernatorv1alpha1.ExceptionExtend,
 			Windows:    []hibernatorv1alpha1.OffHourWindow{{Start: "08:00", End: "22:00", DaysOfWeek: []string{"TUE"}}},
+		},
+		Status: hibernatorv1alpha1.ScheduleExceptionStatus{
+			State: hibernatorv1alpha1.ExceptionStateActive,
 		},
 	}
 

@@ -135,17 +135,21 @@ kubectl get hibernateplan production-plan -n hibernator-system \
   -o jsonpath='{.status.appliedExceptionOverride}'
 # black-friday-week
 
-# The effective target list for this cycle — database is gone
+# The full target list for this cycle — database stays listed, seeded skipped
 kubectl get hibernateplan production-plan -n hibernator-system \
   -o jsonpath='{.status.planSnapshot.targets[*].name}'
-# frontend backend
+# frontend backend database
+
+# Who ran and who was skipped
+kubectl get hibernateplan production-plan -n hibernator-system \
+  -o jsonpath='{range .status.executions[*]}{.target}={.state} {.message}{"\n"}{end}'
 ```
 
 ## Variations
 
-- **No hibernation at all during the event** — use `type: suspend` with a full-day window instead. Note: `targetOverrides` is only valid on `extend` and `replace`, not on `suspend`.
+- **No hibernation at all during the event** — use `type: suspend` with a full-day window instead. `suspend` supports `targetOverrides` (partial wakeup subset) but not `executionOverride`.
 - **Different schedule AND different strategy** — use `type: replace` with an `executionOverride`: see [Holiday Schedule Replacement](holiday-schedule-replacement.md).
-- **Stack multiple exceptions** — an extend plus a suspend can coexist on one plan: see [Composing Multiple Exceptions](../user-guides/composing-multiple-exceptions.md).
+- **Stack multiple exceptions** — an extend plus a suspend can coexist on one plan (see [Composing Multiple Exceptions](../user-guides/composing-multiple-exceptions.md)) — but only if at most one of them carries overrides (`targetOverrides`/`executionOverride`).
 
 ## Next Steps
 

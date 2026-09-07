@@ -258,7 +258,8 @@ func (c *layoutComposer) threadRootProgressLine() string {
 		switch hibernatorv1alpha1.ExecutionState(target.State) {
 		case hibernatorv1alpha1.StateCompleted,
 			hibernatorv1alpha1.StateFailed,
-			hibernatorv1alpha1.StateAborted:
+			hibernatorv1alpha1.StateAborted,
+			hibernatorv1alpha1.StateSkipped:
 			done++
 		}
 	}

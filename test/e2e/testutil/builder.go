@@ -194,6 +194,20 @@ func (b *ScheduleExceptionBuilder) WithLeadTime(leadTime string) *ScheduleExcept
 	return b
 }
 
+// WithTargetOverrides sets per-target overrides (disabled and/or parameters).
+// Disabled targets stay listed and are seeded instantly-completed at transition.
+func (b *ScheduleExceptionBuilder) WithTargetOverrides(overrides ...hibernatorv1alpha1.TargetOverride) *ScheduleExceptionBuilder {
+	b.exc.Spec.TargetOverrides = overrides
+	return b
+}
+
+// WithExecutionOverride sets the execution strategy/behavior replacement.
+// Only valid for extend and replace types.
+func (b *ScheduleExceptionBuilder) WithExecutionOverride(override *hibernatorv1alpha1.ExecutionOverride) *ScheduleExceptionBuilder {
+	b.exc.Spec.ExecutionOverride = override
+	return b
+}
+
 // Build returns the constructed ScheduleException.
 func (b *ScheduleExceptionBuilder) Build() *hibernatorv1alpha1.ScheduleException {
 	return b.exc

@@ -135,7 +135,7 @@ For detailed scenarios covering all type combinations (extend + suspend, replace
 
 ## Execution Overrides (Advanced)
 
-`extend` and `replace` exceptions can also override the **execution intent** for a cycle: which targets run, their parameters, the execution strategy, and failure behavior. This is useful when the same schedule does not fit all targets, for example during a maintenance window where only compute should hibernate while databases stay online.
+`extend` and `replace` exceptions can also override the **execution intent** for a cycle: which targets run, their parameters, the execution strategy, and failure behavior. `suspend` exceptions support `targetOverrides` only (partial wakeup subset) — `executionOverride` remains forbidden on `suspend`. Anything not listed in an override follows the base plan spec as-is.
 
 ```yaml
 apiVersion: hibernator.ardikabs.com/v1alpha1
@@ -172,6 +172,39 @@ In this example:
 - The `database` target is skipped entirely for the cycle.
 - The `compute` target uses overridden parameters.
 - Targets run sequentially, and a single failure does not stop the cycle.
+
+Weekend subset with `suspend` (e.g. wake 2 of 10 while hibernated, auto-revert on expiry):
+
+```yaml
+apiVersion: hibernator.ardikabs.com/v1alpha1
+kind: ScheduleException
+metadata:
+  name: weekend-dev-subset
+  namespace: hibernator-system
+spec:
+  planRef:
+    name: rds-fleet
+  type: suspend
+  validFrom: "2026-09-06T00:00:00Z"
+  validUntil: "2026-09-07T23:59:00Z"
+  windows:
+    - start: "00:00"
+      end: "23:59"
+      daysOfWeek: ["SAT", "SUN"]
+  targetOverrides:
+    - targetName: db-prod-01
+      disabled: true
+    - targetName: db-prod-02
+      disabled: true
+    # unlisted targets follow base plan as-is; disabled targets stay stopped
+    # (disable 8 of 10 to wake only the 2 dev instances for the weekend)
+```
+
+!!! warning "Only one exception with overrides per plan"
+    `extend`, `replace`, and `suspend` share a single override slot: if one exception with `targetOverrides`/`executionOverride` is active for a plan, no second exception with overrides whose validity period overlaps it can be created — even an otherwise compatible `extend` + `suspend` pair. Plain exceptions without overrides can still coexist.
+
+!!! note "Disabling on DAG plans"
+    Disabling any target — upstream or downstream — is allowed. A disabled target is treated as instantly succeeded, so dependents proceed normally.
 
 !!! warning "Execution overrides are an advanced feature"
     Because execution overrides change the shape of a hibernation/wakeup cycle, they are best suited for operators who understand the target resources and failure modes. Misconfigured overrides can leave resources in an unexpected state.

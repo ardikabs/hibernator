@@ -124,9 +124,10 @@ func TestBuildEffectivePlan_DisabledTarget(t *testing.T) {
 	ep := st.buildEffectivePlan(plan)
 	require.NotNil(t, ep)
 
-	// Effective plan should have only the non-disabled target
-	require.Len(t, ep.Spec.Targets, 1)
-	assert.Equal(t, "app", ep.Spec.Targets[0].Name)
+	// Disabled targets stay listed (D1); they are seeded skipped at transition.
+	require.Len(t, ep.Spec.Targets, 2)
+	assert.Equal(t, "db", ep.Spec.Targets[0].Name)
+	assert.Equal(t, "app", ep.Spec.Targets[1].Name)
 
 	// Original plan should be unchanged
 	require.Len(t, plan.Spec.Targets, 2)
@@ -449,9 +450,13 @@ func TestTransitionToHibernating_UsesEffectivePlanTargets(t *testing.T) {
 	testPlan := plan.DeepCopy()
 	upd.Mutator.Mutate(testPlan)
 
-	// Executions should be built from effective plan (only "app", not "db")
-	require.Len(t, testPlan.Status.Executions, 1)
-	assert.Equal(t, "app", testPlan.Status.Executions[0].Target)
+	// Executions cover all targets; disabled "db" is seeded skipped (D1)
+	require.Len(t, testPlan.Status.Executions, 2)
+	assert.Equal(t, "db", testPlan.Status.Executions[0].Target)
+	assert.Equal(t, hibernatorv1alpha1.StateSkipped, testPlan.Status.Executions[0].State)
+	assert.Contains(t, testPlan.Status.Executions[0].Message, "Skipped: disabled by exception override-exc")
+	assert.Equal(t, "app", testPlan.Status.Executions[1].Target)
+	assert.Equal(t, hibernatorv1alpha1.StatePending, testPlan.Status.Executions[1].State)
 
 	// AppliedExceptionOverride should be recorded
 	assert.Equal(t, "override-exc", testPlan.Status.AppliedExceptionOverride)
@@ -577,14 +582,15 @@ func TestBuildEffectivePlan_FullOverride(t *testing.T) {
 	require.NotNil(t, ep)
 
 	// Effective plan should have:
-	// - Only "app" target ("db" disabled)
+	// - Both targets ("db" stays listed; seeded skipped at transition, D1)
 	// - "app" parameters overridden
 	// - Strategy changed to Sequential
 	// - Behavior changed to BestEffort
-	require.Len(t, ep.Spec.Targets, 1)
-	assert.Equal(t, "app", ep.Spec.Targets[0].Name)
-	require.NotNil(t, ep.Spec.Targets[0].Parameters)
-	assert.Equal(t, `{"cluster":"event"}`, string(ep.Spec.Targets[0].Parameters.Raw))
+	require.Len(t, ep.Spec.Targets, 2)
+	assert.Equal(t, "db", ep.Spec.Targets[0].Name)
+	assert.Equal(t, "app", ep.Spec.Targets[1].Name)
+	require.NotNil(t, ep.Spec.Targets[1].Parameters)
+	assert.Equal(t, `{"cluster":"event"}`, string(ep.Spec.Targets[1].Parameters.Raw))
 	assert.Equal(t, hibernatorv1alpha1.StrategySequential, ep.Spec.Execution.Strategy.Type)
 	assert.Equal(t, hibernatorv1alpha1.BehaviorBestEffort, ep.Spec.Behavior.Mode)
 
@@ -652,8 +658,9 @@ func TestEffectivePlan_FallsBackToBuildEffectivePlan_WhenNoSnapshot(t *testing.T
 
 	effective := st.effectivePlan(plan)
 	require.NotNil(t, effective)
-	// Should have no targets because the exception disables "db"
-	assert.Empty(t, effective.Spec.Targets)
+	// Disabled targets stay listed (D1); skipping happens at transition.
+	require.Len(t, effective.Spec.Targets, 1)
+	assert.Equal(t, "db", effective.Spec.Targets[0].Name)
 }
 
 func TestFindActiveExceptionOverride_SkipsDeletionTimestamp(t *testing.T) {
@@ -728,8 +735,14 @@ func TestTransitionToHibernating_CapturesPlanSnapshot(t *testing.T) {
 	require.NotNil(t, testPlan.Status.PlanSnapshot)
 	assert.Equal(t, "override-exc", testPlan.Status.PlanSnapshot.ExceptionName)
 	assert.Equal(t, hibernatorv1alpha1.StrategySequential, testPlan.Status.PlanSnapshot.Execution.Strategy.Type)
-	require.Len(t, testPlan.Status.PlanSnapshot.Targets, 1)
-	assert.Equal(t, "app", testPlan.Status.PlanSnapshot.Targets[0].Name)
+	// Snapshot keeps the full target list (D1); "db" is seeded skipped in Executions.
+	require.Len(t, testPlan.Status.PlanSnapshot.Targets, 2)
+	require.Len(t, testPlan.Status.Executions, 2)
+	assert.Equal(t, "db", testPlan.Status.Executions[0].Target)
+	assert.Equal(t, hibernatorv1alpha1.StateSkipped, testPlan.Status.Executions[0].State)
+	assert.Contains(t, testPlan.Status.Executions[0].Message, "Skipped: disabled by exception override-exc")
+	assert.Equal(t, "app", testPlan.Status.Executions[1].Target)
+	assert.Equal(t, hibernatorv1alpha1.StatePending, testPlan.Status.Executions[1].State)
 }
 
 func TestHibernatingState_Finalize_PreservesPlanSnapshot(t *testing.T) {
@@ -969,13 +982,182 @@ func TestTransitionToHibernating_FreshSnapshot(t *testing.T) {
 	upd.Mutator.Mutate(testPlan)
 
 	assert.Equal(t, hibernatorv1alpha1.PhaseHibernating, testPlan.Status.Phase)
-	// Fresh cycle should use live exception targets (only "db", "app" disabled)
-	require.Len(t, testPlan.Status.Executions, 1)
-	assert.Equal(t, "db", testPlan.Status.Executions[0].Target)
+	// Fresh cycle keeps the full target list; "app" is seeded skipped (D1).
+	require.Len(t, testPlan.Status.Executions, 2)
+	assert.Equal(t, "app", testPlan.Status.Executions[0].Target)
+	assert.Equal(t, hibernatorv1alpha1.StateSkipped, testPlan.Status.Executions[0].State)
+	assert.Contains(t, testPlan.Status.Executions[0].Message, "Skipped: disabled by exception new-exc")
+	assert.Equal(t, "db", testPlan.Status.Executions[1].Target)
+	assert.Equal(t, hibernatorv1alpha1.StatePending, testPlan.Status.Executions[1].State)
 	// New cycle ID and snapshot from live exception
 	assert.NotEqual(t, "cycle-001", testPlan.Status.CurrentCycleID)
 	assert.Equal(t, "new-exc", testPlan.Status.AppliedExceptionOverride)
 	require.NotNil(t, testPlan.Status.PlanSnapshot)
 	assert.Equal(t, "new-exc", testPlan.Status.PlanSnapshot.ExceptionName)
 	assert.Equal(t, testPlan.Status.CurrentCycleID, testPlan.Status.PlanSnapshot.CycleID)
+}
+
+func TestEffectivePlan_SuspendOverride_KeepsFullTargets(t *testing.T) {
+	plan := basePlanForState("p", hibernatorv1alpha1.PhaseHibernated)
+	plan.Spec.Targets = []hibernatorv1alpha1.Target{{Name: "db-0", Type: "rds"}, {Name: "db-1", Type: "rds"}}
+	plan.Status.CurrentCycleID = "cyc-1"
+	plan.Status.CurrentOperation = hibernatorv1alpha1.OperationWakeUp
+	plan.Status.PlanSnapshot = &hibernatorv1alpha1.PlanSnapshot{
+		CycleID: "cyc-1", ExceptionName: "",
+		Targets:   plan.Spec.Targets,
+		Execution: plan.Spec.Execution, Behavior: plan.Spec.Behavior,
+	}
+	exc := hibernatorv1alpha1.ScheduleException{
+		ObjectMeta: metav1.ObjectMeta{Name: "weekend", Namespace: "default"},
+		Status:     hibernatorv1alpha1.ScheduleExceptionStatus{State: hibernatorv1alpha1.ExceptionStateActive},
+		Spec: hibernatorv1alpha1.ScheduleExceptionSpec{
+			Type:       hibernatorv1alpha1.ExceptionSuspend,
+			ValidFrom:  metav1.Time{Time: time.Now().Add(-24 * time.Hour)},
+			ValidUntil: metav1.Time{Time: time.Now().Add(24 * time.Hour)},
+			Windows:    []hibernatorv1alpha1.OffHourWindow{{Start: "00:00", End: "23:59", DaysOfWeek: []string{"SAT"}}},
+			TargetOverrides: []hibernatorv1alpha1.TargetOverride{
+				{TargetName: "db-1", Disabled: true},
+			},
+		},
+	}
+	c := newHandlerFakeClient(plan)
+	st := newHandlerState(plan, c)
+	st.PlanCtx.Exceptions = []hibernatorv1alpha1.ScheduleException{exc}
+	ep := st.effectivePlan(plan)
+	require.NotNil(t, ep)
+	// Disabled targets stay listed (D1); skipping happens at transition.
+	require.Len(t, ep.Spec.Targets, 2)
+	assert.Equal(t, "db-0", ep.Spec.Targets[0].Name)
+	assert.Equal(t, "db-1", ep.Spec.Targets[1].Name)
+	assert.Equal(t, "cyc-1", plan.Status.PlanSnapshot.CycleID)
+	assert.Len(t, plan.Status.PlanSnapshot.Targets, 2, "snapshot must preserve full intent")
+}
+
+func TestTransitionToWakingUp_SuspendOverride_SeedsSkippedExecutions(t *testing.T) {
+	plan := basePlanForState("p", hibernatorv1alpha1.PhaseHibernated)
+	plan.Spec.Targets = []hibernatorv1alpha1.Target{{Name: "db-0", Type: "rds"}, {Name: "db-1", Type: "rds"}}
+	plan.Status.CurrentCycleID = "cyc-1"
+	plan.Status.CurrentOperation = hibernatorv1alpha1.OperationHibernate
+	plan.Status.PlanSnapshot = &hibernatorv1alpha1.PlanSnapshot{
+		CycleID: "cyc-1", ExceptionName: "",
+		Targets:   plan.Spec.Targets,
+		Execution: plan.Spec.Execution, Behavior: plan.Spec.Behavior,
+	}
+	plan.Status.AppliedExceptionOverride = ""
+	exc := hibernatorv1alpha1.ScheduleException{
+		ObjectMeta: metav1.ObjectMeta{Name: "weekend", Namespace: "default"},
+		Status:     hibernatorv1alpha1.ScheduleExceptionStatus{State: hibernatorv1alpha1.ExceptionStateActive},
+		Spec: hibernatorv1alpha1.ScheduleExceptionSpec{
+			Type:       hibernatorv1alpha1.ExceptionSuspend,
+			ValidFrom:  metav1.Time{Time: time.Now().Add(-24 * time.Hour)},
+			ValidUntil: metav1.Time{Time: time.Now().Add(24 * time.Hour)},
+			Windows:    []hibernatorv1alpha1.OffHourWindow{{Start: "00:00", End: "23:59", DaysOfWeek: []string{"SAT"}}},
+			TargetOverrides: []hibernatorv1alpha1.TargetOverride{
+				{TargetName: "db-1", Disabled: true},
+			},
+		},
+	}
+	c := newHandlerFakeClient(plan)
+	st := newHandlerState(plan, c)
+	st.PlanCtx.Exceptions = []hibernatorv1alpha1.ScheduleException{exc}
+
+	h := &idleState{state: st}
+	_, err := h.transitionToWakingUp(st.Log, hibernatorv1alpha1.TriggerSchedule)
+	require.NoError(t, err)
+
+	upd := <-planStatuses(st).C()
+	require.NotNil(t, upd.Mutator)
+
+	testPlan := plan.DeepCopy()
+	upd.Mutator.Mutate(testPlan)
+
+	assert.Equal(t, hibernatorv1alpha1.PhaseWakingUp, testPlan.Status.Phase)
+	// Both targets listed; db-1 seeded skipped so only db-0 runs (D1).
+	require.Len(t, testPlan.Status.Executions, 2)
+	assert.Equal(t, "db-0", testPlan.Status.Executions[0].Target)
+	assert.Equal(t, hibernatorv1alpha1.StatePending, testPlan.Status.Executions[0].State)
+	assert.Equal(t, "db-1", testPlan.Status.Executions[1].Target)
+	assert.Equal(t, hibernatorv1alpha1.StateSkipped, testPlan.Status.Executions[1].State)
+	assert.Contains(t, testPlan.Status.Executions[1].Message, "Skipped: disabled by exception weekend")
+	require.NotNil(t, testPlan.Status.PlanSnapshot, "suspend wakeup must preserve hibernation snapshot")
+	assert.Len(t, testPlan.Status.PlanSnapshot.Targets, 2, "snapshot must keep full intent for Monday revert")
+	assert.Equal(t, "", testPlan.Status.AppliedExceptionOverride)
+	assert.Equal(t, "cyc-1", testPlan.Status.CurrentCycleID)
+}
+
+func TestEffectivePlan_WakeUpExpiredSuspend_FrozenToExecutions(t *testing.T) {
+	plan := basePlanForState("p", hibernatorv1alpha1.PhaseWakingUp)
+	// Base spec gained db-2 mid-cycle; frozen executions must exclude it (D3).
+	plan.Spec.Targets = []hibernatorv1alpha1.Target{
+		{Name: "db-0", Type: "rds"},
+		{Name: "db-1", Type: "rds"},
+		{Name: "db-2", Type: "rds"},
+	}
+	plan.Status.CurrentCycleID = "cyc-1"
+	plan.Status.CurrentOperation = hibernatorv1alpha1.OperationWakeUp
+	plan.Status.Executions = []hibernatorv1alpha1.ExecutionStatus{
+		{Target: "db-0", Executor: "rds", State: hibernatorv1alpha1.StatePending},
+		{Target: "db-1", Executor: "rds", State: hibernatorv1alpha1.StateSkipped, Message: "Skipped: disabled by exception weekend"},
+	}
+
+	c := newHandlerFakeClient(plan)
+	st := newHandlerState(plan, c)
+	st.PlanCtx.Exceptions = nil // suspend expired/deleted mid-wakeup
+
+	ep := st.effectivePlan(plan)
+	require.NotNil(t, ep)
+	require.Len(t, ep.Spec.Targets, 2, "wakeup intent frozen to executions after exception gone")
+	assert.Equal(t, "db-0", ep.Spec.Targets[0].Name)
+	assert.Equal(t, "db-1", ep.Spec.Targets[1].Name)
+}
+
+func TestTransitionToHibernating_AllDisabled_CompletesWithoutJobs(t *testing.T) {
+	plan := basePlanForState("p", hibernatorv1alpha1.PhaseActive)
+	plan.Spec.Targets = []hibernatorv1alpha1.Target{
+		{Name: "db-0", Type: "rds"},
+		{Name: "db-1", Type: "rds"},
+		{Name: "db-2", Type: "rds"},
+	}
+
+	exc := &hibernatorv1alpha1.ScheduleException{
+		ObjectMeta: metav1.ObjectMeta{Name: "all-off", Namespace: "default"},
+		Status:     hibernatorv1alpha1.ScheduleExceptionStatus{State: hibernatorv1alpha1.ExceptionStateActive},
+		Spec: hibernatorv1alpha1.ScheduleExceptionSpec{
+			Type:       hibernatorv1alpha1.ExceptionExtend,
+			ValidFrom:  metav1.Time{Time: time.Now().Add(-24 * time.Hour)},
+			ValidUntil: metav1.Time{Time: time.Now().Add(24 * time.Hour)},
+			Windows:    []hibernatorv1alpha1.OffHourWindow{{Start: "00:00", End: "23:59", DaysOfWeek: []string{"MON"}}},
+			TargetOverrides: []hibernatorv1alpha1.TargetOverride{
+				{TargetName: "db-0", Disabled: true},
+				{TargetName: "db-1", Disabled: true},
+				{TargetName: "db-2", Disabled: true},
+			},
+		},
+	}
+
+	c := newHandlerFakeClient(plan, exc)
+	st := newHandlerState(plan, c)
+	st.PlanCtx.Exceptions = []hibernatorv1alpha1.ScheduleException{*exc}
+
+	h := &idleState{state: st}
+	_, err := h.transitionToHibernating(nil, st.Log, false, hibernatorv1alpha1.TriggerSchedule)
+	require.NoError(t, err)
+
+	upd := <-planStatuses(st).C()
+	require.NotNil(t, upd.Mutator)
+
+	testPlan := plan.DeepCopy()
+	upd.Mutator.Mutate(testPlan)
+
+	require.Len(t, testPlan.Status.Executions, 3)
+	for _, e := range testPlan.Status.Executions {
+		assert.Equal(t, hibernatorv1alpha1.StateSkipped, e.State)
+		assert.Contains(t, e.Message, "Skipped: disabled by exception all-off")
+	}
+
+	// Full-target stage resolves all-terminal with zero jobs dispatched.
+	status := GetStageStatus(st.Log, testPlan, scheduler.ExecutionStage{Targets: []string{"db-0", "db-1", "db-2"}})
+	assert.True(t, status.AllTerminal)
+	assert.False(t, status.HasPending)
+	assert.Equal(t, 3, status.SkippedCount)
 }
