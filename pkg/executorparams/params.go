@@ -258,4 +258,9 @@ type NoOpParameters struct {
 	// FailureMessage allows customizing the error message for simulated failures.
 	// If empty, a default message will be used.
 	FailureMessage string `json:"failureMessage,omitempty"`
+
+	// Marker is an opaque test label echoed verbatim into restore state.
+	// It lets tests assert exact restore round-trips without matching on
+	// generated IDs. Maximum 64 characters. Optional.
+	Marker string `json:"marker,omitempty"`
 }

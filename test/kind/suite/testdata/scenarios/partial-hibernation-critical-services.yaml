@@ -1,0 +1,39 @@
+apiVersion: hibernator.ardikabs.com/v1alpha1
+kind: HibernatePlan
+metadata:
+  name: partial
+spec:
+  execution:
+    strategy:
+      type: Parallel
+      maxConcurrency: 3
+  behavior:
+    mode: Strict
+  targets:
+    - name: critical-api
+      type: noop
+      connectorRef:
+        kind: CloudProvider
+        name: scn-aws
+      parameters:
+        randomDelaySeconds: 1
+        failureMode: none
+        marker: partial-critical-api
+    - name: batch-workers
+      type: noop
+      connectorRef:
+        kind: CloudProvider
+        name: scn-aws
+      parameters:
+        randomDelaySeconds: 1
+        failureMode: none
+        marker: partial-batch-workers
+    - name: dev-sandbox
+      type: noop
+      connectorRef:
+        kind: CloudProvider
+        name: scn-aws
+      parameters:
+        randomDelaySeconds: 1
+        failureMode: none
+        marker: partial-dev-sandbox

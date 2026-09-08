@@ -1,0 +1,55 @@
+apiVersion: hibernator.ardikabs.com/v1alpha1
+kind: HibernatePlan
+metadata:
+  name: staged
+spec:
+  execution:
+    strategy:
+      type: Staged
+      stages:
+        - name: dev
+          parallel: true
+          targets: ["dev-a", "dev-b"]
+        - name: batch
+          targets: ["batch"]
+        - name: shared
+          targets: ["shared"]
+  behavior:
+    mode: Strict
+  targets:
+    - name: dev-a
+      type: noop
+      connectorRef:
+        kind: CloudProvider
+        name: scn-aws
+      parameters:
+        randomDelaySeconds: 1
+        failureMode: none
+        marker: staged-dev-a
+    - name: dev-b
+      type: noop
+      connectorRef:
+        kind: CloudProvider
+        name: scn-aws
+      parameters:
+        randomDelaySeconds: 1
+        failureMode: none
+        marker: staged-dev-b
+    - name: batch
+      type: noop
+      connectorRef:
+        kind: CloudProvider
+        name: scn-aws
+      parameters:
+        randomDelaySeconds: 1
+        failureMode: none
+        marker: staged-batch
+    - name: shared
+      type: noop
+      connectorRef:
+        kind: CloudProvider
+        name: scn-aws
+      parameters:
+        randomDelaySeconds: 1
+        failureMode: none
+        marker: staged-shared

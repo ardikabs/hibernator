@@ -1,6 +1,6 @@
-//go:build floci
+//go:build awsenv
 
-package floci
+package awsenv
 
 import (
 	"context"
@@ -16,7 +16,7 @@ import (
 	"github.com/ardikabs/hibernator/internal/executor"
 	ec2exec "github.com/ardikabs/hibernator/internal/executor/ec2"
 	"github.com/ardikabs/hibernator/pkg/executorparams"
-	"github.com/ardikabs/hibernator/test/floci/harness"
+	"github.com/ardikabs/hibernator/test/awsenv/harness"
 )
 
 func ec2Spec(cRegion string, tags map[string]string, restoreTo map[string]json.RawMessage) executor.Spec {
@@ -28,7 +28,7 @@ func ec2Spec(cRegion string, tags map[string]string, restoreTo map[string]json.R
 		panic(err)
 	}
 	return executor.Spec{
-		TargetName: "floci-ec2",
+		TargetName: "awsenv-ec2",
 		TargetType: "ec2",
 		Parameters: paramsJSON,
 		ConnectorConfig: executor.ConnectorConfig{
@@ -48,21 +48,21 @@ func ec2Spec(cRegion string, tags map[string]string, restoreTo map[string]json.R
 func TestEC2_FullLifecycle(t *testing.T) {
 	ctx := context.Background()
 	c := harness.Setup(t)
-	tags := map[string]string{"floci-e2e": harness.Nonce(), "Role": "bastion"}
+	tags := map[string]string{"awsenv-e2e": harness.Nonce(), "Role": "bastion"}
 
-	ids := harness.SeedEC2(t, ctx, c, "floci-lifecycle", tags, 2)
+	ids := c.Provisioner.ProvisionEC2(t, ctx, harness.EC2FixtureSpec{Name: "awsenv-lifecycle", Tags: tags, Count: 2}).InstanceIDs
 	require.Len(t, ids, 2)
-	_, err := c.EC2.StopInstances(ctx, &ec2.StopInstancesInput{InstanceIds: []string{ids[1]}})
+	_, err := c.Clients.EC2.StopInstances(ctx, &ec2.StopInstancesInput{InstanceIds: []string{ids[1]}})
 	require.NoError(t, err)
-	harness.WaitForInstanceState(t, ctx, c.EC2, []string{ids[1]}, ec2types.InstanceStateNameStopped, 3*time.Minute)
+	harness.WaitForInstanceState(t, ctx, c.Clients.EC2, []string{ids[1]}, ec2types.InstanceStateNameStopped, 3*time.Minute)
 
 	exec := ec2exec.New()
 	collected := map[string]json.RawMessage{}
-	spec := ec2Spec(c.Region, tags, collected)
+	spec := ec2Spec(c.Clients.Region, tags, collected)
 	require.NoError(t, exec.Validate(spec))
 
 	shutdownRes, err := exec.Shutdown(ctx, logr.Discard(), spec)
-	require.NoError(t, err)
+	harness.RequireNoErrorOrSkip(t, harness.CapabilityEC2Lifecycle, "StopInstances", err)
 	require.Contains(t, shutdownRes.Message, "stopped 1 of 2 EC2 instance(s)")
 	require.Contains(t, shutdownRes.Message, "all instances confirmed stopped")
 	require.Len(t, collected, 2, "restore data must be reported for every discovered instance")
@@ -72,7 +72,7 @@ func TestEC2_FullLifecycle(t *testing.T) {
 	require.True(t, originallyRunning.WasRunning)
 	require.False(t, originallyStopped.WasRunning)
 
-	harness.WaitForInstanceState(t, ctx, c.EC2, ids, ec2types.InstanceStateNameStopped, 3*time.Minute)
+	harness.WaitForInstanceState(t, ctx, c.Clients.EC2, ids, ec2types.InstanceStateNameStopped, 3*time.Minute)
 
 	wakeupRes, err := exec.WakeUp(ctx, logr.Discard(), spec, executor.RestoreData{
 		Type:   "ec2",
@@ -83,8 +83,8 @@ func TestEC2_FullLifecycle(t *testing.T) {
 	require.Contains(t, wakeupRes.Message, "started 1 EC2 instance(s)")
 	require.Contains(t, wakeupRes.Message, "all instances confirmed running")
 
-	harness.WaitForInstanceState(t, ctx, c.EC2, []string{ids[0]}, ec2types.InstanceStateNameRunning, 3*time.Minute)
-	harness.WaitForInstanceState(t, ctx, c.EC2, []string{ids[1]}, ec2types.InstanceStateNameStopped, 30*time.Second)
+	harness.WaitForInstanceState(t, ctx, c.Clients.EC2, []string{ids[0]}, ec2types.InstanceStateNameRunning, 3*time.Minute)
+	harness.WaitForInstanceState(t, ctx, c.Clients.EC2, []string{ids[1]}, ec2types.InstanceStateNameStopped, 30*time.Second)
 }
 
 func TestEC2_ValidateRejectsEmptySelector(t *testing.T) {
@@ -104,17 +104,17 @@ func TestEC2_ValidateRejectsEmptySelector(t *testing.T) {
 func TestEC2_NoMatchIsNoop(t *testing.T) {
 	ctx := context.Background()
 	c := harness.Setup(t)
-	tags := map[string]string{"floci-e2e": "no-such-" + harness.Nonce()}
+	tags := map[string]string{"awsenv-e2e": "no-such-" + harness.Nonce()}
 
 	exec := ec2exec.New()
 	collected := map[string]json.RawMessage{}
 
-	shutdownRes, err := exec.Shutdown(ctx, logr.Discard(), ec2Spec(c.Region, tags, collected))
+	shutdownRes, err := exec.Shutdown(ctx, logr.Discard(), ec2Spec(c.Clients.Region, tags, collected))
 	require.NoError(t, err)
 	require.Contains(t, shutdownRes.Message, "stopped 0 of 0 EC2 instance(s)")
 	require.Empty(t, collected)
 
-	wakeupRes, err := exec.WakeUp(ctx, logr.Discard(), ec2Spec(c.Region, tags, collected), executor.RestoreData{})
+	wakeupRes, err := exec.WakeUp(ctx, logr.Discard(), ec2Spec(c.Clients.Region, tags, collected), executor.RestoreData{})
 	require.NoError(t, err)
 	require.Contains(t, wakeupRes.Message, "wakeup completed for EC2 (no restore data)")
 }

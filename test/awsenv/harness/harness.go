@@ -1,17 +1,19 @@
-//go:build e2e || floci || kind
+//go:build e2e || awsenv || kind
 
-// Package harness owns everything Floci executor E2E suites share:
-// environment gating, AWS SDK endpoint injection, Floci readiness,
+// Package harness owns everything the awsenv executor integration suites
+// share: environment gating, AWS SDK endpoint injection, backend readiness,
 // instance seeding, state polling, and cleanup.
 //
 // To onboard a new executor: add its client to Clients, add a
-// Seed<X> helper, and write test/floci/<x>_lifecycle_test.go.
+// Seed<X> helper, and write test/awsenv/<x>_lifecycle_test.go.
 package harness
 
 import (
 	"context"
+	"crypto/rand"
 	"fmt"
 	"os"
+	"strings"
 	"testing"
 	"time"
 
@@ -19,6 +21,8 @@ import (
 	awsconfig "github.com/aws/aws-sdk-go-v2/config"
 	"github.com/aws/aws-sdk-go-v2/service/ec2"
 	ec2types "github.com/aws/aws-sdk-go-v2/service/ec2/types"
+	"github.com/aws/aws-sdk-go-v2/service/eks"
+	"github.com/aws/aws-sdk-go-v2/service/rds"
 	"github.com/aws/aws-sdk-go-v2/service/sts"
 
 	"github.com/ardikabs/hibernator/pkg/awsutil"
@@ -33,24 +37,30 @@ const (
 )
 
 // Clients holds one AWS client per emulated service.
-// New executors add their client as a new field (RDS, EKS, ...).
 type Clients struct {
 	EC2      *ec2.Client
+	RDS      *rds.Client
+	EKS      *eks.Client
 	STS      *sts.Client
 	Region   string
 	Endpoint string
 }
 
-// Setup gates on FLOCI_ENABLED=1 (otherwise the test skips), points the
-// AWS SDK at Floci via environment, and waits for Floci readiness.
-// It must be called before any AWS call in every Floci suite test.
-func Setup(t *testing.T) *Clients {
+// Setup gates on AWSENV_ENABLED=1 (otherwise the test fails), points the
+// AWS SDK at the configured endpoint via environment, and waits for backend
+// readiness. It must be called before any AWS call in every awsenv suite test.
+func Setup(t *testing.T) *Environment {
 	t.Helper()
-	if os.Getenv("FLOCI_ENABLED") != "1" {
-		t.Fatal("Floci test requires FLOCI_ENABLED=1 with Floci on :4566 (see test/floci/compose.yml)")
+	if os.Getenv("AWSENV_ENABLED") != "1" {
+		t.Fatal("AWS environment test requires AWSENV_ENABLED=1 with an endpoint on :4566 (see test/awsenv/environments/floci/compose.yml)")
 	}
 
-	endpoint := os.Getenv("FLOCI_ENDPOINT")
+	provider, err := resolveProvider()
+	if err != nil {
+		t.Fatal(err.Error())
+	}
+
+	endpoint := os.Getenv("AWSENV_ENDPOINT_URL")
 	if endpoint == "" {
 		endpoint = defaultEndpoint
 	}
@@ -67,35 +77,95 @@ func Setup(t *testing.T) *Clients {
 	defer cancel()
 	cfg, err := awsconfig.LoadDefaultConfig(ctx, awsconfig.WithRegion(defaultRegion))
 	if err != nil {
-		t.Fatalf("load AWS config for Floci: %v", err)
+		t.Fatalf("load AWS config: %v", err)
 	}
 
-	c := &Clients{
+	clients := &Clients{
 		EC2:      ec2.NewFromConfig(cfg),
+		RDS:      rds.NewFromConfig(cfg),
+		EKS:      eks.NewFromConfig(cfg),
 		STS:      sts.NewFromConfig(cfg),
 		Region:   defaultRegion,
 		Endpoint: endpoint,
 	}
 
-	// Readiness: Floci answers STS once its HTTP router is up.
+	// Readiness: the backend answers STS once its HTTP router is up. Each
+	// attempt gets its own deadline so a hung request cannot mask the backend
+	// error behind the shared context timeout.
 	deadline := time.Now().Add(60 * time.Second)
+	var lastErr error
 	for {
-		if _, err := c.STS.GetCallerIdentity(ctx, &sts.GetCallerIdentityInput{}); err == nil {
-			return c
-		} else if time.Now().After(deadline) {
-			t.Fatalf("floci not ready at %s after 60s: %v", endpoint, err)
+		attemptCtx, attemptCancel := context.WithTimeout(context.Background(), 10*time.Second)
+		_, err := clients.STS.GetCallerIdentity(attemptCtx, &sts.GetCallerIdentityInput{})
+		attemptCancel()
+		if err == nil {
+			return &Environment{Provider: provider, Endpoint: endpoint, Region: defaultRegion, Clients: clients, Provisioner: &FlociProvisioner{Clients: clients}}
+		}
+		lastErr = err
+		if time.Now().After(deadline) {
+			t.Fatalf("%s not ready at %s after 60s (last error: %v)", provider, endpoint, lastErr)
 		}
 		time.Sleep(2 * time.Second)
 	}
 }
 
 // Nonce returns a per-run tag value so parallel/sequential runs never
-// select each other's instances.
+// select each other's instances. The random suffix guards against two tests
+// starting within the same nanosecond.
 func Nonce() string {
-	return fmt.Sprintf("floci-%d", time.Now().UnixNano())
+	var b [4]byte
+	if _, err := rand.Read(b[:]); err != nil {
+		return fmt.Sprintf("awsenv-%d", time.Now().UnixNano())
+	}
+	return fmt.Sprintf("awsenv-%d-%x", time.Now().UnixNano(), b)
 }
 
-// AWSConnectorConfig builds the executor connector config for Floci:
+// notFoundCodes are AWS "resource does not exist" error codes. Deletion
+// confirmation must only treat these (plus "not found" messages) as gone:
+// auth, throttling, validation, timeout, connection, and server errors mean
+// "unknown", never "deleted".
+var notFoundCodes = []string{
+	"NotFound",
+	"NotFoundException",
+	"ResourceNotFoundException",
+	"DBInstanceNotFound",
+	"DBSnapshotNotFound",
+}
+
+// isNotFoundError reports whether err positively identifies a missing
+// resource. Anything else — including transport errors — returns false so
+// callers keep polling instead of declaring success.
+func isNotFoundError(err error) bool {
+	if err == nil {
+		return false
+	}
+	msg := err.Error()
+	for _, code := range notFoundCodes {
+		if strings.Contains(msg, code) {
+			return true
+		}
+	}
+	lowered := strings.ToLower(msg)
+	return strings.Contains(lowered, "not found") || strings.Contains(lowered, "does not exist")
+}
+
+// uniqueName builds a resource name that preserves the full UnixNano stamp
+// (the uniqueness source) and trims the human prefix instead of amputating
+// the stamp. Result is lowercase and capped at 63 characters.
+func uniqueName(prefix string, stamp int64) string {
+	stampStr := fmt.Sprintf("%d", stamp)
+	prefix = strings.ToLower(prefix)
+	maxPrefix := 63 - len(stampStr) - 1
+	if maxPrefix < 0 {
+		maxPrefix = 0
+	}
+	if len(prefix) > maxPrefix {
+		prefix = prefix[:maxPrefix]
+	}
+	return prefix + "-" + stampStr
+}
+
+// AWSConnectorConfig builds the executor connector config for the test backend:
 // static test credentials, no role assumption (Floci accepts any non-empty creds).
 func AWSConnectorConfig(region string) *awsutil.AWSConnectorConfig {
 	return &awsutil.AWSConnectorConfig{
@@ -137,7 +207,7 @@ func SeedEC2(t *testing.T, ctx context.Context, c *Clients, name string, tags ma
 		ids = append(ids, aws.ToString(inst.InstanceId))
 	}
 	if len(ids) == 0 {
-		t.Fatal("seed EC2 instances: Floci returned zero instances")
+		t.Fatal("seed EC2 instances: backend returned zero instances")
 	}
 
 	WaitForInstanceState(t, ctx, c.EC2, ids, ec2types.InstanceStateNameRunning, 3*time.Minute)

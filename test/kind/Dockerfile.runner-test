@@ -1,7 +1,0 @@
-# Test-only runner: bakes the in-cluster Floci endpoint so runner pods
-# reach host Floci without any production code change (CloudProvider has
-# no endpoint field; the SDK reads AWS_ENDPOINT_URL from the environment).
-ARG BASE=hibernator-runner:kind
-FROM ${BASE}
-ENV AWS_ENDPOINT_URL=http://floci.hibernator-system.svc:4566
-ENV AWS_EC2_METADATA_DISABLED=true

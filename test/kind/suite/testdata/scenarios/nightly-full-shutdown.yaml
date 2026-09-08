@@ -1,0 +1,39 @@
+apiVersion: hibernator.ardikabs.com/v1alpha1
+kind: HibernatePlan
+metadata:
+  name: nightly
+spec:
+  execution:
+    strategy:
+      type: Parallel
+      maxConcurrency: 3
+  behavior:
+    mode: Strict
+  targets:
+    - name: nodegroups
+      type: noop
+      connectorRef:
+        kind: CloudProvider
+        name: scn-aws
+      parameters:
+        randomDelaySeconds: 1
+        failureMode: none
+        marker: nightly-nodegroups
+    - name: database
+      type: noop
+      connectorRef:
+        kind: CloudProvider
+        name: scn-aws
+      parameters:
+        randomDelaySeconds: 1
+        failureMode: none
+        marker: nightly-database
+    - name: bastion
+      type: noop
+      connectorRef:
+        kind: CloudProvider
+        name: scn-aws
+      parameters:
+        randomDelaySeconds: 1
+        failureMode: none
+        marker: nightly-bastion

@@ -37,6 +37,8 @@ type RestoreState struct {
 	GeneratedID string `json:"generatedId"`
 	// TargetName echoes back the target name for verification
 	TargetName string `json:"targetName"`
+	// Marker echoes back the test marker from parameters for verification
+	Marker string `json:"marker,omitempty"`
 }
 
 // Executor implements the NoOp hibernation logic.
@@ -115,6 +117,7 @@ func (e *Executor) Shutdown(ctx context.Context, log logr.Logger, spec executor.
 		OperationTime: time.Now().UTC(),
 		GeneratedID:   uuid.New().String(),
 		TargetName:    spec.TargetName,
+		Marker:        params.Marker,
 	}
 
 	// Incremental save: persist this instance's restore data immediately
@@ -221,6 +224,11 @@ func (e *Executor) validateParams(params Parameters) error {
 	}
 	if !validFailureModes[params.FailureMode] {
 		return fmt.Errorf("invalid failureMode: %s. Valid values: none, shutdown, wakeup, both", params.FailureMode)
+	}
+
+	// Validate marker length
+	if len(params.Marker) > 64 {
+		return fmt.Errorf("marker must be at most 64 characters, got %d", len(params.Marker))
 	}
 
 	return nil

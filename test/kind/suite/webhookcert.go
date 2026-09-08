@@ -1,6 +1,6 @@
 //go:build kind
 
-package kind
+package suite
 
 import (
 	"bytes"

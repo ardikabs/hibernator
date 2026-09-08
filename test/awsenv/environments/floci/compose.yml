@@ -1,11 +1,11 @@
 # Floci-backed AWS emulator for executor E2E tests.
 #
 # Usage:
-#   docker compose -f test/floci/compose.yml up -d
-#   FLOCI_ENABLED=1 go test ./test/floci/... -tags=floci -count=1 -v
-#   docker compose -f test/floci/compose.yml down
+#   docker compose -f test/awsenv/environments/floci/compose.yml up -d
+#   AWSENV_ENABLED=1 go test ./test/awsenv/... -tags=awsenv -count=1 -v
+#   docker compose -f test/awsenv/environments/floci/compose.yml down
 #
-# The suite gates on FLOCI_ENABLED and waits for readiness itself,
+# The suite gates on AWSENV_ENABLED and waits for readiness itself,
 # so no compose healthcheck is needed. EC2 runs real Docker containers,
 # hence the docker.sock mount.
 services:

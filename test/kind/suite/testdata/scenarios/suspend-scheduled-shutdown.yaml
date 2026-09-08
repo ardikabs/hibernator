@@ -1,0 +1,36 @@
+apiVersion: hibernator.ardikabs.com/v1alpha1
+kind: HibernatePlan
+metadata:
+  name: suspend-plan
+spec:
+  execution:
+    strategy:
+      type: Parallel
+      maxConcurrency: 1
+  behavior:
+    mode: Strict
+  targets:
+    - name: nodegroups
+      type: noop
+      connectorRef:
+        kind: CloudProvider
+        name: scn-aws
+      parameters:
+        randomDelaySeconds: 1
+        failureMode: none
+        marker: suspend-nodegroups
+---
+apiVersion: hibernator.ardikabs.com/v1alpha1
+kind: ScheduleException
+metadata:
+  name: suspend-now
+  labels:
+    hibernator.ardikabs.com/plan: suspend-plan
+spec:
+  planRef:
+    name: suspend-plan
+  type: suspend
+  windows:
+    - start: "00:00"
+      end: "23:59"
+      daysOfWeek: ["MON", "TUE", "WED", "THU", "FRI", "SAT", "SUN"]

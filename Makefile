@@ -44,7 +44,7 @@ COVERAGE_HTML ?= $(COVERAGE_DIR)/coverage.html
 COVERAGE_THRESHOLD ?= 50
 
 # Unit test packages (exclude e2e, cmd, and generated files)
-UNIT_TEST_PKGS ?= $(shell go list ./... | grep -vE '(/cmd/controller|/cmd/kubectl-hibernator|/mocks|/test/e2e|/test/floci|/test/kind)')
+UNIT_TEST_PKGS ?= $(shell go list ./... | grep -vE '(/cmd/controller|/cmd/kubectl-hibernator|/mocks|/test/e2e|/test/awsenv|/test/kind)')
 
 # Colors for output
 CYAN := \033[36m
@@ -184,10 +184,10 @@ test-e2e-focus: envtest ## Run E2E tests matching a specific prefix. Usage: make
 	@echo "$(CYAN)Running E2E tests with focus: $(FOCUS)...$(RESET)"
 	@$(GOCMD) test ./test/e2e/ -v -tags=e2e -ginkgo.v -ginkgo.focus="$(FOCUS)"
 
-.PHONY: test-floci
-test-floci: ## Run Floci-backed executor E2E tests (requires Floci on :4566, see test/floci/compose.yml).
-	@echo "$(CYAN)Running Floci E2E tests...$(RESET)"
-	@FLOCI_ENABLED=1 $(GOCMD) test ./test/floci/... -v -tags=floci -count=1
+.PHONY: test-awsenv
+test-awsenv: ## Run AWS-environment executor integration tests (requires Floci on :4566, see test/awsenv/environments/floci/compose.yml).
+	@echo "$(CYAN)Running AWS environment E2E tests...$(RESET)"
+	@AWSENV_ENABLED=1 $(GOCMD) test ./test/awsenv/... -v -tags=awsenv -count=1
 
 KIND ?= $(CURDIR)/bin/kind
 .PHONY: kind-tool
@@ -197,12 +197,12 @@ kind-tool: ## Install kind to bin/.
 .PHONY: test-kind
 test-kind: kind-tool ## Full-chain kind E2E (builds images, provisions cluster, runs Go suite).
 	@echo "$(CYAN)Running kind full-chain E2E tests...$(RESET)"
-	@FLOCI_ENABLED=1 $(GOCMD) test ./test/kind/ -v -tags=kind -count=1 -timeout 60m
+	@$(GOCMD) test ./test/kind/ -v -tags=kind -count=1 -timeout 60m
 
 .PHONY: test-kind-schedule
 test-kind-schedule: kind-tool ## Full-chain kind E2E including the real wall-clock schedule cycle (nightly).
 	@echo "$(CYAN)Running kind full-chain E2E including scheduler...$(RESET)"
-	@FLOCI_ENABLED=1 RUN_KIND_SCHEDULE=1 $(GOCMD) test ./test/kind/ -v -tags=kind -count=1 -timeout 60m
+	@RUN_KIND_SCHEDULE=1 $(GOCMD) test ./test/kind/ -v -tags=kind -count=1 -timeout 60m
 
 .PHONY: test-pkg
 test-pkg: ## Run tests for a specific package. Usage: make test-pkg PKG=./internal/scheduler/...

@@ -13,29 +13,30 @@ import (
 	"k8s.io/apimachinery/pkg/types"
 
 	"github.com/ardikabs/hibernator/internal/wellknown"
+	"github.com/ardikabs/hibernator/test/kind/suite"
 )
 
 func TestNewRunConfigGeneratesUniqueOwnedResources(t *testing.T) {
-	a := newRunConfig(101)
-	b := newRunConfig(102)
+	a := suite.NewRunConfig(101)
+	b := suite.NewRunConfig(102)
 
-	require.NotEqual(t, a.clusterName, b.clusterName)
-	require.True(t, strings.HasPrefix(a.clusterName, "hibernator-"))
-	require.True(t, strings.HasPrefix(b.clusterName, "hibernator-"))
-	require.True(t, strings.HasPrefix(a.namespace, "hibernator-e2e-"))
-	require.Contains(t, a.controllerImage, a.runID)
-	require.Contains(t, a.runnerTestImage, a.runID)
+	require.NotEqual(t, a.ClusterName, b.ClusterName)
+	require.True(t, strings.HasPrefix(a.ClusterName, "hibernator-"))
+	require.True(t, strings.HasPrefix(b.ClusterName, "hibernator-"))
+	require.True(t, strings.HasPrefix(a.Namespace, "hibernator-e2e-"))
+	require.Contains(t, a.ControllerImage, a.RunID)
+	require.Contains(t, a.RunnerImage, a.RunID)
 }
 
 func TestHibernationWindowRoundsStartUp(t *testing.T) {
 	now := time.Date(2026, 9, 7, 23, 58, 40, 0, time.UTC)
-	window := hibernationWindowAt(now, 3*time.Minute, 15*time.Minute)
+	window := suite.HibernationWindowAt(now, 3*time.Minute, 15*time.Minute)
 
-	require.Equal(t, "00:02", window.start)
-	require.Equal(t, "00:17", window.end)
-	require.Equal(t, []string{"TUE"}, window.days)
-	require.Equal(t, time.Date(2026, 9, 8, 0, 2, 0, 0, time.UTC), window.startAt)
-	require.Equal(t, time.Date(2026, 9, 8, 0, 17, 0, 0, time.UTC), window.endAt)
+	require.Equal(t, "00:02", window.Start)
+	require.Equal(t, "00:17", window.End)
+	require.Equal(t, []string{"TUE"}, window.Days)
+	require.Equal(t, time.Date(2026, 9, 8, 0, 2, 0, 0, time.UTC), window.StartAt)
+	require.Equal(t, time.Date(2026, 9, 8, 0, 17, 0, 0, time.UTC), window.EndAt)
 }
 
 func TestJobBelongsToCycleAcceptsControllerMarkedTerminalJob(t *testing.T) {
@@ -48,7 +49,7 @@ func TestJobBelongsToCycleAcceptsControllerMarkedTerminalJob(t *testing.T) {
 		OwnerReferences: []metav1.OwnerReference{{UID: uid}},
 	}}
 
-	require.True(t, jobBelongsToCycle(job, uid, "cycle-1"))
-	require.False(t, jobBelongsToCycle(job, uid, "cycle-2"))
-	require.False(t, jobBelongsToCycle(job, types.UID("other-plan"), "cycle-1"))
+	require.True(t, suite.JobBelongsToCycle(job, uid, "cycle-1"))
+	require.False(t, suite.JobBelongsToCycle(job, uid, "cycle-2"))
+	require.False(t, suite.JobBelongsToCycle(job, types.UID("other-plan"), "cycle-1"))
 }
