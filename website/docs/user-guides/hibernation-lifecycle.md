@@ -134,14 +134,14 @@ kubectl logs -n hibernator-system -l hibernator.ardikabs.com/plan=dev-offhours -
 Restore metadata is stored in a ConfigMap:
 
 ```bash
-kubectl get configmap restore-data-dev-offhours -n hibernator-system -o yaml
+kubectl get configmap hibernator-restore-dev-offhours -n hibernator-system -o yaml
 ```
 
-Keys follow the format `{executor}_{target-name}`:
+Keys follow the format `{target-name}.json`:
 
 ```yaml
 data:
-  rds_dev-database: '{"instanceId":"dev-db","state":"available","engineVersion":"15.4"}'
+  dev-database.json: '{"instanceId":"dev-db","state":"available","engineVersion":"15.4"}'
 ```
 
 ## Execution History

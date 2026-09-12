@@ -101,7 +101,7 @@ Two options:
 
 ### Where is restore data stored?
 
-In a ConfigMap named `restore-data-{plan-name}` in the plan's namespace. Keys follow the format `{executor}_{target-name}` with JSON-encoded restore state.
+In a ConfigMap named `hibernator-restore-{plan-name}` in the plan's namespace. Keys follow the format `{target-name}.json` with JSON-encoded restore state.
 
 ### How many execution cycles are retained in history?
 

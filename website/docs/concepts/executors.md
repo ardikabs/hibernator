@@ -91,7 +91,7 @@ Executors do not run inside the controller. Instead, the controller creates an i
 2. Calls `Validate` to verify parameters
 3. Calls `Shutdown` or `WakeUp` depending on the operation
 4. Streams logs and progress to the control plane via gRPC
-5. Persists restore metadata in a ConfigMap (`restore-data-{plan-name}`)
+5. Persists restore metadata in a ConfigMap (`hibernator-restore-{plan-name}`)
 
 Each runner gets an ephemeral ServiceAccount with the minimum permissions needed.
 

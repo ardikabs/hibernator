@@ -55,6 +55,7 @@ For detailed design documents, see the [proposals directory](https://github.com/
 - [x] Lead-time configuration for suspensions
 - [x] Automatic time-based expiration
 - [x] Composable multi-exception semantics (mergeByType)
+- [x] Per-target and execution overrides (targetOverrides/executionOverride) with cycle-intent locking
 
 ### Security & Authentication
 
@@ -90,7 +91,6 @@ For detailed design documents, see the [proposals directory](https://github.com/
 
 ### Medium-Term
 
-- **ScheduleException Target Override** — Allow `ScheduleException` to override specific targets within a plan rather than the entire schedule. For example, keep the database running during a maintenance window while hibernating compute resources, or vice versa. This enables fine-grained per-target exception control.
 - **Exception Approval Workflows** — Slack/email-based approvals (Phase 6+)
 
 ### Long-Term

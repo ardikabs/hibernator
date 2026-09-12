@@ -1,6 +1,6 @@
 # Hibernator Test Layers
 
-Three suites, three contracts. Each proves something the others cannot, and
+Four suites, four contracts. Each proves something the others cannot, and
 the names describe *how much of the system the test is allowed to know about*
 — not how "real" it is.
 
@@ -8,6 +8,7 @@ the names describe *how much of the system the test is allowed to know about*
 |---|---|---|
 | `test/e2e` | Controller integration tests (whitebox e2e) | Controller state machine: schedule evaluation, phase transitions, Job dispatch, restore bookkeeping — with fakes *inside* the system boundary (fake clock, simulated Job success). |
 | `test/awsenv` | AWS integration tests (runner + executor debugging) | Runner and platform executors in detail: real executor code + real AWS SDK calls against emulated AWS (Floci today, real AWS later via the same contract). Asserts intermediate steps — discovered resources, restore payloads, `wasRunning` flags, messages, cloud-side states. |
+| `test/k8senv` | Kubernetes API integration tests (executor debugging) | K8s-API executors in detail: real Karpenter/WorkloadScaler code through the real client factory against a real API server (envtest: etcd, no kubelet). Asserts discovery, scale writes, restore payloads, messages, stale skips. No cloud backend involved. |
 | `test/kind` | Blackbox e2e (acceptance) | The whole system on a real cluster, outcome only: CRDs in, expected phases and restore data out, with real controller and noop runner pods. No cloud backend involved. Proves functionality matches expectation, period. |
 
 ## Why "simulation" for awsenv
@@ -48,12 +49,15 @@ make test-e2e
 docker compose -f test/awsenv/environments/floci/compose.yml up -d
 make test-awsenv
 
+# Kubernetes API executor suite (needs envtest binaries)
+make test-k8senv
+
 # Blackbox full chain (builds images, provisions kind; ~5 min smoke)
 make test-kind
 # ...including the real wall-clock schedule cycle (nightly)
 make test-kind-schedule
 ```
 
-All three suites are opt-in by build tag and leave default
+All four suites are opt-in by build tag and leave default
 `go test ./...` unaffected. See each suite's README for details,
 environment variables, and troubleshooting.

@@ -360,6 +360,6 @@ spec:
 
 ### Workloads not scaling back up
 
-- Check the restore ConfigMap exists: `kubectl get cm restore-data-{plan-name} -n hibernator-system`
+- Check the restore ConfigMap exists: `kubectl get cm hibernator-restore-{plan-name} -n hibernator-system`
 - Verify the saved replica counts are correct in the ConfigMap
 - If a workload was deleted and recreated during hibernation, the restore will fail (name mismatch)

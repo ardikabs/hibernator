@@ -104,8 +104,9 @@ func TestMain(m *testing.M) {
 //
 // Three plans share one namespace to cover the midnight crossing from every
 // side: a normal schedule transitioning both ways across midnight, a
-// full-day hibernation holding Hibernated across midnight, and a
-// full-day-active plan asserting zero Jobs across midnight.
+// full-day hibernation holding Hibernated across midnight, a weekday-only
+// window proving no-weekend-cycling, and a full-day-active plan asserting
+// zero Jobs across midnight.
 func TestNoopScheduleCycle(t *testing.T) {
 	if os.Getenv("RUN_KIND_SCHEDULE") != "1" {
 		t.Skip("set RUN_KIND_SCHEDULE=1 for the real wall-clock schedule cycle")
@@ -166,6 +167,21 @@ func TestNoopScheduleCycle(t *testing.T) {
 	suite.PollPhaseAtLeast(t, c, cs, fullHibernateKey, hibernatorv1alpha1.PhaseHibernated, time.Until(window.StartAt)+5*time.Minute)
 	suite.PollJobComplete(t, c, cs, fullHibernateKey, hibernatorv1alpha1.OperationHibernate, "noop", 8*time.Minute)
 
+	// Weekday parking across midnight: a MON-FRI 20:00-06:00 UTC window is
+	// hibernate-desired at creation on every night of the week (in-window
+	// on weeknights, parked across the weekend since Friday 20:00 beats
+	// Friday 06:00 with no Saturday edge). It must hibernate promptly and
+	// never wake: weekend runs prove no-weekend-cycling live, weeknight
+	// runs prove off-hours hibernation.
+	createSchedulePlan(t, ctx, c, ns, provider.Name, "weekend-parking", "sched-park",
+		[]hibernatorv1alpha1.OffHourWindow{{
+			Start: "20:00", End: "06:00",
+			DaysOfWeek: []string{"MON", "TUE", "WED", "THU", "FRI"},
+		}})
+	parkingKey := client.ObjectKey{Namespace: ns, Name: "weekend-parking"}
+	suite.PollPhaseAtLeast(t, c, cs, parkingKey, hibernatorv1alpha1.PhaseHibernated, time.Until(window.StartAt)+5*time.Minute)
+	suite.PollJobComplete(t, c, cs, parkingKey, hibernatorv1alpha1.OperationHibernate, "noop", 8*time.Minute)
+
 	// Full-day active: a past same-day window has no edges near midnight, so
 	// the plan must stay Active (and dispatch zero Jobs) across the day
 	// change. A 1-minute 23:59-00:00 window is deliberately NOT used here:
@@ -201,6 +217,10 @@ func TestNoopScheduleCycle(t *testing.T) {
 	suite.PollPhaseAtLeast(t, c, cs, fullHibernateKey, hibernatorv1alpha1.PhaseHibernated, 2*time.Minute)
 	suite.ScnAssertRestoreMarkers(t, c, ns, "fullday-hibernate", map[string]string{"noop": "sched-fullday"})
 	suite.ScnAssertNoJobs(t, c, ns, "fullday-hibernate", hibernatorv1alpha1.OperationWakeUp, "noop")
+
+	suite.PollPhaseAtLeast(t, c, cs, parkingKey, hibernatorv1alpha1.PhaseHibernated, 2*time.Minute)
+	suite.ScnAssertRestoreMarkers(t, c, ns, "weekend-parking", map[string]string{"noop": "sched-park"})
+	suite.ScnAssertNoJobs(t, c, ns, "weekend-parking", hibernatorv1alpha1.OperationWakeUp, "noop")
 
 	suite.PollPhaseAtLeast(t, c, cs, activeKey, hibernatorv1alpha1.PhaseActive, 2*time.Minute)
 	suite.ScnAssertNoJobs(t, c, ns, "fullday-active", hibernatorv1alpha1.OperationHibernate, "noop")

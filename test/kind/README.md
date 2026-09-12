@@ -80,9 +80,9 @@ make test-kind            # immediate override-driven full-chain PR smoke
 make test-kind-schedule   # also run the real wall-clock schedule cycle (nightly)
 ```
 
-`make test-kind-schedule` runs the 3-plan midnight matrix in
-`TestNoopScheduleCycle` (normal cycle, full-day hibernation, full-day
-active). Without anchors it uses a relative window (start ~3 min out) for
+`make test-kind-schedule` runs the 4-plan midnight matrix in
+`TestNoopScheduleCycle` (normal cycle, full-day hibernation, weekday
+parking, full-day active). Without anchors it uses a relative window (start ~3 min out) for
 ad-hoc runs; the nightly pins absolute UTC anchors:
 
 ```bash

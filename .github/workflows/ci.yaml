@@ -72,7 +72,7 @@ jobs:
         run: make test-e2e
 
   test-awsenv:
-    name: AWS Integration Tests
+    name: AWSEnv Tests
     needs: [lint]
     runs-on: ubuntu-latest
     timeout-minutes: 20
@@ -87,12 +87,31 @@ jobs:
       - name: Start Floci AWS emulator
         run: docker compose -f test/awsenv/environments/floci/compose.yml up -d
 
-      - name: Run AWS Integration Tests
+      - name: Run AWSEnv Tests
         run: make test-awsenv
 
       - name: Stop Floci AWS emulator
         if: always()
         run: docker compose -f test/awsenv/environments/floci/compose.yml down -v
+
+  test-k8senv:
+    name: K8sEnv Tests
+    needs: [lint]
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v6
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.26'
+          cache: true
+
+      - name: Setting up Test Dependencies
+        run: make envtest
+
+      - name: Run K8sEnv Tests
+        run: make test-k8senv
 
   test-kind:
     name: Kind E2E Tests

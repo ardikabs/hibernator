@@ -36,7 +36,8 @@ jobs:
         run: make kind-tool
 
       # Full suite: override-driven scenarios plus the wall-clock
-      # TestNoopScheduleCycle 3-plan midnight matrix
-      # (normal 23:55-00:05 cycle, full-day hibernation, full-day active).
+      # TestNoopScheduleCycle 4-plan midnight matrix
+      # (normal 23:55-00:05 cycle, full-day hibernation, weekday parking,
+      # full-day active).
       - name: Run Kind Schedule E2E Tests
         run: make test-kind-schedule

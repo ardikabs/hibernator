@@ -44,7 +44,7 @@ COVERAGE_HTML ?= $(COVERAGE_DIR)/coverage.html
 COVERAGE_THRESHOLD ?= 50
 
 # Unit test packages (exclude e2e, cmd, and generated files)
-UNIT_TEST_PKGS ?= $(shell go list ./... | grep -vE '(/cmd/controller|/cmd/kubectl-hibernator|/mocks|/test/e2e|/test/awsenv|/test/kind)')
+UNIT_TEST_PKGS ?= $(shell go list ./... | grep -vE '(/cmd/controller|/cmd/kubectl-hibernator|/mocks|/test/e2e|/test/awsenv|/test/kind|/test/k8senv)')
 
 # Colors for output
 CYAN := \033[36m
@@ -188,6 +188,11 @@ test-e2e-focus: envtest ## Run E2E tests matching a specific prefix. Usage: make
 test-awsenv: ## Run AWS-environment executor integration tests (requires Floci on :4566, see test/awsenv/environments/floci/compose.yml).
 	@echo "$(CYAN)Running AWS environment E2E tests...$(RESET)"
 	@AWSENV_ENABLED=1 $(GOCMD) test ./test/awsenv/... -v -tags=awsenv -count=1
+
+.PHONY: test-k8senv
+test-k8senv: envtest ## Run Kubernetes API executor integration tests (envtest: Karpenter + WorkloadScaler, no cloud backend).
+	@echo "$(CYAN)Running Kubernetes API integration tests...$(RESET)"
+	@KUBEBUILDER_ASSETS=$$($(ENVTEST) use -p path 2>/dev/null) K8SENV_ENABLED=1 $(GOCMD) test ./test/k8senv/... -v -tags=k8senv -count=1
 
 KIND ?= $(CURDIR)/bin/kind
 .PHONY: kind-tool
