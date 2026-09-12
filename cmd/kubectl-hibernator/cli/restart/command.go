@@ -20,7 +20,8 @@ import (
 )
 
 type restartOptions struct {
-	root *common.RootOptions
+	root   *common.RootOptions
+	dryRun bool
 }
 
 // NewCommand creates the "restart" subcommand.
@@ -54,12 +55,14 @@ Examples:
 		}),
 	}
 
+	cmd.Flags().BoolVar(&restartOpts.dryRun, "dry-run", false, "Preview what would happen without making changes")
+
 	return cmd
 }
 
 func runRestart(ctx context.Context, opts *restartOptions, planName string) error {
 	out := output.FromContext(ctx)
-	c, err := common.NewK8sClient(opts.root)
+	c, err := common.ClientFactory(opts.root)
 	if err != nil {
 		return err
 	}
@@ -77,10 +80,18 @@ func runRestart(ctx context.Context, opts *restartOptions, planName string) erro
 			return fmt.Errorf("HibernatePlan %q has no recorded operation (.status.currentOperation is empty); the plan must have completed at least one hibernation cycle before restart can be used", planName)
 		}
 	default:
+		if plan.Status.Phase == "" {
+			return fmt.Errorf("HibernatePlan %q has no recorded phase yet (the controller has not reconciled it); restart only applies to Active or Hibernated plans", planName)
+		}
 		return fmt.Errorf("HibernatePlan %q is in %q phase; restart only applies to Active or Hibernated plans", planName, plan.Status.Phase)
 	}
 
 	patch := client.MergeFrom(plan.DeepCopy())
+
+	if opts.dryRun {
+		out.Info("[DRY-RUN] Would trigger restart for HibernatePlan %q (last operation: %s)", planName, plan.Status.CurrentOperation)
+		return nil
+	}
 
 	if plan.Annotations == nil {
 		plan.Annotations = make(map[string]string)

@@ -94,12 +94,8 @@ func runSuspend(ctx context.Context, opts *suspendOptions, planName string) erro
 		return fmt.Errorf("only one of --seconds or --until can be specified")
 	}
 
-	// Calculate deadline
+	// Calculate deadline (ParseDeadline rejects past deadlines).
 	var deadline time.Time
-	if opts.seconds > 0 && opts.until != "" {
-		return fmt.Errorf("only one of --seconds or --until can be specified")
-	}
-
 	if opts.seconds > 0 {
 		deadline = time.Now().Add(time.Duration(opts.seconds * float64(time.Second)))
 	} else if opts.until != "" {
@@ -110,7 +106,7 @@ func runSuspend(ctx context.Context, opts *suspendOptions, planName string) erro
 		}
 	}
 
-	c, err := common.NewK8sClient(opts.root)
+	c, err := common.ClientFactory(opts.root)
 	if err != nil {
 		return err
 	}

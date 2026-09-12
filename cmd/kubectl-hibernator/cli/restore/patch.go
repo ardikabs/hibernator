@@ -9,6 +9,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"os"
 	"strings"
 
@@ -31,6 +32,7 @@ type patchOptions struct {
 	patchJSON  string
 	patchFile  string
 	dryRun     bool
+	yes        bool
 }
 
 // newPatchCommand creates the "restore patch" command
@@ -89,6 +91,7 @@ kubectl hibernator restore patch my-plan -t eks -r node-123 \
 	cmd.Flags().StringVar(&patchOpts.patchJSON, "patch", "", "JSON merge patch (RFC 7386) inline")
 	cmd.Flags().StringVar(&patchOpts.patchFile, "patch-file", "", "Path to JSON merge patch file")
 	cmd.Flags().BoolVar(&patchOpts.dryRun, "dry-run", false, "Preview changes without applying")
+	cmd.Flags().BoolVar(&patchOpts.yes, "yes", false, "Skip confirmation prompts (non-interactive use)")
 
 	lo.Must0(cmd.MarkFlagRequired("target"))
 	lo.Must0(cmd.MarkFlagRequired("resource-id"))
@@ -112,7 +115,7 @@ func runPatch(ctx context.Context, opts *patchOptions, planName string) error {
 	}
 
 	// Load client and fetch restore data
-	c, err := common.NewK8sClient(opts.root)
+	c, err := common.ClientFactory(opts.root)
 	if err != nil {
 		return err
 	}
@@ -167,9 +170,7 @@ func runPatch(ctx context.Context, opts *patchOptions, planName string) error {
 
 		if !opts.root.JsonOutput {
 			out.Info("Proceed with creating this resource? (y/N): ")
-			var response string
-			lo.Must1(fmt.Scanln(&response))
-			if strings.ToLower(response) != "y" {
+			if !opts.yes && !confirmPrompt(os.Stdin, "y") {
 				out.Info("Cancelled - no changes made")
 				return nil
 			}
@@ -250,9 +251,7 @@ func runPatch(ctx context.Context, opts *patchOptions, planName string) error {
 	// Confirm before applying (unless forced)
 	if !opts.root.JsonOutput {
 		out.Info("Apply changes? (y/N): ")
-		var response string
-		lo.Must1(fmt.Scanln(&response))
-		if strings.ToLower(response) != "y" {
+		if !opts.yes && !confirmPrompt(os.Stdin, "y") {
 			out.Info("Cancelled")
 			return nil
 		}
@@ -420,4 +419,16 @@ func showPatchDiff(ctx context.Context, current, modified map[string]any) error 
 	out.Info(string(modifiedJSON))
 
 	return nil
+}
+
+// confirmPrompt reads one line from in and reports whether it equals want
+// (case-insensitive). Any read error — including EOF on non-TTY stdin —
+// safely returns false instead of panicking, so piped invocations cancel
+// rather than crash.
+func confirmPrompt(in io.Reader, want string) bool {
+	var response string
+	if _, err := fmt.Fscanln(in, &response); err != nil {
+		return false
+	}
+	return strings.EqualFold(strings.TrimSpace(response), want)
 }

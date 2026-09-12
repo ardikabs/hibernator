@@ -140,6 +140,10 @@ type loggerKeyType struct{}
 
 var loggerKey = loggerKeyType{}
 
+type writerKeyType struct{}
+
+var writerKey = writerKeyType{}
+
 // WithFormatter returns a new context with the given formatter injected.
 func WithFormatter(ctx context.Context, f Formatter) context.Context {
 	return context.WithValue(ctx, loggerKey, f)
@@ -152,6 +156,21 @@ func FromContext(ctx context.Context) Formatter {
 		return &SimpleFormatter{stdout: os.Stdout, stderr: os.Stderr}
 	}
 	return f
+}
+
+// WithWriter returns a new context carrying the writer PrintObj calls
+// should render to. Defaults to os.Stdout; tests inject a buffer.
+func WithWriter(ctx context.Context, w io.Writer) context.Context {
+	return context.WithValue(ctx, writerKey, w)
+}
+
+// WriterFromContext retrieves the PrintObj writer from the context,
+// defaulting to os.Stdout when unset.
+func WriterFromContext(ctx context.Context) io.Writer {
+	if w, ok := ctx.Value(writerKey).(io.Writer); ok && w != nil {
+		return w
+	}
+	return os.Stdout
 }
 
 // WrapRunE wraps a RunE function to handle errors with the output formatter.

@@ -17,7 +17,6 @@ import (
 	"time"
 
 	"github.com/ardikabs/hibernator/internal/version"
-	"github.com/samber/lo"
 )
 
 const (
@@ -158,14 +157,17 @@ func isRCVersion(version string) bool {
 	return matched
 }
 
-// parseVersion converts version string to comparable integer
-// v1.2.3 -> 10203, v1.2.3-rc.1 -> 10203
+// parseVersion converts a version string to a comparable integer that orders
+// prereleases below their release: v1.2.2 < v1.2.3-rc.1 < v1.2.3-rc.2 < v1.2.3.
+// Malformed input yields 0 (never panics, never wins a comparison).
 func parseVersion(v string) int {
 	// Remove 'v' prefix
 	v = strings.TrimPrefix(v, "v")
 
-	// Cut off anything after '-' (tags like -rc.1, -beta, etc.)
+	// Split off any prerelease suffix (e.g. -rc.1, -beta).
+	suffix := ""
 	if idx := strings.Index(v, "-"); idx != -1 {
+		suffix = v[idx+1:]
 		v = v[:idx]
 	}
 
@@ -174,12 +176,32 @@ func parseVersion(v string) int {
 		return 0
 	}
 
-	// strconv.Atoi is the specialized tool for string-to-int conversion
-	major := lo.Must(strconv.Atoi(parts[0]))
-	minor := lo.Must(strconv.Atoi(parts[1]))
-	patch := lo.Must(strconv.Atoi(parts[2]))
+	// Non-numeric parts are rejected instead of panicking.
+	major, err := strconv.Atoi(parts[0])
+	if err != nil || major < 0 {
+		return 0
+	}
+	minor, err := strconv.Atoi(parts[1])
+	if err != nil || minor < 0 {
+		return 0
+	}
+	patch, err := strconv.Atoi(parts[2])
+	if err != nil || patch < 0 {
+		return 0
+	}
 
-	return major*10000 + minor*100 + patch
+	base := major*1000000 + minor*1000 + patch
+	if suffix == "" {
+		// Stable outranks any prerelease of the same base.
+		return base*1000 + 999
+	}
+	if n, ok := strings.CutPrefix(suffix, "rc."); ok {
+		if rc, err := strconv.Atoi(n); err == nil && rc >= 0 {
+			return base*1000 + min(rc, 998)
+		}
+	}
+	// Unknown prerelease ranks below any rc/stable of the same base.
+	return base * 1000
 }
 
 // isNewer checks if newVersion is newer than currentVersion

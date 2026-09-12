@@ -142,6 +142,13 @@ func (e *Executor) WakeUp(ctx context.Context, log logr.Logger, spec executor.Sp
 		return &executor.Result{Message: fmt.Sprintf("noop wakeup completed for target %s (no restore data)", spec.TargetName)}, nil
 	}
 
+	// Opt-in read of the skipped advisory channel: the runner already
+	// withheld these entries from Data, so this only overcommunicates in
+	// logs. Behavior is unchanged whether or not Skipped is populated.
+	for key, reason := range restore.Skipped {
+		log.Info("skipping withheld restore entry", "key", key, "reason", reason)
+	}
+
 	// Iterate over all operations in restore data (should be single operation for noop)
 	for id, stateBytes := range restore.Data {
 		var state RestoreState

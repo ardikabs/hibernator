@@ -102,6 +102,14 @@ func parseNaturalLanguage(input string, now time.Time) (time.Time, bool) {
 	}
 
 	if result, err := naturaldate.Parse(input, now, naturaldate.WithDirection(naturaldate.Future)); err == nil {
+		// The grammar is lenient: inputs it cannot anchor to any time
+		// expression resolve to the reference time itself. A deadline of
+		// "now" is meaningless (it would expire immediately), so treat a
+		// result indistinguishable from now as unrecognized and let the
+		// stricter tiers — or the final error — decide.
+		if result.Sub(now) < time.Second {
+			return time.Time{}, false
+		}
 		return result, true
 	}
 
@@ -118,7 +126,7 @@ func parseInDuration(input string, now time.Time) (time.Time, bool) {
 	}
 
 	value, err := strconv.ParseFloat(matches[1], 64)
-	if err != nil {
+	if err != nil || value <= 0 {
 		return time.Time{}, false
 	}
 

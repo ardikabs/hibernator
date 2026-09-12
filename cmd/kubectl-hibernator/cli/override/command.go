@@ -108,6 +108,9 @@ func runOverride(ctx context.Context, opts *overrideOptions, planName string) er
 	if opts.disable && opts.to != "" {
 		return fmt.Errorf("--disable and --to are mutually exclusive")
 	}
+	if opts.disable && (opts.seconds > 0 || opts.until != "") {
+		return fmt.Errorf("--disable takes no deadline flags; --seconds/--until are silently ignored otherwise")
+	}
 	if !opts.disable && opts.to == "" {
 		return fmt.Errorf("--to is required when activating an override; use --disable to deactivate")
 	}
@@ -135,7 +138,7 @@ func runOverride(ctx context.Context, opts *overrideOptions, planName string) er
 		}
 	}
 
-	c, err := common.NewK8sClient(opts.root)
+	c, err := common.ClientFactory(opts.root)
 	if err != nil {
 		return err
 	}
@@ -208,6 +211,9 @@ func activateOverride(ctx context.Context, c client.Client, plan *hibernatorv1al
 	case hibernatorv1alpha1.PhaseActive, hibernatorv1alpha1.PhaseHibernated:
 		// valid — proceed
 	default:
+		if plan.Status.Phase == "" {
+			return fmt.Errorf("HibernatePlan %q has no recorded phase yet (the controller has not reconciled it); override only applies to Active or Hibernated plans (execution phases run to completion naturally)", planName)
+		}
 		return fmt.Errorf("HibernatePlan %q is in %q phase; override only applies to Active or Hibernated plans (execution phases run to completion naturally)", planName, plan.Status.Phase)
 	}
 

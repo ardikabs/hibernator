@@ -52,6 +52,13 @@ type ResourceStatus struct {
 	// Used for same-cycle restart detection: if nil, resource hasn't been reported in this cycle.
 	// If set, the existing state is preserved during restart unless the new state is demanded.
 	LastReportedAt *metav1.Time `json:"lastReportedAt,omitempty"`
+
+	// Excluded marks operator-withheld resources (e.g. via CLI prune for
+	// partial weekend runs). Excluded entries are skipped at wakeup by the
+	// runner before executors ever see them. Fresh captures rebuild Status
+	// from scratch, so the flag clears automatically on the next full
+	// hibernation; same-cycle preserves keep it.
+	Excluded bool `json:"excluded,omitempty"`
 }
 
 // Data represents restore metadata for a target.
