@@ -1,0 +1,43 @@
+name: Nightly Kind Schedule
+
+# Fixed-clock midnight-crossing schedule cycle. Cron fires 23:50 UTC so
+# cluster provisioning + image builds settle before the 23:55 hibernate
+# edge; the suite must observe Hibernating by ~23:56, WakingUp by ~00:06,
+# and finish asserts by ~00:10 (hard ceiling via timeout-minutes).
+#
+# NOTE: `schedule` triggers only run on the default branch. Manual runs
+# from any branch via workflow_dispatch.
+on:
+  schedule:
+    - cron: '50 23 * * *'
+
+  workflow_dispatch:
+
+jobs:
+  kind-schedule:
+    name: Kind Schedule Cycle
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    env:
+      KIND_SCHEDULE_START: '23:55'
+      KIND_SCHEDULE_END: '00:05'
+    steps:
+      - uses: actions/checkout@v6
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.26'
+          cache: true
+
+      - name: Setup kubectl
+        uses: azure/setup-kubectl@v4
+
+      - name: Setup kind
+        run: make kind-tool
+
+      # Full suite: override-driven scenarios plus the wall-clock
+      # TestNoopScheduleCycle 4-plan midnight matrix
+      # (normal 23:55-00:05 cycle, full-day hibernation, weekday parking,
+      # full-day active).
+      - name: Run Kind Schedule E2E Tests
+        run: make test-kind-schedule

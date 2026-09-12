@@ -1,0 +1,46 @@
+apiVersion: hibernator.ardikabs.com/v1alpha1
+kind: HibernatePlan
+metadata:
+  name: rehearsal
+spec:
+  execution:
+    strategy:
+      type: DAG
+      maxConcurrency: 2
+      dependencies:
+        - from: apps
+          to: nodes
+        - from: nodes
+          to: database
+  behavior:
+    mode: BestEffort
+    retries: 2
+  targets:
+    - name: apps
+      type: noop
+      connectorRef:
+        kind: CloudProvider
+        name: scn-aws
+      parameters:
+        randomDelaySeconds: 1
+        failureMode: none
+        marker: dryrun-apps
+    - name: nodes
+      type: noop
+      connectorRef:
+        kind: CloudProvider
+        name: scn-aws
+      parameters:
+        randomDelaySeconds: 1
+        failureMode: shutdown
+        failureMessage: simulated node drain timeout
+        marker: dryrun-nodes
+    - name: database
+      type: noop
+      connectorRef:
+        kind: CloudProvider
+        name: scn-aws
+      parameters:
+        randomDelaySeconds: 1
+        failureMode: none
+        marker: dryrun-database

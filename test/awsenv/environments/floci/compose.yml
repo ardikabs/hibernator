@@ -1,0 +1,21 @@
+# Floci-backed AWS emulator for executor E2E tests.
+#
+# Usage:
+#   docker compose -f test/awsenv/environments/floci/compose.yml up -d
+#   AWSENV_ENABLED=1 go test ./test/awsenv/... -tags=awsenv -count=1 -v
+#   docker compose -f test/awsenv/environments/floci/compose.yml down
+#
+# The suite gates on AWSENV_ENABLED and waits for readiness itself,
+# so no compose healthcheck is needed. EC2 runs real Docker containers,
+# hence the docker.sock mount.
+services:
+  floci:
+    # Digest pin is required because this container receives Docker socket
+    # access. Override FLOCI_IMAGE only for an explicitly reviewed upgrade.
+    image: ${FLOCI_IMAGE:-floci/floci@sha256:4e451c39c7bb88e3cd4f87e8fc0c25d5b47695a51185d521e2241fa00486e8eb}
+    ports:
+      - "4566:4566"
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+    environment:
+      FLOCI_STORAGE_MODE: memory

@@ -1,0 +1,98 @@
+# Test-owned copy of the controller ClusterRole, mirroring
+# charts/hibernator/templates/rbac/clusterrole.yaml (the production rules).
+#
+# Rationale: config/manager/manager.yaml embeds a STALE partial ClusterRole
+# (missing scheduleexceptions, hibernatenotifications, pods, leases, ...),
+# so the controller's caches never sync on kind. This manifest is applied
+# AFTER manager.yaml and replaces the rules wholesale (same object name).
+# If the chart gains verbs, update this copy as well.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: hibernator-controller
+  labels:
+    app.kubernetes.io/name: hibernator
+    app.kubernetes.io/component: controller
+rules:
+  # CRD management
+  - apiGroups: [""]
+    resources: ["namespaces"]
+    verbs: ["get", "list", "watch"]
+
+  # HibernatorPlan
+  - apiGroups: ["hibernator.ardikabs.com"]
+    resources: ["hibernateplans"]
+    verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
+  - apiGroups: ["hibernator.ardikabs.com"]
+    resources: ["hibernateplans/status"]
+    verbs: ["get", "patch", "update"]
+  - apiGroups: ["hibernator.ardikabs.com"]
+    resources: ["hibernateplans/finalizers"]
+    verbs: ["update"]
+
+  # CloudProvider
+  - apiGroups: ["hibernator.ardikabs.com"]
+    resources: ["cloudproviders"]
+    verbs: ["get", "list", "watch"]
+
+  # K8SCluster
+  - apiGroups: ["hibernator.ardikabs.com"]
+    resources: ["k8sclusters"]
+    verbs: ["get", "list", "watch"]
+
+  # ScheduleException
+  - apiGroups: ["hibernator.ardikabs.com"]
+    resources: ["scheduleexceptions"]
+    verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
+  - apiGroups: ["hibernator.ardikabs.com"]
+    resources: ["scheduleexceptions/status"]
+    verbs: ["get", "patch", "update"]
+  - apiGroups: ["hibernator.ardikabs.com"]
+    resources: ["scheduleexceptions/finalizers"]
+    verbs: ["update"]
+
+  # HibernateNotification
+  - apiGroups: ["hibernator.ardikabs.com"]
+    resources: ["hibernatenotifications"]
+    verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
+  - apiGroups: ["hibernator.ardikabs.com"]
+    resources: ["hibernatenotifications/status"]
+    verbs: ["get", "patch", "update"]
+  - apiGroups: ["hibernator.ardikabs.com"]
+    resources: ["hibernatenotifications/finalizers"]
+    verbs: ["update"]
+
+  # Job management
+  - apiGroups: ["batch"]
+    resources: ["jobs"]
+    verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
+
+  # Pod management for logs
+  - apiGroups: [""]
+    resources: ["pods", "pods/log"]
+    verbs: ["get", "list", "watch"]
+
+  # ConfigMap management for restore data
+  - apiGroups: [""]
+    resources: ["configmaps"]
+    verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
+
+  # Secret management for connectors
+  - apiGroups: [""]
+    resources: ["secrets"]
+    verbs: ["get", "list"]
+
+  # Events
+  - apiGroups: [""]
+    resources: ["events"]
+    verbs: ["create", "patch"]
+
+  # Lease for leader election
+  - apiGroups: ["coordination.k8s.io"]
+    resources: ["leases"]
+    verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
+
+  # Token Review for service account validation
+  - apiGroups: ["authentication.k8s.io"]
+    resources: ["tokenreviews"]
+    verbs: ["create"]

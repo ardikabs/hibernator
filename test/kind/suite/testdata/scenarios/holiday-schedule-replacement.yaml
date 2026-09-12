@@ -1,0 +1,51 @@
+apiVersion: hibernator.ardikabs.com/v1alpha1
+kind: HibernatePlan
+metadata:
+  name: holiday-plan
+spec:
+  execution:
+    strategy:
+      type: Parallel
+      maxConcurrency: 2
+  behavior:
+    mode: Strict
+  targets:
+    - name: workloads
+      type: noop
+      connectorRef:
+        kind: CloudProvider
+        name: scn-aws
+      parameters:
+        randomDelaySeconds: 1
+        failureMode: none
+        marker: holiday-workloads
+    - name: database
+      type: noop
+      connectorRef:
+        kind: CloudProvider
+        name: scn-aws
+      parameters:
+        randomDelaySeconds: 1
+        failureMode: none
+        marker: holiday-database
+---
+apiVersion: hibernator.ardikabs.com/v1alpha1
+kind: ScheduleException
+metadata:
+  name: holiday
+  labels:
+    hibernator.ardikabs.com/plan: holiday-plan
+spec:
+  planRef:
+    name: holiday-plan
+  type: replace
+  windows:
+    - start: "00:00"
+      end: "23:59"
+      daysOfWeek: ["MON", "TUE", "WED", "THU", "FRI", "SAT", "SUN"]
+  executionOverride:
+    strategy:
+      type: Sequential
+    behavior:
+      mode: BestEffort
+      retries: 1

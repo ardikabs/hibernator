@@ -96,12 +96,12 @@ Common issues and their solutions.
 
 1. Verify the ConfigMap exists:
     ```bash
-    kubectl get configmap restore-data-<plan-name> -n hibernator-system
+    kubectl get configmap hibernator-restore-<plan-name> -n hibernator-system
     ```
 
 2. Check the ConfigMap content:
     ```bash
-    kubectl get configmap restore-data-<plan-name> -n hibernator-system -o yaml
+    kubectl get configmap hibernator-restore-<plan-name> -n hibernator-system -o yaml
     ```
 
 3. Ensure the ConfigMap was not garbage-collected (check runner pod logs from the shutdown cycle)

@@ -1,0 +1,26 @@
+# Minimal NodePool CRD for the k8senv integration suite.
+#
+# Only what the Karpenter executor touches: cluster-scoped CRUD plus label
+# selectors on unstructured objects. Unknown fields are preserved so saved
+# specs round-trip verbatim (restore fidelity is asserted). No status
+# subresource: nothing converges status in envtest, and AwaitCompletion
+# waits stay disabled in this suite for exactly that reason.
+apiVersion: apiextensions.k8s.io/v1
+kind: CustomResourceDefinition
+metadata:
+  name: nodepools.karpenter.sh
+spec:
+  group: karpenter.sh
+  names:
+    plural: nodepools
+    singular: nodepool
+    kind: NodePool
+  scope: Cluster
+  versions:
+    - name: v1
+      served: true
+      storage: true
+      schema:
+        openAPIV3Schema:
+          type: object
+          x-kubernetes-preserve-unknown-fields: true

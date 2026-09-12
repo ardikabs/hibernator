@@ -1,0 +1,62 @@
+apiVersion: hibernator.ardikabs.com/v1alpha1
+kind: HibernatePlan
+metadata:
+  name: event-plan
+spec:
+  execution:
+    strategy:
+      type: Parallel
+      maxConcurrency: 3
+  behavior:
+    mode: Strict
+  targets:
+    - name: frontend
+      type: noop
+      connectorRef:
+        kind: CloudProvider
+        name: scn-aws
+      parameters:
+        randomDelaySeconds: 1
+        failureMode: none
+        marker: eventmode-frontend
+    - name: api
+      type: noop
+      connectorRef:
+        kind: CloudProvider
+        name: scn-aws
+      parameters:
+        randomDelaySeconds: 1
+        failureMode: none
+        marker: eventmode-api-base
+    - name: batch
+      type: noop
+      connectorRef:
+        kind: CloudProvider
+        name: scn-aws
+      parameters:
+        randomDelaySeconds: 1
+        failureMode: none
+        marker: eventmode-batch
+---
+apiVersion: hibernator.ardikabs.com/v1alpha1
+kind: ScheduleException
+metadata:
+  name: event-mode
+  labels:
+    hibernator.ardikabs.com/plan: event-plan
+spec:
+  planRef:
+    name: event-plan
+  type: extend
+  windows:
+    - start: "00:00"
+      end: "23:59"
+      daysOfWeek: ["MON", "TUE", "WED", "THU", "FRI", "SAT", "SUN"]
+  targetOverrides:
+    - targetName: api
+      parameters:
+        randomDelaySeconds: 1
+        failureMode: none
+        marker: eventmode-api-override
+    - targetName: batch
+      disabled: true

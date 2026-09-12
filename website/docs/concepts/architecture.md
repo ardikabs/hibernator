@@ -132,4 +132,4 @@ During shutdown, executors capture the current state of resources:
 - RDS: Instance state (running/stopped)
 - EC2: Instance IDs and states
 
-This metadata is stored in ConfigMaps namespaced as `restore-data-{plan-name}` with keys formatted as `{executor}_{target-name}`. During wakeup, the executor reads this metadata to restore resources to their exact pre-hibernation state.
+This metadata is stored in a ConfigMap named `hibernator-restore-{plan-name}` with keys formatted as `{target-name}.json`. During wakeup, the executor reads this metadata to restore resources to their exact pre-hibernation state.

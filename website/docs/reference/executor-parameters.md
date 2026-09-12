@@ -176,4 +176,5 @@ NoOpParameters defines the expected parameters for the noop executor.
 | `randomDelaySeconds` | _int_ | RandomDelaySeconds specifies the maximum duration in seconds for random sleep during operations.<br />The actual delay will be randomly chosen between 0 and this value.<br />Maximum allowed is 30 seconds. Defaults to 1 if not specified. |
 | `failureMode` | _string_ | FailureMode specifies when to simulate failures. Valid values: "none", "shutdown", "wakeup", "both".<br />Defaults to "none". |
 | `failureMessage` | _string_ | FailureMessage allows customizing the error message for simulated failures.<br />If empty, a default message will be used. |
+| `marker` | _string_ | Marker is an opaque test label echoed verbatim into restore state.<br />It lets tests assert exact restore round-trips without matching on<br />generated IDs. Maximum 64 characters. Optional. |
 

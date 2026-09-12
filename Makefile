@@ -44,7 +44,7 @@ COVERAGE_HTML ?= $(COVERAGE_DIR)/coverage.html
 COVERAGE_THRESHOLD ?= 50
 
 # Unit test packages (exclude e2e, cmd, and generated files)
-UNIT_TEST_PKGS ?= $(shell go list ./... | grep -vE '(/cmd/controller|/cmd/kubectl-hibernator|/mocks|/test/e2e)')
+UNIT_TEST_PKGS ?= $(shell go list ./... | grep -vE '(/cmd/controller|/cmd/kubectl-hibernator|/mocks|/test/e2e|/test/awsenv|/test/kind|/test/k8senv)')
 
 # Colors for output
 CYAN := \033[36m
@@ -108,7 +108,7 @@ bin/golangci-lint: bin/golangci-lint-${GOLANGCI_VERSION}
 
 bin/golangci-lint-${GOLANGCI_VERSION}:
 	@mkdir -p bin
-	curl -sSfL https://raw.githubusercontent.com/golangci/golangci-lint/master/install.sh | sh -s -- -b bin v$(GOLANGCI_VERSION)
+	curl -sSfL https://raw.githubusercontent.com/golangci/golangci-lint/main/install.sh | sh -s -- -b bin v$(GOLANGCI_VERSION)
 	@mv bin/golangci-lint "$@"
 
 .PHONY: lint
@@ -183,6 +183,31 @@ test-e2e-focus: envtest ## Run E2E tests matching a specific prefix. Usage: make
 	fi
 	@echo "$(CYAN)Running E2E tests with focus: $(FOCUS)...$(RESET)"
 	@$(GOCMD) test ./test/e2e/ -v -tags=e2e -ginkgo.v -ginkgo.focus="$(FOCUS)"
+
+.PHONY: test-awsenv
+test-awsenv: ## Run AWS-environment executor integration tests (requires Floci on :4566, see test/awsenv/environments/floci/compose.yml).
+	@echo "$(CYAN)Running AWS environment E2E tests...$(RESET)"
+	@AWSENV_ENABLED=1 $(GOCMD) test ./test/awsenv/... -v -tags=awsenv -count=1
+
+.PHONY: test-k8senv
+test-k8senv: envtest ## Run Kubernetes API executor integration tests (envtest: Karpenter + WorkloadScaler, no cloud backend).
+	@echo "$(CYAN)Running Kubernetes API integration tests...$(RESET)"
+	@KUBEBUILDER_ASSETS=$$($(ENVTEST) use -p path 2>/dev/null) K8SENV_ENABLED=1 $(GOCMD) test ./test/k8senv/... -v -tags=k8senv -count=1
+
+KIND ?= $(CURDIR)/bin/kind
+.PHONY: kind-tool
+kind-tool: ## Install kind to bin/.
+	@test -s $(KIND) || { GOBIN=$(CURDIR)/bin go install sigs.k8s.io/kind@v0.29.0; }
+
+.PHONY: test-kind
+test-kind: kind-tool ## Full-chain kind E2E (builds images, provisions cluster, runs Go suite).
+	@echo "$(CYAN)Running kind full-chain E2E tests...$(RESET)"
+	@$(GOCMD) test ./test/kind/ -v -tags=kind -count=1 -timeout 60m
+
+.PHONY: test-kind-schedule
+test-kind-schedule: kind-tool ## Full-chain kind E2E including the real wall-clock schedule cycle (nightly). Set KIND_SCHEDULE_START/END (HH:MM UTC) to pin absolute window anchors; unset = relative window for ad-hoc runs.
+	@echo "$(CYAN)Running kind full-chain E2E including scheduler...$(RESET)"
+	@RUN_KIND_SCHEDULE=1 $(GOCMD) test ./test/kind/ -v -tags=kind -count=1 -timeout 60m
 
 .PHONY: test-pkg
 test-pkg: ## Run tests for a specific package. Usage: make test-pkg PKG=./internal/scheduler/...

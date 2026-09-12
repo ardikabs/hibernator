@@ -1,0 +1,59 @@
+apiVersion: hibernator.ardikabs.com/v1alpha1
+kind: HibernatePlan
+metadata:
+  name: subset
+spec:
+  execution:
+    strategy:
+      type: Parallel
+      maxConcurrency: 3
+  behavior:
+    mode: Strict
+  targets:
+    - name: db-1
+      type: noop
+      connectorRef:
+        kind: CloudProvider
+        name: scn-aws
+      parameters:
+        randomDelaySeconds: 1
+        failureMode: none
+        marker: subset-db-1
+    - name: db-2
+      type: noop
+      connectorRef:
+        kind: CloudProvider
+        name: scn-aws
+      parameters:
+        randomDelaySeconds: 1
+        failureMode: none
+        marker: subset-db-2
+    - name: db-3
+      type: noop
+      connectorRef:
+        kind: CloudProvider
+        name: scn-aws
+      parameters:
+        randomDelaySeconds: 1
+        failureMode: none
+        marker: subset-db-3
+---
+apiVersion: hibernator.ardikabs.com/v1alpha1
+kind: ScheduleException
+metadata:
+  name: subset-suspend
+  labels:
+    hibernator.ardikabs.com/plan: subset
+spec:
+  planRef:
+    name: subset
+  type: suspend
+  windows:
+    - start: "00:00"
+      end: "23:59"
+      daysOfWeek: ["MON", "TUE", "WED", "THU", "FRI", "SAT", "SUN"]
+  targetOverrides:
+    - targetName: db-2
+      disabled: true
+    - targetName: db-3
+      disabled: true

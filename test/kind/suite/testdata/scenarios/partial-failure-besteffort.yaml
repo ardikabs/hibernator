@@ -1,0 +1,41 @@
+apiVersion: hibernator.ardikabs.com/v1alpha1
+kind: HibernatePlan
+metadata:
+  name: besteffort
+spec:
+  execution:
+    strategy:
+      type: Parallel
+      maxConcurrency: 3
+  behavior:
+    mode: BestEffort
+    retries: 3
+  targets:
+    - name: ns-shop
+      type: noop
+      connectorRef:
+        kind: CloudProvider
+        name: scn-aws
+      parameters:
+        randomDelaySeconds: 1
+        failureMode: none
+        marker: besteffort-ns-shop
+    - name: ns-pricing
+      type: noop
+      connectorRef:
+        kind: CloudProvider
+        name: scn-aws
+      parameters:
+        randomDelaySeconds: 1
+        failureMode: shutdown
+        failureMessage: simulated stuck PDB
+        marker: besteffort-ns-pricing
+    - name: ns-reports
+      type: noop
+      connectorRef:
+        kind: CloudProvider
+        name: scn-aws
+      parameters:
+        randomDelaySeconds: 1
+        failureMode: none
+        marker: besteffort-ns-reports

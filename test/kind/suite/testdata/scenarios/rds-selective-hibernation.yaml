@@ -1,0 +1,21 @@
+apiVersion: hibernator.ardikabs.com/v1alpha1
+kind: HibernatePlan
+metadata:
+  name: rds-selective
+spec:
+  execution:
+    strategy:
+      type: Parallel
+      maxConcurrency: 1
+  behavior:
+    mode: Strict
+  targets:
+    - name: selective-databases
+      type: noop
+      connectorRef:
+        kind: CloudProvider
+        name: scn-aws
+      parameters:
+        randomDelaySeconds: 1
+        failureMode: none
+        marker: selective-databases

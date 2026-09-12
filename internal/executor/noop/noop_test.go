@@ -238,6 +238,52 @@ func TestExecutor_WakeUp(t *testing.T) {
 	}
 }
 
+func TestExecutor_Shutdown_EchoesMarker(t *testing.T) {
+	e := New()
+	ctx := context.Background()
+
+	paramsJSON, err := json.Marshal(executorparams.NoOpParameters{
+		RandomDelaySeconds: 1,
+		FailureMode:        "none",
+		Marker:             "scenario-nightly-01",
+	})
+	require.NoError(t, err)
+
+	var reported RestoreState
+	spec := executor.Spec{
+		TargetName: "marker-target",
+		TargetType: "noop",
+		Parameters: paramsJSON,
+		ConnectorConfig: executor.ConnectorConfig{
+			AWS: &executor.AWSConnectorConfig{},
+		},
+		ReportStateCallback: func(key string, value interface{}) error {
+			raw, err := json.Marshal(value)
+			require.NoError(t, err)
+			require.NoError(t, json.Unmarshal(raw, &reported))
+			return nil
+		},
+	}
+
+	_, err = e.Shutdown(ctx, logr.Discard(), spec)
+	require.NoError(t, err)
+	assert.Equal(t, "scenario-nightly-01", reported.Marker)
+	assert.Equal(t, "marker-target", reported.TargetName)
+}
+
+func TestExecutor_Validate_MarkerTooLong(t *testing.T) {
+	e := New()
+	spec := executor.Spec{
+		ConnectorConfig: executor.ConnectorConfig{
+			AWS: &executor.AWSConnectorConfig{},
+		},
+		Parameters: json.RawMessage(`{"marker": "0123456789012345678901234567890123456789012345678901234567890123456789"}`),
+	}
+	err := e.Validate(spec)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "marker")
+}
+
 func TestExecutor_Shutdown_ContextCancellation(t *testing.T) {
 	e := New()
 	ctx, cancel := context.WithCancel(context.Background())
