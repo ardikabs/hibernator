@@ -74,6 +74,19 @@ func TestScenarios(t *testing.T) {
 		// (Days [FRI..MON] would add a Monday 20:00 hibernation with no
 		// Tuesday wakeup by the documented per-day semantics.)
 		b := suite.LoadScenario(t, ns, "weekend-hibernation")
+		// Neutralize the declared weekday window: these steps drive
+		// hibernate/wakeup via overrides, and the real Asia/Jakarta
+		// 20:00-06:00 schedule would hibernate the plan at creation during
+		// off-hours (including the whole weekend), failing the Active
+		// assert below. Same inactive shape the loader injects for
+		// schedule-less plans.
+		window := suite.HibernationWindowAt(time.Now(), time.Hour, 15*time.Minute)
+		b.Plan.Spec.Schedule = hibernatorv1alpha1.Schedule{
+			Timezone: "UTC",
+			OffHours: []hibernatorv1alpha1.OffHourWindow{
+				{Start: window.Start, End: window.End, DaysOfWeek: window.Days},
+			},
+		}
 		key := b.ApplyPlan(t, c)
 		suite.PollPhaseAtLeast(t, c, suite.K8sSets, key, hibernatorv1alpha1.PhaseActive, 2*time.Minute)
 		suite.RunHibernateStep(t, c, suite.K8sSets, ns, key, suite.HibernateStepExpectation{
