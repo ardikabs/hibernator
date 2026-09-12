@@ -499,7 +499,7 @@ func formatLogLine(line string) string {
 
 	// Execution context
 	if execID != "" && target != "" {
-		sb.WriteString(fmt.Sprintf("(exec=%s, target=%s) ", execID, target))
+		fmt.Fprintf(&sb, "(exec=%s, target=%s) ", execID, target)
 	}
 
 	// Main message
@@ -509,67 +509,67 @@ func formatLogLine(line string) string {
 	switch msg {
 	case "starting runner":
 		if op := extractString(logEntry, "operation"); op != "" {
-			sb.WriteString(fmt.Sprintf(" [%s]", op))
+			fmt.Fprintf(&sb, " [%s]", op)
 		}
 		if tt := extractString(logEntry, "targetType"); tt != "" {
-			sb.WriteString(fmt.Sprintf(" (%s)", tt))
+			fmt.Fprintf(&sb, " (%s)", tt)
 		}
 
 	case "progress":
 		if message := extractString(logEntry, "message"); message != "" {
-			sb.WriteString(fmt.Sprintf(": %s", message))
+			fmt.Fprintf(&sb, ": %s", message)
 		}
 		if phase := extractString(logEntry, "phase"); phase != "" {
-			sb.WriteString(fmt.Sprintf(" (phase: %s", phase))
+			fmt.Fprintf(&sb, " (phase: %s", phase)
 			if percent := extractString(logEntry, "percent"); percent != "" {
-				sb.WriteString(fmt.Sprintf(", %s%%", percent))
+				fmt.Fprintf(&sb, ", %s%%", percent)
 			}
 			sb.WriteString(")")
 		}
 
 	case "error context":
 		if errMsg := extractString(logEntry, "error"); errMsg != "" {
-			sb.WriteString(fmt.Sprintf(": %s", errMsg))
+			fmt.Fprintf(&sb, ": %s", errMsg)
 		}
 
 	case "waiting for workload replicas to scale", "waiting for operation":
 		if name := extractString(logEntry, "name"); name != "" {
 			ns := extractString(logEntry, "namespace")
-			sb.WriteString(fmt.Sprintf(" %s/%s", ns, name))
+			fmt.Fprintf(&sb, " %s/%s", ns, name)
 		}
 		if desc := extractString(logEntry, "description"); desc != "" {
-			sb.WriteString(fmt.Sprintf(": %s", desc))
+			fmt.Fprintf(&sb, ": %s", desc)
 		}
 		if timeout := extractString(logEntry, "timeout"); timeout != "" {
-			sb.WriteString(fmt.Sprintf(" (timeout: %s)", timeout))
+			fmt.Fprintf(&sb, " (timeout: %s)", timeout)
 		}
 
 	case "polling operation (initial)", "polling operation":
 		if desc := extractString(logEntry, "description"); desc != "" {
-			sb.WriteString(fmt.Sprintf(": %s", desc))
+			fmt.Fprintf(&sb, ": %s", desc)
 		}
 		if status := extractString(logEntry, "status"); status != "" {
-			sb.WriteString(fmt.Sprintf(" → %s", status))
+			fmt.Fprintf(&sb, " → %s", status)
 		}
 
 	case "operation completed":
 		if desc := extractString(logEntry, "description"); desc != "" {
-			sb.WriteString(fmt.Sprintf(": %s", desc))
+			fmt.Fprintf(&sb, ": %s", desc)
 		}
 
 	default:
 		// Generic handling for other message types
 		if desc := extractString(logEntry, "description"); desc != "" {
-			sb.WriteString(fmt.Sprintf(": %s", desc))
+			fmt.Fprintf(&sb, ": %s", desc)
 		}
 		if message := extractString(logEntry, "message"); message != "" {
-			sb.WriteString(fmt.Sprintf(": %s", message))
+			fmt.Fprintf(&sb, ": %s", message)
 		}
 		if status := extractString(logEntry, "status"); status != "" {
-			sb.WriteString(fmt.Sprintf(" → %s", status))
+			fmt.Fprintf(&sb, " → %s", status)
 		}
 		if errMsg := extractString(logEntry, "error"); errMsg != "" {
-			sb.WriteString(fmt.Sprintf(" (ERROR: %s)", errMsg))
+			fmt.Fprintf(&sb, " (ERROR: %s)", errMsg)
 		}
 	}
 

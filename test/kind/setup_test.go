@@ -39,6 +39,46 @@ func TestHibernationWindowRoundsStartUp(t *testing.T) {
 	require.Equal(t, time.Date(2026, 9, 8, 0, 17, 0, 0, time.UTC), window.EndAt)
 }
 
+func TestFixedScheduleWindowSameDay(t *testing.T) {
+	now := time.Date(2026, 9, 7, 12, 0, 0, 0, time.UTC) // Monday
+	window, err := suite.FixedScheduleWindow(now, "14:00", "14:10")
+
+	require.NoError(t, err)
+	require.Equal(t, "14:00", window.Start)
+	require.Equal(t, "14:10", window.End)
+	require.Equal(t, []string{"MON"}, window.Days)
+	require.Equal(t, time.Date(2026, 9, 7, 14, 0, 0, 0, time.UTC), window.StartAt)
+	require.Equal(t, time.Date(2026, 9, 7, 14, 10, 0, 0, time.UTC), window.EndAt)
+}
+
+func TestFixedScheduleWindowOvernightEmitsBothDays(t *testing.T) {
+	now := time.Date(2026, 9, 7, 23, 50, 0, 0, time.UTC) // Monday
+	window, err := suite.FixedScheduleWindow(now, "23:55", "00:05")
+
+	require.NoError(t, err)
+	require.Equal(t, "23:55", window.Start)
+	require.Equal(t, "00:05", window.End)
+	require.Equal(t, []string{"MON", "TUE"}, window.Days)
+	require.Equal(t, time.Date(2026, 9, 7, 23, 55, 0, 0, time.UTC), window.StartAt)
+	require.Equal(t, time.Date(2026, 9, 8, 0, 5, 0, 0, time.UTC), window.EndAt)
+}
+
+func TestFixedScheduleWindowRejectsBadAnchors(t *testing.T) {
+	now := time.Date(2026, 9, 7, 12, 0, 0, 0, time.UTC)
+
+	for _, tc := range []struct{ start, end string }{
+		{"10:00", "10:00"}, // zero-length window
+		{"25:00", "10:00"}, // hour out of range
+		{"10:00", "10:60"}, // minute out of range
+		{"ab:cd", "10:00"}, // not numeric
+		{"10:00:00", "11:00"},
+		{"", "11:00"},
+	} {
+		_, err := suite.FixedScheduleWindow(now, tc.start, tc.end)
+		require.Error(t, err, "start=%q end=%q must be rejected", tc.start, tc.end)
+	}
+}
+
 func TestJobBelongsToCycleAcceptsControllerMarkedTerminalJob(t *testing.T) {
 	uid := types.UID("plan-uid")
 	job := batchv1.Job{ObjectMeta: metav1.ObjectMeta{

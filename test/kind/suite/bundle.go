@@ -198,6 +198,57 @@ func HibernationWindowAt(now time.Time, lead, length time.Duration) ScheduleWind
 	}
 }
 
+// FixedScheduleWindow builds a ScheduleWindow anchored to absolute wall-clock
+// times ("15:04", UTC) on the day containing now. An end at or before start
+// rolls to the next day (overnight window, e.g. 23:55-00:05 spans midnight);
+// both endpoint days are emitted so the scheduler fires each edge exactly
+// once. Unlike HibernationWindowAt, the anchors do not drift with setup
+// duration, which is what makes fixed nightly windows observable.
+func FixedScheduleWindow(now time.Time, startHHMM, endHHMM string) (ScheduleWindow, error) {
+	parse := func(label, s string) (int, int, error) {
+		parts := strings.Split(s, ":")
+		if len(parts) != 2 {
+			return 0, 0, fmt.Errorf("invalid %s time %q, expected HH:MM", label, s)
+		}
+		var hh, mm int
+		if _, err := fmt.Sscanf(s, "%d:%d", &hh, &mm); err != nil {
+			return 0, 0, fmt.Errorf("invalid %s time %q: %w", label, s, err)
+		}
+		if hh < 0 || hh > 23 || mm < 0 || mm > 59 {
+			return 0, 0, fmt.Errorf("invalid %s time %q, hour 0-23 and minute 0-59 required", label, s)
+		}
+		return hh, mm, nil
+	}
+
+	sh, sm, err := parse("start", startHHMM)
+	if err != nil {
+		return ScheduleWindow{}, err
+	}
+	eh, em, err := parse("end", endHHMM)
+	if err != nil {
+		return ScheduleWindow{}, err
+	}
+	if sh == eh && sm == em {
+		return ScheduleWindow{}, fmt.Errorf("start and end times must be different; start=%s, end=%s", startHHMM, endHHMM)
+	}
+
+	now = now.UTC()
+	s := time.Date(now.Year(), now.Month(), now.Day(), sh, sm, 0, 0, time.UTC)
+	e := time.Date(now.Year(), now.Month(), now.Day(), eh, em, 0, 0, time.UTC)
+	if !e.After(s) {
+		e = e.Add(24 * time.Hour)
+	}
+	day := func(t time.Time) string { return strings.ToUpper(t.Format("Mon")) }
+	days := []string{day(s)}
+	if d := day(e); d != days[0] {
+		days = append(days, d)
+	}
+	return ScheduleWindow{
+		Start: s.Format("15:04"), End: e.Format("15:04"), Days: days,
+		StartAt: s, EndAt: e,
+	}, nil
+}
+
 // pollPhaseAtLeast waits for a durable lifecycle milestone. Transient phases
 // accept their immediate successful successor so a fast runner cannot make
 // the test miss a correct transition between polls.

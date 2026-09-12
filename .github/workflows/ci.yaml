@@ -16,7 +16,12 @@ on:
       - internal/**
       - pkg/**
       - test/**
+      - config/**
+      - Dockerfile
+      - Makefile
       - go.mod
+      - go.sum
+      - .github/workflows/ci.yaml
 
 jobs:
   lint:
@@ -65,3 +70,50 @@ jobs:
 
       - name: Run E2E Tests
         run: make test-e2e
+
+  test-awsenv:
+    name: AWS Integration Tests
+    needs: [lint]
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v6
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.26'
+          cache: true
+
+      - name: Start Floci AWS emulator
+        run: docker compose -f test/awsenv/environments/floci/compose.yml up -d
+
+      - name: Run AWS Integration Tests
+        run: make test-awsenv
+
+      - name: Stop Floci AWS emulator
+        if: always()
+        run: docker compose -f test/awsenv/environments/floci/compose.yml down -v
+
+  test-kind:
+    name: Kind E2E Tests
+    needs: [lint]
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v6
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.26'
+          cache: true
+
+      - name: Setup kubectl
+        uses: azure/setup-kubectl@v4
+
+      - name: Setup kind
+        run: make kind-tool
+
+      # PR smoke only (override-driven). The real wall-clock schedule cycle
+      # (make test-kind-schedule) stays nightly/manual.
+      - name: Run Kind E2E Tests
+        run: make test-kind

@@ -80,6 +80,19 @@ make test-kind            # immediate override-driven full-chain PR smoke
 make test-kind-schedule   # also run the real wall-clock schedule cycle (nightly)
 ```
 
+`make test-kind-schedule` runs the 3-plan midnight matrix in
+`TestNoopScheduleCycle` (normal cycle, full-day hibernation, full-day
+active). Without anchors it uses a relative window (start ~3 min out) for
+ad-hoc runs; the nightly pins absolute UTC anchors:
+
+```bash
+KIND_SCHEDULE_START=23:55 KIND_SCHEDULE_END=00:05 make test-kind-schedule
+```
+
+Anchored runs fail fast when setup finishes less than 90s before the start
+edge (cron fired late or cold image cache). Nightly CI lives in
+`.github/workflows/nightly-kind.yaml` (cron `50 23 * * *` UTC).
+
 Keep a suite-owned cluster for debugging: `KEEP_KIND=1 make test-kind`.
 Keep it only on failure: `KEEP_KIND_ON_FAILURE=1 make test-kind`.
 (Point kubectl at the printed kubeconfig.)

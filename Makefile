@@ -108,7 +108,7 @@ bin/golangci-lint: bin/golangci-lint-${GOLANGCI_VERSION}
 
 bin/golangci-lint-${GOLANGCI_VERSION}:
 	@mkdir -p bin
-	curl -sSfL https://raw.githubusercontent.com/golangci/golangci-lint/master/install.sh | sh -s -- -b bin v$(GOLANGCI_VERSION)
+	curl -sSfL https://raw.githubusercontent.com/golangci/golangci-lint/main/install.sh | sh -s -- -b bin v$(GOLANGCI_VERSION)
 	@mv bin/golangci-lint "$@"
 
 .PHONY: lint
@@ -200,7 +200,7 @@ test-kind: kind-tool ## Full-chain kind E2E (builds images, provisions cluster, 
 	@$(GOCMD) test ./test/kind/ -v -tags=kind -count=1 -timeout 60m
 
 .PHONY: test-kind-schedule
-test-kind-schedule: kind-tool ## Full-chain kind E2E including the real wall-clock schedule cycle (nightly).
+test-kind-schedule: kind-tool ## Full-chain kind E2E including the real wall-clock schedule cycle (nightly). Set KIND_SCHEDULE_START/END (HH:MM UTC) to pin absolute window anchors; unset = relative window for ad-hoc runs.
 	@echo "$(CYAN)Running kind full-chain E2E including scheduler...$(RESET)"
 	@RUN_KIND_SCHEDULE=1 $(GOCMD) test ./test/kind/ -v -tags=kind -count=1 -timeout 60m
 
