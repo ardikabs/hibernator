@@ -17,6 +17,15 @@ import (
 	"github.com/ardikabs/hibernator/pkg/k8sutil"
 )
 
+// Skip reasons for RestoreData.Skipped. Keys are resource keys within Data;
+// values explain why the runner withheld them. Executors must function
+// correctly ignoring Skipped and may read it to overcommunicate.
+const (
+	// SkipReasonExcluded marks operator-withheld resources (e.g. CLI prune
+	// for partial runs). Fresh captures clear the underlying marker.
+	SkipReasonExcluded = "excluded"
+)
+
 // RestoreData holds restore metadata produced by Shutdown.
 type RestoreData struct {
 	// Type of the executor that produced this data.
@@ -31,6 +40,11 @@ type RestoreData struct {
 	// - RDS: instanceID or clusterID with prefix (e.g., "instance:my-db", "cluster:my-cluster")
 	// - Noop: operation ID (e.g., "noop-12345")
 	Data map[string]json.RawMessage `json:"data"`
+
+	// Skipped lists resource keys withheld from Data and why. The runner
+	// normalizes Data before executors run, so entries here are advisory
+	// only: safe to ignore, available for logging or message enrichment.
+	Skipped map[string]string `json:"skipped,omitempty"`
 
 	// IsLive indicates whether data was captured from actual resource state via API (true)
 	// or is cached/unknown state (false). When true, hibernator has direct knowledge of the

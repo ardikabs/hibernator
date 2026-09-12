@@ -8,7 +8,6 @@ package list
 import (
 	"context"
 	"fmt"
-	"os"
 
 	"github.com/spf13/cobra"
 	"sigs.k8s.io/controller-runtime/pkg/client"
@@ -53,7 +52,7 @@ Examples:
 }
 
 func runList(ctx context.Context, opts *listOptions) error {
-	c, err := common.NewK8sClient(opts.root)
+	c, err := common.ClientFactory(opts.root)
 	if err != nil {
 		return err
 	}
@@ -84,7 +83,7 @@ func runList(ctx context.Context, opts *listOptions) error {
 		}
 	}
 
-	output := &printers.PlanListOutput{Items: items}
+	planList := &printers.PlanListOutput{Items: items}
 	d := &printers.Dispatcher{JSON: opts.root.JsonOutput}
-	return d.PrintObj(output, os.Stdout)
+	return d.PrintObj(planList, output.WriterFromContext(ctx))
 }

@@ -91,6 +91,11 @@ func (s *preserveStateStrategy) setStatus(ctx *stateMergeContext) ResourceStatus
 	status := ResourceStatus{}
 	if ctx.existing.Status != nil {
 		status.StaleCount = ctx.existing.Status[ctx.key].StaleCount
+		// Same-cycle preserve keeps operator intent: an Excluded marker set
+		// after the save (e.g. CLI prune for a partial run) must survive a
+		// mid-cycle restart re-report. Fresh captures in other strategies
+		// rebuild Status and clear it.
+		status.Excluded = ctx.existing.Status[ctx.key].Excluded
 		if ctx.existing.Status[ctx.key].LastReportedAt != nil {
 			status.LastReportedAt = ctx.existing.Status[ctx.key].LastReportedAt
 		}

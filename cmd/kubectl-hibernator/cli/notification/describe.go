@@ -8,7 +8,6 @@ package notification
 import (
 	"context"
 	"fmt"
-	"os"
 
 	"github.com/spf13/cobra"
 	"k8s.io/apimachinery/pkg/types"
@@ -55,7 +54,7 @@ Examples:
 }
 
 func runDescribe(ctx context.Context, opts *describeOptions, notifName string) error {
-	c, err := common.NewK8sClient(opts.root)
+	c, err := common.ClientFactory(opts.root)
 	if err != nil {
 		return err
 	}
@@ -85,5 +84,5 @@ func runDescribe(ctx context.Context, opts *describeOptions, notifName string) e
 	}
 
 	d := &printers.Dispatcher{JSON: opts.root.JsonOutput}
-	return d.PrintObj(out, os.Stdout)
+	return d.PrintObj(out, output.WriterFromContext(ctx))
 }

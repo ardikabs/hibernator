@@ -20,7 +20,8 @@ import (
 )
 
 type resumeOptions struct {
-	root *common.RootOptions
+	root   *common.RootOptions
+	dryRun bool
 }
 
 // NewCommand creates the "resume" command.
@@ -45,13 +46,15 @@ Examples:
 		}),
 	}
 
+	cmd.Flags().BoolVar(&resOpts.dryRun, "dry-run", false, "Preview what would happen without making changes")
+
 	return cmd
 }
 
 func runResume(ctx context.Context, opts *resumeOptions, planName string) error {
 	out := output.FromContext(ctx)
 
-	c, err := common.NewK8sClient(opts.root)
+	c, err := common.ClientFactory(opts.root)
 	if err != nil {
 		return err
 	}
@@ -77,12 +80,18 @@ func runResume(ctx context.Context, opts *resumeOptions, planName string) error 
 		return nil
 	}
 
+	if opts.dryRun {
+		out.Info("[DRY-RUN] Would resume HibernatePlan %q (clear spec.suspend and suspension annotations)", planName)
+		return nil
+	}
+
 	// Patch: remove annotations and set spec.suspend=false
 	patch := client.MergeFrom(plan.DeepCopy())
 
 	plan.Spec.Suspend = false
 	if plan.Annotations != nil {
 		delete(plan.Annotations, wellknown.AnnotationSuspendUntil)
+		delete(plan.Annotations, wellknown.AnnotationSuspendReason)
 	}
 
 	if err := c.Patch(ctx, &plan, patch); err != nil {
