@@ -146,11 +146,24 @@ func (s *state) execute(
 // This catches force-applied exceptions or plan changes after exception creation.
 // When a PlanSnapshot is present, validation is performed against the snapshot so the
 // exception resource does not need to remain present.
-func (s *state) validateRuntimeOverrides(ctx context.Context, log logr.Logger, plan *hibernatorv1alpha1.HibernatePlan) error {
+//
+// NOTE: effective is the effective (override-resolved) plan from effectivePlan,
+// not the live base plan. Validation targets are derived from it.
+func (s *state) validateRuntimeOverrides(ctx context.Context, log logr.Logger, effective *hibernatorv1alpha1.HibernatePlan) error {
+	// WakeUp with a started cycle validates the frozen working set (full list,
+	// disabled seeded skipped) — the same targets execute() dispatches.
+	if effective.Status.CurrentOperation == hibernatorv1alpha1.OperationWakeUp && len(effective.Status.Executions) > 0 {
+		if sus := s.findActiveSuspendOverride(); sus != nil {
+			log.V(1).Info("runtime validation of suspend override targets", "exception", sus.Name)
+		} else {
+			log.V(1).Info("runtime validation of frozen wakeup targets")
+		}
+		return s.validateTargetOverrides(log, effective, effective.Spec.Targets)
+	}
 	// If a snapshot is locked for this cycle, validate against the snapshot.
-	if snap := plan.Status.PlanSnapshot; snap != nil && snap.CycleID == plan.Status.CurrentCycleID {
+	if snap := effective.Status.PlanSnapshot; snap != nil && snap.CycleID == effective.Status.CurrentCycleID {
 		log.V(1).Info("runtime validation of locked plan snapshot", "exception", snap.ExceptionName)
-		return s.validateTargetOverrides(log, plan, snap.Targets)
+		return s.validateTargetOverrides(log, effective, snap.Targets)
 	}
 
 	// Find active exception with execution overrides
@@ -182,7 +195,7 @@ func (s *state) validateRuntimeOverrides(ctx context.Context, log logr.Logger, p
 	}
 
 	log.V(1).Info("runtime validation of execution overrides", "exception", activeException.Name)
-	return s.validateTargetOverrides(log, plan, plan.Spec.Targets)
+	return s.validateTargetOverrides(log, effective, effective.Spec.Targets)
 }
 
 // validateTargetOverrides validates target parameters against the provided targets.
@@ -229,12 +242,14 @@ func (s *state) executeForStage(
 			continue
 		}
 
-		// Skip targets already in a terminal state (previously pruned or completed).
+		// Skip targets already in a terminal state (previously pruned, completed,
+		// or skipped by override).
 		execStatus := FindExecutionStatus(plan, target.Type, targetName)
 		if execStatus != nil &&
 			(execStatus.State == hibernatorv1alpha1.StateFailed ||
 				execStatus.State == hibernatorv1alpha1.StateCompleted ||
-				execStatus.State == hibernatorv1alpha1.StateAborted) {
+				execStatus.State == hibernatorv1alpha1.StateAborted ||
+				execStatus.State == hibernatorv1alpha1.StateSkipped) {
 			continue
 		}
 

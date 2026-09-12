@@ -108,6 +108,7 @@ nav:
         - Dependency-Ordered Shutdown (DAG): scenarios/dependency-ordered-shutdown.md
         - Staged Hibernation by Criticality: scenarios/staged-hibernation-criticality.md
         - Event-Mode Overrides: scenarios/event-mode-overrides.md
+        - Weekend Subset Wakeup: scenarios/weekend-subset-wakeup.md
         - Holiday Schedule Replacement: scenarios/holiday-schedule-replacement.md
       - Expert:
         - Dry-Run Rehearsal: scenarios/dry-run-rehearsal.md

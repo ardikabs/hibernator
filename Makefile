@@ -9,7 +9,7 @@
 IMG ?= ghcr.io/ardikabs/hibernator:latest
 RUNNER_IMG ?= ghcr.io/ardikabs/hibernator-runner:latest
 PLATFORMS ?= linux/amd64,linux/arm64
-GOLANGCI_VERSION ?= 2.8.0
+GOLANGCI_VERSION ?= 2.13.2
 
 # CLI multi-platform configuration
 CLI_PLATFORMS := darwin/amd64 darwin/arm64 linux/amd64 linux/arm64

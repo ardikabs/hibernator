@@ -78,6 +78,8 @@ func StateIcon(state hibernatorv1alpha1.ExecutionState) string {
 		return "[FAIL]"
 	case hibernatorv1alpha1.StateAborted:
 		return "[SKIP]"
+	case hibernatorv1alpha1.StateSkipped:
+		return "[SKIP]"
 	case hibernatorv1alpha1.StateRunning:
 		return "[..]"
 	case hibernatorv1alpha1.StatePending:

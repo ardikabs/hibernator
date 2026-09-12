@@ -32,6 +32,8 @@ type StageStatus struct {
 	FailedCount int
 	// CompletedCount is the number of targets that have completed successfully.
 	CompletedCount int
+	// SkippedCount is the number of targets skipped by exception override (StateSkipped).
+	SkippedCount int
 }
 
 // GetStageStatus returns detailed status information about a stage's execution progress.
@@ -47,6 +49,9 @@ func GetStageStatus(log logr.Logger, plan *hibernatorv1alpha1.HibernatePlan, sta
 				switch exec.State {
 				case hibernatorv1alpha1.StateCompleted:
 					status.CompletedCount++
+					terminalCount++
+				case hibernatorv1alpha1.StateSkipped:
+					status.SkippedCount++
 					terminalCount++
 				case hibernatorv1alpha1.StateFailed, hibernatorv1alpha1.StateAborted:
 					status.FailedCount++
@@ -217,7 +222,8 @@ func IsOperationComplete(plan *hibernatorv1alpha1.HibernatePlan) bool {
 	return lo.EveryBy(plan.Status.Executions, func(exec hibernatorv1alpha1.ExecutionStatus) bool {
 		return exec.State == hibernatorv1alpha1.StateCompleted ||
 			exec.State == hibernatorv1alpha1.StateFailed ||
-			exec.State == hibernatorv1alpha1.StateAborted
+			exec.State == hibernatorv1alpha1.StateAborted ||
+			exec.State == hibernatorv1alpha1.StateSkipped
 	})
 }
 

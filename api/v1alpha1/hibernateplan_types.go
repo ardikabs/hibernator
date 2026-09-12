@@ -108,7 +108,7 @@ const (
 )
 
 // ExecutionState represents per-target execution state.
-// +kubebuilder:validation:Enum=Pending;Running;Completed;Failed;Aborted
+// +kubebuilder:validation:Enum=Pending;Running;Completed;Failed;Aborted;Skipped
 type ExecutionState string
 
 const (
@@ -126,6 +126,11 @@ const (
 	// Currently only relevant with DAG strategy and BestEffort behavior,
 	// but may be extended to other strategies/behaviors in the future.
 	StateAborted ExecutionState = "Aborted"
+	// StateSkipped indicates the target was not executed because it was disabled
+	// by a ScheduleException target override. Terminal and success-family: stages
+	// advance, cycles complete, and Strict behavior is unaffected — the mirror of
+	// StateAborted, which is terminal but failure-family.
+	StateSkipped ExecutionState = "Skipped"
 )
 
 // OffHourWindow defines a time window for hibernation.

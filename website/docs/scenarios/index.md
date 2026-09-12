@@ -17,6 +17,7 @@ Real-world hibernation setups, ordered from the simplest to the most advanced. E
 | Advanced | **Dependency-Ordered Shutdown (DAG)** | Databases stop last and wake first via explicit dependencies | [Details](dependency-ordered-shutdown.md) |
 | Advanced | **Staged Hibernation by Criticality** | Roll hibernation through tiers: dev → batch → shared | [Details](staged-hibernation-criticality.md) |
 | Advanced | **Event-Mode Overrides** | Change which targets hibernate (and how) during a special event | [Details](event-mode-overrides.md) |
+| Advanced | **Weekend Subset Wakeup** | Wake only 2 of 10 databases during a suspend window, auto-revert after | [Details](weekend-subset-wakeup.md) |
 | Advanced | **Holiday Schedule Replacement** | Replace the entire schedule and execution strategy for a period | [Details](holiday-schedule-replacement.md) |
 | Expert | **Dry-Run Rehearsal** | Validate a production-shaped plan with zero cloud impact | [Details](dry-run-rehearsal.md) |
 | Expert | **Production-Grade Setup** | Cross-account access, ordered shutdown, Slack alerts, governance | [Details](production-grade-setup.md) |
@@ -36,6 +37,7 @@ Use this matrix to find the scenario that exercises a specific feature combinati
 | Dependency-Ordered Shutdown | DAG | Strict | — | workloadscaler, eks, ec2, rds | Ordering |
 | Staged by Criticality | Staged | Strict | — | workloadscaler, karpenter, eks, rds | Stage groups |
 | Event-Mode Overrides | Parallel (base) | Strict | extend + targetOverrides | ec2, eks, rds | Per-target overrides |
+| Weekend Subset Wakeup | Parallel (base) | Strict | suspend + targetOverrides | rds | Partial wakeup subset |
 | Holiday Replacement | Sequential (override) | BestEffort (override) | replace + executionOverride | eks, rds | Schedule + strategy replacement |
 | Dry-Run Rehearsal | DAG | BestEffort | — | noop | Failure simulation |
 | Production-Grade Setup | DAG | Strict | replace (referenced) | workloadscaler, karpenter, eks, rds | Cross-account + notifications |

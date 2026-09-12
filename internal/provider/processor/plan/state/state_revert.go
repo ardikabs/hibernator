@@ -37,6 +37,8 @@ func (s *revertState) Handle(ctx context.Context) (StateResult, error) {
 
 	// Use PlanSnapshot targets when available for this cycle, matching transitionToWakingUp.
 	// Runner handles skipping targets without live restore data as no-op.
+	// NOTE: revert intentionally wakes the full snapshot; suspend partial-wakeup
+	// seeding does not apply to manual revert (revert = full recovery).
 	var targetList []hibernatorv1alpha1.Target
 	if snap := plan.Status.PlanSnapshot; snap != nil && snap.CycleID == plan.Status.CurrentCycleID {
 		targetList = snap.Targets
@@ -82,15 +84,7 @@ func (s *revertState) Handle(ctx context.Context) (StateResult, error) {
 		return StateResult{Requeue: true}, nil
 	}
 
-	executions := make([]hibernatorv1alpha1.ExecutionStatus, len(targetList))
-	for i, t := range targetList {
-		executions[i] = hibernatorv1alpha1.ExecutionStatus{
-			Target:   t.Name,
-			Executor: t.Type,
-			State:    hibernatorv1alpha1.StatePending,
-			Message:  "Target pending revert wakeup",
-		}
-	}
+	executions := buildExecutionsWithSeededSkips(targetList, nil, "", "Target pending revert wakeup")
 
 	previousPhase := plan.Status.Phase
 	now := s.Clock.Now()

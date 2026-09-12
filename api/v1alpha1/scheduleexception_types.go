@@ -66,7 +66,8 @@ type TargetOverride struct {
 	Parameters *Parameters `json:"parameters,omitempty"`
 
 	// Disabled, when true, excludes the target from both shutdown and wakeup
-	// for the entire exception window.
+	// for the entire exception window. When Disabled is true, Parameters
+	// on the same entry is ignored.
 	// +kubebuilder:default=false
 	// +optional
 	Disabled bool `json:"disabled,omitempty"`
@@ -125,14 +126,16 @@ type ScheduleExceptionSpec struct {
 	Windows []OffHourWindow `json:"windows"`
 
 	// TargetOverrides defines per-target overrides for the exception window.
-	// Only valid when Type is "extend" or "replace".
+	// Valid when Type is "extend", "replace", or "suspend".
+	// For "suspend", only per-target disabled/parameters are honored; see ExecutionOverride.
+	// Unlisted targets and unlisted fields follow the base HibernatePlan spec as-is.
 	// +kubebuilder:validation:Optional
 	// +optional
 	TargetOverrides []TargetOverride `json:"targetOverrides,omitempty"`
 
 	// ExecutionOverride defines a full replacement of the execution strategy
 	// and behavior for the exception window.
-	// Only valid when Type is "extend" or "replace".
+	// Only valid when Type is "extend" or "replace". Forbidden on "suspend".
 	// +kubebuilder:validation:Optional
 	// +optional
 	ExecutionOverride *ExecutionOverride `json:"executionOverride,omitempty"`

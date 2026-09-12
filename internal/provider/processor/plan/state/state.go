@@ -12,7 +12,6 @@ import (
 	"time"
 
 	"github.com/go-logr/logr"
-	"github.com/samber/lo"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/utils/ptr"
@@ -230,10 +229,25 @@ func (b *state) plan() *hibernatorv1alpha1.HibernatePlan {
 }
 
 // findActiveExceptionOverride finds the active exception with execution overrides
-// for the current plan. If multiple active exceptions have overrides, the most
-// recent one (by CreationTimestamp) is selected to ensure deterministic behavior.
-// Returns nil if no such exception exists.
+// findActiveExceptionOverride finds the active non-suspend exception carrying
+// execution intent for the current plan. See findActiveOverride.
 func (s *state) findActiveExceptionOverride() *hibernatorv1alpha1.ScheduleException {
+	return s.findActiveOverride(false)
+}
+
+// findActiveSuspendOverride finds the active suspend exception with target overrides.
+// Only suspend exceptions with TargetOverrides are returned; suspend without
+// overrides has no execution impact. See findActiveOverride.
+func (s *state) findActiveSuspendOverride() *hibernatorv1alpha1.ScheduleException {
+	return s.findActiveOverride(true)
+}
+
+// findActiveOverride returns the most recently created active exception matching
+// the suspend predicate that carries execution intent (target and/or execution
+// overrides), or nil. Most-recent-wins keeps overlapping matches deterministic.
+// The combined empty-check is exact for both sides: suspend can never carry an
+// ExecutionOverride (rejected by the webhook), so it reduces to TargetOverrides.
+func (s *state) findActiveOverride(wantSuspend bool) *hibernatorv1alpha1.ScheduleException {
 	now := s.Clock.Now()
 
 	var result *hibernatorv1alpha1.ScheduleException
@@ -242,7 +256,7 @@ func (s *state) findActiveExceptionOverride() *hibernatorv1alpha1.ScheduleExcept
 		if exc.Status.State != hibernatorv1alpha1.ExceptionStateActive {
 			continue
 		}
-		if exc.Spec.Type == hibernatorv1alpha1.ExceptionSuspend {
+		if (exc.Spec.Type == hibernatorv1alpha1.ExceptionSuspend) != wantSuspend {
 			continue
 		}
 		if !exc.Spec.ValidFrom.Time.Before(now) || !now.Before(exc.Spec.ValidUntil.Time) {
@@ -252,21 +266,132 @@ func (s *state) findActiveExceptionOverride() *hibernatorv1alpha1.ScheduleExcept
 		if !exc.DeletionTimestamp.IsZero() {
 			continue
 		}
-		if len(exc.Spec.TargetOverrides) > 0 || exc.Spec.ExecutionOverride != nil {
-			if result == nil || exc.CreationTimestamp.After(result.CreationTimestamp.Time) {
-				result = exc
-			}
+		if len(exc.Spec.TargetOverrides) == 0 && exc.Spec.ExecutionOverride == nil {
+			continue
+		}
+		if result == nil || exc.CreationTimestamp.After(result.CreationTimestamp.Time) {
+			result = exc
 		}
 	}
 
 	return result
 }
 
+// applyParameterOverrides returns a copy of base with parameter replacements
+// applied. Disabled entries are ignored here: disabled targets stay in the plan
+// and are seeded instantly-completed at transition (D1), so strategy artifacts
+// (DAG edges, stage membership) always resolve. Unlisted targets and unlisted
+// fields follow the base spec as-is. Unknown target names are skipped.
+func applyParameterOverrides(base []hibernatorv1alpha1.Target, overrides []hibernatorv1alpha1.TargetOverride, log logr.Logger) []hibernatorv1alpha1.Target {
+	effective := append([]hibernatorv1alpha1.Target(nil), base...)
+	targetMap := make(map[string]*hibernatorv1alpha1.Target, len(effective))
+	for i := range effective {
+		targetMap[effective[i].Name] = &effective[i]
+	}
+	for _, o := range overrides {
+		if o.Disabled {
+			continue
+		}
+		target, ok := targetMap[o.TargetName]
+		if !ok {
+			log.V(1).Info("target override references non-existent target, skipping", "targetName", o.TargetName)
+			continue
+		}
+		if o.Parameters != nil {
+			target.Parameters = o.Parameters
+			log.V(1).Info("applied parameter override", "targetName", o.TargetName)
+		}
+	}
+	return effective
+}
+
+// isDisabled reports whether overrides disable the named target.
+// Linear scan is deliberate: target lists are single-digit and this keeps
+// the predicate trivially reviewable next to its only callers.
+func isDisabled(overrides []hibernatorv1alpha1.TargetOverride, name string) bool {
+	for _, o := range overrides {
+		if o.TargetName == name && o.Disabled {
+			return true
+		}
+	}
+	return false
+}
+
+// buildExecutionsWithSeededSkips builds ExecutionStatus entries for a transition.
+// Disabled targets are seeded StateSkipped ("virtually succeeded") so strategy
+// artifacts stay whole and stages can complete without dispatching jobs for them.
+func buildExecutionsWithSeededSkips(targetList []hibernatorv1alpha1.Target, overrides []hibernatorv1alpha1.TargetOverride, excName, pendingMsg string) []hibernatorv1alpha1.ExecutionStatus {
+	executions := make([]hibernatorv1alpha1.ExecutionStatus, len(targetList))
+	for i, t := range targetList {
+		if excName != "" && isDisabled(overrides, t.Name) {
+			executions[i] = hibernatorv1alpha1.ExecutionStatus{
+				Target:   t.Name,
+				Executor: t.Type,
+				State:    hibernatorv1alpha1.StateSkipped,
+				Message:  fmt.Sprintf("Skipped: disabled by exception %s", excName),
+			}
+			continue
+		}
+		executions[i] = hibernatorv1alpha1.ExecutionStatus{
+			Target:   t.Name,
+			Executor: t.Type,
+			State:    hibernatorv1alpha1.StatePending,
+			Message:  pendingMsg,
+		}
+	}
+	return executions
+}
+
+// freezeToExecutions locks the full cycle intent to the frozen Status.Executions:
+// membership plus the snapshot's Execution/Behavior when the snapshot belongs to
+// this cycle. Stages, ordering, and executions can never disagree mid-cycle.
+func freezeToExecutions(effective *hibernatorv1alpha1.HibernatePlan, plan *hibernatorv1alpha1.HibernatePlan) *hibernatorv1alpha1.HibernatePlan {
+	executions := plan.Status.Executions
+	if len(executions) == 0 {
+		return effective
+	}
+	if snap := plan.Status.PlanSnapshot; snap != nil && snap.CycleID == plan.Status.CurrentCycleID {
+		effective.Spec.Execution = snap.Execution
+		effective.Spec.Behavior = snap.Behavior
+	}
+	keep := make(map[string]bool, len(executions))
+	for _, e := range executions {
+		keep[e.Target] = true
+	}
+	kept := effective.Spec.Targets[:0]
+	for _, t := range effective.Spec.Targets {
+		if keep[t.Name] {
+			kept = append(kept, t)
+		}
+	}
+	effective.Spec.Targets = kept
+	return effective
+}
+
 // effectivePlan returns the plan to use for execution.
-// If a PlanSnapshot exists for the current cycle, it reconstructs the plan with
-// the snapshot's spec, preserving the current status. Otherwise it falls back to
-// buildEffectivePlan.
+// Precedence is intentionally flat and ordered — read top to bottom:
+//  1. WakeUp + live suspend override → suspend params, frozen to executions.
+//  2. WakeUp + started cycle, exception gone → frozen executions, base params.
+//  3. Snapshot for this cycle → locked hibernate intent.
+//  4. Live extend/replace overrides → fresh intent.
+//  5. Base plan.
+//
+// Splitting these branches further would scatter the precedence; keep them here.
 func (s *state) effectivePlan(plan *hibernatorv1alpha1.HibernatePlan) *hibernatorv1alpha1.HibernatePlan {
+	if plan.Status.CurrentOperation == hibernatorv1alpha1.OperationWakeUp {
+		if sus := s.findActiveSuspendOverride(); sus != nil {
+			log := s.Log.WithValues("plan", s.Key.String(), "exception", sus.Name)
+			log.V(1).Info("applying suspend parameter overrides for wakeup")
+			effective := plan.DeepCopy()
+			effective.Spec.Targets = applyParameterOverrides(effective.Spec.Targets, sus.Spec.TargetOverrides, log)
+			return freezeToExecutions(effective, plan)
+		}
+		if len(plan.Status.Executions) > 0 {
+			// Exception expired/deleted mid-wakeup: run the frozen execution set
+			// with base params instead of stranding the cycle.
+			return freezeToExecutions(plan.DeepCopy(), plan)
+		}
+	}
 	if snap := plan.Status.PlanSnapshot; snap != nil && snap.CycleID == plan.Status.CurrentCycleID {
 		log := s.Log.WithValues("plan", s.Key.String(), "cycleID", snap.CycleID)
 		log.V(1).Info("using locked plan snapshot for execution", "exception", snap.ExceptionName)
@@ -310,38 +435,10 @@ func (s *state) buildEffectivePlan(plan *hibernatorv1alpha1.HibernatePlan) *hibe
 		}
 	}
 
-	// Apply target overrides
+	// Apply parameter overrides (as-is merge: unlisted targets untouched;
+	// disabled targets stay listed and are seeded skipped at transition).
 	if len(activeException.Spec.TargetOverrides) > 0 {
-		// First pass: remove disabled targets
-		for _, override := range activeException.Spec.TargetOverrides {
-			if override.Disabled {
-				effectivePlan.Spec.Targets = lo.Filter(effectivePlan.Spec.Targets, func(t hibernatorv1alpha1.Target, _ int) bool {
-					return t.Name != override.TargetName
-				})
-				log.V(1).Info("disabled target", "targetName", override.TargetName)
-			}
-		}
-
-		// Second pass: apply parameter overrides
-		// Build target map after filtering so pointers reference the correct slice.
-		targetMap := make(map[string]*hibernatorv1alpha1.Target)
-		for i := range effectivePlan.Spec.Targets {
-			targetMap[effectivePlan.Spec.Targets[i].Name] = &effectivePlan.Spec.Targets[i]
-		}
-		for _, override := range activeException.Spec.TargetOverrides {
-			if override.Disabled {
-				continue
-			}
-			target, ok := targetMap[override.TargetName]
-			if !ok {
-				log.V(1).Info("target override references non-existent target, skipping", "targetName", override.TargetName)
-				continue
-			}
-			if override.Parameters != nil {
-				target.Parameters = override.Parameters
-				log.V(1).Info("applied parameter override", "targetName", override.TargetName)
-			}
-		}
+		effectivePlan.Spec.Targets = applyParameterOverrides(effectivePlan.Spec.Targets, activeException.Spec.TargetOverrides, log)
 	}
 
 	return effectivePlan
