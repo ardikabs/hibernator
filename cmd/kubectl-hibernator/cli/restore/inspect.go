@@ -9,7 +9,6 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"os"
 
 	"github.com/samber/lo"
 	"github.com/spf13/cobra"
@@ -59,7 +58,7 @@ Examples:
 }
 
 func runInspect(ctx context.Context, opts *restorePointOptions, planName string) error {
-	c, err := common.NewK8sClient(opts.root)
+	c, err := common.ClientFactory(opts.root)
 	if err != nil {
 		return err
 	}
@@ -92,7 +91,10 @@ func runInspect(ctx context.Context, opts *restorePointOptions, planName string)
 
 		// Check if resource exists
 		if state, ok := data.State[opts.resourceID]; ok {
-			resourceState = state.(map[string]any)
+			resourceState, ok = state.(map[string]any)
+			if !ok {
+				return fmt.Errorf("resource %q in target %q is not an object (got %T)", opts.resourceID, opts.target, state)
+			}
 			break
 		}
 
@@ -111,5 +113,5 @@ func runInspect(ctx context.Context, opts *restorePointOptions, planName string)
 		TargetData: *targetData,
 		ResourceID: opts.resourceID,
 		State:      resourceState,
-	}, os.Stdout)
+	}, output.WriterFromContext(ctx))
 }

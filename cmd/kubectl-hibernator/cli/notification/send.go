@@ -11,6 +11,7 @@ import (
 	"fmt"
 	"log/slog"
 	"os"
+	"strings"
 	"time"
 
 	"github.com/go-logr/logr"
@@ -131,10 +132,13 @@ Examples:
 }
 
 func runSend(ctx context.Context, opts *sendOptions, notifName string) error {
-	// Validate event
-	if !isValidEvent(opts.event) {
+	// Events are case-insensitive on input but always normalized to the
+	// canonical form so payloads and templates see stable values.
+	canonical, ok := canonicalEvent(opts.event)
+	if !ok {
 		return fmt.Errorf("invalid event %q: must be one of Start, Success, Failure, Recovery, PhaseChange", opts.event)
 	}
+	opts.event = canonical
 
 	if opts.isLocalMode() {
 		return runSendLocal(ctx, opts)
@@ -150,7 +154,7 @@ func runSend(ctx context.Context, opts *sendOptions, notifName string) error {
 		return fmt.Errorf("--sink-type requires --config-file for local mode")
 	}
 
-	c, err := common.NewK8sClient(opts.root)
+	c, err := common.ClientFactory(opts.root)
 	if err != nil {
 		return err
 	}
@@ -286,7 +290,7 @@ func executeSend(ctx context.Context, opts *sendOptions, sinkType, sinkName stri
 		}
 
 		d := &printers.Dispatcher{JSON: opts.root.JsonOutput}
-		return d.PrintObj(dryRunOutput, os.Stdout)
+		return d.PrintObj(dryRunOutput, output.WriterFromContext(ctx))
 	}
 
 	if _, err := sinkInstance.Send(ctx, payload, sendOpts); err != nil {
@@ -307,6 +311,23 @@ func isValidEvent(event string) bool {
 		return true
 	}
 	return false
+}
+
+// canonicalEvent matches the event case-insensitively and returns the
+// canonical form, so "success" and "Success" produce identical payloads.
+func canonicalEvent(event string) (string, bool) {
+	for _, e := range []hibernatorv1alpha1.NotificationEvent{
+		hibernatorv1alpha1.EventStart,
+		hibernatorv1alpha1.EventSuccess,
+		hibernatorv1alpha1.EventFailure,
+		hibernatorv1alpha1.EventRecovery,
+		hibernatorv1alpha1.EventPhaseChange,
+	} {
+		if strings.EqualFold(string(e), event) {
+			return string(e), true
+		}
+	}
+	return "", false
 }
 
 func isValidSinkType(sinkType string) bool {

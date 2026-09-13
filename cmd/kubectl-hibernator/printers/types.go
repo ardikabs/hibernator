@@ -161,6 +161,7 @@ type RestoreDetailJSON struct {
 	ResourceID string         `json:"resourceId"`
 	Executor   string         `json:"executor"`
 	IsLive     bool           `json:"isLive"`
+	Excluded   bool           `json:"excluded,omitempty"`
 	CreatedAt  int64          `json:"createdAt,omitempty"`
 	CapturedAt int64          `json:"capturedAt,omitempty"`
 	State      map[string]any `json:"state"`
@@ -178,6 +179,7 @@ type RestoreResourceJSON struct {
 	IsLive     bool           `json:"isLive"`
 	CapturedAt int64          `json:"capturedAt,omitempty"`
 	StaleCount int            `json:"staleCount,omitempty"`
+	Excluded   bool           `json:"excluded,omitempty"`
 	CycleID    string         `json:"cycleID,omitempty"`
 	State      map[string]any `json:"state,omitempty"`
 }
@@ -349,5 +351,6 @@ type RestoreResource struct {
 	IsLive     bool   `json:"isLive"`
 	ReportedAt string `json:"reportedAt,omitempty"`
 	StaleCount int    `json:"staleCount,omitempty"`
+	Excluded   bool   `json:"excluded,omitempty"`
 	CycleID    string `json:"CycleID,omitempty"`
 }

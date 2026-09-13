@@ -284,3 +284,45 @@ func TestRunner_UnknownExecutorType_ReturnsError(t *testing.T) {
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "executor not found")
 }
+
+// TestRunner_Wakeup_ExcludesMarkedResources verifies the runner normalization
+// contract: operator-excluded entries never reach the executor (Data holds
+// only eligible keys), are reported via Skipped, and are counted in the
+// result message.
+func TestRunner_Wakeup_ExcludesMarkedResources(t *testing.T) {
+	data := restore.Data{
+		Target:   "my-target",
+		Executor: "fake",
+		Version:  1,
+		IsLive:   true,
+		State: map[string]any{
+			"keep": "valueKeep",
+			"drop": "valueDrop",
+		},
+		Status: map[string]restore.ResourceStatus{
+			"drop": {Excluded: true},
+		},
+	}
+	dataBytes, err := json.Marshal(data)
+	require.NoError(t, err)
+	cm := &corev1.ConfigMap{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "hibernator-restore-test-plan",
+			Namespace: "default",
+		},
+		Data: map[string]string{"my-target.json": string(dataBytes)},
+	}
+
+	fakeExec := &fakeExecutor{typeVal: "fake"}
+	r, _ := newTestRunner(baseConfig("wakeup", "fake"), fakeExec, cm)
+
+	result, runErr := r.run(context.Background())
+	require.NoError(t, runErr)
+	require.True(t, fakeExec.wakeupCalled)
+
+	assert.Contains(t, fakeExec.receivedRestore.Data, "keep")
+	assert.NotContains(t, fakeExec.receivedRestore.Data, "drop",
+		"excluded entries must be normalized away before the executor runs")
+	assert.Equal(t, map[string]string{"drop": executor.SkipReasonExcluded}, fakeExec.receivedRestore.Skipped)
+	assert.Contains(t, result.Message, "skipped 1 excluded resource(s)")
+}

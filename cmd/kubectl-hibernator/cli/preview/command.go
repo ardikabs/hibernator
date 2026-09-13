@@ -73,7 +73,7 @@ func runPreview(ctx context.Context, opts *previewOptions, args []string) error 
 			return fmt.Errorf("plan name is required (or use --file for local YAML)")
 		}
 
-		c, err := common.NewK8sClient(opts.root)
+		c, err := common.ClientFactory(opts.root)
 		if err != nil {
 			return err
 		}
@@ -103,7 +103,7 @@ func runPreview(ctx context.Context, opts *previewOptions, args []string) error 
 		events = []common.ScheduleEvent{}
 	}
 
-	output := &printers.ScheduleOutput{
+	schedOut := &printers.ScheduleOutput{
 		Plan:       plan,
 		Result:     result,
 		Exceptions: exRefs,
@@ -111,7 +111,7 @@ func runPreview(ctx context.Context, opts *previewOptions, args []string) error 
 	}
 
 	d := &printers.Dispatcher{JSON: opts.root.JsonOutput}
-	return d.PrintObj(output, os.Stdout)
+	return d.PrintObj(schedOut, output.WriterFromContext(ctx))
 }
 
 func loadPlanFromFile(path string, plan *hibernatorv1alpha1.HibernatePlan) error {

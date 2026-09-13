@@ -43,8 +43,9 @@ func NewRootCommand() *cobra.Command {
 		Short: "Manage Hibernator plans from the command line",
 		Long: `kubectl-hibernator is a CLI plugin for managing HibernatePlan resources.
 
-It provides commands to inspect schedules, view plan status, suspend/resume
-hibernation, trigger retries, and tail controller logs.
+It provides commands to inspect schedules and plans, suspend/resume
+hibernation, trigger retries, manage restore data and notifications,
+and tail controller logs.
 
 Install by copying the binary to your PATH:
   cp bin/kubectl-hibernator /usr/local/bin/kubectl-hibernator
@@ -53,7 +54,7 @@ Then use as:
   kubectl hibernator list
   kubectl hibernator describe my-plan
   kubectl hibernator preview my-plan
-  kubectl hibernator suspend my-plan --hours 4 --reason "deployment"
+  kubectl hibernator suspend my-plan --seconds 14400 --reason "deployment"
   kubectl hibernator resume my-plan
   kubectl hibernator retry my-plan
   kubectl hibernator override my-plan --to hibernate
@@ -72,7 +73,7 @@ Then use as:
 	cmd.PersistentFlags().BoolVar(&opts.JsonOutput, "json", false, "Output in JSON format")
 
 	// Register subcommands
-	cmd.AddCommand(version.NewCommand())
+	cmd.AddCommand(version.NewCommand(opts))
 	cmd.AddCommand(list.NewCommand(opts))
 	cmd.AddCommand(describe.NewCommand(opts))
 	cmd.AddCommand(preview.NewCommand(opts))

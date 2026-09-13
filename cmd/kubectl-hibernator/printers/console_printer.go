@@ -274,7 +274,10 @@ func (p *ConsolePrinter) printOperationSummary(tw *textWriter, op *hibernatorv1a
 // printSchedule renders schedule evaluation, upcoming events, and active exceptions for `kubectl-hibernator preview`.
 func (p *ConsolePrinter) printSchedule(out *ScheduleOutput, w io.Writer) error {
 	plan := out.Plan
-	result := out.Result.(*scheduler.EvaluationResult)
+	result, ok := out.Result.(*scheduler.EvaluationResult)
+	if !ok || result == nil {
+		return fmt.Errorf("preview output requires a schedule evaluation result, got %T", out.Result)
+	}
 	exceptions := out.Exceptions
 	events := out.Events
 
@@ -425,9 +428,11 @@ func (p *ConsolePrinter) printRestoreResources(out *RestoreResourcesOutput, w io
 		// Extract resource IDs from state with stale counts and cycle ID
 		for resourceID := range data.State {
 			staleCount := 0
+			excluded := false
 			reportedAtStr := "-"
 			if data.Status != nil {
 				staleCount = data.Status[resourceID].StaleCount
+				excluded = data.Status[resourceID].Excluded
 				if data.Status[resourceID].LastReportedAt != nil {
 					reportedAtStr = formatLocalTime(data.Status[resourceID].LastReportedAt.Time)
 				}
@@ -439,6 +444,7 @@ func (p *ConsolePrinter) printRestoreResources(out *RestoreResourcesOutput, w io
 				IsLive:     data.IsLive,
 				ReportedAt: reportedAtStr,
 				StaleCount: staleCount,
+				Excluded:   excluded,
 				CycleID:    data.CycleID,
 			})
 		}
@@ -454,7 +460,7 @@ func (p *ConsolePrinter) printRestoreResources(out *RestoreResourcesOutput, w io
 	}
 
 	tw.newline()
-	tw.header("Resource ID", "Target", "Executor", "Live", "Stale", "Cycle", fmt.Sprintf("Reported At (%s)", time.Local.String()))
+	tw.header("Resource ID", "Target", "Executor", "Live", "Stale", "Excluded", "Cycle", fmt.Sprintf("Reported At (%s)", time.Local.String()))
 
 	for _, r := range resources {
 		live := "no"
@@ -465,11 +471,15 @@ func (p *ConsolePrinter) printRestoreResources(out *RestoreResourcesOutput, w io
 		if r.StaleCount > 0 {
 			stale = "yes"
 		}
+		excluded := "no"
+		if r.Excluded {
+			excluded = "yes"
+		}
 		cycleID := "-"
 		if r.CycleID != "" {
 			cycleID = r.CycleID
 		}
-		tw.row(r.ResourceID, r.Target, r.Executor, live, stale, cycleID, r.ReportedAt)
+		tw.row(r.ResourceID, r.Target, r.Executor, live, stale, excluded, cycleID, r.ReportedAt)
 	}
 
 	return tw.flush()
@@ -497,6 +507,13 @@ func (p *ConsolePrinter) printRestoreDetail(out *RestoreDetailOutput, w io.Write
 	}
 	if status, ok := data.Status[out.ResourceID]; ok && status.LastReportedAt != nil {
 		tw.row("  Reported At:", formatLocalTime(status.LastReportedAt.Time))
+	}
+	if status, ok := data.Status[out.ResourceID]; ok {
+		excluded := "no"
+		if status.Excluded {
+			excluded = "yes"
+		}
+		tw.row("  Excluded:", excluded)
 	}
 
 	tw.newline()

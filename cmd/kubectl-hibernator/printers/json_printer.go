@@ -339,6 +339,9 @@ func (p *JSONPrinter) restoreDetailToJSON(out *RestoreDetailOutput) RestoreDetai
 	result.Target = data.Target
 	result.Executor = data.Executor
 	result.IsLive = data.IsLive
+	if status, ok := data.Status[out.ResourceID]; ok {
+		result.Excluded = status.Excluded
+	}
 	result.CreatedAt = formatUnixTime(data.CreatedAt.Time)
 	if data.CapturedAt != nil {
 		result.CapturedAt = formatUnixTime(data.CapturedAt.Time)
@@ -369,10 +372,15 @@ func (p *JSONPrinter) restoreResourcesToJSON(out *RestoreResourcesOutput) Restor
 
 		for resourceID, state := range data.State {
 			staleCount := 0
+			excluded := false
 			if data.Status != nil {
 				staleCount = data.Status[resourceID].StaleCount
+				excluded = data.Status[resourceID].Excluded
 			}
 
+			// Non-object states cannot be rendered structurally; keep the
+			// row with a null state instead of panicking on the assertion.
+			stateMap, _ := state.(map[string]any)
 			result.Resources = append(result.Resources, RestoreResourceJSON{
 				ResourceID: resourceID,
 				Target:     data.Target,
@@ -380,8 +388,9 @@ func (p *JSONPrinter) restoreResourcesToJSON(out *RestoreResourcesOutput) Restor
 				IsLive:     data.IsLive,
 				CapturedAt: capturedAtUnix,
 				StaleCount: staleCount,
+				Excluded:   excluded,
 				CycleID:    data.CycleID,
-				State:      state.(map[string]any),
+				State:      stateMap,
 			})
 		}
 	}

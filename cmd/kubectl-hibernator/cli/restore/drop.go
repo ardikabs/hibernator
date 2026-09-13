@@ -48,6 +48,7 @@ Examples:
 
 	cmd.Flags().StringVarP(&restoreOpts.target, "target", "t", "", "Target name (required)")
 	cmd.Flags().StringVarP(&restoreOpts.resourceID, "resource-id", "r", "", "Resource ID to drop (required)")
+	cmd.Flags().BoolVar(&restoreOpts.dryRun, "dry-run", false, "Preview what would happen without making changes")
 
 	lo.Must0(cmd.MarkFlagRequired("target"))
 	lo.Must0(cmd.MarkFlagRequired("resource-id"))
@@ -58,7 +59,7 @@ Examples:
 func runDrop(ctx context.Context, opts *restorePointOptions, planName string) error {
 	out := output.FromContext(ctx)
 
-	c, err := common.NewK8sClient(opts.root)
+	c, err := common.ClientFactory(opts.root)
 	if err != nil {
 		return err
 	}
@@ -89,6 +90,11 @@ func runDrop(ctx context.Context, opts *restorePointOptions, planName string) er
 
 		if _, ok := data.State[opts.resourceID]; !ok {
 			return fmt.Errorf("resource %q not found in target %q", opts.resourceID, opts.target)
+		}
+
+		if opts.dryRun {
+			out.Info("[DRY-RUN] Would drop resource %q from target %q (%d resources would remain)", opts.resourceID, opts.target, len(data.State)-1)
+			return nil
 		}
 
 		// Remove the resource ID from state and tracking

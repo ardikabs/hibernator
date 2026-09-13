@@ -257,6 +257,18 @@ func TestParseDeadline_Errors(t *testing.T) {
 			name:  "past RFC3339 should fail",
 			input: "2020-01-01T00:00:00Z",
 		},
+		{
+			name:  "gibberish must fail, not resolve to now",
+			input: "not a time at all xyz",
+		},
+		{
+			name:  "single unknown word must fail",
+			input: "someday",
+		},
+		{
+			name:  "zero duration must fail",
+			input: "in 0 minutes",
+		},
 	}
 
 	for _, tt := range tests {

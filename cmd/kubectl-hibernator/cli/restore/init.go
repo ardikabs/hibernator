@@ -28,6 +28,7 @@ type initOptions struct {
 	target   string
 	executor string
 	force    bool
+	dryRun   bool
 }
 
 // newInitCommand initializes an empty restore point for a target
@@ -61,6 +62,7 @@ Examples:
 	cmd.Flags().StringVarP(&initOpts.target, "target", "t", "", "Target name (required)")
 	cmd.Flags().StringVarP(&initOpts.executor, "executor", "x", "", "Executor type (required)")
 	cmd.Flags().BoolVar(&initOpts.force, "force", false, "Overwrite existing restore point entry for the target")
+	cmd.Flags().BoolVar(&initOpts.dryRun, "dry-run", false, "Preview what would happen without making changes")
 
 	lo.Must0(cmd.MarkFlagRequired("target"))
 	lo.Must0(cmd.MarkFlagRequired("executor"))
@@ -71,7 +73,7 @@ Examples:
 func runInit(ctx context.Context, opts *initOptions, planName string) error {
 	out := output.FromContext(ctx)
 
-	c, err := common.NewK8sClient(opts.root)
+	c, err := common.ClientFactory(opts.root)
 	if err != nil {
 		return err
 	}
@@ -88,9 +90,27 @@ func runInit(ctx context.Context, opts *initOptions, planName string) error {
 	cmName := restore.GetRestoreConfigMap(planName)
 	var cm corev1.ConfigMap
 	err = c.Get(ctx, types.NamespacedName{Name: cmName, Namespace: ns}, &cm)
+	if err != nil && !apierrors.IsNotFound(err) {
+		return fmt.Errorf("failed to get restore ConfigMap: %w", err)
+	}
+	cmExists := err == nil
+
+	targetKey := fmt.Sprintf("%s.json", opts.target)
+
+	if opts.dryRun {
+		if cmExists {
+			if _, exists := cm.Data[targetKey]; exists && !opts.force {
+				return fmt.Errorf("restore point entry already exists for target %q (use --force to overwrite)", opts.target)
+			}
+			out.Info("[DRY-RUN] Would initialize restore point entry for target %q (executor: %s) in ConfigMap %q", opts.target, opts.executor, cmName)
+		} else {
+			out.Info("[DRY-RUN] Would create restore ConfigMap %q with entry for target %q (executor: %s)", cmName, opts.target, opts.executor)
+		}
+		return nil
+	}
 
 	// Create new ConfigMap if it doesn't exist
-	if apierrors.IsNotFound(err) {
+	if !cmExists {
 		cm = corev1.ConfigMap{
 			ObjectMeta: metav1.ObjectMeta{
 				Name:      cmName,
@@ -104,14 +124,16 @@ func runInit(ctx context.Context, opts *initOptions, planName string) error {
 		if err := c.Create(ctx, &cm); err != nil {
 			return fmt.Errorf("failed to create restore ConfigMap: %w", err)
 		}
-	} else if err != nil {
-		return fmt.Errorf("failed to get restore ConfigMap: %w", err)
 	}
 
 	// Check if target already exists
-	targetKey := fmt.Sprintf("%s.json", opts.target)
 	if _, exists := cm.Data[targetKey]; exists && !opts.force {
 		return fmt.Errorf("restore point entry already exists for target %q (use --force to overwrite)", opts.target)
+	}
+
+	if opts.dryRun {
+		out.Info("[DRY-RUN] Would initialize restore point entry for target %q (executor: %s)", opts.target, opts.executor)
+		return nil
 	}
 
 	// Create empty restore data

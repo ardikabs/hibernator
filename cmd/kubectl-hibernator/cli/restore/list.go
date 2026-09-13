@@ -8,7 +8,6 @@ package restore
 import (
 	"context"
 	"fmt"
-	"os"
 
 	"github.com/spf13/cobra"
 	corev1 "k8s.io/api/core/v1"
@@ -70,7 +69,7 @@ Examples:
 }
 
 func runListResources(ctx context.Context, opts *restorePointOptions, planName string) error {
-	c, err := common.NewK8sClient(opts.root)
+	c, err := common.ClientFactory(opts.root)
 	if err != nil {
 		return err
 	}
@@ -88,12 +87,12 @@ func runListResources(ctx context.Context, opts *restorePointOptions, planName s
 	return d.PrintObj(&printers.RestoreResourcesOutput{
 		ConfigMap: cm,
 		Target:    opts.target,
-	}, os.Stdout)
+	}, output.WriterFromContext(ctx))
 }
 
 // runList displays a summary of the restore point
 func runList(ctx context.Context, opts *restorePointOptions, planName string) error {
-	c, err := common.NewK8sClient(opts.root)
+	c, err := common.ClientFactory(opts.root)
 	if err != nil {
 		return err
 	}
@@ -116,5 +115,5 @@ func runList(ctx context.Context, opts *restorePointOptions, planName string) er
 	}
 
 	d := &printers.Dispatcher{JSON: opts.root.JsonOutput}
-	return d.PrintObj(cm, os.Stdout)
+	return d.PrintObj(cm, output.WriterFromContext(ctx))
 }

@@ -64,7 +64,7 @@ Examples:
 }
 
 func runRevert(ctx context.Context, opts *revertOptions, planName string) error {
-	c, err := common.NewK8sClient(opts.root)
+	c, err := common.ClientFactory(opts.root)
 	if err != nil {
 		return err
 	}
@@ -192,11 +192,15 @@ func waitForRevert(ctx context.Context, c client.Client, out output.Formatter, p
 }
 
 func revertPhaseError(planName string, phase hibernatorv1alpha1.PlanPhase) error {
-	return fmt.Errorf(`HibernatePlan %q is in %q phase, not Error — cannot revert
+	inPhase := fmt.Sprintf("is in %q phase", phase)
+	if phase == "" {
+		inPhase = "has no recorded phase yet (the controller has not reconciled it)"
+	}
+	return fmt.Errorf(`HibernatePlan %q %s, not Error — cannot revert
 
 Revert is only available for plans stuck in Error phase after a failed hibernation.
 It selectively wakes up targets that were successfully hibernated and skips failed ones.
 
 To check the plan status and available actions:
-  kubectl hibernator describe %s`, planName, phase, planName)
+  kubectl hibernator describe %s`, planName, inPhase, planName)
 }

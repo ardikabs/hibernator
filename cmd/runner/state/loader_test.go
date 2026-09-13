@@ -206,3 +206,86 @@ func TestLoadRestoreData_ValueTransformation(t *testing.T) {
 	assert.Equal(t, "ng-1", ng["name"])
 	assert.Equal(t, float64(0), ng["minSize"])
 }
+
+func TestLoadRestoreData_ReportsExcludedKeysWithoutDropping(t *testing.T) {
+	status := map[string]restore.ResourceStatus{
+		"keep": {Excluded: false},
+		"drop": {Excluded: true},
+	}
+	data := restore.Data{
+		Target:    "my-target",
+		Executor:  "eks",
+		Version:   1,
+		CreatedAt: metav1.Now(),
+		IsLive:    true,
+		State: map[string]any{
+			"keep": "valueKeep",
+			"drop": "valueDrop",
+		},
+		Status: status,
+	}
+	dataBytes, err := json.Marshal(data)
+	require.NoError(t, err)
+	cm := &corev1.ConfigMap{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "hibernator-restore-test-plan",
+			Namespace: "default",
+		},
+		Data: map[string]string{"my-target.json": string(dataBytes)},
+	}
+	fakeClient := fake.NewClientBuilder().
+		WithScheme(schemeWithRestore()).
+		WithObjects(cm).
+		Build()
+
+	ctx := context.Background()
+	log := logr.Discard()
+	restoreMgr := restore.NewManager(fakeClient, log)
+
+	result, found, err := LoadRestoreData(ctx, restoreMgr, log, "default", "test-plan", "my-target")
+	require.NoError(t, err)
+	assert.True(t, found)
+
+	// The runner enforces exclusion; the loader only reports it.
+	assert.Contains(t, result.Data, "keep")
+	assert.Contains(t, result.Data, "drop")
+	require.Equal(t, map[string]string{"drop": "excluded"}, result.Skipped)
+}
+
+func TestLoadRestoreData_StaleBeatsExcluded(t *testing.T) {
+	// A key both stale and excluded resolves as stale: dropped from Data
+	// and absent from Skipped, so it can never be restored.
+	data := restore.Data{
+		Target:   "my-target",
+		Executor: "eks",
+		Version:  1,
+		IsLive:   true,
+		State:    map[string]any{"both": "value"},
+		Status: map[string]restore.ResourceStatus{
+			"both": {StaleCount: 2, Excluded: true},
+		},
+	}
+	dataBytes, err := json.Marshal(data)
+	require.NoError(t, err)
+	cm := &corev1.ConfigMap{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "hibernator-restore-test-plan",
+			Namespace: "default",
+		},
+		Data: map[string]string{"my-target.json": string(dataBytes)},
+	}
+	fakeClient := fake.NewClientBuilder().
+		WithScheme(schemeWithRestore()).
+		WithObjects(cm).
+		Build()
+
+	ctx := context.Background()
+	log := logr.Discard()
+	restoreMgr := restore.NewManager(fakeClient, log)
+
+	result, found, err := LoadRestoreData(ctx, restoreMgr, log, "default", "test-plan", "my-target")
+	require.NoError(t, err)
+	assert.True(t, found)
+	assert.NotContains(t, result.Data, "both")
+	assert.Empty(t, result.Skipped)
+}

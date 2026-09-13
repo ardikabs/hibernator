@@ -8,7 +8,6 @@ package describe
 import (
 	"context"
 	"fmt"
-	"os"
 
 	"github.com/spf13/cobra"
 	"k8s.io/apimachinery/pkg/types"
@@ -51,7 +50,7 @@ Examples:
 }
 
 func runDescribe(ctx context.Context, opts *describeOptions, planName string) error {
-	c, err := common.NewK8sClient(opts.root)
+	c, err := common.ClientFactory(opts.root)
 	if err != nil {
 		return err
 	}
@@ -64,5 +63,5 @@ func runDescribe(ctx context.Context, opts *describeOptions, planName string) er
 	}
 
 	d := &printers.Dispatcher{JSON: opts.root.JsonOutput}
-	return d.PrintObj(plan, os.Stdout)
+	return d.PrintObj(plan, output.WriterFromContext(ctx))
 }

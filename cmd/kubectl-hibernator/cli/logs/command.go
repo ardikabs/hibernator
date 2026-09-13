@@ -91,7 +91,7 @@ func runLogs(ctx context.Context, opts *logsOptions, planName string) error {
 	}
 
 	// Build controller-runtime client for fetching plan info
-	k8sClient, err := common.NewK8sClient(opts.root)
+	k8sClient, err := common.ClientFactory(opts.root)
 	if err != nil {
 		return err
 	}

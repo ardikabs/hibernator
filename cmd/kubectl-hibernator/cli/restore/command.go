@@ -15,6 +15,7 @@ type restorePointOptions struct {
 	root       *common.RootOptions
 	target     string
 	resourceID string
+	dryRun     bool
 }
 
 // NewCommand creates the "restore" parent command group.
@@ -47,7 +48,19 @@ Examples:
   kubectl hibernator restore patch my-plan --target eks-cluster --resource-id xyz --set desiredCapacity=10
 
   # Drop a resource from the restore point (use with caution)
-  kubectl hibernator restore drop my-plan --target eks-cluster --resource-id xyz`,
+  kubectl hibernator restore drop my-plan --target eks-cluster --resource-id xyz
+
+  # Drop a resource from the restore point (use with caution)
+  kubectl hibernator restore drop my-plan --target eks-cluster --resource-id xyz
+
+  # Back up a target entry, prune to weekend resources, restore afterwards
+  kubectl hibernator restore export my-plan --target eks-cluster --file eks-full.json
+  kubectl hibernator restore prune my-plan --target eks-cluster --keep ng-weekend --yes
+  kubectl hibernator restore import my-plan --target eks-cluster --file eks-full.json --yes
+
+  # Back up and restore a single resource state
+  kubectl hibernator restore export my-plan --target eks-cluster --resource-id xyz --file xyz.json
+  kubectl hibernator restore import my-plan --target eks-cluster --resource-id xyz --file xyz.json --yes`,
 	}
 
 	cmd.AddCommand(newInitCommand(opts))
@@ -55,6 +68,9 @@ Examples:
 	cmd.AddCommand(newInspectCommand(opts))
 	cmd.AddCommand(newPatchCommand(opts))
 	cmd.AddCommand(newDropCommand(opts))
+	cmd.AddCommand(newExportCommand(opts))
+	cmd.AddCommand(newImportCommand(opts))
+	cmd.AddCommand(newPruneCommand(opts))
 
 	return cmd
 }

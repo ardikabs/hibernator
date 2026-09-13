@@ -20,7 +20,8 @@ import (
 )
 
 type retryOptions struct {
-	root *common.RootOptions
+	root   *common.RootOptions
+	dryRun bool
 }
 
 // NewCommand creates the "retry" command.
@@ -49,12 +50,13 @@ Examples:
 	var deprecatedForce bool
 	cmd.Flags().BoolVar(&deprecatedForce, "force", false, "[DEPRECATED] has no effect; retry is now restricted to Error phase plans")
 	_ = cmd.Flags().MarkDeprecated("force", "retry is now restricted to plans in Error phase. Use 'restart' to re-trigger an operation on Active or Hibernated plans")
+	cmd.Flags().BoolVar(&retryOpts.dryRun, "dry-run", false, "Preview what would happen without making changes")
 
 	return cmd
 }
 
 func runRetry(ctx context.Context, opts *retryOptions, planName string) error {
-	c, err := common.NewK8sClient(opts.root)
+	c, err := common.ClientFactory(opts.root)
 	if err != nil {
 		return err
 	}
@@ -70,6 +72,12 @@ func runRetry(ctx context.Context, opts *retryOptions, planName string) error {
 	// retry is strictly for Error phase plans
 	if plan.Status.Phase != hibernatorv1alpha1.PhaseError {
 		return retryPhaseError(planName, plan.Status.Phase)
+	}
+
+	if opts.dryRun {
+		out := output.FromContext(ctx)
+		out.Info("[DRY-RUN] Would trigger retry for HibernatePlan %q", planName)
+		return nil
 	}
 
 	// Patch annotation
@@ -108,6 +116,10 @@ If the plan is Active or Hibernated and you want to re-run the last executor ope
 'restart' is a one-shot, voluntary re-trigger that honours the plan's current state
 without interfering with the schedule or phase transitions.`
 
-	return fmt.Errorf("HibernatePlan %q is in %q phase, not Error — cannot retry\n%s",
-		planName, phase, fmt.Sprintf(hint, planName))
+	inPhase := fmt.Sprintf("is in %q phase", phase)
+	if phase == "" {
+		inPhase = "has no recorded phase yet (the controller has not reconciled it)"
+	}
+	return fmt.Errorf("HibernatePlan %q %s, not Error — cannot retry\n%s",
+		planName, inPhase, fmt.Sprintf(hint, planName))
 }

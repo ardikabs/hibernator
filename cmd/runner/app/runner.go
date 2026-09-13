@@ -9,6 +9,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"sort"
 	"time"
 
 	"github.com/go-logr/logr"
@@ -266,10 +267,24 @@ func (r *runner) executeOperation(ctx context.Context, exec executor.Executor, s
 			r.log.Info("warning: restore data is from non-live source; restore point may be outdated.")
 		}
 
+		// Enforce operator exclusion: executors only ever see eligible
+		// entries in Data. Skipped carries the advisory record (see
+		// executor.SkipReasonExcluded) for reporting below.
+		excluded := excludedResourceKeys(rd.Skipped)
+		for _, key := range excluded {
+			delete(rd.Data, key)
+		}
+		if len(excluded) > 0 {
+			r.log.Info("withholding operator-excluded resources from wakeup", "excluded", len(excluded))
+		}
+
 		result, err := exec.WakeUp(ctx, r.log, *spec, *rd)
 		if err != nil {
 			operationErr = err
 		} else {
+			if len(excluded) > 0 {
+				result.Message = fmt.Sprintf("%s; skipped %d excluded resource(s)", result.Message, len(excluded))
+			}
 			executorResult = result
 		}
 	default:
@@ -292,6 +307,19 @@ func (r *runner) executeOperation(ctx context.Context, exec executor.Executor, s
 	r.log.Info("operation completed", "duration", duration)
 
 	return executorResult, nil
+}
+
+// excludedResourceKeys returns the sorted resource keys marked excluded
+// for skipping, so enforcement and reporting stay deterministic.
+func excludedResourceKeys(skipped map[string]string) []string {
+	var out []string
+	for key, reason := range skipped {
+		if reason == executor.SkipReasonExcluded {
+			out = append(out, key)
+		}
+	}
+	sort.Strings(out)
+	return out
 }
 
 // buildExecutorSpec constructs the executor spec from connector configuration.

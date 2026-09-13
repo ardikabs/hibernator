@@ -177,7 +177,7 @@ kubectl hibernator override my-plan --to wakeup --until "in 30 minutes" --dry-ru
 | Flag | Description |
 |------|-------------|
 | `--to` | Target phase: `hibernate` or `wakeup`. Required when activating. |
-| `--disable` | Deactivate the override and restore normal schedule control. Mutually exclusive with `--to`. |
+| `--disable` | Deactivate the override and restore normal schedule control. Mutually exclusive with `--to`, `--seconds`, and `--until`. |
 | `--seconds` | Duration in seconds for the override to remain active. Mutually exclusive with `--until`. |
 | `--until` | Deadline for the override. Supports natural language (e.g., `in 30 minutes`, `tomorrow at 6am`) or RFC3339 format. Mutually exclusive with `--seconds`. |
 | `--dry-run` | Preview what would happen without making changes. |
@@ -194,9 +194,14 @@ Re-trigger the last executor operation on a plan that is already at a stable pha
 ```bash
 kubectl hibernator restart my-plan
 kubectl hibernator restart my-plan -n production
+kubectl hibernator restart my-plan --dry-run
 ```
 
 The plan must have completed at least one full hibernation cycle (`.status.currentOperation` must be recorded).
+
+| Flag | Description |
+|------|-------------|
+| `--dry-run` | Preview what would happen without making changes. |
 
 !!! tip "Fresh restart"
     To discard the locked cycle intent and start a new hibernation cycle, add the `hibernator.ardikabs.com/fresh=true` annotation alongside `restart=true`. See [Manual Actions](override-actions.md#fresh-restart) for details. CLI support for `--fresh` is tracked separately.
@@ -209,10 +214,36 @@ Trigger a manual retry of a plan stuck in the `Error` phase. The controller clea
 
 ```bash
 kubectl hibernator retry my-plan
+kubectl hibernator retry my-plan --dry-run
 ```
 
 !!! note
     `retry` only applies to plans in `Error` phase. For plans in Active or Hibernated phase, use `restart` instead.
+
+| Flag | Description |
+|------|-------------|
+| `--dry-run` | Preview what would happen without making changes. |
+
+| Flag | Description |
+|------|-------------|
+| `--dry-run` | Preview what would happen without making changes. |
+
+---
+
+### `revert`
+
+Selectively wake up targets that were successfully hibernated on a plan stuck in `Error` phase after a failed hibernation. Targets that failed are skipped. See [Manual Actions](override-actions.md) for full details.
+
+```bash
+kubectl hibernator revert my-plan
+kubectl hibernator revert my-plan --dry-run
+kubectl hibernator revert my-plan --wait
+```
+
+| Flag | Description |
+|------|-------------|
+| `--dry-run` | Preview which targets would be reverted without making changes. |
+| `--wait` | Wait for the revert operation to complete (polls every 5s, up to 10m). |
 
 ---
 
@@ -267,11 +298,16 @@ The `--until` flag supports multiple user-friendly formats for both `suspend` an
 
 ### `resume`
 
-Resume a suspended HibernatePlan, restoring normal schedule evaluation immediately.
+Resume a suspended HibernatePlan, restoring normal schedule evaluation immediately. Clears `spec.suspend` as well as the `suspend-until` and `suspend-reason` annotations.
 
 ```bash
 kubectl hibernator resume my-plan
+kubectl hibernator resume my-plan --dry-run
 ```
+
+| Flag | Description |
+|------|-------------|
+| `--dry-run` | Preview what would happen without making changes. |
 
 ---
 
@@ -290,8 +326,8 @@ kubectl hibernator logs my-plan --level error
 | Flag | Description |
 |------|-------------|
 | `--target` | Filter logs by target name. |
-| `--level` | Filter by level: `error` (logs with error field) or `info` (logs without errors). |
-| `--tail` | Number of recent log lines to fetch (default: `500`). |
+| `--level` | Filter by level: `error` (logs with error field) or `info` (logs without errors). Other values match everything. |
+| `--tail` | Number of recent log lines to fetch (default: `500`). Ignored with `--follow`. |
 | `-f, --follow` | Stream logs continuously until interrupted. |
 
 ---
@@ -366,6 +402,7 @@ kubectl hibernator restore init my-plan -t db-prod -x rds --force
 | `-t, --target` | Target name (required). |
 | `-x, --executor` | Executor type: `eks`, `rds`, `ec2`, `karpenter`, etc. (required). |
 | `--force` | Overwrite an existing restore point entry for the target. |
+| `--dry-run` | Preview what would happen without making changes. |
 
 #### `restore patch`
 
@@ -398,6 +435,7 @@ kubectl hibernator restore patch my-plan -t eks -r ng-main \
 | `--patch` | Inline JSON merge patch (RFC 7386). |
 | `--patch-file` | Path to a JSON merge patch file. |
 | `--dry-run` | Preview changes without applying. |
+| `--yes` | Skip confirmation prompts (non-interactive use). |
 
 !!! note
     Field operations (`--set`/`--remove`) and JSON merge patch (`--patch`/`--patch-file`) are mutually exclusive — use one mode per invocation.
@@ -408,12 +446,85 @@ Remove a specific resource from a restore point. The next hibernation cycle will
 
 ```bash
 kubectl hibernator restore drop my-plan --target eks-cluster --resource-id ng-main
+kubectl hibernator restore drop my-plan --target eks-cluster --resource-id ng-main --dry-run
 ```
 
 | Flag | Description |
 |------|-------------|
 | `-t, --target` | Target name (required). |
 | `-r, --resource-id` | Resource identifier (required). |
+| `--dry-run` | Preview what would happen without making changes. |
+
+!!! warning
+    `drop` applies immediately without a confirmation prompt. Use `--dry-run` first when scripting.
+
+#### `restore export`
+
+Write a target's restore entry (or a single resource state) to a local file. This is the backup half of the weekend partial-run workflow below.
+
+```bash
+kubectl hibernator restore export my-plan --target eks-cluster --file eks-full.json
+kubectl hibernator restore export my-plan --target eks-cluster --resource-id ng-main --file ng-main.json
+```
+
+| Flag | Description |
+|------|-------------|
+| `-t, --target` | Target name (required). |
+| `-r, --resource-id` | Single resource ID to export (defaults to the whole target entry). |
+| `--file` | Destination file path (required). Parent directories are created. |
+
+#### `restore import`
+
+Write a file produced by `restore export` back into the restore point, replacing the target entry (or a single resource state) wholesale. A backup is refused when its embedded target name differs from `--target`, so cross-target imports cannot happen by accident.
+
+```bash
+kubectl hibernator restore import my-plan --target eks-cluster --file eks-full.json
+kubectl hibernator restore import my-plan --target eks-cluster --resource-id ng-main --file ng-main.json
+kubectl hibernator restore import my-plan --target eks-cluster --file eks-full.json --dry-run
+```
+
+| Flag | Description |
+|------|-------------|
+| `-t, --target` | Target name (required). |
+| `-r, --resource-id` | Single resource ID to import (defaults to the whole target entry). |
+| `--file` | Source file path, as written by `restore export` (required). |
+| `--dry-run` | Preview what would happen without making changes. |
+| `--yes` | Skip confirmation prompts (non-interactive use). |
+
+#### `restore prune`
+
+Mark every resource state in a target's restore entry excluded except the `--keep` list, so wakeup skips them. The payloads stay intact: importing the backup (or the next full hibernation) clears the markers. Use `--delete` to permanently remove instead.
+
+```bash
+kubectl hibernator restore prune my-plan --target eks-cluster --keep ng-weekend-a --keep ng-weekend-b
+kubectl hibernator restore prune my-plan --target eks-cluster --keep ng-weekend-a --dry-run
+kubectl hibernator restore prune my-plan --target eks-cluster --keep ng-weekend-a --delete --yes
+```
+
+| Flag | Description |
+|------|-------------|
+| `-t, --target` | Target name (required). |
+| `--keep` | Resource ID to keep (repeatable, at least one required). |
+| `--dry-run` | Preview what would happen without making changes. |
+| `--yes` | Skip confirmation prompts (non-interactive use). |
+| `--delete` | Permanently delete non-kept resources instead of marking them excluded. |
+
+#### Weekend partial runs
+
+`ScheduleException` target overrides disable whole targets; when only *some resources within one target* should run over the weekend, trim the restore data instead:
+
+```bash
+# Friday evening: snapshot the full restore data
+kubectl hibernator restore export weekend-plan -t eks --file eks-full.json
+
+# Trim to weekend runners only
+kubectl hibernator restore prune weekend-plan -t eks --keep ng-weekend-a --keep ng-weekend-b --yes
+
+# ... SAT/SUN partial runs happen ...
+
+# Monday: restore the full snapshot
+kubectl hibernator restore import weekend-plan -t eks --file eks-full.json --yes
+```
 
 ---
 
@@ -498,7 +609,7 @@ kubectl hibernator notification send my-notification --event Start --phase Hiber
 
 | Flag | Short | Description |
 |------|-------|-------------|
-| `--event` | `-e` | Event type to simulate. **Required.** One of: `Start`, `Success`, `Failure`, `Recovery`, `PhaseChange`. |
+| `--event` | `-e` | Event type to simulate (case-insensitive). **Required.** One of: `Start`, `Success`, `Failure`, `Recovery`, `PhaseChange`. |
 | `--sink` | | Sink name to send to. Auto-selected if only one sink is configured. |
 | `--sink-type` | | Sink type for local mode: `slack`, `telegram`, or `webhook`. Requires `--config-file`. |
 | `--plan` | `-p` | Populate payload from this HibernatePlan's current cluster status. Mutually exclusive with `--plan-file`. |
@@ -519,4 +630,9 @@ Print the CLI plugin version.
 
 ```bash
 kubectl hibernator version
+kubectl hibernator version --json
 ```
+
+| Flag | Description |
+|------|-------------|
+| `--json` | Output machine-readable JSON (`version`, `commit`) instead of human text. Skips the update check. |

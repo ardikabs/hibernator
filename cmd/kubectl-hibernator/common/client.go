@@ -22,6 +22,11 @@ func init() {
 	_ = hibernatorv1alpha1.AddToScheme(Scheme)
 }
 
+// ClientFactory builds the Kubernetes client for CLI commands. It defaults
+// to NewK8sClient and is overridden in tests with a fake client. Tests must
+// restore it via t.Cleanup since it is process-global.
+var ClientFactory = NewK8sClient
+
 // NewK8sClient creates a controller-runtime client from the global options.
 func NewK8sClient(opts *RootOptions) (client.Client, error) {
 	loadingRules := clientcmd.NewDefaultClientConfigLoadingRules()
