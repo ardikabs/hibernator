@@ -1,3 +1,14 @@
+<a name="v1.7.0-rc.2"></a>
+
+## [v1.7.0-rc.2](https://github.com/ardikabs/hibernator/compare/v1.7.0-rc.1...v1.7.0-rc.2) (2026-09-13)
+
+### ✨ Features
+
+* cli restore import/export/prune and coverage for cli ([#195](https://github.com/ardikabs/hibernator/issues/195))
+* implement real E2E test with AWS Emulator (Floci) ([#194](https://github.com/ardikabs/hibernator/issues/194))
+* **schedule-exception:** support per-target overrides on suspend ([#193](https://github.com/ardikabs/hibernator/issues/193))
+
+
 <a name="v1.7.0-rc.1"></a>
 
 ## [v1.7.0-rc.1](https://github.com/ardikabs/hibernator/compare/v1.6.5...v1.7.0-rc.1) (2026-08-28)
