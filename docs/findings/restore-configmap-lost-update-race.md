@@ -1,6 +1,6 @@
 ---
 date: September 23, 2026
-status: investigated
+status: resolved
 component: Restore Manager, Runner, Wakeup Finalize
 ---
 
@@ -68,9 +68,30 @@ the old cycle ID and `HasRestoreData` stays true — leaking the corruption into
 the next cycle's identity and scheduling inputs. Manual recovery means
 hand-editing the restore ConfigMap.
 
+## Resolution
+
+Chosen: Option A, implemented in `internal/restore/manager.go`.
+`MarkTargetRestored` and `UnlockRestoreData` now do Get → mutate →
+`client.MergeFrom` patch inside `retry.RetryOnConflict(retry.DefaultBackoff)`
+(same pattern `status/processor.go` uses). The merge patch keeps each
+concurrent mark to its disjoint annotation/data keys so parallel runners no
+longer clobber each other, and the retry re-reads on any residual collision
+(e.g. with the controller-side unlock). Genuine failures stay non-fatal in the
+runner as before.
+
+Regression tests in `internal/restore/manager_concurrency_test.go`:
+`TestMarkTargetRestored_RetriesOnConflict` and
+`TestUnlockRestoreData_RetriesOnConflict` inject a `Conflict` via fake-client
+interceptors and assert retry + correct end state;
+`TestConcurrentMarkTargetRestored_NoLostMarks` releases 3 parallel markers at
+a barrier (the kind-flake shape) and asserts no annotation is lost — this
+fails deterministically against the old full-object `Update` code path, which
+the fake client rejects with stale-`resourceVersion` conflicts.
+`TestConcurrentMarkTargetRestored_NoLostMarks` passes 10/10 consecutive runs.
+
 ## Proposed Solutions
 
-### Option A: RetryOnConflict on the writers (recommended, the actual fix)
+### Option A: RetryOnConflict on the writers (recommended, the actual fix — implemented)
 
 Wrap the Get→Update in `MarkTargetRestored` and `UnlockRestoreData` with
 `retry.RetryOnConflict` (same pattern `status/processor.go` already uses).
