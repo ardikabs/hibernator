@@ -9,7 +9,7 @@ name: Nightly Kind Schedule
 # from any branch via workflow_dispatch.
 on:
   schedule:
-    - cron: '50 23 * * *'
+    - cron: '52 23 * * *'
 
   workflow_dispatch:
 
@@ -19,8 +19,8 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 30
     env:
-      KIND_SCHEDULE_START: '23:55'
-      KIND_SCHEDULE_END: '00:05'
+      KIND_SCHEDULE_START: '23:58'
+      KIND_SCHEDULE_END: '00:08'
     steps:
       - uses: actions/checkout@v6
 
@@ -37,7 +37,7 @@ jobs:
 
       # Full suite: override-driven scenarios plus the wall-clock
       # TestNoopScheduleCycle 4-plan midnight matrix
-      # (normal 23:55-00:05 cycle, full-day hibernation, weekday parking,
+      # (normal 23:58-00:08 cycle, full-day hibernation, weekday parking,
       # full-day active).
       - name: Run Kind Schedule E2E Tests
         run: make test-kind-schedule
