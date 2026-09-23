@@ -1284,4 +1284,130 @@ var _ = Describe("ScheduleException E2E", func() {
 		By("Cleaning up replace exception (suspend exception is cleaned up in AfterEach)")
 		testutil.EnsureDeleted(ctx, k8sClient, exceptionReplace)
 	})
+
+	It("ExceptionActivationTriggersReevaluation: Hibernated plan wakes up when a suspend exception activates, without any manual plan poke", func() {
+		// Regression test for the missing trigger where a ScheduleException
+		// status transition (Pending → Active) never re-reconciled the plan:
+		// the plan stayed Hibernated past the suspend window until a human
+		// poked it. With exceptionStateChangedPredicate the activation alone
+		// must drive Hibernated → WakingUp.
+		//
+		// NOTE: phase assertions below deliberately use
+		// eventuallyPhaseWithoutTrigger (plain Gets, no TriggerReconcile
+		// annotation poke). A poke would mask the behavior under test.
+		baseTime := time.Date(2026, 3, 30, 20, 30, 0, 0, time.UTC) // Monday 20:30 — inside base hibernation window
+		fakeClock.SetTime(baseTime)
+
+		By("Creating HibernatePlan with 20:00-06:00 hibernation window")
+		plan, _ = testutil.NewHibernatePlanBuilder("exc-activation-trigger", testNamespace).
+			WithSchedule("20:00", "06:00", "MON", "TUE", "WED", "THU", "FRI", "SAT", "SUN").
+			WithExecutionStrategy(hibernatorv1alpha1.ExecutionStrategy{
+				Type: hibernatorv1alpha1.StrategySequential,
+			}).
+			WithTarget(hibernatorv1alpha1.Target{
+				Name: "database",
+				Type: "noop",
+				ConnectorRef: hibernatorv1alpha1.ConnectorRef{
+					Kind: "CloudProvider",
+					Name: "exception-aws",
+				},
+			}).
+			Build()
+
+		Expect(k8sClient.Create(ctx, plan)).To(Succeed())
+
+		By("Driving plan to Hibernated (still 20:30, base schedule says hibernate)")
+		testutil.SimulateHibernation(ctx, k8sClient, plan, restoreManager, fakeClock.Now(), "database")
+
+		By("Creating ExceptionSuspend carving out 20:00-23:00 (additional up hours)")
+		exception = testutil.NewScheduleExceptionBuilder("exc-activation-suspend", testNamespace, plan.Name).
+			WithType(hibernatorv1alpha1.ExceptionSuspend).
+			WithValidity(baseTime.Add(-1*time.Hour), baseTime.Add(48*time.Hour)).
+			WithWindows(hibernatorv1alpha1.OffHourWindow{
+				Start:      "20:00",
+				End:        "23:00",
+				DaysOfWeek: []string{"MON", "TUE", "WED", "THU", "FRI", "SAT", "SUN"},
+			}).
+			Build()
+
+		Expect(k8sClient.Create(ctx, exception)).To(Succeed())
+
+		By("Waiting for ScheduleException to become Active")
+		testutil.EventuallyExceptionState(ctx, k8sClient, exception, hibernatorv1alpha1.ExceptionStateActive)
+
+		By("Verifying plan leaves Hibernated for WakingUp with NO manual plan reconcile")
+		eventuallyPhaseWithoutTrigger(plan, hibernatorv1alpha1.PhaseWakingUp)
+
+		By("Completing the wakeup cycle back to Active")
+		testutil.SimulateWakeup(ctx, k8sClient, plan, fakeClock.Now(), "database")
+	})
+
+	It("ExceptionExpiryTriggersReevaluation: Active plan hibernates when a suspend exception expires, without any manual plan poke", func() {
+		// Mirror of the activation case for the Active → Expired transition:
+		// at 23:00 the suspend window lapses and the base schedule must take
+		// over on its own.
+		baseTime := time.Date(2026, 4, 20, 8, 0, 0, 0, time.UTC) // Monday 08:00 — on-hours
+		fakeClock.SetTime(baseTime)
+
+		By("Creating HibernatePlan with 20:00-06:00 hibernation window")
+		plan, _ = testutil.NewHibernatePlanBuilder("exc-expiry-trigger", testNamespace).
+			WithSchedule("20:00", "06:00", "MON", "TUE", "WED", "THU", "FRI", "SAT", "SUN").
+			WithExecutionStrategy(hibernatorv1alpha1.ExecutionStrategy{
+				Type: hibernatorv1alpha1.StrategySequential,
+			}).
+			WithTarget(hibernatorv1alpha1.Target{
+				Name: "database",
+				Type: "noop",
+				ConnectorRef: hibernatorv1alpha1.ConnectorRef{
+					Kind: "CloudProvider",
+					Name: "exception-aws",
+				},
+			}).
+			Build()
+
+		Expect(k8sClient.Create(ctx, plan)).To(Succeed())
+		testutil.EventuallyPhase(ctx, k8sClient, plan, hibernatorv1alpha1.PhaseActive)
+
+		By("Creating ExceptionSuspend covering 20:00-06:00 but expiring at 21:00")
+		expiryTime := time.Date(2026, 4, 20, 21, 0, 0, 0, time.UTC)
+		exception = testutil.NewScheduleExceptionBuilder("exc-expiry-suspend", testNamespace, plan.Name).
+			WithType(hibernatorv1alpha1.ExceptionSuspend).
+			WithValidity(baseTime.Add(-1*time.Hour), expiryTime).
+			WithWindows(hibernatorv1alpha1.OffHourWindow{
+				Start:      "20:00",
+				End:        "06:00",
+				DaysOfWeek: []string{"MON", "TUE", "WED", "THU", "FRI", "SAT", "SUN"},
+			}).
+			Build()
+
+		Expect(k8sClient.Create(ctx, exception)).To(Succeed())
+		testutil.EventuallyExceptionState(ctx, k8sClient, exception, hibernatorv1alpha1.ExceptionStateActive)
+
+		By("Advancing clock to Monday 20:30 — exception still active, plan must stay Active")
+		fakeClock.SetTime(time.Date(2026, 4, 20, 20, 30, 0, 0, time.UTC))
+		testutil.TriggerReconcile(ctx, k8sClient, plan)
+		testutil.ConsistentllyAtPhase(ctx, k8sClient, plan, hibernatorv1alpha1.PhaseActive, 2*time.Second)
+
+		By("Advancing clock past 21:00 and triggering exception reconcile so it expires")
+		fakeClock.SetTime(time.Date(2026, 4, 20, 21, 5, 0, 0, time.UTC))
+		testutil.TriggerReconcile(ctx, k8sClient, exception)
+
+		By("Waiting for exception to become Expired")
+		testutil.EventuallyExceptionState(ctx, k8sClient, exception, hibernatorv1alpha1.ExceptionStateExpired)
+
+		By("Verifying plan transitions to Hibernating with NO manual plan reconcile")
+		eventuallyPhaseWithoutTrigger(plan, hibernatorv1alpha1.PhaseHibernating)
+	})
 })
+
+// eventuallyPhaseWithoutTrigger polls the plan phase with plain Gets only —
+// deliberately no TriggerReconcile annotation poke (unlike
+// testutil.EventuallyPhase, which pokes on every poll). A poke would mask the
+// behavior under test: that a ScheduleException state transition alone
+// (via exceptionStateChangedPredicate) drives plan schedule re-evaluation.
+func eventuallyPhaseWithoutTrigger(plan *hibernatorv1alpha1.HibernatePlan, phase hibernatorv1alpha1.PlanPhase) {
+	Eventually(func() hibernatorv1alpha1.PlanPhase {
+		_ = k8sClient.Get(ctx, client.ObjectKeyFromObject(plan), plan)
+		return plan.Status.Phase
+	}).WithTimeout(testutil.DefaultTimeout).WithPolling(testutil.DefaultInterval).Should(Equal(phase))
+}

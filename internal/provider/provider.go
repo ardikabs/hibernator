@@ -8,7 +8,6 @@ package provider
 import (
 	"context"
 	"fmt"
-	"maps"
 	"sort"
 	"time"
 
@@ -440,101 +439,10 @@ func (r *PlanReconciler) findPlansForNotification(ctx context.Context, obj clien
 	return lo.Ternary(len(matchedPlans) == 0, unMatchedPlans, matchedPlans)
 }
 
-// onJobTerminalUpdate is the predicate UpdateFunc for owned Jobs. It detects the
-// first 0→1+ transition of Job.Status.Succeeded or Job.Status.Failed, signalling
-// that the Job has reached a terminal state. On detection, it increments
-// DependencyNonces for the owning plan so that the subsequent Reconcile embeds a
-// changed DeliveryNonce into the PlanContext — preventing watchable.Map from
-// suppressing re-delivery to subscribers when no HibernatePlan field has changed.
-// This enables processors to react to job completion near real-time, bypassing the
-// standard polling interval.
-//
-// Returns true on the terminal transition to allow the event to proceed to Reconcile,
-// so the controller immediately stores an updated PlanContext with the incremented
-// DeliveryNonce.
-func (r *PlanReconciler) onJobTerminalUpdate(e event.UpdateEvent) bool {
-	oldJob, ok1 := e.ObjectOld.(*batchv1.Job)
-	newJob, ok2 := e.ObjectNew.(*batchv1.Job)
-	if !ok1 || !ok2 {
-		return false
-	}
-	// Detect the first 0→1+ transition of Succeeded or Failed.
-	wasTerminal := oldJob.Status.Succeeded > 0 || oldJob.Status.Failed > 0
-	isTerminal := newJob.Status.Succeeded > 0 || newJob.Status.Failed > 0
-	condition := !wasTerminal && isTerminal
-	if condition {
-		owner := metav1.GetControllerOf(newJob)
-		if owner == nil {
-			return condition
-		}
-
-		nn := types.NamespacedName{
-			Name:      owner.Name,
-			Namespace: newJob.Namespace,
-		}
-
-		r.DependencyNonces.Inc(nn)
-
-		r.Log.V(1).Info("job transitioned to terminal state, enqueuing plan",
-			"plan", nn,
-			"job", client.ObjectKeyFromObject(newJob),
-			"succeeded", newJob.Status.Succeeded,
-			"failed", newJob.Status.Failed,
-		)
-	}
-
-	return condition
-}
-
 // SetupWithManager sets up the provider reconciler with the Manager.
+// Event filtering lives in predicates.go — all watch predicates are defined
+// and unit-tested there; this function only wires them.
 func (r *PlanReconciler) SetupWithManager(mgr ctrl.Manager, workers int) error {
-	// configMapDataChangedPredicate fires only when a ConfigMap's Data or BinaryData
-	// changes, ignoring annotation/label-only updates.
-	//
-	// During a wakeup cycle each runner calls MarkTargetRestored(), which patches the
-	// restore ConfigMap's annotations (not its Data). Without this predicate every
-	// such annotation write would trigger a provider reconcile even though HasRestoreData
-	// would return the same answer — producing one spurious reconcile per wakeup stage.
-	configMapDataChangedPredicate := predicate.Funcs{
-		UpdateFunc: func(e event.UpdateEvent) bool {
-			oldCM, okOld := e.ObjectOld.(*corev1.ConfigMap)
-			newCM, okNew := e.ObjectNew.(*corev1.ConfigMap)
-			if !okOld || !okNew {
-				return true // pass unknown types through
-			}
-			return !maps.Equal(oldCM.Data, newCM.Data)
-		},
-		CreateFunc:  func(_ event.CreateEvent) bool { return true },
-		DeleteFunc:  func(_ event.DeleteEvent) bool { return true },
-		GenericFunc: func(_ event.GenericEvent) bool { return false },
-	}
-
-	// notificationDeletionPredicate passes through updates where DeletionTimestamp
-	// transitions from zero to non-zero. This ensures plan reconciles fire so the
-	// lifecycle processor can clean up watchedPlans and remove the notification finalizer.
-	notificationDeletionPredicate := predicate.Funcs{
-		UpdateFunc: func(e event.UpdateEvent) bool {
-			if e.ObjectOld == nil || e.ObjectNew == nil {
-				return false
-			}
-			return e.ObjectOld.GetDeletionTimestamp().IsZero() && !e.ObjectNew.GetDeletionTimestamp().IsZero()
-		},
-	}
-
-	// jobTerminalPredicate triggers provider reconciliation only when an owned Job
-	// first reaches a terminal state.  We detect this via the monotonically
-	// increasing Succeeded/Failed counters rather than the Active counter, because
-	// Active is non-monotonic (0→N→0) and informer coalescing can squash the
-	// intermediate updates, turning the sequence into Active 0→0 which would be
-	// invisible.  Succeeded and Failed only ever increase, so the 0→1+ transition
-	// fires exactly once per Job regardless of coalescing.
-	jobTerminalPredicate := predicate.Funcs{
-		UpdateFunc:  r.onJobTerminalUpdate,
-		CreateFunc:  func(_ event.CreateEvent) bool { return false },
-		DeleteFunc:  func(_ event.DeleteEvent) bool { return false },
-		GenericFunc: func(_ event.GenericEvent) bool { return false },
-	}
-
 	return ctrl.NewControllerManagedBy(mgr).
 		// React to Spec changes (generation bump) and annotation changes (retry-now,
 		// suspend-until, override-action, restart, etc.). Status writes are excluded —
@@ -547,18 +455,23 @@ func (r *PlanReconciler) SetupWithManager(mgr ctrl.Manager, workers int) error {
 				predicate.LabelChangedPredicate{},
 			),
 		)).
-		Owns(&batchv1.Job{}, builder.WithPredicates(jobTerminalPredicate)).
+		Owns(&batchv1.Job{}, builder.WithPredicates(r.jobTerminalPredicate())).
 		Owns(&corev1.ConfigMap{}, builder.WithPredicates(configMapDataChangedPredicate)).
 		Watches(
 			&hibernatorv1alpha1.ScheduleException{},
 			handler.EnqueueRequestsFromMapFunc(r.findPlansForException),
-			// Only Spec changes matter — no state handler reads exc.Status.State;
-			// schedule evaluation uses ValidFrom/ValidUntil directly. Suppressing
-			// scheduleexception status writes eliminates the scheduleexception.LifecycleProcessor
-			// status-write → reconcile loop.
+			// Spec/annotation changes plus lifecycle state transitions
+			// (Pending → Active, Active → Expired). Schedule evaluation only
+			// honours exceptions whose Status.State is Active, and activation
+			// and expiry are status-subresource writes that bump neither
+			// Generation nor annotations — without the state predicate the
+			// plan is never re-reconciled when an exception takes effect or
+			// lapses. Message-only status writes stay suppressed. No loop
+			// risk: plan Reconcile never writes exception objects.
 			builder.WithPredicates(predicate.Or(
 				predicate.GenerationChangedPredicate{},
 				predicate.AnnotationChangedPredicate{},
+				exceptionStateChangedPredicate,
 			)),
 		).
 		Watches(
