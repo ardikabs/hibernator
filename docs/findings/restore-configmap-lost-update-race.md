@@ -79,7 +79,7 @@ longer clobber each other, and the retry re-reads on any residual collision
 (e.g. with the controller-side unlock). Genuine failures stay non-fatal in the
 runner as before.
 
-Regression tests in `internal/restore/manager_concurrency_test.go`:
+Regression tests in `internal/restore/manager_test.go` (Concurrency section):
 `TestMarkTargetRestored_RetriesOnConflict` and
 `TestUnlockRestoreData_RetriesOnConflict` inject a `Conflict` via fake-client
 interceptors and assert retry + correct end state;
@@ -88,6 +88,24 @@ a barrier (the kind-flake shape) and asserts no annotation is lost — this
 fails deterministically against the old full-object `Update` code path, which
 the fake client rejects with stale-`resourceVersion` conflicts.
 `TestConcurrentMarkTargetRestored_NoLostMarks` passes 10/10 consecutive runs.
+
+Follow-up in the same change: `Save` (`internal/restore/save.go`) wrapped in
+`RetryOnConflict` as well — parallel hibernate runners save distinct target
+keys on the same ConfigMap and faced the identical collision (a conflicted
+save failed the runner flush and hence the hibernate Job). Re-running is
+idempotent (identical payload); size validation stays outside the retry loop.
+Covered by `TestSave_RetriesOnConflict`.
+
+Same optimistic pattern applied to the scale subresource writes in
+`internal/executor/workloadscaler/workloadscaler.go`: both the shutdown
+scale-to-zero and wakeup restore sequences now re-read (`GetScale`) and
+re-apply inside `RetryOnConflict`, so a transient HPA fight no longer fails
+the whole target operation. Deliberately placed at the two call sites rather
+than inside `UpdateScale` — retrying the write alone would resubmit the same
+stale object forever. Bounded by `DefaultBackoff`, so a persistent tug-of-war
+still surfaces as an error. Covered by `TestShutdown_RetriesScaleConflict`,
+`TestShutdown_PersistentScaleConflict_SurfacesError`, and
+`TestWakeUp_RetriesScaleConflict` (mock-based, no new test files).
 
 ## Proposed Solutions
 

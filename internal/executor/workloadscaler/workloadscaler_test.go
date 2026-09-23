@@ -15,7 +15,9 @@ import (
 	"github.com/ardikabs/hibernator/internal/executor/workloadscaler/mocks"
 	"github.com/go-logr/logr"
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/mock"
 	corev1 "k8s.io/api/core/v1"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime/schema"
@@ -431,4 +433,176 @@ func TestFormatMessages(t *testing.T) {
 
 	wakeupWithStale := formatWakeUpMessage(operationStats{applied: 4, skippedStale: 1})
 	assert.Equal(t, "restored 4 workload(s), skipped 1 stale workload(s)", wakeupWithStale)
+}
+
+// ---------------------------------------------------------------------------
+// Optimistic concurrency: transient scale-subresource conflicts (e.g. HPA
+// writes racing hibernator) must be retried with a fresh read — never fail
+// the whole target operation on first collision, and never loop on a stale
+// object.
+// ---------------------------------------------------------------------------
+
+func scaleConflictError() error {
+	return apierrors.NewConflict(
+		schema.GroupResource{Group: "apps", Resource: "deployments"},
+		"test-deployment",
+		errors.New("simulated concurrent scale write"),
+	)
+}
+
+func conflictScaleObj(replicas int64) *unstructured.Unstructured {
+	return &unstructured.Unstructured{
+		Object: map[string]interface{}{
+			"spec": map[string]interface{}{
+				"replicas": replicas,
+			},
+			"status": map[string]interface{}{
+				"replicas": replicas,
+			},
+		},
+	}
+}
+
+func TestShutdown_RetriesScaleConflict(t *testing.T) {
+	ctx := context.Background()
+	mockClient := mocks.NewClient(t)
+
+	gvr := schema.GroupVersionResource{Group: "apps", Version: "v1", Resource: "deployments"}
+	workloadList := &unstructured.UnstructuredList{
+		Items: []unstructured.Unstructured{
+			{
+				Object: map[string]interface{}{
+					"apiVersion": "apps/v1",
+					"kind":       "Deployment",
+					"metadata": map[string]interface{}{
+						"name":      "test-deployment",
+						"namespace": "default",
+					},
+				},
+			},
+		},
+	}
+	mockClient.EXPECT().ListWorkloads(ctx, gvr, "default", "").Return(workloadList, nil)
+
+	scaleObj := conflictScaleObj(3)
+	// Fresh read per attempt: unlimited matches.
+	mockClient.EXPECT().GetScale(ctx, gvr, "default", "test-deployment").Return(scaleObj, nil)
+	// First write collides (HPA raced us), second succeeds.
+	mockClient.EXPECT().UpdateScale(ctx, gvr, "default", scaleObj).Return(nil, scaleConflictError()).Once()
+	mockClient.EXPECT().UpdateScale(ctx, gvr, "default", scaleObj).Return(scaleObj, nil)
+
+	e := NewWithClients(func(ctx context.Context, spec *executor.Spec) (Client, error) {
+		return mockClient, nil
+	})
+
+	spec := executor.Spec{
+		TargetName: "test-workloads",
+		TargetType: "workloadscaler",
+		Parameters: json.RawMessage(`{
+			"includedGroups": ["Deployment"],
+			"namespace": {"literals": ["default"]}
+		}`),
+		ConnectorConfig: executor.ConnectorConfig{
+			K8S: &executor.K8SConnectorConfig{},
+		},
+	}
+
+	_, err := e.Shutdown(ctx, logr.Discard(), spec)
+	assert.NoError(t, err)
+	mockClient.AssertNumberOfCalls(t, "UpdateScale", 2)
+}
+
+func TestShutdown_PersistentScaleConflict_SurfacesError(t *testing.T) {
+	ctx := context.Background()
+	mockClient := mocks.NewClient(t)
+
+	gvr := schema.GroupVersionResource{Group: "apps", Version: "v1", Resource: "deployments"}
+	workloadList := &unstructured.UnstructuredList{
+		Items: []unstructured.Unstructured{
+			{
+				Object: map[string]interface{}{
+					"apiVersion": "apps/v1",
+					"kind":       "Deployment",
+					"metadata": map[string]interface{}{
+						"name":      "test-deployment",
+						"namespace": "default",
+					},
+				},
+			},
+		},
+	}
+	mockClient.EXPECT().ListWorkloads(ctx, gvr, "default", "").Return(workloadList, nil)
+	mockClient.EXPECT().GetScale(ctx, gvr, "default", "test-deployment").Return(conflictScaleObj(3), nil)
+	// Every write collides: bounded retry must give up and preserve the error.
+	mockClient.EXPECT().UpdateScale(ctx, gvr, "default", mock.Anything).Return(nil, scaleConflictError())
+
+	e := NewWithClients(func(ctx context.Context, spec *executor.Spec) (Client, error) {
+		return mockClient, nil
+	})
+
+	spec := executor.Spec{
+		TargetName: "test-workloads",
+		TargetType: "workloadscaler",
+		Parameters: json.RawMessage(`{
+			"includedGroups": ["Deployment"],
+			"namespace": {"literals": ["default"]}
+		}`),
+		ConnectorConfig: executor.ConnectorConfig{
+			K8S: &executor.K8SConnectorConfig{},
+		},
+	}
+
+	_, err := e.Shutdown(ctx, logr.Discard(), spec)
+	assert.Error(t, err)
+	assert.Contains(t, err.Error(), "update scale")
+}
+
+func TestWakeUp_RetriesScaleConflict(t *testing.T) {
+	ctx := context.Background()
+	mockClient := mocks.NewClient(t)
+
+	gvr := schema.GroupVersionResource{Group: "apps", Version: "v1", Resource: "deployments"}
+
+	scaleObj := conflictScaleObj(0)
+	mockClient.EXPECT().GetScale(ctx, gvr, "default", "test-deployment").Return(scaleObj, nil)
+	mockClient.EXPECT().UpdateScale(ctx, gvr, "default", scaleObj).Return(nil, scaleConflictError()).Once()
+	mockClient.EXPECT().UpdateScale(ctx, gvr, "default", scaleObj).Return(scaleObj, nil)
+
+	e := NewWithClients(func(ctx context.Context, spec *executor.Spec) (Client, error) {
+		return mockClient, nil
+	})
+
+	spec := executor.Spec{
+		TargetName: "test-workloads",
+		TargetType: "workloadscaler",
+		Parameters: json.RawMessage(`{
+			"includedGroups": ["Deployment"],
+			"namespace": {"literals": ["default"]}
+		}`),
+		ConnectorConfig: executor.ConnectorConfig{
+			K8S: &executor.K8SConnectorConfig{},
+		},
+	}
+
+	workloadState := WorkloadState{
+		Group:     "apps",
+		Version:   "v1",
+		Resource:  "deployments",
+		Kind:      "Deployment",
+		Namespace: "default",
+		Name:      "test-deployment",
+		Replicas:  3,
+		WasScaled: true,
+	}
+	workloadStateBytes, _ := json.Marshal(workloadState)
+	restoreData := executor.RestoreData{
+		Type: "workloadscaler",
+		Data: map[string]json.RawMessage{
+			"default/Deployment/test-deployment": workloadStateBytes,
+		},
+	}
+
+	_, err := e.WakeUp(ctx, logr.Discard(), spec, restoreData)
+	assert.NoError(t, err)
+	mockClient.AssertNumberOfCalls(t, "UpdateScale", 2)
 }

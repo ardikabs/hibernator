@@ -381,6 +381,57 @@ func TestMarkTargetRestored_RetriesOnConflict(t *testing.T) {
 	}
 }
 
+// TestSave_RetriesOnConflict proves parallel hibernate saves survive a
+// transient write collision on the shared restore ConfigMap instead of
+// failing the runner flush.
+func TestSave_RetriesOnConflict(t *testing.T) {
+	scheme := concurrencyTestScheme(t)
+	ctx := context.Background()
+	namespace, planName, target := "test-ns", "test-plan", "target-a"
+
+	var attempts atomic.Int32
+	fakeClient := fake.NewClientBuilder().
+		WithScheme(scheme).
+		WithInterceptorFuncs(interceptor.Funcs{
+			Patch: func(ctx context.Context, c client.WithWatch, obj client.Object, patch client.Patch, opts ...client.PatchOption) error {
+				if attempts.Add(1) == 1 {
+					return conflictError()
+				}
+				return c.Patch(ctx, obj, patch, opts...)
+			},
+		}).
+		Build()
+	mgr := NewManager(fakeClient, logr.Discard())
+
+	// Seed so Save takes the Patch path (ConfigMap already exists).
+	seedLiveTarget(t, ctx, mgr, namespace, planName, target)
+	attempts.Store(0)
+
+	data := &Data{
+		Target:    target,
+		Executor:  "noop",
+		Version:   2,
+		CreatedAt: metav1.Now(),
+		IsLive:    true,
+		CycleID:   "cycle-002",
+		State:     map[string]any{"marker": target},
+	}
+	if err := mgr.Save(ctx, namespace, planName, target, data); err != nil {
+		t.Fatalf("Save() should retry conflict, got = %v", err)
+	}
+	if got := attempts.Load(); got < 2 {
+		t.Fatalf("expected a retry after conflict, attempts = %d", got)
+	}
+
+	loaded, err := mgr.Load(ctx, namespace, planName, target)
+	if err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+	if loaded == nil || loaded.CycleID != "cycle-002" {
+		t.Fatalf("expected retried save to persist, got %+v", loaded)
+	}
+}
+
 // TestUnlockRestoreData_RetriesOnConflict proves the controller-side unlock
 // survives a concurrent runner mark landing mid-unlock.
 func TestUnlockRestoreData_RetriesOnConflict(t *testing.T) {
