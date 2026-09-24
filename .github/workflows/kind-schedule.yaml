@@ -1,15 +1,18 @@
-name: Nightly Kind Schedule
+name: Kind Schedule E2E
 
-# Fixed-clock midnight-crossing schedule cycle. Cron fires 23:50 UTC so
-# cluster provisioning + image builds settle before the 23:55 hibernate
-# edge; the suite must observe Hibernating by ~23:56, WakingUp by ~00:06,
-# and finish asserts by ~00:10 (hard ceiling via timeout-minutes).
+# Clock-agnostic schedule cycle. GitHub `schedule` triggers are best-effort
+# and never fire at an exact minute, so the suite pins nothing to the wall
+# clock: TestNoopScheduleCycle resolves a window relative to the moment it
+# starts (hibernate edge ~3 min out, wakeup edge a fixed 5 min later)
+# and finishes asserts well inside the 30 min job timeout. The cron time
+# below is therefore arbitrary (low contention on runners);
+# move it freely without touching the test.
 #
 # NOTE: `schedule` triggers only run on the default branch. Manual runs
 # from any branch via workflow_dispatch.
 on:
   schedule:
-    - cron: '52 23 * * *'
+    - cron: '55 */6 * * *'
 
   workflow_dispatch:
 
@@ -18,9 +21,6 @@ jobs:
     name: Kind Schedule Cycle
     runs-on: ubuntu-latest
     timeout-minutes: 30
-    env:
-      KIND_SCHEDULE_START: '23:58'
-      KIND_SCHEDULE_END: '00:08'
     steps:
       - uses: actions/checkout@v6
 
@@ -36,8 +36,8 @@ jobs:
         run: make kind-tool
 
       # Full suite: override-driven scenarios plus the wall-clock
-      # TestNoopScheduleCycle 4-plan midnight matrix
-      # (normal 23:58-00:08 cycle, full-day hibernation, weekday parking,
+      # TestNoopScheduleCycle 4-plan matrix with a relative window
+      # (normal cycle, full-day hibernation, weekday parking,
       # full-day active).
       - name: Run Kind Schedule E2E Tests
         run: make test-kind-schedule

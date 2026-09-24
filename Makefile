@@ -205,7 +205,7 @@ test-kind: kind-tool ## Full-chain kind E2E (builds images, provisions cluster, 
 	@$(GOCMD) test ./test/kind/ -v -tags=kind -count=1 -timeout 60m
 
 .PHONY: test-kind-schedule
-test-kind-schedule: kind-tool ## Full-chain kind E2E including the real wall-clock schedule cycle (nightly). Set KIND_SCHEDULE_START/END (HH:MM UTC) to pin absolute window anchors; unset = relative window for ad-hoc runs.
+test-kind-schedule: kind-tool ## Full-chain kind E2E including the real wall-clock schedule cycle (nightly). The schedule window is always relative to the test start (hibernate ~3m out, wakeup a fixed 5m later); no env pinning needed.
 	@echo "$(CYAN)Running kind full-chain E2E including scheduler...$(RESET)"
 	@RUN_KIND_SCHEDULE=1 $(GOCMD) test ./test/kind/ -v -tags=kind -count=1 -timeout 60m
 
