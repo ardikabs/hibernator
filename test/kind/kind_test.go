@@ -98,15 +98,18 @@ func TestMain(m *testing.M) {
 // this opt-in test proves schedule-driven transitions with noop targets,
 // so no cloud backend is involved.
 //
-// The window resolves via resolveScheduleWindow: KIND_SCHEDULE_START/END
-// ("15:04" UTC) pin absolute anchors for the nightly run (23:55-00:05 across
-// midnight); when unset, a relative window is used for ad-hoc local runs.
+// The window resolves via resolveScheduleWindow: always relative to the
+// moment the test starts (hibernate edge ~3 min out, wakeup edge a fixed
+// 5 min later). There are no absolute clock anchors: GitHub `schedule`
+// triggers are best-effort and never fire at an exact minute, so pinning
+// the suite to a fixed HH:MM (e.g. via KIND_SCHEDULE_START/END) made the
+// nightly flaky by design. The cron time itself is arbitrary night time;
+// the suite adapts to whenever the job actually starts.
 //
-// Three plans share one namespace to cover the midnight crossing from every
-// side: a normal schedule transitioning both ways across midnight, a
-// full-day hibernation holding Hibernated across midnight, a weekday-only
-// window proving no-weekend-cycling, and a full-day-active plan asserting
-// zero Jobs across midnight.
+// Four plans share one namespace: a normal schedule transitioning both
+// ways on the resolved window, a full-day hibernation holding Hibernated,
+// a weekday-only window proving no-weekend-cycling at night, and a
+// full-day-active plan asserting zero Jobs.
 func TestNoopScheduleCycle(t *testing.T) {
 	if os.Getenv("RUN_KIND_SCHEDULE") != "1" {
 		t.Skip("set RUN_KIND_SCHEDULE=1 for the real wall-clock schedule cycle")
@@ -182,15 +185,24 @@ func TestNoopScheduleCycle(t *testing.T) {
 	suite.PollPhaseAtLeast(t, c, cs, parkingKey, hibernatorv1alpha1.PhaseHibernated, time.Until(window.StartAt)+5*time.Minute)
 	suite.PollJobComplete(t, c, cs, parkingKey, hibernatorv1alpha1.OperationHibernate, "noop", 8*time.Minute)
 
-	// Full-day active: a past same-day window has no edges near midnight, so
-	// the plan must stay Active (and dispatch zero Jobs) across the day
-	// change. A 1-minute 23:59-00:00 window is deliberately NOT used here:
-	// the 1m schedule buffer would force a phantom hibernation inside the
-	// 00:00-00:01 end grace.
-	today := strings.ToUpper(time.Now().UTC().Format("Mon"))
+	// Full-day active: a window that ended well before the test has no
+	// edges near the resolved hibernation window, so the plan must stay
+	// Active (and dispatch zero Jobs) for the whole run. The window is
+	// anchored relative to now (2h ago) rather than a fixed clock time so
+	// the suite stays agnostic to whenever cron actually fires. A 1-minute
+	// 23:59-00:00 window is deliberately NOT used here: the 1m schedule
+	// buffer would force a phantom hibernation inside the 00:00-00:01 end
+	// grace.
+	pastStart := time.Now().UTC().Add(-2 * time.Hour).Truncate(time.Minute)
+	pastEnd := pastStart.Add(10 * time.Minute)
+	dayOf := func(tm time.Time) string { return strings.ToUpper(tm.Format("Mon")) }
+	pastDays := []string{dayOf(pastStart)}
+	if d := dayOf(pastEnd); d != pastDays[0] {
+		pastDays = append(pastDays, d)
+	}
 	createSchedulePlan(t, ctx, c, ns, provider.Name, "fullday-active", "sched-active",
 		[]hibernatorv1alpha1.OffHourWindow{{
-			Start: "12:00", End: "12:10", DaysOfWeek: []string{today},
+			Start: pastStart.Format("15:04"), End: pastEnd.Format("15:04"), DaysOfWeek: pastDays,
 		}})
 	activeKey := client.ObjectKey{Namespace: ns, Name: "fullday-active"}
 	suite.PollPhaseAtLeast(t, c, cs, activeKey, hibernatorv1alpha1.PhaseActive, 2*time.Minute)
@@ -210,7 +222,7 @@ func TestNoopScheduleCycle(t *testing.T) {
 	suite.PollPhaseAtLeast(t, c, cs, key, hibernatorv1alpha1.PhaseActive, 3*time.Minute)
 	suite.ScnAssertRestoreConsumed(t, c, ns, "schedule-cycle", []string{"noop"})
 
-	// Midnight steady-state: neither full-day plan may have flapped. The
+	// Steady-state: neither full-day plan may have flapped. The
 	// NoJobs asserts cover the whole run, so any boundary dispatch (e.g. a
 	// phantom wakeup of the hibernated plan, or any Job for the active
 	// plan) fails here even if phases settled back.
@@ -228,29 +240,32 @@ func TestNoopScheduleCycle(t *testing.T) {
 }
 
 // resolveScheduleWindow returns the hibernation window for the schedule-cycle
-// test. KIND_SCHEDULE_START/END ("15:04" UTC) pin absolute anchors for the
-// nightly run (e.g. 23:55-00:05 across midnight); when both are unset, a
-// relative window is used for ad-hoc local runs. Anchored runs fail fast
-// when setup finished too close to the start edge: plans must exist before
-// the hibernate edge fires, otherwise the cycle is unobservable and every
-// subsequent poll would fail with a misleading timeout.
+// test. The window is always relative to now: the hibernate edge lands ~3
+// min out (room to create all four plans before it fires, otherwise the
+// cycle is unobservable and every subsequent poll would fail with a
+// misleading timeout) and the wakeup edge follows a fixed 5 min later. The
+// fixed gap is deliberate: the noop executor finishes in seconds, so 5 min
+// guarantees hibernate has fully settled into Hibernated before the wakeup
+// edge fires, with no race between the two transitions.
+//
+// Total wall-clock is bounded: ~3 min lead + 5 min hibernated + a few
+// minutes of Job/phase asserts, comfortably inside the 30 min job timeout
+// no matter when cron actually fires. Legacy KIND_SCHEDULE_START/END
+// anchors are deliberately ignored (logged when set so stale workflow env
+// is visible): GitHub `schedule` triggers are best-effort and never
+// guaranteed to fire at an exact minute, so absolute anchors made the
+// nightly flaky by design.
 func resolveScheduleWindow(t *testing.T) suite.ScheduleWindow {
 	t.Helper()
-	startEnv, endEnv := os.Getenv("KIND_SCHEDULE_START"), os.Getenv("KIND_SCHEDULE_END")
-	if startEnv == "" && endEnv == "" {
-		return suite.HibernationWindowAt(time.Now(), 3*time.Minute, 8*time.Minute)
+	if startEnv, endEnv := os.Getenv("KIND_SCHEDULE_START"), os.Getenv("KIND_SCHEDULE_END"); startEnv != "" || endEnv != "" {
+		t.Logf("ignoring legacy KIND_SCHEDULE_START/END anchors (%q/%q): window is always relative to now", startEnv, endEnv)
 	}
-	if startEnv == "" || endEnv == "" {
-		t.Fatalf("KIND_SCHEDULE_START and KIND_SCHEDULE_END must be set together (got %q/%q)", startEnv, endEnv)
-	}
-	window, err := suite.FixedScheduleWindow(time.Now(), startEnv, endEnv)
-	require.NoError(t, err, "invalid fixed schedule anchors")
-	const minSetupLead = 90 * time.Second
-	if lead := time.Until(window.StartAt); lead < minSetupLead {
-		t.Fatalf("fixed window start %s is %s away (need >=%s): setup overran the nightly budget or cron fired late",
-			window.StartAt.Format(time.RFC3339), lead.Round(time.Second), minSetupLead)
-	}
-	t.Logf("fixed schedule window %s-%s days=%v (start %s)", window.Start, window.End, window.Days, window.StartAt.Format(time.RFC3339))
+	const lead = 3 * time.Minute
+	const length = 5 * time.Minute
+	window := suite.HibernationWindowAt(time.Now(), lead, length)
+	t.Logf("relative schedule window %s-%s days=%v (hibernate %s, wakeup %s, length %s)",
+		window.Start, window.End, window.Days,
+		window.StartAt.Format(time.RFC3339), window.EndAt.Format(time.RFC3339), length)
 	return window
 }
 
