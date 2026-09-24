@@ -15,38 +15,18 @@ import (
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
+	"k8s.io/client-go/util/retry"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 )
 
 // Save persists restore data for a target.
+//
+// Parallel hibernate runners save distinct target keys on the same shared
+// ConfigMap. The merge patch keeps each save to its own key, and
+// RetryOnConflict re-reads on collision so no save is lost. Re-running is
+// idempotent (identical payload), and the size validation stays outside the
+// retry loop.
 func (m *Manager) Save(ctx context.Context, namespace, planName, targetName string, data *Data) error {
-	cmName := configMapName(planName)
-
-	// Get or create the ConfigMap
-	cm := &corev1.ConfigMap{}
-	err := m.client.Get(ctx, types.NamespacedName{
-		Namespace: namespace,
-		Name:      cmName,
-	}, cm)
-
-	if apierrors.IsNotFound(err) {
-		// Create new ConfigMap
-		cm = &corev1.ConfigMap{
-			ObjectMeta: metav1.ObjectMeta{
-				Name:      cmName,
-				Namespace: namespace,
-				Labels: map[string]string{
-					wellknown.LabelPlan: planName,
-				},
-			},
-			Data: make(map[string]string),
-		}
-	} else if err != nil {
-		return fmt.Errorf("get restore configmap: %w", err)
-	}
-
-	patch := client.MergeFrom(cm.DeepCopy())
-
 	// Serialize data
 	dataBytes, err := json.Marshal(data)
 	if err != nil {
@@ -58,18 +38,47 @@ func (m *Manager) Save(ctx context.Context, namespace, planName, targetName stri
 		return fmt.Errorf("restore data too large (%d bytes), max %d", len(dataBytes), MaxConfigMapSize)
 	}
 
-	// Store with target-specific key
-	key := fmt.Sprintf("%s.json", targetName)
-	if cm.Data == nil {
-		cm.Data = make(map[string]string)
-	}
-	cm.Data[key] = string(dataBytes)
+	cmName := configMapName(planName)
 
-	if cm.ResourceVersion == "" {
-		return m.client.Create(ctx, cm)
-	}
+	return retry.RetryOnConflict(retry.DefaultBackoff, func() error {
+		// Get or create the ConfigMap
+		cm := &corev1.ConfigMap{}
+		err := m.client.Get(ctx, types.NamespacedName{
+			Namespace: namespace,
+			Name:      cmName,
+		}, cm)
 
-	return m.client.Patch(ctx, cm, patch)
+		if apierrors.IsNotFound(err) {
+			// Create new ConfigMap
+			cm = &corev1.ConfigMap{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:      cmName,
+					Namespace: namespace,
+					Labels: map[string]string{
+						wellknown.LabelPlan: planName,
+					},
+				},
+				Data: make(map[string]string),
+			}
+		} else if err != nil {
+			return fmt.Errorf("get restore configmap: %w", err)
+		}
+
+		patch := client.MergeFrom(cm.DeepCopy())
+
+		// Store with target-specific key
+		key := fmt.Sprintf("%s.json", targetName)
+		if cm.Data == nil {
+			cm.Data = make(map[string]string)
+		}
+		cm.Data[key] = string(dataBytes)
+
+		if cm.ResourceVersion == "" {
+			return m.client.Create(ctx, cm)
+		}
+
+		return m.client.Patch(ctx, cm, patch)
+	})
 }
 
 // SaveState saves the reported state from the current shutdown cycle and performs

@@ -16,6 +16,7 @@ import (
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
+	"k8s.io/client-go/util/retry"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 )
 
@@ -217,44 +218,54 @@ func isDemandedState(state map[string]any) bool {
 
 // MarkTargetRestored marks a target as successfully restored.
 // Sets annotation: hibernator.ardikabs.com/restored-{targetName}: "true"
+//
+// Concurrent wakeup runners (Parallel/DAG strategies) mark distinct targets on
+// the same shared ConfigMap. A merge patch keeps each mark to its disjoint
+// annotation/data keys, and RetryOnConflict re-reads on collision so no mark
+// is silently lost — a lost mark blocks MarkAllTargetsRestored forever and
+// leaves restore data locked.
 func (m *Manager) MarkTargetRestored(ctx context.Context, namespace, planName, targetName string) error {
 	cmName := configMapName(planName)
 
-	var cm corev1.ConfigMap
-	err := m.client.Get(ctx, types.NamespacedName{
-		Namespace: namespace,
-		Name:      cmName,
-	}, &cm)
+	return retry.RetryOnConflict(retry.DefaultBackoff, func() error {
+		var cm corev1.ConfigMap
+		err := m.client.Get(ctx, types.NamespacedName{
+			Namespace: namespace,
+			Name:      cmName,
+		}, &cm)
 
-	if apierrors.IsNotFound(err) {
-		// ConfigMap doesn't exist - nothing to mark
-		return nil
-	}
-	if err != nil {
-		return fmt.Errorf("get restore configmap: %w", err)
-	}
+		if apierrors.IsNotFound(err) {
+			// ConfigMap doesn't exist - nothing to mark
+			return nil
+		}
+		if err != nil {
+			return fmt.Errorf("get restore configmap: %w", err)
+		}
 
-	// Set annotation
-	if cm.Annotations == nil {
-		cm.Annotations = make(map[string]string)
-	}
-	annotationKey := wellknown.AnnotationRestoredPrefix + targetName
-	cm.Annotations[annotationKey] = "true"
+		base := cm.DeepCopy()
 
-	// Reset IsLive flag and clear CycleID for this target's data after successful restore
-	key := fmt.Sprintf("%s.json", targetName)
-	if val, ok := cm.Data[key]; ok {
-		var data Data
-		if err := json.Unmarshal([]byte(val), &data); err == nil {
-			// Mark data as consumed - next hibernation should capture fresh live state
-			data.IsLive = false
-			if dataBytes, err := json.Marshal(&data); err == nil {
-				cm.Data[key] = string(dataBytes)
+		// Set annotation
+		if cm.Annotations == nil {
+			cm.Annotations = make(map[string]string)
+		}
+		annotationKey := wellknown.AnnotationRestoredPrefix + targetName
+		cm.Annotations[annotationKey] = "true"
+
+		// Reset IsLive flag and clear CycleID for this target's data after successful restore
+		key := fmt.Sprintf("%s.json", targetName)
+		if val, ok := cm.Data[key]; ok {
+			var data Data
+			if err := json.Unmarshal([]byte(val), &data); err == nil {
+				// Mark data as consumed - next hibernation should capture fresh live state
+				data.IsLive = false
+				if dataBytes, err := json.Marshal(&data); err == nil {
+					cm.Data[key] = string(dataBytes)
+				}
 			}
 		}
-	}
 
-	return m.client.Update(ctx, &cm)
+		return m.client.Patch(ctx, &cm, client.MergeFrom(base))
+	})
 }
 
 // MarkAllTargetsRestored checks if all targets have been restored.
@@ -288,48 +299,55 @@ func (m *Manager) MarkAllTargetsRestored(ctx context.Context, namespace, planNam
 
 // UnlockRestoreData clears all restored-* annotations and resets CycleID for all targets.
 // This unlocks the restore data for the next hibernation cycle.
+//
+// RetryOnConflict guards the race with late runner marks landing mid-unlock on
+// the same shared ConfigMap (see MarkTargetRestored).
 func (m *Manager) UnlockRestoreData(ctx context.Context, namespace, planName string) error {
 	cmName := configMapName(planName)
 
-	cm := &corev1.ConfigMap{}
-	err := m.client.Get(ctx, types.NamespacedName{
-		Namespace: namespace,
-		Name:      cmName,
-	}, cm)
+	return retry.RetryOnConflict(retry.DefaultBackoff, func() error {
+		cm := &corev1.ConfigMap{}
+		err := m.client.Get(ctx, types.NamespacedName{
+			Namespace: namespace,
+			Name:      cmName,
+		}, cm)
 
-	if apierrors.IsNotFound(err) {
-		// No ConfigMap to unlock
-		return nil
-	}
-	if err != nil {
-		return fmt.Errorf("get restore configmap: %w", err)
-	}
+		if apierrors.IsNotFound(err) {
+			// No ConfigMap to unlock
+			return nil
+		}
+		if err != nil {
+			return fmt.Errorf("get restore configmap: %w", err)
+		}
 
-	// Remove all restored-* annotations
-	if cm.Annotations != nil {
-		for key := range cm.Annotations {
-			if len(key) > len(wellknown.AnnotationRestoredPrefix) && key[:len(wellknown.AnnotationRestoredPrefix)] == wellknown.AnnotationRestoredPrefix {
-				delete(cm.Annotations, key)
+		base := cm.DeepCopy()
+
+		// Remove all restored-* annotations
+		if cm.Annotations != nil {
+			for key := range cm.Annotations {
+				if len(key) > len(wellknown.AnnotationRestoredPrefix) && key[:len(wellknown.AnnotationRestoredPrefix)] == wellknown.AnnotationRestoredPrefix {
+					delete(cm.Annotations, key)
+				}
 			}
 		}
-	}
 
-	// Clear CycleID from all target data to mark restoration as complete
-	for key, val := range cm.Data {
-		var data Data
-		if err := json.Unmarshal([]byte(val), &data); err == nil && data.CycleID != "" {
-			m.log.V(1).Info("clearing CycleID after successful restoration",
-				"target", data.Target,
-				"clearedCycleID", data.CycleID,
-			)
-			data.CycleID = ""
-			if dataBytes, err := json.Marshal(&data); err == nil {
-				cm.Data[key] = string(dataBytes)
+		// Clear CycleID from all target data to mark restoration as complete
+		for key, val := range cm.Data {
+			var data Data
+			if err := json.Unmarshal([]byte(val), &data); err == nil && data.CycleID != "" {
+				m.log.V(1).Info("clearing CycleID after successful restoration",
+					"target", data.Target,
+					"clearedCycleID", data.CycleID,
+				)
+				data.CycleID = ""
+				if dataBytes, err := json.Marshal(&data); err == nil {
+					cm.Data[key] = string(dataBytes)
+				}
 			}
 		}
-	}
 
-	return m.client.Update(ctx, cm)
+		return m.client.Patch(ctx, cm, client.MergeFrom(base))
+	})
 }
 
 // HasRestoreData checks if restore ConfigMap exists for the plan, and at least have eligible restore point,

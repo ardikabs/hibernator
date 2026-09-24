@@ -23,6 +23,7 @@ import (
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/labels"
 	"k8s.io/apimachinery/pkg/runtime/schema"
+	"k8s.io/client-go/util/retry"
 
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 )
@@ -430,10 +431,43 @@ func (e *Executor) scaleDownWorkloads(ctx context.Context,
 	for _, item := range list.Items {
 		stats.processed++
 
-		// Get the scale subresource for this workload
-		scaleObj, err := client.GetScale(ctx, gvr, namespace, item.GetName())
-		if err != nil {
-			if apierrors.IsNotFound(err) {
+		// Optimistic read-modify-write: HPA or overlapping writers may bump
+		// resourceVersion between GetScale and UpdateScale. Re-read fresh and
+		// re-apply on Conflict; Get errors keep their existing skip semantics
+		// and never trigger retries.
+		var (
+			replicas int64
+			found    bool
+			getErr   error
+		)
+		err := retry.RetryOnConflict(retry.DefaultBackoff, func() error {
+			// Get the scale subresource for this workload
+			scaleObj, err := client.GetScale(ctx, gvr, namespace, item.GetName())
+			if err != nil {
+				getErr = err
+				return nil
+			}
+
+			// Get current replica count from scale.spec.replicas
+			replicas, found, err = unstructured.NestedInt64(scaleObj.Object, "spec", "replicas")
+			if err != nil {
+				return fmt.Errorf("get replicas from scale for %s/%s: %w", item.GetKind(), item.GetName(), err)
+			}
+			if !found {
+				return nil
+			}
+
+			// Scale to zero by updating scale.spec.replicas
+			if err := unstructured.SetNestedField(scaleObj.Object, int64(0), "spec", "replicas"); err != nil {
+				return fmt.Errorf("set replicas to zero in scale for %s/%s: %w", item.GetKind(), item.GetName(), err)
+			}
+
+			// Update the scale subresource
+			_, err = client.UpdateScale(ctx, gvr, namespace, scaleObj)
+			return err
+		})
+		if getErr != nil {
+			if apierrors.IsNotFound(getErr) {
 				stats.skippedStale++
 				log.Info("resource does not support the scale subresource, skipping", "name", item.GetName(), "namespace", namespace, "resource", gvr.String())
 			} else {
@@ -442,11 +476,16 @@ func (e *Executor) scaleDownWorkloads(ctx context.Context,
 
 			continue
 		}
-
-		// Get current replica count from scale.spec.replicas
-		replicas, found, err := unstructured.NestedInt64(scaleObj.Object, "spec", "replicas")
 		if err != nil {
-			return operationStats{}, fmt.Errorf("get replicas from scale for %s/%s: %w", item.GetKind(), item.GetName(), err)
+			if apierrors.IsNotFound(err) {
+				stats.skippedStale++
+				log.Info("resource not found, skipping", "namespace", namespace, "name", item.GetName(), "kind", item.GetKind())
+
+				// Skip resources that no longer exist
+				continue
+			}
+
+			return operationStats{}, fmt.Errorf("update scale for %s/%s: %w", item.GetKind(), item.GetName(), err)
 		}
 
 		// Store current state with key = namespace/kind/name
@@ -466,25 +505,6 @@ func (e *Executor) scaleDownWorkloads(ctx context.Context,
 
 		// Scale to zero only if not already at zero
 		if found {
-			// Scale to zero by updating scale.spec.replicas
-			if err := unstructured.SetNestedField(scaleObj.Object, int64(0), "spec", "replicas"); err != nil {
-				return operationStats{}, fmt.Errorf("set replicas to zero in scale for %s/%s: %w", item.GetKind(), item.GetName(), err)
-			}
-
-			// Update the scale subresource
-			_, err = client.UpdateScale(ctx, gvr, namespace, scaleObj)
-			if err != nil {
-				if apierrors.IsNotFound(err) {
-					stats.skippedStale++
-					log.Info("resource not found, skipping", "namespace", namespace, "name", item.GetName(), "kind", item.GetKind())
-
-					// Skip resources that no longer exist
-					continue
-				}
-
-				return operationStats{}, fmt.Errorf("update scale for %s/%s: %w", item.GetKind(), item.GetName(), err)
-			}
-
 			stats.applied++
 
 			// Add to waiting list if awaitCompletion is configured
@@ -529,24 +549,35 @@ func (e *Executor) restoreWorkload(ctx context.Context, log logr.Logger, client 
 		"replicas", state.Replicas,
 	)
 
-	// Get the scale subresource
-	scaleObj, err := client.GetScale(ctx, gvr, state.Namespace, state.Name)
-	if err != nil {
-		if apierrors.IsNotFound(err) {
+	// Optimistic read-modify-write: re-read fresh and re-apply on Conflict
+	// (see scaleDownWorkloads). Get errors keep their existing skip semantics
+	// and never trigger retries.
+	var getErr error
+	err := retry.RetryOnConflict(retry.DefaultBackoff, func() error {
+		// Get the scale subresource
+		scaleObj, err := client.GetScale(ctx, gvr, state.Namespace, state.Name)
+		if err != nil {
+			getErr = err
+			return nil
+		}
+
+		// Update scale.spec.replicas to restore previous count
+		if err := unstructured.SetNestedField(scaleObj.Object, int64(state.Replicas), "spec", "replicas"); err != nil {
+			return fmt.Errorf("set replicas in scale: %w", err)
+		}
+
+		// Update the scale subresource
+		_, err = client.UpdateScale(ctx, gvr, state.Namespace, scaleObj)
+		return err
+	})
+	if getErr != nil {
+		if apierrors.IsNotFound(getErr) {
 			log.Info("resource not found, skipping", "namespace", state.Namespace, "name", state.Name, "kind", state.Kind)
 			return operationOutcomeSkippedStale, nil
 		}
 
-		return "", fmt.Errorf("get scale subresource: %w", err)
+		return "", fmt.Errorf("get scale subresource: %w", getErr)
 	}
-
-	// Update scale.spec.replicas to restore previous count
-	if err := unstructured.SetNestedField(scaleObj.Object, int64(state.Replicas), "spec", "replicas"); err != nil {
-		return "", fmt.Errorf("set replicas in scale: %w", err)
-	}
-
-	// Update the scale subresource
-	_, err = client.UpdateScale(ctx, gvr, state.Namespace, scaleObj)
 	if err != nil {
 		if apierrors.IsNotFound(err) {
 			log.Info("resource not found, skipping", "namespace", state.Namespace, "name", state.Name, "kind", state.Kind)
