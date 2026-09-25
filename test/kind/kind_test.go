@@ -108,8 +108,9 @@ func TestMain(m *testing.M) {
 //
 // Four plans share one namespace: a normal schedule transitioning both
 // ways on the resolved window, a full-day hibernation holding Hibernated,
-// a weekday-only window proving no-weekend-cycling at night, and a
-// full-day-active plan asserting zero Jobs.
+// a day-aware parking hold proving steady Hibernated on every calendar day
+// (see resolveParkingWindow), and a full-day-active plan asserting zero
+// Jobs.
 func TestNoopScheduleCycle(t *testing.T) {
 	if os.Getenv("RUN_KIND_SCHEDULE") != "1" {
 		t.Skip("set RUN_KIND_SCHEDULE=1 for the real wall-clock schedule cycle")
@@ -170,19 +171,21 @@ func TestNoopScheduleCycle(t *testing.T) {
 	suite.PollPhaseAtLeast(t, c, cs, fullHibernateKey, hibernatorv1alpha1.PhaseHibernated, time.Until(window.StartAt)+5*time.Minute)
 	suite.PollJobComplete(t, c, cs, fullHibernateKey, hibernatorv1alpha1.OperationHibernate, "noop", 8*time.Minute)
 
-	// Weekday parking across midnight: a MON-FRI 20:00-06:00 UTC window is
-	// hibernate-desired at creation on every night of the week (in-window
-	// on weeknights, parked across the weekend since Friday 20:00 beats
-	// Friday 06:00 with no Saturday edge). It must hibernate promptly and
-	// never wake: weekend runs prove no-weekend-cycling live, weeknight
-	// runs prove off-hours hibernation.
-	createSchedulePlan(t, ctx, c, ns, provider.Name, "weekend-parking", "sched-park",
-		[]hibernatorv1alpha1.OffHourWindow{{
-			Start: "20:00", End: "06:00",
-			DaysOfWeek: []string{"MON", "TUE", "WED", "THU", "FRI"},
-		}})
-	parkingKey := client.ObjectKey{Namespace: ns, Name: "weekend-parking"}
-	suite.PollPhaseAtLeast(t, c, cs, parkingKey, hibernatorv1alpha1.PhaseHibernated, time.Until(window.StartAt)+5*time.Minute)
+	// Day-aware parking hold: the suite runs every 6h (`55 */6 * * *`), so
+	// it fires on weekday daytimes, weeknights, and weekends alike. A
+	// static MON-FRI 20:00-06:00 window is only hibernate-desired at night
+	// and on weekends (on a weekday daytime the last 06:00 wakeup beats
+	// the previous 20:00 hibernation, so the plan is legitimately Active
+	// and a Hibernated assert fails with a misleading "weekend-parking"
+	// message). resolveParkingWindow therefore picks the window — and the
+	// plan name — from the calendar day and time the test is running on,
+	// so the plan is always hibernate-desired at creation and the failure
+	// message always names the scenario that actually ran.
+	parkingName, parkingMarker, parkingWindows, parkingReason := resolveParkingWindow(t, time.Now())
+	t.Logf("parking plan %q reason: %s windows=%v", parkingName, parkingReason, parkingWindows)
+	createSchedulePlan(t, ctx, c, ns, provider.Name, parkingName, parkingMarker, parkingWindows)
+	parkingKey := client.ObjectKey{Namespace: ns, Name: parkingName}
+	suite.PollPhaseAtLeast(t, c, cs, parkingKey, hibernatorv1alpha1.PhaseHibernated, 8*time.Minute)
 	suite.PollJobComplete(t, c, cs, parkingKey, hibernatorv1alpha1.OperationHibernate, "noop", 8*time.Minute)
 
 	// Full-day active: a window that ended well before the test has no
@@ -231,12 +234,78 @@ func TestNoopScheduleCycle(t *testing.T) {
 	suite.ScnAssertNoJobs(t, c, ns, "fullday-hibernate", hibernatorv1alpha1.OperationWakeUp, "noop")
 
 	suite.PollPhaseAtLeast(t, c, cs, parkingKey, hibernatorv1alpha1.PhaseHibernated, 2*time.Minute)
-	suite.ScnAssertRestoreMarkers(t, c, ns, "weekend-parking", map[string]string{"noop": "sched-park"})
-	suite.ScnAssertNoJobs(t, c, ns, "weekend-parking", hibernatorv1alpha1.OperationWakeUp, "noop")
+	suite.ScnAssertRestoreMarkers(t, c, ns, parkingName, map[string]string{"noop": parkingMarker})
+	suite.ScnAssertNoJobs(t, c, ns, parkingName, hibernatorv1alpha1.OperationWakeUp, "noop")
 
 	suite.PollPhaseAtLeast(t, c, cs, activeKey, hibernatorv1alpha1.PhaseActive, 2*time.Minute)
 	suite.ScnAssertNoJobs(t, c, ns, "fullday-active", hibernatorv1alpha1.OperationHibernate, "noop")
 	suite.ScnAssertNoJobs(t, c, ns, "fullday-active", hibernatorv1alpha1.OperationWakeUp, "noop")
+}
+
+// utcDayName returns the UTC three-letter day name (MON..SUN) for tm,
+// matching the DaysOfWeek convention used by OffHourWindow.
+func utcDayName(tm time.Time) string {
+	return strings.ToUpper(tm.UTC().Format("Mon"))
+}
+
+// resolveParkingWindow picks the parking-hold plan from the calendar day
+// and time the test is running on, so the plan is hibernate-desired at
+// creation no matter which of the 6-hourly cron slots fired.
+//
+//   - Weekend (Sat/Sun): "weekend-parking" with the classic MON-FRI
+//     20:00-06:00 UTC window. Parked since Friday 20:00 (no Saturday
+//     wakeup edge exists), it proves no-weekend-cycling live.
+//   - Weeknight (Mon-Fri 20:00-06:00): "weeknight-parking" with the same
+//     window, in-window at creation, proving off-hours hibernation.
+//   - Weekday daytime (Mon-Fri 06:00-20:00): "daytime-parking" with a
+//     relative hold window (hibernate edge 2h ago, wakeup edge 8h later,
+//     days covering both endpoints). The overnight window would
+//     legitimately evaluate to Active here, so a static window would fail
+//     by design; the relative hold instead proves a steady Hibernated
+//     hold through the whole run on every weekday.
+//
+// Slot-to-branch mapping for the `55 */6 * * *` cadence (nominal 00:55,
+// 06:55, 12:55, 18:55 UTC; GitHub fires best-effort so the branching keys
+// off the actual clock, not the slot): 00:55 exercises weeknight (or
+// weekend), while 06:55/12:55/18:55 exercise daytime-hold (or weekend).
+// Weekly that yields ~5 weeknight + ~15 daytime + ~8 weekend proofs, so a
+// delayed or skipped slot never loses a scenario. The :55 minute offset
+// is deliberate: every window edge in this suite sits on the hour or
+// :59 with ~1m grace, and runs last ~15m, so :55 keeps 55m clearance
+// from all edges in both directions.
+//
+// The returned reason is logged by the caller so a failure message always
+// carries the scenario that actually ran.
+func resolveParkingWindow(t *testing.T, now time.Time) (planName, marker string, windows []hibernatorv1alpha1.OffHourWindow, reason string) {
+	t.Helper()
+	now = now.UTC()
+	overnight := []hibernatorv1alpha1.OffHourWindow{{
+		Start: "20:00", End: "06:00",
+		DaysOfWeek: []string{"MON", "TUE", "WED", "THU", "FRI"},
+	}}
+	switch now.Weekday() {
+	case time.Saturday, time.Sunday:
+		return "weekend-parking", "sched-park-weekend", overnight,
+			"weekend run: parked since Friday 20:00 UTC with no Saturday wakeup edge"
+	default:
+		hm := now.Hour()*60 + now.Minute()
+		if hm >= 20*60 || hm < 6*60 {
+			return "weeknight-parking", "sched-park-weeknight", overnight,
+				"weeknight run: inside the MON-FRI 20:00-06:00 UTC off-hours window"
+		}
+		// Weekday daytime: relative hold window already in effect.
+		start := now.Add(-2 * time.Hour).Truncate(time.Minute)
+		end := start.Add(8 * time.Hour)
+		days := []string{utcDayName(start)}
+		if d := utcDayName(end); d != days[0] {
+			days = append(days, d)
+		}
+		return "daytime-parking", "sched-park-daytime",
+			[]hibernatorv1alpha1.OffHourWindow{{
+				Start: start.Format("15:04"), End: end.Format("15:04"), DaysOfWeek: days,
+			}},
+			"weekday daytime run: overnight window would be Active, using relative hold window"
+	}
 }
 
 // resolveScheduleWindow returns the hibernation window for the schedule-cycle

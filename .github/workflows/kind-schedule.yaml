@@ -12,9 +12,23 @@ name: Kind Schedule E2E
 # from any branch via workflow_dispatch.
 on:
   schedule:
+    # Every 6h at :55 UTC (00:55, 06:55, 12:55, 18:55). The 6h period
+    # divides 24h evenly so each slot deterministically exercises one
+    # parking branch (00:55: weeknight/weekend, others: daytime/weekend;
+    # see resolveParkingWindow). The :55 offset is deliberate: every
+    # window edge in the suite sits on the hour or :59 with ~1m grace and
+    # runs last ~15m, so :55 keeps 55m clearance from all edges. Do not
+    # "tidy" this to :00.
     - cron: '55 */6 * * *'
 
   workflow_dispatch:
+
+# A GitHub scheduling backlog (e.g. after an outage) must serialize, not
+# stack kind clusters: runs are isolated by unique cluster names so overlap
+# is harmless, but serial is cheaper.
+concurrency:
+  group: kind-schedule
+  cancel-in-progress: false
 
 jobs:
   kind-schedule:
@@ -37,7 +51,7 @@ jobs:
 
       # Full suite: override-driven scenarios plus the wall-clock
       # TestNoopScheduleCycle 4-plan matrix with a relative window
-      # (normal cycle, full-day hibernation, weekday parking,
+      # (normal cycle, full-day hibernation, day-aware parking hold,
       # full-day active).
       - name: Run Kind Schedule E2E Tests
         run: make test-kind-schedule
