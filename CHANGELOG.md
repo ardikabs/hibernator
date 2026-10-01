@@ -1,3 +1,16 @@
+<a name="v1.7.0-rc.4"></a>
+
+## [v1.7.0-rc.4](https://github.com/ardikabs/hibernator/compare/v1.7.0-rc.3...v1.7.0-rc.4) (2026-10-01)
+
+### ✨ Features
+
+* subcommand for exception ([#203](https://github.com/ardikabs/hibernator/issues/203))
+
+### 🐛 Bug Fixes
+
+* intermittent e2e test Kind ([#200](https://github.com/ardikabs/hibernator/issues/200))
+
+
 <a name="v1.7.0-rc.3"></a>
 
 ## [v1.7.0-rc.3](https://github.com/ardikabs/hibernator/compare/v1.7.0-rc.2...v1.7.0-rc.3) (2026-09-23)
