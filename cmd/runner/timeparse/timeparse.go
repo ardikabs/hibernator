@@ -32,6 +32,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/samber/lo"
 	"github.com/tj/go-naturaldate"
 )
 
@@ -73,7 +74,7 @@ func ParseDeadline(input string, now time.Time) (time.Time, error) {
 	return time.Time{}, fmt.Errorf(
 		"unrecognized time format: %q\n\n"+
 			"Supported formats:\n"+
-			"  Relative:    'in 30 minutes', 'in 2 hours', 'tomorrow at 6am'\n"+
+			"  Relative:    'now', 'in 30 minutes', 'in 2 hours', 'tomorrow at 6am'\n"+
 			"  Date:        '2026-01-15', 'Jan 15, 2026'\n"+
 			"  Date+Time:   '2026-01-15 14:30', 'Jan 15, 2026 14:30'\n"+
 			"  RFC3339:     '2026-01-15T14:30:00Z'",
@@ -88,26 +89,35 @@ func parseNaturalLanguage(input string, now time.Time) (time.Time, bool) {
 
 	// Handle "in X minutes/hours/days"
 	if strings.HasPrefix(input, "in ") {
-		return parseInDuration(input, now)
+		if result, ok := parseInDuration(input, now); ok {
+			return result, ok
+		}
 	}
 
 	// Handle "tomorrow" variants
 	if strings.HasPrefix(input, "tomorrow") {
-		return parseTomorrow(input, now)
+		if result, ok := parseTomorrow(input, now); ok {
+			return result, ok
+		}
 	}
 
 	// Handle "next " (next Monday, next week, etc.)
 	if strings.HasPrefix(input, "next ") {
-		return parseNext(input, now)
+		if result, ok := parseNext(input, now); ok {
+			return result, ok
+		}
 	}
 
+	input = lo.Ternary(input == "today", "now", input)
 	if result, err := naturaldate.Parse(input, now, naturaldate.WithDirection(naturaldate.Future)); err == nil {
-		// The grammar is lenient: inputs it cannot anchor to any time
-		// expression resolve to the reference time itself. A deadline of
-		// "now" is meaningless (it would expire immediately), so treat a
-		// result indistinguishable from now as unrecognized and let the
-		// stricter tiers — or the final error — decide.
-		if result.Sub(now) < time.Second {
+		// Guardrail: the naturaldate grammar is lenient — any input it cannot
+		// anchor to a time expression resolves to the reference time itself,
+		// so without this check an unformatted string ("RANDOM STRING") would
+		// silently parse as "right now" instead of failing.
+		// Only inputs that explicitly name the present ("now", including the "today" alias
+		// rewritten above) may resolve to (near-)now; anything else landing here carries
+		// no time semantics and is left for the stricter tiers or the final error.
+		if result.Sub(now) < time.Second && input != "now" {
 			return time.Time{}, false
 		}
 		return result, true
@@ -352,7 +362,7 @@ func validateDeadline(t, now time.Time) (time.Time, error) {
 
 	// Check if deadline is in the past
 	if t.Before(now.UTC()) {
-		return time.Time{}, fmt.Errorf("deadline %s is in the past", t.Format(time.RFC3339))
+		return time.Time{}, fmt.Errorf("deadline %s is in the past; the selected date must be in the future, not in the past", t.Format(time.RFC3339))
 	}
 
 	return t, nil

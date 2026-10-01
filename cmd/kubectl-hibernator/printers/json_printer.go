@@ -37,6 +37,12 @@ func (p *JSONPrinter) PrintObj(obj interface{}, w io.Writer) error {
 		output = p.planToJSON(*v)
 	case *PlanListOutput:
 		output = p.planListToJSON(v)
+	case *ExceptionListOutput:
+		output = p.exceptionListToJSON(v)
+	case *ExceptionStatusOutput:
+		output = p.exceptionStatusToJSON(v)
+	case *ExceptionOperationOutput:
+		output = p.exceptionOperationToJSON(v)
 	case *ScheduleOutput:
 		output, err = p.scheduleToJSON(v)
 	case *StatusOutput:
@@ -66,6 +72,100 @@ func (p *JSONPrinter) PrintObj(obj interface{}, w io.Writer) error {
 	enc := json.NewEncoder(w)
 	enc.SetIndent("", "  ")
 	return enc.Encode(output)
+}
+
+func (p *JSONPrinter) exceptionListToJSON(out *ExceptionListOutput) ExceptionListJSON {
+	result := ExceptionListJSON{Items: make([]ExceptionListItemJSON, len(out.Items))}
+	for i, exception := range out.Items {
+		result.Items[i] = exceptionListItemToJSON(exception)
+	}
+	return result
+}
+
+func (p *JSONPrinter) exceptionStatusToJSON(out *ExceptionStatusOutput) ExceptionStatusJSON {
+	result := ExceptionStatusJSON{Items: make([]ExceptionStatusItemJSON, len(out.Items))}
+	for i, item := range out.Items {
+		exception := item.Exception
+		status := ExceptionStatusItemJSON{
+			Name:       exception.Name,
+			Namespace:  exception.Namespace,
+			Labels:     exception.Labels,
+			Plan:       exception.Spec.PlanRef.Name,
+			PlanPhase:  item.PlanPhase,
+			PlanExists: item.PlanExists,
+			Type:       exception.Spec.Type,
+			State:      exception.Status.State,
+			ValidFrom:  formatRFC3339UTC(exception.Spec.ValidFrom.Time),
+			ValidUntil: formatRFC3339UTC(exception.Spec.ValidUntil.Time),
+			Timing:     item.Timing,
+			Windows:    exceptionWindowsToJSON(exception.Spec.Windows),
+			CreatedAt:  formatRFC3339UTC(exception.CreationTimestamp.Time),
+			Message:    exception.Status.Message,
+		}
+		if exception.Status.AppliedAt != nil {
+			status.AppliedAt = formatRFC3339UTC(exception.Status.AppliedAt.Time)
+		}
+		if exception.Status.ExpiredAt != nil {
+			status.ExpiredAt = formatRFC3339UTC(exception.Status.ExpiredAt.Time)
+		}
+		if exception.Status.DetachedAt != nil {
+			status.DetachedAt = formatRFC3339UTC(exception.Status.DetachedAt.Time)
+		}
+		result.Items[i] = status
+	}
+	return result
+}
+
+func (p *JSONPrinter) exceptionOperationToJSON(out *ExceptionOperationOutput) ExceptionOperationJSON {
+	result := ExceptionOperationJSON{
+		Action: out.Action,
+		Items:  make([]ExceptionOperationResultJSON, len(out.Items)),
+	}
+	for i, item := range out.Items {
+		result.Items[i] = ExceptionOperationResultJSON{
+			Plan:    item.Plan,
+			Name:    item.Name,
+			Result:  item.Result,
+			Message: item.Message,
+		}
+	}
+	return result
+}
+
+func exceptionListItemToJSON(exception hibernatorv1alpha1.ScheduleException) ExceptionListItemJSON {
+	return ExceptionListItemJSON{
+		Name:       exception.Name,
+		Namespace:  exception.Namespace,
+		Labels:     exception.Labels,
+		Plan:       exception.Spec.PlanRef.Name,
+		Type:       exception.Spec.Type,
+		State:      exception.Status.State,
+		ValidFrom:  formatRFC3339UTC(exception.Spec.ValidFrom.Time),
+		ValidUntil: formatRFC3339UTC(exception.Spec.ValidUntil.Time),
+		Windows:    exceptionWindowsToJSON(exception.Spec.Windows),
+		CreatedAt:  formatRFC3339UTC(exception.CreationTimestamp.Time),
+	}
+}
+
+func exceptionWindowsToJSON(windows []hibernatorv1alpha1.OffHourWindow) []OffHourWindowJSON {
+	result := make([]OffHourWindowJSON, len(windows))
+	for i, window := range windows {
+		days := make([]string, len(window.DaysOfWeek))
+		copy(days, window.DaysOfWeek)
+		result[i] = OffHourWindowJSON{
+			Start:      window.Start,
+			End:        window.End,
+			DaysOfWeek: days,
+		}
+	}
+	return result
+}
+
+func formatRFC3339UTC(value time.Time) string {
+	if value.IsZero() {
+		return ""
+	}
+	return value.UTC().Format(time.RFC3339)
 }
 
 func (p *JSONPrinter) planToJSON(plan hibernatorv1alpha1.HibernatePlan) PlanJSON {
