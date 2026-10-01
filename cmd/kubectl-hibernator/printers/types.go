@@ -35,6 +35,39 @@ type StatusOutput struct {
 	Plan hibernatorv1alpha1.HibernatePlan
 }
 
+// ExceptionListOutput is a wrapper for printing ScheduleException lists.
+type ExceptionListOutput struct {
+	Items         []hibernatorv1alpha1.ScheduleException `json:"items"`
+	AllNamespaces bool                                   `json:"-"`
+}
+
+// ExceptionStatusItem enriches an exception with its referenced plan state.
+type ExceptionStatusItem struct {
+	Exception  hibernatorv1alpha1.ScheduleException `json:"exception"`
+	PlanPhase  string                               `json:"planPhase"`
+	Timing     string                               `json:"timing"`
+	PlanExists bool                                 `json:"planExists"`
+}
+
+// ExceptionStatusOutput is a wrapper for printing enriched exception status.
+type ExceptionStatusOutput struct {
+	Items []ExceptionStatusItem `json:"items"`
+}
+
+// ExceptionOperationResult represents one create or delete operation result.
+type ExceptionOperationResult struct {
+	Plan    string `json:"plan"`
+	Name    string `json:"name"`
+	Result  string `json:"result"`
+	Message string `json:"message"`
+}
+
+// ExceptionOperationOutput is a wrapper for bulk exception operation results.
+type ExceptionOperationOutput struct {
+	Action string                     `json:"action"`
+	Items  []ExceptionOperationResult `json:"items"`
+}
+
 // RestoreDetailOutput is a wrapper for printing restore resource details
 type RestoreDetailOutput struct {
 	Plan       string
@@ -191,6 +224,65 @@ type ExceptionReferenceJSON struct {
 	ValidUntil int64  `json:"validUntil"`
 	State      string `json:"state"`
 	AppliedAt  int64  `json:"appliedAt,omitempty"`
+}
+
+// ExceptionListItemJSON is the stable JSON representation of a listed exception.
+type ExceptionListItemJSON struct {
+	Name       string                            `json:"name"`
+	Namespace  string                            `json:"namespace"`
+	Labels     map[string]string                 `json:"labels,omitempty"`
+	Plan       string                            `json:"plan"`
+	Type       hibernatorv1alpha1.ExceptionType  `json:"type"`
+	State      hibernatorv1alpha1.ExceptionState `json:"state"`
+	ValidFrom  string                            `json:"validFrom"`
+	ValidUntil string                            `json:"validUntil"`
+	Windows    []OffHourWindowJSON               `json:"windows"`
+	CreatedAt  string                            `json:"createdAt"`
+}
+
+// ExceptionListJSON represents JSON output for an exception list.
+type ExceptionListJSON struct {
+	Items []ExceptionListItemJSON `json:"items"`
+}
+
+// ExceptionStatusItemJSON is the stable JSON representation of exception status.
+type ExceptionStatusItemJSON struct {
+	Name       string                            `json:"name"`
+	Namespace  string                            `json:"namespace"`
+	Labels     map[string]string                 `json:"labels,omitempty"`
+	Plan       string                            `json:"plan"`
+	PlanPhase  string                            `json:"planPhase"`
+	PlanExists bool                              `json:"planExists"`
+	Type       hibernatorv1alpha1.ExceptionType  `json:"type"`
+	State      hibernatorv1alpha1.ExceptionState `json:"state"`
+	ValidFrom  string                            `json:"validFrom"`
+	ValidUntil string                            `json:"validUntil"`
+	Timing     string                            `json:"timing"`
+	Windows    []OffHourWindowJSON               `json:"windows"`
+	CreatedAt  string                            `json:"createdAt"`
+	AppliedAt  string                            `json:"appliedAt,omitempty"`
+	ExpiredAt  string                            `json:"expiredAt,omitempty"`
+	DetachedAt string                            `json:"detachedAt,omitempty"`
+	Message    string                            `json:"message,omitempty"`
+}
+
+// ExceptionStatusJSON represents JSON output for enriched exception status.
+type ExceptionStatusJSON struct {
+	Items []ExceptionStatusItemJSON `json:"items"`
+}
+
+// ExceptionOperationResultJSON is the stable JSON representation of one operation result.
+type ExceptionOperationResultJSON struct {
+	Plan    string `json:"plan"`
+	Name    string `json:"name"`
+	Result  string `json:"result"`
+	Message string `json:"message"`
+}
+
+// ExceptionOperationJSON represents JSON output for a bulk exception operation.
+type ExceptionOperationJSON struct {
+	Action string                         `json:"action"`
+	Items  []ExceptionOperationResultJSON `json:"items"`
 }
 
 // ExecutionCycleJSON represents a single hibernation cycle in the execution history.

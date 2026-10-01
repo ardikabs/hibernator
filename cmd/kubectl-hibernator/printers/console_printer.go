@@ -50,6 +50,12 @@ func (p *ConsolePrinter) PrintObj(obj interface{}, w io.Writer) error {
 		return p.printSchedule(v, w)
 	case *PlanListOutput:
 		return p.printPlanListOutput(v, w)
+	case *ExceptionListOutput:
+		return p.printExceptionList(v, w)
+	case *ExceptionStatusOutput:
+		return p.printExceptionStatus(v, w)
+	case *ExceptionOperationOutput:
+		return p.printExceptionOperation(v, w)
 	case *RestoreDetailOutput:
 		return p.printRestoreDetail(v, w)
 	case *RestoreResourcesOutput:
@@ -63,6 +69,100 @@ func (p *ConsolePrinter) PrintObj(obj interface{}, w io.Writer) error {
 	default:
 		return fmt.Errorf("no human-readable printer registered for %T", obj)
 	}
+}
+
+func (p *ConsolePrinter) printExceptionList(out *ExceptionListOutput, w io.Writer) error {
+	tw := newTextWriter(w)
+	if out.AllNamespaces {
+		tw.header("Name", "Namespace", "Plan", "Type", "State", "Valid From", "Valid Until", "Age")
+	} else {
+		tw.header("Name", "Plan", "Type", "State", "Valid From", "Valid Until", "Age")
+	}
+
+	for _, exception := range out.Items {
+		row := []interface{}{exception.Name}
+		if out.AllNamespaces {
+			row = append(row, exception.Namespace)
+		}
+		row = append(row,
+			displayExceptionValue(exception.Spec.PlanRef.Name),
+			displayExceptionValue(string(exception.Spec.Type)),
+			displayExceptionValue(string(exception.Status.State)),
+			displayExceptionTime(exception.Spec.ValidFrom.Time),
+			displayExceptionTime(exception.Spec.ValidUntil.Time),
+			FormatAge(time.Since(exception.CreationTimestamp.Time)),
+		)
+		tw.row(row...)
+	}
+
+	return tw.flush()
+}
+
+func (p *ConsolePrinter) printExceptionStatus(out *ExceptionStatusOutput, w io.Writer) error {
+	tw := newTextWriter(w)
+	for i, item := range out.Items {
+		exception := item.Exception
+		planPhase := "unavailable"
+		if item.PlanExists {
+			planPhase = displayExceptionValue(item.PlanPhase)
+		}
+
+		tw.line("Name:        %s", displayExceptionValue(exception.Name))
+		tw.line("Namespace:   %s", displayExceptionValue(exception.Namespace))
+		tw.line("Plan:        %s", displayExceptionValue(exception.Spec.PlanRef.Name))
+		tw.line("Plan Phase:  %s", planPhase)
+		tw.line("Type:        %s", displayExceptionValue(string(exception.Spec.Type)))
+		tw.line("State:       %s", displayExceptionValue(string(exception.Status.State)))
+		tw.line("Valid From:  %s", displayExceptionTime(exception.Spec.ValidFrom.Time))
+		tw.line("Valid Until: %s", displayExceptionTime(exception.Spec.ValidUntil.Time))
+		tw.line("Timing:      %s", displayExceptionValue(item.Timing))
+		tw.line("Windows:")
+		if len(exception.Spec.Windows) == 0 {
+			tw.line("  (none)")
+		} else {
+			for _, window := range exception.Spec.Windows {
+				tw.line("  %s - %s [%s]", displayExceptionValue(window.Start), displayExceptionValue(window.End), displayExceptionValue(strings.Join(window.DaysOfWeek, ", ")))
+			}
+		}
+		if exception.Status.AppliedAt != nil {
+			tw.line("Applied At:  %s", displayExceptionTime(exception.Status.AppliedAt.Time))
+		}
+		if exception.Status.ExpiredAt != nil {
+			tw.line("Expired At:  %s", displayExceptionTime(exception.Status.ExpiredAt.Time))
+		}
+		if exception.Status.DetachedAt != nil {
+			tw.line("Detached At: %s", displayExceptionTime(exception.Status.DetachedAt.Time))
+		}
+		tw.line("Message:     %s", displayExceptionValue(exception.Status.Message))
+		if i < len(out.Items)-1 {
+			tw.newline()
+		}
+	}
+
+	return tw.flush()
+}
+
+func (p *ConsolePrinter) printExceptionOperation(out *ExceptionOperationOutput, w io.Writer) error {
+	tw := newTextWriter(w)
+	tw.header("Plan", "Exception", "Result", "Message")
+	for _, item := range out.Items {
+		tw.row(item.Plan, item.Name, item.Result, item.Message)
+	}
+	return tw.flush()
+}
+
+func displayExceptionValue(value string) string {
+	if value == "" {
+		return "-"
+	}
+	return value
+}
+
+func displayExceptionTime(value time.Time) string {
+	if value.IsZero() {
+		return "-"
+	}
+	return formatLocalTime(value)
 }
 
 // printPlanListOutput renders the tabular plan list for `kubectl-hibernator list`.

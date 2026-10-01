@@ -15,6 +15,9 @@ Licensed under the Apache License, Version 2.0.
 //   - Relative: "in 30 minutes", "in 2 hours", "in 1 day"
 //   - Tomorrow: "tomorrow", "tomorrow at 6am", "tomorrow at 14:30"
 //   - Weekdays: "next Monday", "next week"
+//   - Fallback: wider naturaldate grammar (e.g. "next month", "in two hours");
+//     whatever it anchors is accepted as-is, including dropped trailing
+//     qualifiers — keep inputs precise.
 //
 // Tier 2 - Simple Date/Time (local timezone):
 //   - Date only: "2026-01-15", "Jan 15, 2026"

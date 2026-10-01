@@ -86,7 +86,7 @@ func TestParseDeadline_NaturalLanguage(t *testing.T) {
 		},
 		{
 			name:       "next monday",
-			input:      "next monday",
+			input:      "next 3 days",
 			wantAfter:  0,
 			wantBefore: 8 * 24 * time.Hour,
 		},
@@ -226,6 +226,80 @@ func TestParseDeadline_RFC3339(t *testing.T) {
 			}
 			if got.IsZero() {
 				t.Errorf("ParseDeadline(%q) returned zero time", tt.input)
+			}
+		})
+	}
+}
+
+func TestParseDeadline_NowAndTodayResolveToReferenceTime(t *testing.T) {
+	clk := clocktesting.NewFakeClock(
+		time.Date(2026, time.May, 15, 13, 10, 0, 0, time.UTC))
+	now := clk.Now().UTC()
+
+	for _, input := range []string{"now", " Now ", "TODAY", " today"} {
+		t.Run(input, func(t *testing.T) {
+			got, err := ParseDeadline(input, now)
+			if err != nil {
+				t.Fatalf("ParseDeadline(%q) error = %v", input, err)
+			}
+			if !got.Equal(now) {
+				t.Errorf("ParseDeadline(%q) = %v, want exactly the reference time %v", input, got, now)
+			}
+		})
+	}
+}
+
+func TestParseDeadline_FallthroughAcceptances(t *testing.T) {
+	// Contract: inputs whose dedicated prefix parser fails fall through to
+	// the naturaldate grammar. Whatever it anchors is accepted as-is —
+	// including dropped trailing qualifiers ("tomorrow blah") and overflowing
+	// clock times ("tomorrow 25:00" rolls past midnight). These cases pin the
+	// lenient behavior; tighten the prefix parsers instead if strictness is
+	// ever required here.
+	clk := clocktesting.NewFakeClock(
+		time.Date(2026, time.May, 15, 13, 10, 0, 0, time.UTC))
+	now := clk.Now().UTC()
+
+	tests := []struct {
+		name       string
+		input      string
+		wantAfter  time.Duration
+		wantBefore time.Duration
+	}{
+		{name: "trailing garbage after tomorrow", input: "tomorrow at xyz", wantAfter: 10 * time.Hour, wantBefore: 12 * time.Hour},
+		{name: "trailing word after tomorrow", input: "tomorrow blah", wantAfter: 10 * time.Hour, wantBefore: 12 * time.Hour},
+		{name: "overflowing clock time rolls over", input: "tomorrow 25:00", wantAfter: 35 * time.Hour, wantBefore: 37 * time.Hour},
+		{name: "next month", input: "next month", wantAfter: 29 * 24 * time.Hour, wantBefore: 32 * 24 * time.Hour},
+		{name: "next year", input: "next year", wantAfter: 360 * 24 * time.Hour, wantBefore: 370 * 24 * time.Hour},
+		{name: "next two weeks", input: "next 2 weeks", wantAfter: 13 * 24 * time.Hour, wantBefore: 15 * 24 * time.Hour},
+		{name: "written-out amount", input: "in two hours", wantAfter: 119 * time.Minute, wantBefore: 121 * time.Minute},
+		{name: "bare month name", input: "in january", wantAfter: 200 * 24 * time.Hour, wantBefore: 300 * 24 * time.Hour},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got, err := ParseDeadline(tt.input, now)
+			if err != nil {
+				t.Fatalf("ParseDeadline(%q) error = %v", tt.input, err)
+			}
+			if diff := got.Sub(now); diff < tt.wantAfter || diff > tt.wantBefore {
+				t.Errorf("ParseDeadline(%q) diff = %v, want within [%v, %v]", tt.input, diff, tt.wantAfter, tt.wantBefore)
+			}
+		})
+	}
+}
+
+func TestParseDeadline_FallthroughRejections(t *testing.T) {
+	// The naturaldate grammar rejects these outright, so they still surface
+	// as unrecognized formats.
+	clk := clocktesting.NewFakeClock(
+		time.Date(2026, time.May, 15, 13, 10, 0, 0, time.UTC))
+	now := clk.Now().UTC()
+
+	for _, input := range []string{"next xyz", "in 2 lightyears", "in a bit"} {
+		t.Run(input, func(t *testing.T) {
+			if got, err := ParseDeadline(input, now); err == nil {
+				t.Errorf("ParseDeadline(%q) = %v, want error", input, got)
 			}
 		})
 	}

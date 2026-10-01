@@ -12,6 +12,7 @@ import (
 
 	hibernatorv1alpha1 "github.com/ardikabs/hibernator/api/v1alpha1"
 	"github.com/ardikabs/hibernator/cmd/kubectl-hibernator/cli/describe"
+	"github.com/ardikabs/hibernator/cmd/kubectl-hibernator/cli/exception"
 	"github.com/ardikabs/hibernator/cmd/kubectl-hibernator/cli/list"
 	"github.com/ardikabs/hibernator/cmd/kubectl-hibernator/cli/logs"
 	"github.com/ardikabs/hibernator/cmd/kubectl-hibernator/cli/notification"
@@ -44,8 +45,8 @@ func NewRootCommand() *cobra.Command {
 		Long: `kubectl-hibernator is a CLI plugin for managing HibernatePlan resources.
 
 It provides commands to inspect schedules and plans, suspend/resume
-hibernation, trigger retries, manage restore data and notifications,
-and tail controller logs.
+hibernation, trigger retries, manage ScheduleException resources,
+manage restore data and notifications, and tail controller logs.
 
 Install by copying the binary to your PATH:
   cp bin/kubectl-hibernator /usr/local/bin/kubectl-hibernator
@@ -59,6 +60,10 @@ Then use as:
   kubectl hibernator retry my-plan
   kubectl hibernator override my-plan --to hibernate
   kubectl hibernator restart my-plan
+  kubectl hibernator exception create holiday --plan my-plan --type suspend --from "in 1 hour" --until "in 2 hours" --window-start 22:00 --window-end 06:00
+  kubectl hibernator exception list
+  kubectl hibernator exception describe --plan my-plan
+  kubectl hibernator exception delete -l env=prod --plan my-plan --yes
   kubectl hibernator logs my-plan`,
 		PersistentPreRunE: func(cmd *cobra.Command, args []string) error {
 			return cmd.ValidateRequiredFlags()
@@ -84,6 +89,7 @@ Then use as:
 	cmd.AddCommand(restart.NewCommand(opts))
 	cmd.AddCommand(restore.NewCommand(opts))
 	cmd.AddCommand(revert.NewCommand(opts))
+	cmd.AddCommand(exception.NewCommand(opts))
 	cmd.AddCommand(notification.NewCommand(opts))
 	cmd.AddCommand(logs.NewCommand(opts))
 	return cmd
