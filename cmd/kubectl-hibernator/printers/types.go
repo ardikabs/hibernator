@@ -228,16 +228,17 @@ type ExceptionReferenceJSON struct {
 
 // ExceptionListItemJSON is the stable JSON representation of a listed exception.
 type ExceptionListItemJSON struct {
-	Name       string                            `json:"name"`
-	Namespace  string                            `json:"namespace"`
-	Labels     map[string]string                 `json:"labels,omitempty"`
-	Plan       string                            `json:"plan"`
-	Type       hibernatorv1alpha1.ExceptionType  `json:"type"`
-	State      hibernatorv1alpha1.ExceptionState `json:"state"`
-	ValidFrom  string                            `json:"validFrom"`
-	ValidUntil string                            `json:"validUntil"`
-	Windows    []OffHourWindowJSON               `json:"windows"`
-	CreatedAt  string                            `json:"createdAt"`
+	Name        string                            `json:"name"`
+	Namespace   string                            `json:"namespace"`
+	Labels      map[string]string                 `json:"labels,omitempty"`
+	Annotations map[string]string                 `json:"annotations,omitempty"`
+	Plan        string                            `json:"plan"`
+	Type        hibernatorv1alpha1.ExceptionType  `json:"type"`
+	State       hibernatorv1alpha1.ExceptionState `json:"state"`
+	ValidFrom   string                            `json:"validFrom"`
+	ValidUntil  string                            `json:"validUntil"`
+	Windows     []OffHourWindowJSON               `json:"windows"`
+	CreatedAt   string                            `json:"createdAt"`
 }
 
 // ExceptionListJSON represents JSON output for an exception list.
@@ -247,23 +248,24 @@ type ExceptionListJSON struct {
 
 // ExceptionStatusItemJSON is the stable JSON representation of exception status.
 type ExceptionStatusItemJSON struct {
-	Name       string                            `json:"name"`
-	Namespace  string                            `json:"namespace"`
-	Labels     map[string]string                 `json:"labels,omitempty"`
-	Plan       string                            `json:"plan"`
-	PlanPhase  string                            `json:"planPhase"`
-	PlanExists bool                              `json:"planExists"`
-	Type       hibernatorv1alpha1.ExceptionType  `json:"type"`
-	State      hibernatorv1alpha1.ExceptionState `json:"state"`
-	ValidFrom  string                            `json:"validFrom"`
-	ValidUntil string                            `json:"validUntil"`
-	Timing     string                            `json:"timing"`
-	Windows    []OffHourWindowJSON               `json:"windows"`
-	CreatedAt  string                            `json:"createdAt"`
-	AppliedAt  string                            `json:"appliedAt,omitempty"`
-	ExpiredAt  string                            `json:"expiredAt,omitempty"`
-	DetachedAt string                            `json:"detachedAt,omitempty"`
-	Message    string                            `json:"message,omitempty"`
+	Name        string                            `json:"name"`
+	Namespace   string                            `json:"namespace"`
+	Labels      map[string]string                 `json:"labels,omitempty"`
+	Annotations map[string]string                 `json:"annotations,omitempty"`
+	Plan        string                            `json:"plan"`
+	PlanPhase   string                            `json:"planPhase"`
+	PlanExists  bool                              `json:"planExists"`
+	Type        hibernatorv1alpha1.ExceptionType  `json:"type"`
+	State       hibernatorv1alpha1.ExceptionState `json:"state"`
+	ValidFrom   string                            `json:"validFrom"`
+	ValidUntil  string                            `json:"validUntil"`
+	Timing      string                            `json:"timing"`
+	Windows     []OffHourWindowJSON               `json:"windows"`
+	CreatedAt   string                            `json:"createdAt"`
+	AppliedAt   string                            `json:"appliedAt,omitempty"`
+	ExpiredAt   string                            `json:"expiredAt,omitempty"`
+	DetachedAt  string                            `json:"detachedAt,omitempty"`
+	Message     string                            `json:"message,omitempty"`
 }
 
 // ExceptionStatusJSON represents JSON output for enriched exception status.

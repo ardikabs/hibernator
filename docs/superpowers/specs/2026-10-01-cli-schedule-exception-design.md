@@ -53,11 +53,19 @@ copied. Every generated exception also receives the canonical
 `hibernator.ardikabs.com/plan` label for its referenced plan. Requirements based
 on label non-existence do not add a label.
 
+Provenance is stamped at creation: `--purpose` records free text in the
+`hibernator.ardikabs.com/purpose` annotation (omitted when empty), and
+`--managed-by` (default `hibernator-cli`, empty omits) sets the standard
+`app.kubernetes.io/managed-by` label, overwriting any plan-copied value — the
+exception's manager is whoever runs the command. Annotations are visible in
+JSON output and dry-run previews (table and YAML).
+
 `--type`, `--from`, `--until`, `--window-start`, and `--window-end` are required.
 `--days` is optional and accepts comma-separated, case-insensitive day
-abbreviations or full day names. An omitted or empty value expands to all seven
-days. Days are stored using the API's canonical `MON` through `SUN`
-abbreviations.
+abbreviations or full day names, plus `START-END` ranges that expand in week
+order (`MON-FRI`, wrapping `FRI-MON`, same-day `MON-MON` meaning the full week).
+An omitted or empty value expands to all seven days. Days are stored using the
+API's canonical `MON` through `SUN` abbreviations.
 
 `--from` and `--until` use the existing `timeparse` natural-language parser.
 Inputs are interpreted relative to the user's local clock and converted to UTC

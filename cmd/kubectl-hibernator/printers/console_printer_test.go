@@ -225,6 +225,22 @@ func TestExceptionJSONEmptyWindowsEncodeAsArray(t *testing.T) {
 	assert.Equal(t, []any{}, statusItem["windows"])
 }
 
+func TestExceptionStatusJSONIncludesAnnotations(t *testing.T) {
+	exception := exceptionForPrinter(
+		"maintenance",
+		"operations",
+		time.Date(2026, time.January, 2, 3, 4, 5, 0, time.UTC),
+	)
+	exception.Annotations = map[string]string{"hibernator.ardikabs.com/purpose": "Ramadan support"}
+	out := &ExceptionStatusOutput{Items: []ExceptionStatusItem{{
+		Exception: exception, PlanPhase: "Hibernated", Timing: "2h remaining", PlanExists: true,
+	}}}
+
+	got := printExceptionJSON(t, out)
+	item := got["items"].([]any)[0].(map[string]any)
+	assert.Equal(t, map[string]any{"hibernator.ardikabs.com/purpose": "Ramadan support"}, item["annotations"])
+}
+
 func TestExceptionOperationJSON(t *testing.T) {
 	out := &ExceptionOperationOutput{
 		Action: "create",
