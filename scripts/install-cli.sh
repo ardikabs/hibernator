@@ -118,7 +118,7 @@ try_download_tarball() {
     local arch="$3"
     local tmp_dir="$4"
 
-    local asset_name="${BINARY_NAME}_${version}_${os}_${arch}.tar.gz"
+    local asset_name="${BINARY_NAME}_${version#v}_${os}_${arch}.tar.gz"
     local url="https://github.com/${REPO}/releases/download/${version}/${asset_name}"
     local output_path="${tmp_dir}/${asset_name}"
 
