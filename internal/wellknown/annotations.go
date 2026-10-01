@@ -6,6 +6,11 @@ const (
 	// the same object (labels for selectors, annotations for metadata).
 	AnnotationPlan = "hibernator.ardikabs.com/plan"
 
+	// AnnotationPurpose records the human reason for creating a
+	// ScheduleException (e.g. "Ramadan support"). Free text, set at creation
+	// time via the CLI --purpose flag.
+	AnnotationPurpose = "hibernator.ardikabs.com/purpose"
+
 	// AnnotationTarget is the annotation for target name.
 	AnnotationTarget = "hibernator.ardikabs.com/target"
 
