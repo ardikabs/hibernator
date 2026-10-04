@@ -1,10 +1,12 @@
+> **⚠️ ARCHIVED** — Historical MVP checklist for RFC-0007. CLI and server integration are now implemented. Keep for history only.
+
 # RFC-0007 MVP Implementation Checklist
 
 **Focus**: Lean prototype of `kubectl hibernator` with 6 core commands
 
 **RFC Reference**: [docs/proposals/0007-kubectl-hibernator-cli-plugin.md](../../docs/proposals/0007-kubectl-hibernator-cli-plugin.md)
 
-**Last Updated**: 2026-02-20
+**Last Updated**: 2026-04-13
 
 ---
 
@@ -13,9 +15,9 @@
 | Component | Status | Progress | Notes |
 |-----------|--------|----------|-------|
 | **Client-Side CLI** | ✅ Complete | 100% | All 6 commands implemented, tested with sample YAML |
-| **Server-Side Controller** | ⏳ Pending | 0% | Needs annotation/spec handling logic review & testing |
-| **Integration Tests** | ‼️ Blocked | 0% | Requires server-side work to test end-to-end |
-| **E2E Tests** | ‼️ Blocked | 0% | Requires server-side work |
+| **Server-Side Controller** | ✅ Complete | 100% | Annotation/spec handling integrated in controller |
+| **Integration Tests** | ✅ Complete | 100% | CLI and server integration validated |
+| **E2E Tests** | ✅ Complete | 100% | Core CLI use cases covered in E2E |
 | **Documentation** | ✅ Complete | 100% | RFC and user journeys complete |
 
 ---
@@ -274,4 +276,4 @@
 **Dependencies Added**:
 - `github.com/spf13/cobra` v1.10.2
 
-**Status**: Client-side MVP ✅ Complete. Server-side pending review & implementation.
+**Status**: RFC-0007 implementation complete (client + server + integration).
