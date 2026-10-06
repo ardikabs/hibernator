@@ -28,6 +28,12 @@ const (
 	maxExceptionPrefixLen = 54
 	hibernatorLabelDomain = "hibernator.ardikabs.com"
 	alphanumericAlphabet  = "abcdefghijklmnopqrstuvwxyz0123456789"
+	// managedByLabelKey is the standard Kubernetes managed-by label, used to
+	// record which tool created a ScheduleException. It is a label (not an
+	// annotation) so ownership stays visible to label-based tooling.
+	managedByLabelKey = "app.kubernetes.io/managed-by"
+	// defaultManagedBy is recorded when --managed-by is not supplied.
+	defaultManagedBy = "hibernator-cli"
 )
 
 var (
@@ -56,19 +62,80 @@ func parseDays(value string) ([]string, error) {
 
 	days := make([]string, 0, len(allDays))
 	seen := make(map[string]struct{}, len(allDays))
-	for _, raw := range strings.Split(value, ",") {
-		day, ok := aliases[strings.ToLower(strings.TrimSpace(raw))]
-		if !ok {
-			return nil, fmt.Errorf("invalid day %q", raw)
-		}
+	addDay := func(raw, day string) error {
 		if _, duplicate := seen[day]; duplicate {
-			return nil, fmt.Errorf("duplicate day %q", raw)
+			return fmt.Errorf("duplicate day %q", raw)
 		}
 		seen[day] = struct{}{}
 		days = append(days, day)
+		return nil
+	}
+	for _, raw := range strings.Split(value, ",") {
+		token := strings.TrimSpace(raw)
+		if !strings.Contains(token, "-") {
+			day, ok := aliases[strings.ToLower(token)]
+			if !ok {
+				return nil, fmt.Errorf("invalid day %q", raw)
+			}
+			if err := addDay(raw, day); err != nil {
+				return nil, err
+			}
+			continue
+		}
+		expanded, err := expandDayRange(token, aliases)
+		if err != nil {
+			return nil, err
+		}
+		for _, day := range expanded {
+			if err := addDay(raw, day); err != nil {
+				return nil, err
+			}
+		}
 	}
 
 	return days, nil
+}
+
+// expandDayRange expands a "START-END" weekday range into canonical day
+// abbreviations in week order, wrapping past Sunday when the end precedes
+// the start (FRI-MON → FRI,SAT,SUN,MON). A range with identical endpoints
+// (MON-MON) expands to the full week. Endpoint names accept the same
+// case-insensitive abbreviations and full names as single days.
+func expandDayRange(token string, aliases map[string]string) ([]string, error) {
+	if strings.Count(token, "-") != 1 {
+		return nil, fmt.Errorf("invalid day range %q", token)
+	}
+	bounds := strings.SplitN(token, "-", 2)
+	start, ok := aliases[strings.ToLower(strings.TrimSpace(bounds[0]))]
+	if !ok {
+		return nil, fmt.Errorf("invalid day %q", strings.TrimSpace(bounds[0]))
+	}
+	end, ok := aliases[strings.ToLower(strings.TrimSpace(bounds[1]))]
+	if !ok {
+		return nil, fmt.Errorf("invalid day %q", strings.TrimSpace(bounds[1]))
+	}
+	if start == end {
+		return append([]string(nil), allDays...), nil
+	}
+
+	startIdx, endIdx := dayIndex(start), dayIndex(end)
+	expanded := make([]string, 0, 7)
+	for i := startIdx; ; i = (i + 1) % len(allDays) {
+		expanded = append(expanded, allDays[i])
+		if i == endIdx {
+			break
+		}
+	}
+	return expanded, nil
+}
+
+func dayIndex(day string) int {
+	for i, name := range allDays {
+		if name == day {
+			return i
+		}
+	}
+	return -1
 }
 
 func validateWindow(start, end string) error {

@@ -17,6 +17,7 @@ import (
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/labels"
+	"k8s.io/apimachinery/pkg/util/validation"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	sigsyaml "sigs.k8s.io/yaml"
 
@@ -36,6 +37,8 @@ type createOptions struct {
 	plan, selector, exceptionType, from, until string
 	windowStart, windowEnd, days               string
 	leadTime                                   string
+	purpose                                    string
+	managedBy                                  string
 	format                                     string
 	dryRun                                     bool
 
@@ -66,7 +69,9 @@ func newCreateCommand(root *common.RootOptions) *cobra.Command {
 	cmd.Flags().StringVar(&opts.until, "until", "", "End of the exception validity period")
 	cmd.Flags().StringVar(&opts.windowStart, "window-start", "", "Exception window start in HH:MM format")
 	cmd.Flags().StringVar(&opts.windowEnd, "window-end", "", "Exception window end in HH:MM format")
-	cmd.Flags().StringVar(&opts.days, "days", "", "Comma-separated weekdays; defaults to all days")
+	cmd.Flags().StringVar(&opts.days, "days", "", "Comma-separated weekdays and ranges (e.g. MON,WED-FRI); defaults to all days")
+	cmd.Flags().StringVar(&opts.purpose, "purpose", "", "Human reason for the exception, stored as an annotation (e.g. \"Ramadan support\")")
+	cmd.Flags().StringVar(&opts.managedBy, "managed-by", defaultManagedBy, "Tool recorded as managing the exception (standard managed-by label); empty omits it")
 	cmd.Flags().StringVarP(&opts.format, "output", "o", "", "Output format for --dry-run previews (supported: yaml)")
 	cmd.Flags().StringVar(&opts.leadTime, "lead-time", "", "Buffer before suspension windows that prevents new hibernation starts (e.g., 30m, 1h); only valid with --type suspend")
 	cmd.Flags().BoolVar(&opts.dryRun, "dry-run", false, "Preview the ScheduleExceptions that would be created without making changes")
@@ -104,6 +109,11 @@ func runCreate(ctx context.Context, opts *createOptions, prefix string) error {
 	}
 	if _, err := compactPrefix(prefix, maxExceptionPrefixLen); err != nil {
 		return err
+	}
+	if opts.managedBy != "" {
+		if problems := validation.IsValidLabelValue(opts.managedBy); len(problems) > 0 {
+			return fmt.Errorf("invalid --managed-by value %q: %s", opts.managedBy, strings.Join(problems, "; "))
+		}
 	}
 	if opts.format != "" && !opts.dryRun {
 		// --output only affects dry-run previews; warn and continue so the
@@ -156,7 +166,7 @@ func runCreate(ctx context.Context, opts *createOptions, prefix string) error {
 			exceptionLabels := selectorLabels(plan.Labels, selector)
 			exceptionLabels[wellknown.LabelPlan] = plan.Name
 			preview = append(preview, *buildExceptionObject(
-				plan, exceptionLabels, name, exceptionType,
+				plan, exceptionLabels, buildProvenance(opts.purpose, opts.managedBy, exceptionLabels), name, exceptionType,
 				validFrom, validUntil, opts.windowStart, opts.windowEnd, days, opts.leadTime,
 			))
 		}
@@ -176,7 +186,8 @@ func runCreate(ctx context.Context, opts *createOptions, prefix string) error {
 		plan := &plans[i]
 		result, createErr := createExceptionForPlan(
 			ctx, c, plan, selector, prefix, exceptionType,
-			validFrom, validUntil, opts.windowStart, opts.windowEnd, days, opts.leadTime, opts.generateSuffix,
+			validFrom, validUntil, opts.windowStart, opts.windowEnd, days, opts.leadTime,
+			opts.purpose, opts.managedBy, opts.generateSuffix,
 		)
 		if createErr != nil {
 			failedPlans = append(failedPlans, plan.Name)
@@ -217,11 +228,14 @@ func createExceptionForPlan(
 	windowStart, windowEnd string,
 	days []string,
 	leadTime string,
+	purpose string,
+	managedBy string,
 	generateSuffix suffixGenerator,
 ) (printers.ExceptionOperationResult, error) {
 	result := printers.ExceptionOperationResult{Plan: plan.Name}
 	exceptionLabels := selectorLabels(plan.Labels, selector)
 	exceptionLabels[wellknown.LabelPlan] = plan.Name
+	annotations := buildProvenance(purpose, managedBy, exceptionLabels)
 
 	for attempt := 0; attempt < maxCreateAttempts; attempt++ {
 		name, err := buildExceptionName(prefix, generateSuffix)
@@ -232,7 +246,7 @@ func createExceptionForPlan(
 		}
 		result.Name = name
 
-		exception := buildExceptionObject(plan, exceptionLabels, name, exceptionType, validFrom, validUntil, windowStart, windowEnd, days, leadTime)
+		exception := buildExceptionObject(plan, exceptionLabels, annotations, name, exceptionType, validFrom, validUntil, windowStart, windowEnd, days, leadTime)
 		err = c.Create(ctx, exception)
 		if err == nil {
 			result.Result = "SUCCESS"
@@ -251,12 +265,27 @@ func createExceptionForPlan(
 	return result, fmt.Errorf("%s", result.Message)
 }
 
+// buildProvenance stamps ownership metadata onto exception labels and
+// returns the exception annotations. The managed-by label overwrites any
+// plan-copied value: the exception's manager is whoever runs this command,
+// not the plan's manager. A nil map is returned when there is no purpose.
+func buildProvenance(purpose, managedBy string, exceptionLabels map[string]string) map[string]string {
+	if managedBy != "" {
+		exceptionLabels[managedByLabelKey] = managedBy
+	}
+	if purpose == "" {
+		return nil
+	}
+	return map[string]string{wellknown.AnnotationPurpose: purpose}
+}
+
 // buildExceptionObject constructs the exact ScheduleException that would be
 // persisted for a plan, shared by the create and dry-run paths so previews
 // never drift from reality.
 func buildExceptionObject(
 	plan *hibernatorv1alpha1.HibernatePlan,
 	exceptionLabels map[string]string,
+	annotations map[string]string,
 	name string,
 	exceptionType hibernatorv1alpha1.ExceptionType,
 	validFrom, validUntil time.Time,
@@ -266,9 +295,10 @@ func buildExceptionObject(
 ) *hibernatorv1alpha1.ScheduleException {
 	return &hibernatorv1alpha1.ScheduleException{
 		ObjectMeta: metav1.ObjectMeta{
-			Name:      name,
-			Namespace: plan.Namespace,
-			Labels:    exceptionLabels,
+			Name:        name,
+			Namespace:   plan.Namespace,
+			Labels:      exceptionLabels,
+			Annotations: annotations,
 		},
 		Spec: hibernatorv1alpha1.ScheduleExceptionSpec{
 			PlanRef:    hibernatorv1alpha1.PlanReference{Name: plan.Name},
@@ -340,6 +370,14 @@ func recreateCreateCommand(prefix string, opts *createOptions, planName string) 
 	if opts.leadTime != "" {
 		b.WriteString(" --lead-time ")
 		b.WriteString(shellQuote(opts.leadTime))
+	}
+	if opts.purpose != "" {
+		b.WriteString(" --purpose ")
+		b.WriteString(shellQuote(opts.purpose))
+	}
+	if opts.managedBy != "" {
+		b.WriteString(" --managed-by ")
+		b.WriteString(shellQuote(opts.managedBy))
 	}
 	return b.String()
 }

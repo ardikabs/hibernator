@@ -87,20 +87,21 @@ func (p *JSONPrinter) exceptionStatusToJSON(out *ExceptionStatusOutput) Exceptio
 	for i, item := range out.Items {
 		exception := item.Exception
 		status := ExceptionStatusItemJSON{
-			Name:       exception.Name,
-			Namespace:  exception.Namespace,
-			Labels:     exception.Labels,
-			Plan:       exception.Spec.PlanRef.Name,
-			PlanPhase:  item.PlanPhase,
-			PlanExists: item.PlanExists,
-			Type:       exception.Spec.Type,
-			State:      exception.Status.State,
-			ValidFrom:  formatRFC3339UTC(exception.Spec.ValidFrom.Time),
-			ValidUntil: formatRFC3339UTC(exception.Spec.ValidUntil.Time),
-			Timing:     item.Timing,
-			Windows:    exceptionWindowsToJSON(exception.Spec.Windows),
-			CreatedAt:  formatRFC3339UTC(exception.CreationTimestamp.Time),
-			Message:    exception.Status.Message,
+			Name:        exception.Name,
+			Namespace:   exception.Namespace,
+			Labels:      exception.Labels,
+			Annotations: exception.Annotations,
+			Plan:        exception.Spec.PlanRef.Name,
+			PlanPhase:   item.PlanPhase,
+			PlanExists:  item.PlanExists,
+			Type:        exception.Spec.Type,
+			State:       exception.Status.State,
+			ValidFrom:   formatRFC3339UTC(exception.Spec.ValidFrom.Time),
+			ValidUntil:  formatRFC3339UTC(exception.Spec.ValidUntil.Time),
+			Timing:      item.Timing,
+			Windows:     exceptionWindowsToJSON(exception.Spec.Windows),
+			CreatedAt:   formatRFC3339UTC(exception.CreationTimestamp.Time),
+			Message:     exception.Status.Message,
 		}
 		if exception.Status.AppliedAt != nil {
 			status.AppliedAt = formatRFC3339UTC(exception.Status.AppliedAt.Time)
@@ -134,16 +135,17 @@ func (p *JSONPrinter) exceptionOperationToJSON(out *ExceptionOperationOutput) Ex
 
 func exceptionListItemToJSON(exception hibernatorv1alpha1.ScheduleException) ExceptionListItemJSON {
 	return ExceptionListItemJSON{
-		Name:       exception.Name,
-		Namespace:  exception.Namespace,
-		Labels:     exception.Labels,
-		Plan:       exception.Spec.PlanRef.Name,
-		Type:       exception.Spec.Type,
-		State:      exception.Status.State,
-		ValidFrom:  formatRFC3339UTC(exception.Spec.ValidFrom.Time),
-		ValidUntil: formatRFC3339UTC(exception.Spec.ValidUntil.Time),
-		Windows:    exceptionWindowsToJSON(exception.Spec.Windows),
-		CreatedAt:  formatRFC3339UTC(exception.CreationTimestamp.Time),
+		Name:        exception.Name,
+		Namespace:   exception.Namespace,
+		Labels:      exception.Labels,
+		Annotations: exception.Annotations,
+		Plan:        exception.Spec.PlanRef.Name,
+		Type:        exception.Spec.Type,
+		State:       exception.Status.State,
+		ValidFrom:   formatRFC3339UTC(exception.Spec.ValidFrom.Time),
+		ValidUntil:  formatRFC3339UTC(exception.Spec.ValidUntil.Time),
+		Windows:     exceptionWindowsToJSON(exception.Spec.Windows),
+		CreatedAt:   formatRFC3339UTC(exception.CreationTimestamp.Time),
 	}
 }
 

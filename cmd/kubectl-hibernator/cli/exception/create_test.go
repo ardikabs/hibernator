@@ -548,6 +548,140 @@ func TestRunCreateRejectsUnsupportedOutput(t *testing.T) {
 	assert.Zero(t, clientCalls)
 }
 
+func TestCreateProvenanceFlagsRegistered(t *testing.T) {
+	cmd := newCreateCommand(&common.RootOptions{})
+	purpose := cmd.Flags().Lookup("purpose")
+	require.NotNil(t, purpose)
+	assert.Equal(t, "", purpose.DefValue)
+	managedBy := cmd.Flags().Lookup("managed-by")
+	require.NotNil(t, managedBy)
+	assert.Equal(t, "hibernator-cli", managedBy.DefValue)
+}
+
+func TestRunCreatePersistsPurposeAndManagedBy(t *testing.T) {
+	c := fake.NewClientBuilder().WithScheme(common.Scheme).WithObjects(
+		plan("plan-a", "team-a", nil),
+	).Build()
+	useCreateClient(t, c)
+
+	opts := validCreateOptions(time.Date(2026, time.October, 1, 9, 0, 0, 0, time.UTC))
+	opts.plan, opts.selector = "plan-a", ""
+	opts.purpose = "Ramadan support"
+	opts.managedBy = "gitops"
+	opts.generateSuffix = fixedSuffix("a1b2c3d4")
+
+	ctx, _ := createTestContext()
+	require.NoError(t, runCreate(ctx, opts, "maintenance"))
+
+	got := &hibernatorv1alpha1.ScheduleException{}
+	require.NoError(t, c.Get(context.Background(), client.ObjectKey{Namespace: "team-a", Name: "maintenance-a1b2c3d4"}, got))
+	assert.Equal(t, "Ramadan support", got.Annotations[wellknown.AnnotationPurpose])
+	assert.Equal(t, "gitops", got.Labels[managedByLabelKey])
+}
+
+func TestRunCreateOmitsEmptyPurposeAndManagedBy(t *testing.T) {
+	c := fake.NewClientBuilder().WithScheme(common.Scheme).WithObjects(
+		plan("plan-a", "team-a", nil),
+	).Build()
+	useCreateClient(t, c)
+
+	opts := validCreateOptions(time.Date(2026, time.October, 1, 9, 0, 0, 0, time.UTC))
+	opts.plan, opts.selector = "plan-a", ""
+	opts.purpose = ""
+	opts.managedBy = ""
+	opts.generateSuffix = fixedSuffix("a1b2c3d4")
+
+	ctx, _ := createTestContext()
+	require.NoError(t, runCreate(ctx, opts, "maintenance"))
+
+	got := &hibernatorv1alpha1.ScheduleException{}
+	require.NoError(t, c.Get(context.Background(), client.ObjectKey{Namespace: "team-a", Name: "maintenance-a1b2c3d4"}, got))
+	assert.NotContains(t, got.Annotations, wellknown.AnnotationPurpose)
+	assert.NotContains(t, got.Labels, managedByLabelKey)
+	assert.Equal(t, "plan-a", got.Labels[wellknown.LabelPlan])
+}
+
+func TestRunCreateManagedByOverwritesPlanCopiedValue(t *testing.T) {
+	c := fake.NewClientBuilder().WithScheme(common.Scheme).WithObjects(
+		plan("plan-a", "team-a", map[string]string{"env": "prod", "app.kubernetes.io/managed-by": "helm"}),
+	).Build()
+	useCreateClient(t, c)
+
+	opts := validCreateOptions(time.Date(2026, time.October, 1, 9, 0, 0, 0, time.UTC))
+	opts.plan, opts.selector = "", "app.kubernetes.io/managed-by=helm,env=prod"
+	opts.managedBy = "hibernator-cli"
+	opts.generateSuffix = fixedSuffix("a1b2c3d4")
+
+	ctx, _ := createTestContext()
+	require.NoError(t, runCreate(ctx, opts, "maintenance"))
+
+	got := &hibernatorv1alpha1.ScheduleException{}
+	require.NoError(t, c.Get(context.Background(), client.ObjectKey{Namespace: "team-a", Name: "maintenance-a1b2c3d4"}, got))
+	assert.Equal(t, "hibernator-cli", got.Labels[managedByLabelKey])
+	assert.Equal(t, "prod", got.Labels["env"])
+	assert.Equal(t, "plan-a", got.Labels[wellknown.LabelPlan])
+}
+
+func TestRunCreateRejectsInvalidManagedByBeforeClient(t *testing.T) {
+	clientCalls := 0
+	restoreClientFactory(t, func(*common.RootOptions) (client.Client, error) {
+		clientCalls++
+		return nil, errors.New("client must not be created")
+	})
+
+	opts := validCreateOptions(time.Date(2026, time.October, 1, 9, 0, 0, 0, time.UTC))
+	opts.managedBy = "not a valid label value!"
+
+	require.ErrorContains(t, runCreate(context.Background(), opts, "maintenance"), "invalid --managed-by")
+	assert.Zero(t, clientCalls)
+}
+
+func TestRunCreateDryRunJSONIncludesAnnotations(t *testing.T) {
+	c := fake.NewClientBuilder().WithScheme(common.Scheme).WithObjects(
+		plan("plan-a", "team-a", nil),
+	).Build()
+	useCreateClient(t, c)
+
+	opts := validCreateOptions(time.Date(2026, time.October, 1, 9, 0, 0, 0, time.UTC))
+	opts.plan, opts.selector = "plan-a", ""
+	opts.purpose = "Ramadan support"
+	opts.managedBy = "hibernator-cli"
+	opts.dryRun = true
+	opts.root.JsonOutput = true
+	opts.generateSuffix = fixedSuffix("a1b2c3d4")
+
+	ctx, buf := createTestContext()
+	require.NoError(t, runCreate(ctx, opts, "maintenance"))
+
+	var got struct {
+		Items []struct {
+			Annotations map[string]string `json:"annotations"`
+		} `json:"items"`
+	}
+	require.NoError(t, json.Unmarshal(buf.Bytes(), &got))
+	require.Len(t, got.Items, 1)
+	assert.Equal(t, "Ramadan support", got.Items[0].Annotations[wellknown.AnnotationPurpose])
+}
+
+func TestRunCreateRecreationCommandIncludesProvenance(t *testing.T) {
+	base := fake.NewClientBuilder().WithScheme(common.Scheme).WithObjects(
+		plan("plan-a", "team-a", map[string]string{"env": "prod"}),
+	).Build()
+	c := &failingCreateClient{Client: base, failPlan: "plan-a", err: errors.New("admission denied")}
+	useCreateClient(t, c)
+
+	opts := validCreateOptions(time.Date(2026, time.October, 1, 9, 0, 0, 0, time.UTC))
+	opts.purpose = "Ramadan support"
+	opts.managedBy = "gitops"
+	opts.generateSuffix = fixedSuffix("a1b2c3d4")
+
+	ctx, _ := createTestContext()
+	err := runCreate(ctx, opts, "maintenance")
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), `--purpose "Ramadan support"`)
+	assert.Contains(t, err.Error(), "--managed-by gitops")
+}
+
 func TestRunCreateUsesJSONOutputMode(t *testing.T) {
 	c := fake.NewClientBuilder().WithScheme(common.Scheme).WithObjects(plan("plan-a", "team-a", nil)).Build()
 	useCreateClient(t, c)

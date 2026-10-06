@@ -52,6 +52,51 @@ func TestParseDaysRejectsInvalidAndDuplicateValues(t *testing.T) {
 	}
 }
 
+func TestParseDaysExpandsRanges(t *testing.T) {
+	tests := []struct {
+		name  string
+		value string
+		want  []string
+	}{
+		{name: "simple range", value: "MON-FRI", want: []string{"MON", "TUE", "WED", "THU", "FRI"}},
+		{name: "case insensitive full names", value: "monday-friday", want: []string{"MON", "TUE", "WED", "THU", "FRI"}},
+		{name: "mixed abbreviation and full name", value: "Mon-Wednesday", want: []string{"MON", "TUE", "WED"}},
+		{name: "weekend pair", value: "SAT-SUN", want: []string{"SAT", "SUN"}},
+		{name: "wrap around weekend", value: "FRI-MON", want: []string{"FRI", "SAT", "SUN", "MON"}},
+		{name: "lowercase full name wrap", value: "friday-monday", want: []string{"FRI", "SAT", "SUN", "MON"}},
+		{name: "wrap around single step", value: "SUN-TUE", want: []string{"SUN", "MON", "TUE"}},
+		{name: "same day means full week", value: "MON-MON", want: []string{"MON", "TUE", "WED", "THU", "FRI", "SAT", "SUN"}},
+		{name: "range combined with days", value: "MON-WED,FRI", want: []string{"MON", "TUE", "WED", "FRI"}},
+		{name: "order follows tokens", value: "FRI,MON-WED", want: []string{"FRI", "MON", "TUE", "WED"}},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			days, err := parseDays(tt.value)
+			require.NoError(t, err)
+			assert.Equal(t, tt.want, days)
+		})
+	}
+}
+
+func TestParseDaysRejectsMalformedRanges(t *testing.T) {
+	for _, value := range []string{
+		"MON-",
+		"-FRI",
+		"MON-TUE-WED",
+		"FUNDAY-MON",
+		"MON-FUNDAY",
+		"MON-WED,WED",
+		"MON-WED,TUE-THU",
+		"MON-MON,MON",
+	} {
+		t.Run(value, func(t *testing.T) {
+			_, err := parseDays(value)
+			require.Error(t, err)
+		})
+	}
+}
+
 func TestValidateWindowAcceptsDaytimeAndOvernightWindows(t *testing.T) {
 	require.NoError(t, validateWindow("00:00", "23:59"))
 	require.NoError(t, validateWindow("23:00", "01:00"))
