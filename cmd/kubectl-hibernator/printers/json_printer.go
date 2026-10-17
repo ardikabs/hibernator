@@ -374,7 +374,7 @@ func (p *JSONPrinter) planListToJSON(out *PlanListOutput) PlanListJSON {
 			Phase:     string(item.Plan.Status.Phase),
 			Suspended: item.Plan.Spec.Suspend,
 			NextEvent: item.NextEvent,
-			Age:       FormatAge(time.Since(item.Plan.CreationTimestamp.Time)),
+			Age:       FormatAgeFromTime(item.Plan.CreationTimestamp.Time),
 		}
 	}
 
@@ -524,7 +524,7 @@ func (p *JSONPrinter) notifListToJSON(out *NotifListOutput) NotifListJSON {
 			Events:       events,
 			Sinks:        sinks,
 			WatchedPlans: len(notif.Status.WatchedPlans),
-			Age:          FormatAge(time.Since(notif.CreationTimestamp.Time)),
+			Age:          FormatAgeFromTime(notif.CreationTimestamp.Time),
 		}
 
 		if notif.Status.LastDeliveryTime != nil {

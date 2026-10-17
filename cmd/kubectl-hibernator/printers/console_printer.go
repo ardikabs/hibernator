@@ -90,7 +90,7 @@ func (p *ConsolePrinter) printExceptionList(out *ExceptionListOutput, w io.Write
 			displayExceptionValue(string(exception.Status.State)),
 			displayExceptionTime(exception.Spec.ValidFrom.Time),
 			displayExceptionTime(exception.Spec.ValidUntil.Time),
-			FormatAge(time.Since(exception.CreationTimestamp.Time)),
+			FormatAgeFromTime(exception.CreationTimestamp.Time),
 		)
 		tw.row(row...)
 	}
@@ -178,7 +178,7 @@ func (p *ConsolePrinter) printPlanListOutput(out *PlanListOutput, w io.Writer) e
 			suspended = "yes"
 		}
 
-		age := FormatAge(time.Since(plan.CreationTimestamp.Time))
+		age := FormatAgeFromTime(plan.CreationTimestamp.Time)
 		nextEvent := FormatNextEvent(item.NextEvent)
 
 		tw.row(plan.Name, plan.Namespace, plan.Status.Phase, suspended, nextEvent, age)
@@ -650,7 +650,7 @@ func (p *ConsolePrinter) printNotifList(out *NotifListOutput, w io.Writer) error
 			lastDelivery = HumanDuration(time.Since(notif.Status.LastDeliveryTime.Time)) + " ago"
 		}
 
-		age := FormatAge(time.Since(notif.CreationTimestamp.Time))
+		age := FormatAgeFromTime(notif.CreationTimestamp.Time)
 
 		tw.row(notif.Name, notif.Namespace, strings.Join(events, ","), sinkCount, planCount, lastDelivery, age)
 	}
