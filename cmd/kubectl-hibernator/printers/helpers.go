@@ -38,6 +38,16 @@ func FormatAge(d time.Duration) string {
 	}
 }
 
+// FormatAgeFromTime formats a creation timestamp into a Kubernetes-like age
+// string. Zero timestamps (e.g. dry-run previews that were never persisted)
+// render as "-" instead of a huge duration since year 1.
+func FormatAgeFromTime(t time.Time) string {
+	if t.IsZero() {
+		return "-"
+	}
+	return FormatAge(time.Since(t))
+}
+
 // HumanDuration formats a duration into a human-readable string.
 func HumanDuration(d time.Duration) string {
 	if d < 0 {

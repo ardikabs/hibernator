@@ -69,3 +69,9 @@ func TestStateIcon(t *testing.T) {
 func TestFormatNextEventNil(t *testing.T) {
 	require.Equal(t, "-", FormatNextEvent(nil))
 }
+
+func TestFormatAgeFromTime(t *testing.T) {
+	require.Equal(t, "-", FormatAgeFromTime(time.Time{}))
+	require.NotEqual(t, "-", FormatAgeFromTime(time.Now().Add(-time.Hour)))
+	require.Contains(t, FormatAgeFromTime(time.Now().Add(-90*time.Minute)), "h")
+}

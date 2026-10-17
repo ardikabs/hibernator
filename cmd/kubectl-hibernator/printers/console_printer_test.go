@@ -63,6 +63,21 @@ func TestExceptionListConsoleAllNamespaces(t *testing.T) {
 	assert.Equal(t, "operations", strings.Fields(lines[1])[1])
 }
 
+func TestExceptionListConsoleDryRunZeroAgeShowsDash(t *testing.T) {
+	exception := exceptionForPrinter("maintenance", "operations", time.Time{})
+	exception.CreationTimestamp = metav1.Time{}
+	out := &ExceptionListOutput{Items: []hibernatorv1alpha1.ScheduleException{exception}}
+
+	var buf bytes.Buffer
+	require.NoError(t, (&ConsolePrinter{}).PrintObj(out, &buf))
+
+	lines := strings.Split(strings.TrimSpace(buf.String()), "\n")
+	require.Len(t, lines, 2)
+	fields := strings.Fields(lines[1])
+	assert.Equal(t, "-", fields[len(fields)-1])
+	assert.NotContains(t, buf.String(), "mo")
+}
+
 func TestExceptionStatusConsole(t *testing.T) {
 	exception := exceptionForPrinter(
 		"maintenance",
