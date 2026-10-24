@@ -1,3 +1,19 @@
+<a name="v1.7.0-rc.5"></a>
+
+## [v1.7.0-rc.5](https://github.com/ardikabs/hibernator/compare/v1.7.0-rc.4...v1.7.0-rc.5) (2026-10-24)
+
+### ✨ Features
+
+* support ranging days for exception cli ([#205](https://github.com/ardikabs/hibernator/issues/205))
+
+### 🐛 Bug Fixes
+
+* exception create with dry-run for empty time ([#207](https://github.com/ardikabs/hibernator/issues/207))
+
+### 🧹 Miscellaneous
+
+* fix install-cli script ([#206](https://github.com/ardikabs/hibernator/issues/206))
+
 <a name="v1.7.0-rc.4"></a>
 
 ## [v1.7.0-rc.4](https://github.com/ardikabs/hibernator/compare/v1.7.0-rc.3...v1.7.0-rc.4) (2026-10-01)
