@@ -37,7 +37,10 @@ func NewCommand(opts *common.RootOptions) *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "override <plan-name>",
 		Short: "Override the schedule of a HibernatePlan",
-		Long: `Manually override the schedule of a HibernatePlan by setting the override-action
+		Long: `Manually override the schedule of a HibernatePlan, forcing it toward a target phase (hibernate or wakeup).
+The override is persistent — the plan stays locked until explicitly deactivated or until the deadline expires. See Manual Actions for full details.
+
+Manually override the schedule of a HibernatePlan by setting the override-action
 and override-phase-target annotations.
 
 While override is active, the controller ignores the configured schedule for this plan.
@@ -45,7 +48,7 @@ The plan will be driven toward the specified target phase (hibernate or wakeup) 
 stay there on every reconcile tick — it will NOT automatically transition to the next
 phase based on the schedule.
 
-⚠️  CAUTION: By default, this is a persistent override.
+Caution: By default, this is a persistent override.
 Once activated, the plan stays locked in the target phase until the override is explicitly
 deactivated using --disable. Forgetting to deactivate means the plan will never follow its
 schedule again until the annotations are removed.
@@ -68,37 +71,38 @@ Use retry instead when the plan is stuck in PhaseError.
 Activating the override requires --to (hibernate or wakeup).
 Deactivating the override requires --disable.
 
-Examples:
-  # Force the plan to hibernate immediately, ignoring the schedule
-  kubectl hibernator override my-plan --to hibernate
+Warning: Without --seconds or --until, this is not a one-shot action. The plan will stay locked at the target phase until you explicitly run kubectl hibernator override <plan> --disable or the deadline expires.`,
+		Example: `# Force the plan to hibernate immediately, ignoring the schedule
+kubectl hibernator override my-plan --to hibernate
 
-  # Force the plan to wake up immediately, ignoring the schedule
-  kubectl hibernator override my-plan --to wakeup
+# Force the plan to wake up immediately, ignoring the schedule
+kubectl hibernator override my-plan --to wakeup
 
-  # Deactivate the override and restore normal schedule control
-  kubectl hibernator override my-plan --disable
+# Deactivate the override and restore normal schedule control
+kubectl hibernator override my-plan --disable
 
-  # Force wakeup for 2 hours, then auto-restore schedule control
-  kubectl hibernator override my-plan --to wakeup --seconds 7200
+# Force wakeup for 2 hours, then auto-restore schedule control
+kubectl hibernator override my-plan --to wakeup --seconds 7200
 
-  # Force hibernation until tomorrow morning
-  kubectl hibernator override my-plan --to hibernate --until "tomorrow at 8am"
+# Force hibernation until tomorrow morning
+kubectl hibernator override my-plan --to hibernate --until "tomorrow at 8am"
 
-  # Force wakeup until a specific date/time
-  kubectl hibernator override my-plan --to wakeup --until "2026-01-15 14:30"
+# Force wakeup until a specific date/time
+kubectl hibernator override my-plan --to wakeup --until "2026-01-15 14:30"
 
-  # Preview what would happen without actually overriding
-  kubectl hibernator override my-plan --to hibernate --until "in 2 hours" --dry-run`,
-		Args: cobra.ExactArgs(1),
+# Preview what would happen without actually overriding
+kubectl hibernator override my-plan --to hibernate --until "in 2 hours" --dry-run`,
+		Annotations: map[string]string{"hibernator.ardikabs.com/see-also": "user-guides/override-actions.md"},
+		Args:        cobra.ExactArgs(1),
 		RunE: output.WrapRunE(func(ctx context.Context, args []string) error {
 			return runOverride(ctx, overrideOpts, args[0])
 		}),
 	}
 
 	cmd.Flags().StringVar(&overrideOpts.to, "to", "", `Phase to drive the plan toward. Required when activating. Valid values: "hibernate", "wakeup"`)
-	cmd.Flags().BoolVar(&overrideOpts.disable, "disable", false, "Deactivate the override and restore normal schedule control")
-	cmd.Flags().StringVar(&overrideOpts.until, "until", "", `Deadline for override. Supports formats: "in 30 minutes", "tomorrow at 6am", "2026-01-15 14:30", "2026-01-15T14:30:00Z"`)
-	cmd.Flags().Float64Var(&overrideOpts.seconds, "seconds", 0, "Duration in seconds for override to remain active (e.g., 3600, 1800)")
+	cmd.Flags().BoolVar(&overrideOpts.disable, "disable", false, "Deactivate the override and restore normal schedule control. Mutually exclusive with --to, --seconds, and --until.")
+	cmd.Flags().StringVar(&overrideOpts.until, "until", "", `Deadline for override. Supports formats: "in 30 minutes", "tomorrow at 6am", "2026-01-15 14:30", "2026-01-15T14:30:00Z". Mutually exclusive with --seconds.`)
+	cmd.Flags().Float64Var(&overrideOpts.seconds, "seconds", 0, "Duration in seconds for override to remain active (e.g., 3600, 1800). Mutually exclusive with --until.")
 	cmd.Flags().BoolVar(&overrideOpts.dryRun, "dry-run", false, "Preview what would happen without making changes")
 
 	return cmd

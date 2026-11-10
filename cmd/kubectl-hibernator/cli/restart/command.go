@@ -31,12 +31,13 @@ func NewCommand(opts *common.RootOptions) *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "restart <plan-name>",
 		Short: "Re-trigger the last executor operation on a HibernatePlan",
-		Long: `Re-trigger the last executor operation by adding the restart annotation to a HibernatePlan.
+		Long: `Re-trigger the last executor operation by adding the restart annotation to a HibernatePlan. This is a one-shot action — the annotation is consumed atomically by the controller. See Manual Actions for full details.
 
 The controller detects the annotation and re-runs the executor that was last recorded in
 .status.currentOperation, without changing the schedule or overriding any phase logic.
 
 This is useful when you want to:
+
   - Re-apply a partial hibernation or wakeup that succeeded only for some targets.
   - Test idempotency of an executor on a live plan.
 
@@ -46,10 +47,15 @@ Unlike override, restart is a voluntary, one-shot action — the annotation is c
 The plan must be in PhaseActive (to re-run wakeup) or PhaseHibernated (to re-run hibernation).
 Use retry instead when the plan is stuck in PhaseError.
 
-Examples:
-  kubectl hibernator restart my-plan
-  kubectl hibernator restart my-plan -n production`,
-		Args: cobra.ExactArgs(1),
+Tip: To discard the locked cycle intent and start a new hibernation cycle, add the hibernator.ardikabs.com/fresh=true annotation alongside restart=true. See Manual Actions for details on fresh restart. CLI support for --fresh is tracked separately.`,
+		Example: `# Re-trigger the last operation for a plan
+kubectl hibernator restart my-plan
+# Re-trigger the last operation in a specific namespace
+kubectl hibernator restart my-plan -n production
+# Preview restart without making changes
+kubectl hibernator restart my-plan --dry-run`,
+		Annotations: map[string]string{"hibernator.ardikabs.com/see-also": "user-guides/override-actions.md"},
+		Args:        cobra.ExactArgs(1),
 		RunE: output.WrapRunE(func(ctx context.Context, args []string) error {
 			return runRestart(ctx, restartOpts, args[0])
 		}),

@@ -35,12 +35,15 @@ func NewCommand(opts *common.RootOptions) *cobra.Command {
 and setting spec.suspend=false.
 
 This clears the suspend-until deadline and suspend-reason annotations,
-allowing the controller to resume schedule evaluation.
-
-Examples:
-  kubectl hibernator resume my-plan
-  kubectl hibernator resume my-plan -n production`,
-		Args: cobra.ExactArgs(1),
+allowing the controller to resume schedule evaluation.`,
+		Example: `# Resume a suspended HibernatePlan
+kubectl hibernator resume my-plan
+# Resume a HibernatePlan in a specific namespace
+kubectl hibernator resume my-plan -n production
+# Preview resume without making changes
+kubectl hibernator resume my-plan --dry-run`,
+		Annotations: map[string]string{"hibernator.ardikabs.com/see-also": "user-guides/plan-suspension.md"},
+		Args:        cobra.ExactArgs(1),
 		RunE: output.WrapRunE(func(ctx context.Context, args []string) error {
 			return runResume(ctx, resOpts, args[0])
 		}),

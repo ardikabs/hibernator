@@ -53,24 +53,27 @@ func NewCommand(opts *common.RootOptions) *cobra.Command {
 by plan name, target, or execution ID.
 
 The command discovers the controller pod automatically by label selector
-(app.kubernetes.io/name=hibernator), then streams or tails its logs.
-
-Examples:
-  kubectl hibernator logs my-plan
-  kubectl hibernator logs my-plan --tail 100
-  kubectl hibernator logs my-plan --target my-cluster
-  kubectl hibernator logs my-plan --follow
-  kubectl hibernator logs my-plan --json`,
+(app.kubernetes.io/name=hibernator), then streams or tails its logs.`,
+		Example: `# View controller logs for a plan
+kubectl hibernator logs my-plan
+# View the last 100 log lines for a plan
+kubectl hibernator logs my-plan --tail 100
+# View logs filtered by target
+kubectl hibernator logs my-plan --target my-cluster
+# Stream logs continuously
+kubectl hibernator logs my-plan --follow
+# View logs with JSON output
+kubectl hibernator logs my-plan --json`,
 		Args: cobra.ExactArgs(1),
 		RunE: output.WrapRunE(func(ctx context.Context, args []string) error {
 			return runLogs(ctx, logsOpts, args[0])
 		}),
 	}
 
-	cmd.Flags().StringVar(&logsOpts.target, "target", "", "Filter logs by target name")
-	cmd.Flags().StringVar(&logsOpts.level, "level", "", "Filter logs by level: 'error' (logs with error field) or 'info' (logs without errors)")
-	cmd.Flags().Int64Var(&logsOpts.tail, "tail", 500, "Number of recent log lines to fetch")
-	cmd.Flags().BoolVarP(&logsOpts.follow, "follow", "f", false, "Follow log output (stream)")
+	cmd.Flags().StringVar(&logsOpts.target, "target", "", "Filter logs by target name.")
+	cmd.Flags().StringVar(&logsOpts.level, "level", "", "Filter logs by level: 'error' (logs with error field) or 'info' (logs without errors). Other values match everything.")
+	cmd.Flags().Int64Var(&logsOpts.tail, "tail", 500, "Number of recent log lines to fetch (default: 500). Ignored with --follow.")
+	cmd.Flags().BoolVarP(&logsOpts.follow, "follow", "f", false, "Stream logs continuously until interrupted.")
 
 	return cmd
 }

@@ -37,8 +37,11 @@ The controller will detect this annotation and initiate a retry of the failed op
 This command only applies to plans in Error phase. To re-run the last executor
 operation on an Active or Hibernated plan, use the 'restart' subcommand instead.
 
-Examples:
-  kubectl hibernator retry my-plan`,
+Note: retry only applies to plans in Error phase. For plans in Active or Hibernated phase, use restart instead.`,
+		Example: `# Trigger a retry for a plan in Error phase
+kubectl hibernator retry my-plan
+# Preview retry without making changes
+kubectl hibernator retry my-plan --dry-run`,
 		Args: cobra.ExactArgs(1),
 		RunE: output.WrapRunE(func(ctx context.Context, args []string) error {
 			return runRetry(ctx, retryOpts, args[0])

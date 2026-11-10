@@ -28,7 +28,13 @@ func NewCommand(opts *common.RootOptions) *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "version",
 		Short: "Print the version of kubectl-hibernator",
-		Long:  "Print the version of kubectl-hibernator",
+		Long: `Print the version of kubectl-hibernator
+
+Use --json for machine-readable JSON output with version and commit instead of human text. The update check is skipped in JSON mode.`,
+		Example: `# Print the plugin version
+kubectl hibernator version
+# Print the version with JSON output
+kubectl hibernator version --json`,
 		RunE: output.WrapRunE(func(ctx context.Context, args []string) error {
 			out := output.FromContext(ctx)
 			if opts.JsonOutput {

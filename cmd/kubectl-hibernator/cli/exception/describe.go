@@ -38,7 +38,21 @@ func newDescribeCommand(root *common.RootOptions) *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "describe [name...]",
 		Short: "Show operational details of ScheduleExceptions",
-		Args:  cobra.ArbitraryArgs,
+		Long: `Show operational details of ScheduleExceptions: state, referenced plan,
+validity period, window, and labels.
+
+Pass exact exception names, or filter with --selector (-l), --plan, or --state
+(comma-separated: Active,Pending,Expired,Detached). Exact names cannot be mixed
+with filters.`,
+		Example: `# Show details of a ScheduleException by name
+kubectl hibernator exception describe holiday-abc12
+# Show exceptions scoped to a plan
+kubectl hibernator exception describe --plan my-plan
+# Show exceptions filtered by label selector and state
+kubectl hibernator exception describe -l env=prod --state Active,Pending
+# Show exceptions across all namespaces
+kubectl hibernator exception describe -A`,
+		Args: cobra.ArbitraryArgs,
 		RunE: output.WrapRunE(func(ctx context.Context, args []string) error {
 			return runDescribe(ctx, opts, args)
 		}),

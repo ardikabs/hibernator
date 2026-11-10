@@ -46,17 +46,15 @@ weekend resources, run the weekend, then import the backup back.
 
 Marking is reversible (import restores the backup, and the next full
 hibernation clears markers automatically). Use --delete to permanently
-remove the non-kept resources instead.
+remove the non-kept resources instead.`,
+		Example: `# Exclude everything except weekend runners (repeat --keep per resource)
+kubectl hibernator restore prune my-plan --target eks-cluster --keep ng-a --keep ng-b
 
-Examples:
-  # Exclude everything except weekend runners (repeat --keep per resource)
-  kubectl hibernator restore prune my-plan --target eks-cluster --keep ng-a --keep ng-b
+# Preview what would be excluded
+kubectl hibernator restore prune my-plan --target eks-cluster --keep ng-a --dry-run
 
-  # Preview what would be excluded
-  kubectl hibernator restore prune my-plan --target eks-cluster --keep ng-a --dry-run
-
-  # Permanently delete instead of marking
-  kubectl hibernator restore prune my-plan --target eks-cluster --keep ng-a --delete --yes`,
+# Permanently delete instead of marking
+kubectl hibernator restore prune my-plan --target eks-cluster --keep ng-a --delete --yes`,
 		Args: cobra.ExactArgs(1),
 		RunE: output.WrapRunE(func(ctx context.Context, args []string) error {
 			return runPrune(ctx, pruneOpts, args[0])

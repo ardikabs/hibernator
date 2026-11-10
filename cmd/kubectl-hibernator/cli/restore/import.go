@@ -41,19 +41,19 @@ func newImportCommand(opts *common.RootOptions) *cobra.Command {
 		Short: "Import previously exported data back into the restore point",
 		Long: `Write a file produced by 'restore export' back into the restore point,
 replacing the target entry (or a single resource state) wholesale.
+A backup is refused when its embedded target name differs from --target,
+so cross-target imports cannot happen by accident.
 
 This is the restore half of the weekend partial-run workflow: after running
-the weekend on a pruned subset, import the full backup taken beforehand.
+the weekend on a pruned subset, import the full backup taken beforehand.`,
+		Example: `# Restore a whole target entry
+kubectl hibernator restore import my-plan --target eks-cluster --file eks-full.json
 
-Examples:
-  # Restore a whole target entry
-  kubectl hibernator restore import my-plan --target eks-cluster --file eks-full.json
+# Restore a single resource state
+kubectl hibernator restore import my-plan --target eks-cluster --resource-id ng-main --file ng-main.json
 
-  # Restore a single resource state
-  kubectl hibernator restore import my-plan --target eks-cluster --resource-id ng-main --file ng-main.json
-
-  # Preview without writing
-  kubectl hibernator restore import my-plan --target eks-cluster --file eks-full.json --dry-run`,
+# Preview without writing
+kubectl hibernator restore import my-plan --target eks-cluster --file eks-full.json --dry-run`,
 		Args: cobra.ExactArgs(1),
 		RunE: output.WrapRunE(func(ctx context.Context, args []string) error {
 			return runImport(ctx, importOpts, args[0])

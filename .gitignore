@@ -91,6 +91,7 @@ charts/*/Chart.lock
 
 # Miscellaneous
 gen-*
+!hack/tools/gen-*
 
 # Beads / Dolt files (added by bd init)
 .dolt/

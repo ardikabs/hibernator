@@ -38,11 +38,13 @@ func NewCommand(opts *common.RootOptions) *cobra.Command {
 		Aliases: []string{"schedule"},
 		Short:   "Preview schedule details and upcoming events for a HibernatePlan",
 		Long: `Show the hibernation schedule including timezone, off-hour windows,
-upcoming hibernate/wakeup events, and any active schedule exceptions.
+upcoming hibernate/wakeup events, and any active schedule exceptions.`,
+		Example: `# Working with cluster resource
+kubectl hibernator preview my-plan
 
-Works with both cluster resources and local YAML files:
-  kubectl hibernator preview my-plan
-  kubectl hibernator preview --file plan.yaml`,
+# Working with local YAML files
+kubectl hibernator preview --file plan.yaml
+  `,
 		Args: cobra.MaximumNArgs(1),
 		RunE: output.WrapRunE(func(ctx context.Context, args []string) error {
 			return runPreview(ctx, previewOpts, args)

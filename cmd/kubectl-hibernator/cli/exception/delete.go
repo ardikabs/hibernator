@@ -38,7 +38,18 @@ func newDeleteCommand(root *common.RootOptions) *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "delete [name...]",
 		Short: "Delete ScheduleExceptions",
-		Args:  cobra.ArbitraryArgs,
+		Long: `Delete ScheduleExceptions by name or by qualified filters.
+
+Provide exact names, or select with --selector (-l) or --plan. At least one of
+a name, --selector, or --plan is required. Exact names cannot be mixed with
+filters. Deletion prompts for confirmation unless --yes is given.`,
+		Example: `# Delete a ScheduleException by name
+kubectl hibernator exception delete holiday-abc12
+# Delete matching exceptions without confirmation
+kubectl hibernator exception delete -l env=prod --plan my-plan --yes
+# Preview the exceptions that would be deleted
+kubectl hibernator exception delete --plan my-plan --dry-run`,
+		Args: cobra.ArbitraryArgs,
 		RunE: output.WrapRunE(func(ctx context.Context, args []string) error {
 			return runDelete(ctx, opts, args)
 		}),
