@@ -33,13 +33,11 @@ This prevents the executor from using stale or problematic restore metadata.
 When a resource is dropped, its entire state is removed from the restore ConfigMap.
 The next hibernation cycle will capture fresh restore data for that resource.
 
-Flags:
-  --target       (required) The target name containing the resource
-  --resource-id  (required) The resource identifier to drop
-
-Examples:
-  kubectl hibernator restore drop my-plan --target eks-cluster --resource-id node-xyz
-  kubectl hibernator restore drop my-plan --target rds --resource-id db-prod-01`,
+Warning: drop applies immediately without a confirmation prompt. Use --dry-run first when scripting.`,
+		Example: `# Drop a resource from a target's restore point
+kubectl hibernator restore drop my-plan --target eks-cluster --resource-id node-xyz
+# Drop a resource from another target's restore point
+kubectl hibernator restore drop my-plan --target rds --resource-id db-prod-01`,
 		Args: cobra.ExactArgs(1),
 		RunE: output.WrapRunE(func(ctx context.Context, args []string) error {
 			return runDrop(ctx, restoreOpts, args[0])

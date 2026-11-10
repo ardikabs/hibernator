@@ -30,25 +30,27 @@ func newDescribeCommand(opts *common.RootOptions) *cobra.Command {
 		Use:   "describe <notification-name>",
 		Short: "Display detailed information about a HibernateNotification",
 		Long: `Show comprehensive details about a HibernateNotification including:
+
 - Label selector configuration
 - Subscribed events
 - Sink configurations (name, type, secret/template references)
-- Status: watched plans, delivery history, last delivery/failure times
+- Status: watched plans, delivery history, last delivery/failure times`,
+		Example: `# Describe a HibernateNotification
+kubectl hibernator notification describe my-notification
+# Describe a HibernateNotification in a specific namespace
+kubectl hibernator notification describe my-notification -n production
 
-Use --plan to check whether this notification's selector matches a specific plan's labels.
-
-Examples:
-  kubectl hibernator notification describe my-notification
-  kubectl hibernator notification describe my-notification -n production
-  kubectl hibernator notification describe my-notification --plan my-plan
-  kubectl hibernator notification describe my-notification --json`,
+# Use --plan to check whether this notification's selector matches a specific plan's labels.
+kubectl hibernator notification describe my-notification --plan my-plan
+# Describe a HibernateNotification with JSON output
+kubectl hibernator notification describe my-notification --json`,
 		Args: cobra.ExactArgs(1),
 		RunE: output.WrapRunE(func(ctx context.Context, args []string) error {
 			return runDescribe(ctx, describeOpts, args[0])
 		}),
 	}
 
-	cmd.Flags().StringVar(&describeOpts.planName, "plan", "", "Check if this notification matches the given HibernatePlan")
+	cmd.Flags().StringVar(&describeOpts.planName, "plan", "", "Check whether this notification's selector matches the given HibernatePlan's labels")
 
 	return cmd
 }

@@ -33,14 +33,17 @@ func NewCommand(opts *common.RootOptions) *cobra.Command {
 		Aliases: []string{"ls"},
 		Short:   "List HibernatePlans in the cluster",
 		Long: `List all HibernatePlan resources with useful information such as
-name, namespace, phase, suspension status, and next scheduled event.
-
-Examples:
-  kubectl hibernator list
-  kubectl hibernator list -n production
-  kubectl hibernator list --all-namespaces
-  kubectl hibernator list --json
-  kubectl hibernator ls`,
+name, namespace, phase, suspension status, and next scheduled event.`,
+		Example: `# List HibernatePlans in the current namespace
+kubectl hibernator list
+# List HibernatePlans in a specific namespace
+kubectl hibernator list -n production
+# List HibernatePlans across all namespaces
+kubectl hibernator list --all-namespaces
+# List HibernatePlans with JSON output
+kubectl hibernator list --json
+# List HibernatePlans using the short alias
+kubectl hibernator ls`,
 		RunE: output.WrapRunE(func(ctx context.Context, args []string) error {
 			return runList(ctx, listOpts)
 		}),

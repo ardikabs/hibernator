@@ -37,7 +37,7 @@ func NewCommand(opts *common.RootOptions) *cobra.Command {
 		Use:   "suspend <plan-name>",
 		Short: "Suspend a HibernatePlan by setting annotations",
 		Long: `Suspend a HibernatePlan by setting spec.suspend=true and optional suspend-until annotation.
-While suspended, the controller prevents all hibernation operations for this plan.
+While suspended, the controller prevents all hibernation operations for this plan. See Plan Suspension for details on the suspension mechanism.
 
 By default, suspension is indefinite — the plan stays suspended until explicitly resumed
 using "kubectl hibernator resume". To set a bounded suspension period, specify either
@@ -49,35 +49,38 @@ The --until flag supports multiple user-friendly formats:
   Date:          "2026-01-15", "Jan 15, 2026"
   Date+Time:     "2026-01-15 14:30", "Jan 15, 2026 2:30pm"
   RFC3339:       "2026-01-15T14:30:00Z" (for scripts)
+  Tomorrow:      "tomorrow", "tomorrow at 6am", "tomorrow at 14:30"
+  Next:          "next Monday", "next week"
 
 All times are interpreted in your local timezone and stored as UTC internally.
 
-Examples:
-  # Suspend indefinitely (must manually resume)
-  kubectl hibernator suspend my-plan --reason "manual hold"
+Note: All times are interpreted in your local timezone and stored as UTC internally.`,
+		Example: `# Suspend indefinitely (must manually resume)
+kubectl hibernator suspend my-plan --reason "manual hold"
 
-  # Suspend for 4 hours
-  kubectl hibernator suspend my-plan --seconds 14400 --reason "deploying new version"
+# Suspend for 4 hours
+kubectl hibernator suspend my-plan --seconds 14400 --reason "deploying new version"
 
-  # Suspend using natural language
-  kubectl hibernator suspend my-plan --until "in 2 hours" --reason "maintenance window"
+# Suspend using natural language
+kubectl hibernator suspend my-plan --until "in 2 hours" --reason "maintenance window"
 
-  # Suspend until tomorrow morning
-  kubectl hibernator suspend my-plan --until "tomorrow at 8am" --reason "scheduled maintenance"
+# Suspend until tomorrow morning
+kubectl hibernator suspend my-plan --until "tomorrow at 8am" --reason "scheduled maintenance"
 
-  # Suspend until a specific date/time
-  kubectl hibernator suspend my-plan --until "2026-01-15 14:30" --reason "holiday freeze"
+# Suspend until a specific date/time
+kubectl hibernator suspend my-plan --until "2026-01-15 14:30" --reason "holiday freeze"
 
-  # Preview what would happen without actually suspending
-  kubectl hibernator suspend my-plan --until "in 2 hours" --reason "test" --dry-run`,
-		Args: cobra.ExactArgs(1),
+# Preview what would happen without actually suspending
+kubectl hibernator suspend my-plan --until "in 2 hours" --reason "test" --dry-run`,
+		Annotations: map[string]string{"hibernator.ardikabs.com/see-also": "user-guides/plan-suspension.md"},
+		Args:        cobra.ExactArgs(1),
 		RunE: output.WrapRunE(func(ctx context.Context, args []string) error {
 			return runSuspend(ctx, susOpts, args[0])
 		}),
 	}
 
-	cmd.Flags().Float64Var(&susOpts.seconds, "seconds", 0, "Duration in seconds to suspend (e.g., 3600, 1800)")
-	cmd.Flags().StringVar(&susOpts.until, "until", "", `Deadline for suspension. Supports formats: "in 30 minutes", "tomorrow at 6am", "2026-01-15 14:30", "2026-01-15T14:30:00Z"`)
+	cmd.Flags().Float64Var(&susOpts.seconds, "seconds", 0, "Duration in seconds to suspend (e.g., 3600, 1800). Mutually exclusive with --until.")
+	cmd.Flags().StringVar(&susOpts.until, "until", "", `Deadline for suspension. Supports formats: "in 30 minutes", "tomorrow at 6am", "2026-01-15 14:30", "2026-01-15T14:30:00Z". Mutually exclusive with --seconds.`)
 	cmd.Flags().StringVar(&susOpts.reason, "reason", "User initiated", "Reason for suspension (recommended)")
 	cmd.Flags().BoolVar(&susOpts.dryRun, "dry-run", false, "Preview what would happen without making changes")
 

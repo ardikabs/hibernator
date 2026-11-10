@@ -33,7 +33,20 @@ func newListCommand(root *common.RootOptions) *cobra.Command {
 		Use:     "list",
 		Aliases: []string{"ls"},
 		Short:   "List ScheduleExceptions",
-		Args:    cobra.NoArgs,
+		Long: `Compact kubectl-get style listing of ScheduleExceptions.
+
+Filter by referenced plan (--plan), label selector (-l/--selector), or exception
+type (--type, comma-separated: suspend,extend,replace). Use -A/--all-namespaces
+to list across namespaces.`,
+		Example: `# List exceptions in the current namespace
+kubectl hibernator exception list
+# List exceptions across all namespaces
+kubectl hibernator exception list -A
+# List exceptions scoped to a plan
+kubectl hibernator exception list --plan my-plan
+# List exceptions filtered by label selector and type
+kubectl hibernator exception list -l env=prod --type suspend,replace`,
+		Args: cobra.NoArgs,
 		RunE: output.WrapRunE(func(ctx context.Context, args []string) error {
 			return runList(ctx, opts)
 		}),

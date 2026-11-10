@@ -73,38 +73,25 @@ Without either, a synthetic demo payload is generated.
 
 Use --dry-run to render the message without sending it.
 
-LOCAL MODE (no cluster access):
-  When --sink-type and --config-file are provided, the command runs fully locally
-  without any Kubernetes cluster access. The notification-name argument is optional
-  in this mode. Combine with --plan-file to use a real plan definition from disk.
-
-Examples:
-  # Send a test notification (auto-selects sink if only one)
-  kubectl hibernator notification send my-notification --event Success
-
-  # Send to a specific sink
-  kubectl hibernator notification send my-notification --event Start --sink slack-alerts
-
-  # Dry-run: render message without sending
-  kubectl hibernator notification send my-notification --event Failure --dry-run
-
-  # Use payload from a real plan
-  kubectl hibernator notification send my-notification --event Success --plan my-plan
-
-  # Use local config file instead of cluster Secret
-  kubectl hibernator notification send my-notification --event Start --config-file ./slack-config.json
-
-  # Use local template file
-  kubectl hibernator notification send my-notification --event Success --template-file ./custom.gotpl
-
-  # Fully local (no cluster needed)
-  kubectl hibernator notification send --event Success --sink-type slack --config-file ./slack-config.json
-
-  # Fully local with plan from file
-  kubectl hibernator notification send --event Failure --sink-type telegram --config-file ./telegram.json --plan-file ./my-plan.yaml
-
-  # Control phase in synthetic payload
-  kubectl hibernator notification send my-notification --event Start --phase Hibernating`,
+Tip: When --sink-type and --config-file are both provided, the command runs fully locally without any Kubernetes API access. The notification-name argument is optional in this mode. Combine with --plan-file to test against a real plan definition from disk.`,
+		Example: `# Send a test notification (auto-selects sink if only one)
+kubectl hibernator notification send my-notification --event Success
+# Send to a specific sink
+kubectl hibernator notification send my-notification --event Start --sink slack-alerts
+# Dry-run: render message without sending
+kubectl hibernator notification send my-notification --event Failure --dry-run
+# Use payload from a real plan
+kubectl hibernator notification send my-notification --event Success --plan my-plan
+# Use local config file instead of cluster Secret
+kubectl hibernator notification send my-notification --event Start --config-file ./slack-config.json
+# Use local template file
+kubectl hibernator notification send my-notification --event Success --template-file ./custom.gotpl
+# Fully local (no cluster needed)
+kubectl hibernator notification send --event Success --sink-type slack --config-file ./slack-config.json
+# Fully local with plan from file
+kubectl hibernator notification send --event Failure --sink-type telegram --config-file ./telegram.json --plan-file ./my-plan.yaml
+# Control phase in synthetic payload
+kubectl hibernator notification send my-notification --event Start --phase Hibernating`,
 		Args: cobra.MaximumNArgs(1),
 		RunE: output.WrapRunE(func(ctx context.Context, args []string) error {
 			var notifName string
@@ -115,9 +102,9 @@ Examples:
 		}),
 	}
 
-	cmd.Flags().StringVarP(&sendOpts.event, "event", "e", "", "Event type to simulate (Start, Success, Failure, Recovery, PhaseChange)")
-	cmd.Flags().StringVarP(&sendOpts.planName, "plan", "p", "", "Populate payload from this HibernatePlan's status (cluster)")
-	cmd.Flags().StringVarP(&sendOpts.planFile, "plan-file", "f", "", "Local YAML file of a HibernatePlan to populate payload from")
+	cmd.Flags().StringVarP(&sendOpts.event, "event", "e", "", "Event type to simulate (case-insensitive). Required. One of: Start, Success, Failure, Recovery, PhaseChange")
+	cmd.Flags().StringVarP(&sendOpts.planName, "plan", "p", "", "Populate payload from this HibernatePlan's current cluster status. Mutually exclusive with --plan-file.")
+	cmd.Flags().StringVarP(&sendOpts.planFile, "plan-file", "f", "", "Local YAML file of a HibernatePlan to populate payload from. Mutually exclusive with --plan.")
 	cmd.Flags().StringVarP(&sendOpts.configFile, "config-file", "c", "", "Local JSON file for sink config (bypasses cluster Secret)")
 	cmd.Flags().StringVarP(&sendOpts.templateFile, "template-file", "t", "", "Local Go template file (overrides cluster ConfigMap)")
 	cmd.Flags().StringVar(&sendOpts.sinkName, "sink", "", "Sink name to send to (auto-selected if only one sink)")

@@ -33,16 +33,19 @@ func newListCommand(opts *common.RootOptions) *cobra.Command {
 		Aliases: []string{"ls"},
 		Short:   "List HibernateNotifications in the cluster",
 		Long: `List all HibernateNotification resources with useful information such as
-name, namespace, subscribed events, sink count, watched plans, and last delivery.
+name, namespace, subscribed events, sink count, watched plans, and last delivery.`,
+		Example: `# List notifications in the current namespace
+kubectl hibernator notification list
+# List notifications in a specific namespace
+kubectl hibernator notification list -n production
+# List notifications across all namespaces
+kubectl hibernator notification list --all-namespaces
 
-Use --plan to filter notifications whose selector matches a specific HibernatePlan's labels.
+# Use --plan to filter notifications whose selector matches a specific HibernatePlan's labels.
+kubectl hibernator notification list --plan my-plan
 
-Examples:
-  kubectl hibernator notification list
-  kubectl hibernator notification list -n production
-  kubectl hibernator notification list --all-namespaces
-  kubectl hibernator notification list --plan my-plan
-  kubectl hibernator notification list --json`,
+# Use --json to display with JSON format
+kubectl hibernator notification list --json`,
 		Args: cobra.NoArgs,
 		RunE: output.WrapRunE(func(ctx context.Context, args []string) error {
 			return runList(ctx, listOpts)
@@ -50,7 +53,7 @@ Examples:
 	}
 
 	cmd.Flags().BoolVarP(&listOpts.allNamespaces, "all-namespaces", "A", false, "List notifications from all namespaces")
-	cmd.Flags().StringVar(&listOpts.planName, "plan", "", "Filter notifications matching this HibernatePlan's labels")
+	cmd.Flags().StringVar(&listOpts.planName, "plan", "", "Filter notifications whose selector matches this HibernatePlan's labels")
 
 	return cmd
 }

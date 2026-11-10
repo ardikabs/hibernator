@@ -44,6 +44,7 @@ func newPatchCommand(opts *common.RootOptions) *cobra.Command {
 		Short: "Update resource state in the restore point",
 		Long: `Modify specific fields or apply structured patches to a resource's restore state.
 Supports three mutation modes:
+
 1. Field-level updates: --set key.path=value --remove key.path
 2. JSON merge patch: --patch '{"key":"value"}'
 3. File-based patch: --patch-file=patch.json
@@ -51,12 +52,13 @@ Supports three mutation modes:
 Field paths support dot notation for nested access: config.scaling.min
 
 Modes are mutually exclusive:
+
 - Use --set/--remove for granular field updates
 - Use --patch or --patch-file for structured changes
 - Cannot mix granular and patch modes in one command
 
-Examples:
-# Field updates (dot notation)
+Note: Field operations (--set/--remove) and JSON merge patch (--patch/--patch-file) are mutually exclusive — use one mode per invocation.`,
+		Example: `# Field updates (dot notation)
 kubectl hibernator restore patch my-plan -t eks -r node-123 \
 --set desiredCapacity=10 \
 --set config.tags.environment=prod

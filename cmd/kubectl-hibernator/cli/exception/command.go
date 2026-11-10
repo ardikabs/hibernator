@@ -16,14 +16,15 @@ func NewCommand(opts *common.RootOptions) *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "exception",
 		Short: "Manage ScheduleException resources",
-		Long: `Create, list, inspect, and delete ScheduleException resources
+		Long: `Create, list, inspect, and delete ScheduleExceptions
 that temporarily deviate HibernatePlans from their base schedules.
 
 Subcommands:
-  create  Create exceptions for one plan (--plan) or a plan selector (-l)
-  list    Compact kubectl-get style listing with plan, label, and type filters
-  describe  Operational detail with state, plan, and label filters
-  delete  Delete by name or qualified filters with confirmation`,
+  create    Create exceptions for one plan (--plan) or a plan selector (-l)
+  list      Compact listing with plan, label, and type filters
+  describe  Show operational detail with state, plan, and label filters
+  delete    Delete by name or qualified filters with confirmation`,
+		Annotations: map[string]string{"hibernator.ardikabs.com/see-also": "user-guides/schedule-exceptions.md"},
 	}
 
 	cmd.AddCommand(newCreateCommand(opts))

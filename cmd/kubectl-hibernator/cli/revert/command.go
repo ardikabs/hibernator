@@ -35,30 +35,33 @@ func NewCommand(opts *common.RootOptions) *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "revert <plan-name>",
 		Short: "Revert a failed hibernation by waking up successfully hibernated targets",
-		Long: `Trigger a revert operation on a HibernatePlan in Error phase.
+		Long: `Selectively wake up targets that were successfully hibernated on a plan stuck in Error phase after a failed hibernation. Targets that failed are skipped. See Manual Actions for full details.
 
 This command sets the revert annotation, causing the controller to transition
 the plan to WakingUp and attempt to restore targets that were successfully
 hibernated. Targets that failed to hibernate are skipped (treated as no-op).
 
 After wakeup completes:
+
   - During hibernation window: plan transitions to Suspended
   - During active window: plan transitions to Active
 
-Use --dry-run to preview which targets would be reverted without making changes.
-
-Examples:
-  kubectl hibernator revert my-plan
-  kubectl hibernator revert my-plan --dry-run
-  kubectl hibernator revert my-plan --wait`,
-		Args: cobra.ExactArgs(1),
+Use --dry-run to preview which targets would be reverted without making changes.`,
+		Example: `# Revert a plan stuck in Error phase
+kubectl hibernator revert my-plan
+# Preview which targets would be reverted
+kubectl hibernator revert my-plan --dry-run
+# Revert and wait for completion
+kubectl hibernator revert my-plan --wait`,
+		Annotations: map[string]string{"hibernator.ardikabs.com/see-also": "user-guides/override-actions.md"},
+		Args:        cobra.ExactArgs(1),
 		RunE: output.WrapRunE(func(ctx context.Context, args []string) error {
 			return runRevert(ctx, revertOpts, args[0])
 		}),
 	}
 
 	cmd.Flags().BoolVar(&revertOpts.dryRun, "dry-run", false, "Preview which targets would be reverted without making changes")
-	cmd.Flags().BoolVar(&revertOpts.wait, "wait", false, "Wait for the revert operation to complete")
+	cmd.Flags().BoolVar(&revertOpts.wait, "wait", false, "Wait for the revert operation to complete (polls every 5s, up to 10m)")
 
 	return cmd
 }

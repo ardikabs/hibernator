@@ -42,17 +42,13 @@ func newInitCommand(opts *common.RootOptions) *cobra.Command {
 
 This is useful for handling edge cases where no restore point exists for a target
 but the target is part of the plan. Initializing creates a clean entry that can later
-be populated with actual restore data during hibernation.
-
-Flags:
-  --target   (required) Target name to initialize
-  --executor (required) Executor type (e.g., eks, rds, ec2, karpenter)
-  --force    Overwrite existing restore point entry for the target
-
-Examples:
-  kubectl hibernator restore init my-plan --target eks-cluster --executor eks
-  kubectl hibernator restore init my-plan --target db-prod --executor rds --force
-  kubectl hibernator restore init my-plan -t karpenter-target -x karpenter`,
+be populated with actual restore data during hibernation.`,
+		Example: `# Initialize an empty restore point for a target
+kubectl hibernator restore init my-plan --target eks-cluster --executor eks
+# Initialize an empty restore point overwriting the existing entry
+kubectl hibernator restore init my-plan --target db-prod --executor rds --force
+# Initialize an empty restore point using short flags
+kubectl hibernator restore init my-plan -t karpenter-target -x karpenter`,
 		Args: cobra.ExactArgs(1),
 		RunE: output.WrapRunE(func(ctx context.Context, args []string) error {
 			return runInit(ctx, initOpts, args[0])

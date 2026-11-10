@@ -29,19 +29,18 @@ func newInspectCommand(opts *common.RootOptions) *cobra.Command {
 		Use:   "inspect <plan-name>",
 		Short: "Display restore point resource details",
 		Long: `Show the actual content and metadata of a specific resource in the restore point.
+
 Displays:
+
 - Target and Executor information
 - Resource quality indicator (isLive status)
-- Full resource state data (executor-specific configuration and metadata)
-
-Requires:
-  --target      The target name containing the resource
-  --resource-id The resource identifier
-
-Examples:
-  kubectl hibernator restore inspect my-plan --target eks-cluster --resource-id node-123
-  kubectl hibernator restore inspect my-plan --target rds --resource-id db-prod-01
-  kubectl hibernator restore inspect my-plan -t eks-cluster -r node-123 --json`,
+- Full resource state data (executor-specific configuration and metadata)`,
+		Example: `# Inspect a resource in the restore point
+kubectl hibernator restore inspect my-plan --target eks-cluster --resource-id node-123
+# Inspect a resource in another target's restore point
+kubectl hibernator restore inspect my-plan --target rds --resource-id db-prod-01
+# Inspect a resource with JSON output using short flags
+kubectl hibernator restore inspect my-plan -t eks-cluster -r node-123 --json`,
 		Args: cobra.ExactArgs(1),
 		RunE: output.WrapRunE(func(ctx context.Context, args []string) error {
 			return runInspect(ctx, restoreOpts, args[0])

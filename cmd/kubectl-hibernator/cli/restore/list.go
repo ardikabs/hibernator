@@ -31,21 +31,19 @@ func newListCommand(opts *common.RootOptions) *cobra.Command {
 		Long: `Show restore point information for a HibernatePlan.
 
 By default, shows a summary of the restore point:
+
 - Overall live status (isLive=true means high-quality recent capture)
 - Total number of resources in the restore point
-- Summary by target
+- Summary by target`,
+		Example: `# Show restore point summary
+kubectl hibernator restore list my-plan
 
-Output formats:
-  -o wide   Show detailed list of all individual resources
-  -o json   Show detailed list in JSON format
-
-Filter by specific target using --target flag.
-
-Examples:
-  kubectl hibernator restore list my-plan              # Show summary
-  kubectl hibernator restore list my-plan -o wide      # Show detailed list
-  kubectl hibernator restore list my-plan --target eks-cluster -o wide
-  kubectl hibernator restore list my-plan -o json      # Detailed list in JSON`,
+# Show detailed list
+kubectl hibernator restore list my-plan -o wide
+# List resources for a specific target in wide output
+kubectl hibernator restore list my-plan --target eks-cluster -o wide
+# List resources with JSON output
+kubectl hibernator restore list my-plan -o json`,
 		Args: cobra.ExactArgs(1),
 		RunE: output.WrapRunE(func(ctx context.Context, args []string) error {
 			switch outputFormat {

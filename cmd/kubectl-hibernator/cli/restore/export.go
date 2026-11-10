@@ -39,14 +39,12 @@ func newExportCommand(opts *common.RootOptions) *cobra.Command {
 		Long: `Write a target's restore entry (or a single resource state) to a local file.
 
 The file is the backup half of the weekend partial-run workflow: export the
-full entry, prune down to weekend resources, then import the file back after.
+full entry, prune down to weekend resources, then import the file back after.`,
+		Example: `# Back up a whole target entry
+kubectl hibernator restore export my-plan --target eks-cluster --file eks-full.json
 
-Examples:
-  # Back up a whole target entry
-  kubectl hibernator restore export my-plan --target eks-cluster --file eks-full.json
-
-  # Back up a single resource state
-  kubectl hibernator restore export my-plan --target eks-cluster --resource-id ng-main --file ng-main.json`,
+# Back up a single resource state
+kubectl hibernator restore export my-plan --target eks-cluster --resource-id ng-main --file ng-main.json`,
 		Args: cobra.ExactArgs(1),
 		RunE: output.WrapRunE(func(ctx context.Context, args []string) error {
 			return runExport(ctx, exportOpts, args[0])
@@ -55,7 +53,7 @@ Examples:
 
 	cmd.Flags().StringVarP(&exportOpts.target, "target", "t", "", "Target name (required)")
 	cmd.Flags().StringVarP(&exportOpts.resourceID, "resource-id", "r", "", "Single resource ID to export (defaults to the whole target entry)")
-	cmd.Flags().StringVar(&exportOpts.file, "file", "", "Destination file path (required)")
+	cmd.Flags().StringVar(&exportOpts.file, "file", "", "Destination file path (required). Parent directories are created.")
 
 	lo.Must0(cmd.MarkFlagRequired("target"))
 	lo.Must0(cmd.MarkFlagRequired("file"))

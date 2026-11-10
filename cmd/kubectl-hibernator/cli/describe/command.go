@@ -30,16 +30,18 @@ func NewCommand(opts *common.RootOptions) *cobra.Command {
 		Use:   "describe <plan-name>",
 		Short: "Display detailed information about a HibernatePlan",
 		Long: `Show comprehensive details about a HibernatePlan including:
+
 - Schedule configuration (timezone, off-hour windows)
 - Execution strategy and behavior mode
 - List of targets with executor-specific parameters
 - Current status and execution history
-- Active exceptions and suspend state
-
-Examples:
-  kubectl hibernator describe my-plan
-  kubectl hibernator describe my-plan -n production
-  kubectl hibernator describe my-plan --json`,
+- Active exceptions and suspend state`,
+		Example: `# Describe a HibernatePlan in the current namespace
+kubectl hibernator describe my-plan
+# Describe a HibernatePlan in a specific namespace
+kubectl hibernator describe my-plan -n production
+# Describe a HibernatePlan with JSON output
+kubectl hibernator describe my-plan --json`,
 		Args: cobra.ExactArgs(1),
 		RunE: output.WrapRunE(func(ctx context.Context, args []string) error {
 			return runDescribe(ctx, describeOpts, args[0])

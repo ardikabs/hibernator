@@ -56,7 +56,23 @@ func newCreateCommand(root *common.RootOptions) *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "create <prefix>",
 		Short: "Create ScheduleExceptions for selected HibernatePlans",
-		Args:  cobra.ExactArgs(1),
+		Long: `Create ScheduleExceptions for one HibernatePlan (--plan) or a set of plans selected by label (-l).
+
+Each invocation creates one ScheduleException per matched plan. The exception deviates
+matched plans from their base schedules for the validity period (--from to --until)
+within the daily window (--window-start/--window-end, --days, defaults to all days).
+
+Either --plan or --selector (-l) is required. The exception type (--type) selects
+suspend, extend, or replace semantics; see Schedule Exceptions concepts for details.`,
+		Example: `# Suspend a plan overnight over the holidays
+kubectl hibernator exception create holiday --plan my-plan --type suspend --from "in 1 hour" --until "in 2 hours" --window-start 22:00 --window-end 06:00
+
+# Target plans by label
+kubectl hibernator exception create freeze -l env=prod --type suspend --from "2026-12-24T18:00:00Z" --until "2026-12-27T06:00:00Z" --window-start 18:00 --window-end 06:00
+
+# Preview without creating
+kubectl hibernator exception create holiday --plan my-plan --type suspend --from "in 1 hour" --until "in 2 hours" --window-start 22:00 --window-end 06:00 --dry-run`,
+		Args: cobra.ExactArgs(1),
 		RunE: output.WrapRunE(func(ctx context.Context, args []string) error {
 			return runCreate(ctx, opts, args[0])
 		}),
