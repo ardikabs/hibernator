@@ -73,7 +73,7 @@ help: ## Display this help.
 # ============================================================================
 
 .PHONY: generate
-generate: controller-gen docs-api-gen docs-executor-params-gen docs-sink-gen ## Generate code (DeepCopy, CRDs), sync to Helm chart, and generate API reference docs.
+generate: controller-gen docs-api-gen docs-executor-params-gen docs-sink-gen docs-cli-gen ## Generate code (DeepCopy, CRDs), sync to Helm chart, and generate API reference docs.
 	$(CONTROLLER_GEN) object:headerFile="hack/boilerplate.go.txt" paths="./api/..."
 	$(CONTROLLER_GEN) crd paths="./api/..." output:crd:artifacts:config=config/crd/bases
 	@echo "$(CYAN)Syncing CRDs to Helm chart...$(RESET)"
@@ -418,6 +418,12 @@ docs-sink-gen: ## Generate notification sink reference from Go types.
 	@echo "$(CYAN)Generating notification sink docs...$(RESET)"
 	@$(GOCMD) run ./hack/tools/gen-sink-docs/
 	@echo "$(GREEN)Notification sink docs generated in $(DOCS_DIR)/docs/reference/notification-sinks.md$(RESET)"
+
+.PHONY: docs-cli-gen
+docs-cli-gen: ## Generate CLI command reference from the cobra tree.
+	@echo "$(CYAN)Generating CLI reference docs...$(RESET)"
+	@$(GOCMD) run ./hack/tools/gen-cli-docs/
+	@echo "$(GREEN)CLI reference docs generated in $(DOCS_DIR)/docs/user-guides/cli.md$(RESET)"
 
 .PHONY: docs-build
 docs-build: ## Build the static documentation site into website/site/ (requires Docker).
