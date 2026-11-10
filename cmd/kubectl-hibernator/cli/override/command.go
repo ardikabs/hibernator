@@ -58,10 +58,11 @@ When the deadline is reached, the override is automatically disabled and schedul
 control is restored.
 
 The --until flag supports multiple user-friendly formats:
-  Relative:      "in 30 minutes", "in 2 hours", "tomorrow at 6am", "next Monday"
-  Date:          "2026-01-15", "Jan 15, 2026"
-  Date+Time:     "2026-01-15 14:30", "Jan 15, 2026 2:30pm"
-  RFC3339:       "2026-01-15T14:30:00Z" (for scripts)
+
+	1. Relative:      "in 30 minutes", "in 2 hours", "tomorrow at 6am", "next Monday"
+	2. Date:          "2026-01-15", "Jan 15, 2026"
+	3. Date+Time:     "2026-01-15 14:30", "Jan 15, 2026 2:30pm"
+	4. RFC3339:       "2026-01-15T14:30:00Z" (for scripts)
 
 All times are interpreted in your local timezone and stored as UTC internally.
 
