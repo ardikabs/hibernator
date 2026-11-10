@@ -541,10 +541,11 @@ When the deadline is reached, the override is automatically disabled and schedul
 control is restored.
 
 The --until flag supports multiple user-friendly formats:
-  Relative:      "in 30 minutes", "in 2 hours", "tomorrow at 6am", "next Monday"
-  Date:          "2026-01-15", "Jan 15, 2026"
-  Date+Time:     "2026-01-15 14:30", "Jan 15, 2026 2:30pm"
-  RFC3339:       "2026-01-15T14:30:00Z" (for scripts)
+
+	1. Relative:      "in 30 minutes", "in 2 hours", "tomorrow at 6am", "next Monday"
+	2. Date:          "2026-01-15", "Jan 15, 2026"
+	3. Date+Time:     "2026-01-15 14:30", "Jan 15, 2026 2:30pm"
+	4. RFC3339:       "2026-01-15T14:30:00Z" (for scripts)
 
 All times are interpreted in your local timezone and stored as UTC internally.
 
@@ -675,25 +676,25 @@ Understanding Restore Point Timestamps:
 
 Restore point data contains two important timestamps that serve different purposes:
 
-  Captured At: The timestamp when the hibernator captured and initiated the save operation to the ConfigMap. This tracks when the data was captured from the hibernator's perspective.
-  Reported At: The time when the executor callback was triggered for a specific resource (via ReportStateCallback). This tracks when each resource's state was initially reported during the shutdown process.
+- **Captured At**: The timestamp when the hibernator captured and initiated the save operation to the ConfigMap. This tracks when the data was captured from the hibernator's perspective.
+- **Reported At**: The time when the executor callback was triggered for a specific resource (via ReportStateCallback). This tracks when each resource's state was initially reported during the shutdown process.
 
 Key Differences:
 
-- Captured At is set per-target when the hibernator initiates the ConfigMap update. It serves as a historical marker for auditing and freshness checks.
-- Reported At is set per-resource when the executor reports the state (via callback) during the shutdown process. Multiple resources may be reported at different times within the same hibernation cycle.
-- Reported At is used for idempotency tracking — it helps determine if a resource has already been reported in the current hibernation cycle.
-- Captured At tracks when the hibernator captured the data, useful for historical analysis and determining data freshness.
+- **Captured At** is set per-target when the hibernator initiates the ConfigMap update. It serves as a historical marker for auditing and freshness checks.
+- **Reported At** is set per-resource when the executor reports the state (via callback) during the shutdown process. Multiple resources may be reported at different times within the same hibernation cycle.
+- **Reported At** is used for idempotency tracking — it helps determine if a resource has already been reported in the current hibernation cycle.
+- **Captured At** tracks when the hibernator captured the data, useful for historical analysis and determining data freshness.
 
-Example Flow:
+#### Example Flow
 
-  Hibernation Cycle:
+##### Hibernation Cycle
 
-    1. Executor discovers resource A → Reports state → Reported At = T1
-    2. Executor discovers resource B → Reports state → Reported At = T2
-    3. Hibernator captures and initiates save to ConfigMap → Captured At = T3
+1. Executor discovers resource A → Reports state → Reported At = T1
+2. Executor discovers resource B → Reports state → Reported At = T2
+3. Hibernator captures and initiates save to ConfigMap → Captured At = T3
 
-Weekend partial runs:
+##### Weekend partial runs
 
 ScheduleException target overrides disable whole targets; when only some resources within one target should run over the weekend, trim the restore data instead.
 
@@ -1134,12 +1135,13 @@ using "kubectl hibernator resume". To set a bounded suspension period, specify e
 removes the suspension and resumes normal schedule control.
 
 The --until flag supports multiple user-friendly formats:
-  Relative:      "in 30 minutes", "in 2 hours", "tomorrow at 6am", "next Monday"
-  Date:          "2026-01-15", "Jan 15, 2026"
-  Date+Time:     "2026-01-15 14:30", "Jan 15, 2026 2:30pm"
-  RFC3339:       "2026-01-15T14:30:00Z" (for scripts)
-  Tomorrow:      "tomorrow", "tomorrow at 6am", "tomorrow at 14:30"
-  Next:          "next Monday", "next week"
+
+	1. Relative:      "in 30 minutes", "in 2 hours", "tomorrow at 6am", "next Monday"
+	2. Date:          "2026-01-15", "Jan 15, 2026"
+	3. Date+Time:     "2026-01-15 14:30", "Jan 15, 2026 2:30pm"
+	4. RFC3339:       "2026-01-15T14:30:00Z" (for scripts)
+	5. Tomorrow:      "tomorrow", "tomorrow at 6am", "tomorrow at 14:30"
+	6. Next:          "next Monday", "next week"
 
 All times are interpreted in your local timezone and stored as UTC internally.
 
