@@ -1,3 +1,12 @@
+<a name="v1.7.0"></a>
+
+## [v1.7.0](https://github.com/ardikabs/hibernator/compare/v1.7.0-rc.5...v1.7.0) (2026-11-10)
+
+### ✨ Features
+
+* gen-cli-docs for CLI docs generator ([#209](https://github.com/ardikabs/hibernator/issues/209))
+
+
 <a name="v1.7.0-rc.5"></a>
 
 ## [v1.7.0-rc.5](https://github.com/ardikabs/hibernator/compare/v1.7.0-rc.4...v1.7.0-rc.5) (2026-10-24)
