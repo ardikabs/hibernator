@@ -71,6 +71,8 @@ spec:
               value: "{{ .Values.image.runner.repository }}:{{ .Values.image.runner.tag | default .Chart.AppVersion }}"
             - name: CONTROL_PLANE_ENDPOINT
               value: {{ .Values.controlPlane.endpoint }}
+            - name: CONTROL_PLANE_NAMESPACE
+              value: {{ .Release.Namespace }}
             - name: SCHEDULE_BUFFER_DURATION
               value: {{ .Values.controlPlane.scheduleBufferDuration | default "1m"}}
             - name: LEADER_ELECTION_ENABLED
@@ -81,6 +83,12 @@ spec:
               value: "{{ .Values.operator.workers }}"
             - name: SYNC_PERIOD
               value: {{ .Values.operator.syncPeriod }}
+            - name: CONNECTOR_RESYNC_INTERVAL
+              value: {{ .Values.operator.connector.resyncInterval | quote }}
+            - name: CONNECTOR_MAX_CONCURRENT_PROBES
+              value: {{ .Values.operator.connector.maxConcurrentProbes | quote }}
+            - name: CONNECTOR_PROBE_TIMEOUT
+              value: {{ .Values.operator.connector.probeTimeout | quote }}
 
           livenessProbe:
             httpGet:

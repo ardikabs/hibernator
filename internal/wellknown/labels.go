@@ -29,4 +29,28 @@ const (
 
 	// LabelException is the label key for the exception name.
 	LabelException = "hibernator.ardikabs.com/exception"
+
+	// LabelConnectorKind is the label key for the connector kind of a probe Job.
+	LabelConnectorKind = "hibernator.ardikabs.com/connector-kind"
+
+	// LabelConnectorName is the label key for the (label-safe) connector name of a probe Job.
+	LabelConnectorName = "hibernator.ardikabs.com/connector-name"
+
+	// LabelConnectorNamespace is the label key for the (label-safe) connector namespace of a probe Job.
+	LabelConnectorNamespace = "hibernator.ardikabs.com/connector-namespace"
+
+	// LabelConnectorProbe marks a Job as a connector probe Job.
+	LabelConnectorProbe = "hibernator.ardikabs.com/connector-probe"
+
+	// AnnotationConnectorName carries the full connector name of a probe Job.
+	AnnotationConnectorName = "hibernator.ardikabs.com/connector-name"
+
+	// AnnotationConnectorNamespace carries the full connector namespace of a probe Job.
+	AnnotationConnectorNamespace = "hibernator.ardikabs.com/connector-namespace"
+
+	// AnnotationConnectorGeneration carries the connector generation a probe Job was created for.
+	AnnotationConnectorGeneration = "hibernator.ardikabs.com/connector-generation"
+
+	// AnnotationConnectorSecretVersion carries the referenced Secret version a probe Job was created for.
+	AnnotationConnectorSecretVersion = "hibernator.ardikabs.com/connector-secret-version"
 )

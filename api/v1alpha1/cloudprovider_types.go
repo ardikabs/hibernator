@@ -101,12 +101,39 @@ type CloudProviderStatus struct {
 	// LastValidated is when credentials were last validated.
 	// +optional
 	LastValidated *metav1.Time `json:"lastValidated,omitempty"`
+
+	// ObservedGeneration is the generation last reconciled.
+	// +optional
+	ObservedGeneration int64 `json:"observedGeneration,omitempty"`
+
+	// LastProbeTime is when the connector was last probed.
+	// +optional
+	LastProbeTime *metav1.Time `json:"lastProbeTime,omitempty"`
+
+	// ObservedSecretVersion is the resourceVersion of the credentials Secret last probed.
+	// +optional
+	ObservedSecretVersion string `json:"observedSecretVersion,omitempty"`
+
+	// Conditions represent the latest observations of the connector state.
+	// +listType=map
+	// +listMapKey=type
+	// +optional
+	Conditions []metav1.Condition `json:"conditions,omitempty"`
+
+	// AllowedExecutors lists executor types the connector may run.
+	// +optional
+	AllowedExecutors []string `json:"allowedExecutors,omitempty"`
+
+	// ExecutorAccess reports per-executor access verification results.
+	// +optional
+	ExecutorAccess []ExecutorAccess `json:"executorAccess,omitempty"`
 }
 
 // +kubebuilder:object:root=true
 // +kubebuilder:subresource:status
 // +kubebuilder:printcolumn:name="Type",type=string,JSONPath=`.spec.type`
-// +kubebuilder:printcolumn:name="Ready",type=boolean,JSONPath=`.status.ready`
+// +kubebuilder:printcolumn:name="Ready",type=string,JSONPath=`.status.conditions[?(@.type=="Ready")].status`
+// +kubebuilder:printcolumn:name="Reason",type=string,JSONPath=`.status.conditions[?(@.type=="Ready")].reason`,priority=1
 // +kubebuilder:printcolumn:name="Age",type=date,JSONPath=`.metadata.creationTimestamp`
 
 // CloudProvider is the Schema for the cloudproviders API.

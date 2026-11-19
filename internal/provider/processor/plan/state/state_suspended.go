@@ -15,7 +15,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
 	hibernatorv1alpha1 "github.com/ardikabs/hibernator/api/v1alpha1"
-	statusprocessor "github.com/ardikabs/hibernator/internal/provider/processor/status"
+	statusmanager "github.com/ardikabs/hibernator/internal/provider/status"
 	"github.com/ardikabs/hibernator/internal/wellknown"
 	"github.com/go-logr/logr"
 )
@@ -136,10 +136,10 @@ func (state *suspendedState) resume(ctx context.Context, log logr.Logger) (State
 
 	log.V(1).Info("normal resume, transitioning to Active")
 
-	state.Statuses.PlanStatuses.Send(statusprocessor.Update[*hibernatorv1alpha1.HibernatePlan]{
+	state.Statuses.PlanStatuses.Send(statusmanager.Update[*hibernatorv1alpha1.HibernatePlan]{
 		NamespacedName: state.Key,
 		Resource:       plan,
-		Mutator: statusprocessor.MutatorFunc[*hibernatorv1alpha1.HibernatePlan](func(p *hibernatorv1alpha1.HibernatePlan) {
+		Mutator: statusmanager.MutatorFunc[*hibernatorv1alpha1.HibernatePlan](func(p *hibernatorv1alpha1.HibernatePlan) {
 			p.Status.Phase = hibernatorv1alpha1.PhaseActive
 			p.Status.LastTransitionTime = ptr.To(metav1.NewTime(state.Clock.Now()))
 		}),
@@ -194,10 +194,10 @@ func (state *suspendedState) resumeFromError(ctx context.Context, log logr.Logge
 	// KeyedWorkerPool processes updates FIFO, so the baseline write lands first and is
 	// immediately followed by the correct next-phase write — both are visible in order.
 	now := state.Clock.Now()
-	state.Statuses.PlanStatuses.Send(statusprocessor.Update[*hibernatorv1alpha1.HibernatePlan]{
+	state.Statuses.PlanStatuses.Send(statusmanager.Update[*hibernatorv1alpha1.HibernatePlan]{
 		NamespacedName: state.Key,
 		Resource:       plan,
-		Mutator: statusprocessor.MutatorFunc[*hibernatorv1alpha1.HibernatePlan](func(p *hibernatorv1alpha1.HibernatePlan) {
+		Mutator: statusmanager.MutatorFunc[*hibernatorv1alpha1.HibernatePlan](func(p *hibernatorv1alpha1.HibernatePlan) {
 			p.Status.Phase = targetPhase
 			p.Status.RetryCount = 0
 			p.Status.ErrorMessage = ""
@@ -265,10 +265,10 @@ func (state *suspendedState) resumeFromExecution(ctx context.Context, log logr.L
 		"shouldHibernate", shouldHibernate)
 
 	now := state.Clock.Now()
-	state.Statuses.PlanStatuses.Send(statusprocessor.Update[*hibernatorv1alpha1.HibernatePlan]{
+	state.Statuses.PlanStatuses.Send(statusmanager.Update[*hibernatorv1alpha1.HibernatePlan]{
 		NamespacedName: state.Key,
 		Resource:       plan,
-		Mutator: statusprocessor.MutatorFunc[*hibernatorv1alpha1.HibernatePlan](func(p *hibernatorv1alpha1.HibernatePlan) {
+		Mutator: statusmanager.MutatorFunc[*hibernatorv1alpha1.HibernatePlan](func(p *hibernatorv1alpha1.HibernatePlan) {
 			p.Status.Phase = targetPhase
 			p.Status.LastTransitionTime = ptr.To(metav1.NewTime(now))
 		}),

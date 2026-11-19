@@ -60,6 +60,9 @@ type Options struct {
 	Workers                 int
 	SyncPeriod              time.Duration
 	ScheduleBufferDuration  string
+	ConnectorResync         time.Duration
+	ConnectorMaxProbes      int
+	ConnectorProbeTimeout   time.Duration
 }
 
 // ParseFlags parses command-line flags and environment variables.
@@ -82,7 +85,7 @@ func ParseFlags() Options {
 	flag.StringVar(&opts.ControlPlaneEndpoint, "control-plane-endpoint", envutil.GetString("CONTROL_PLANE_ENDPOINT", ""),
 		"The endpoint for runner streaming callbacks.")
 	flag.StringVar(&opts.ControlPlaneNamespace, "control-plane-namespace", envutil.GetString("CONTROL_PLANE_NAMESPACE", "hibernator-system"),
-		"The endpoint for runner streaming callbacks.")
+		"The namespace of the runner ServiceAccount, where connector probe Jobs run.")
 	flag.StringVar(&opts.GRPCServerAddr, "grpc-server-address", ":9444",
 		"The address for the gRPC streaming server.")
 	flag.StringVar(&opts.WebSocketServerAddr, "websocket-server-address", ":8082",
@@ -97,6 +100,12 @@ func ParseFlags() Options {
 		"The minimum interval at which watched resources are reconciled. Default is 10 hours.")
 	flag.StringVar(&opts.ScheduleBufferDuration, "schedule-buffer-duration", envutil.GetString("SCHEDULE_BUFFER_DURATION", "1m"),
 		"The buffer duration added to schedule evaluation windows. Defaults to 1m (1-minute) buffer duration to allow full-day operation both for shutdown and wakeup.")
+	flag.DurationVar(&opts.ConnectorResync, "connector-resync-interval", envutil.GetDuration("CONNECTOR_RESYNC_INTERVAL", 15*time.Minute),
+		"The interval between probes of an unchanged CloudProvider or K8SCluster.")
+	flag.IntVar(&opts.ConnectorMaxProbes, "connector-max-concurrent-probes", envutil.GetInt("CONNECTOR_MAX_CONCURRENT_PROBES", 5),
+		"The maximum number of connector probe Jobs running at once.")
+	flag.DurationVar(&opts.ConnectorProbeTimeout, "connector-probe-timeout", envutil.GetDuration("CONNECTOR_PROBE_TIMEOUT", 30*time.Second),
+		"The timeout of a single connector probe.")
 
 	zapOpts := zap.Options{
 		Development: true,
@@ -152,6 +161,12 @@ func Run(opts Options) error {
 		ControlPlaneEndpoint:   opts.ControlPlaneEndpoint,
 		RunnerImage:            opts.RunnerImage,
 		RunnerServiceAccount:   opts.RunnerServiceAccount,
+		ControlPlaneNamespace:  opts.ControlPlaneNamespace,
+		Probe: provider.ProbeOptions{
+			Resync:        opts.ConnectorResync,
+			MaxConcurrent: opts.ConnectorMaxProbes,
+			Timeout:       opts.ConnectorProbeTimeout,
+		},
 	}); err != nil {
 		return err
 	}

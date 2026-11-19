@@ -19,29 +19,29 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
 	hibernatorv1alpha1 "github.com/ardikabs/hibernator/api/v1alpha1"
-	statusprocessor "github.com/ardikabs/hibernator/internal/provider/processor/status"
+	statusmanager "github.com/ardikabs/hibernator/internal/provider/status"
 	"github.com/ardikabs/hibernator/internal/scheduler"
 	"github.com/ardikabs/hibernator/internal/wellknown"
 )
 
-// captureUpdater is a test helper that buffers statusprocessor.Update[T] values
+// captureUpdater is a test helper that buffers statusmanager.Update[T] values
 // sent via Send so that tests can inspect Len() or drain the channel.
 type captureUpdater[T client.Object] struct {
-	ch chan statusprocessor.Update[T]
+	ch chan statusmanager.Update[T]
 }
 
 func newCaptureUpdater[T client.Object](cap int) *captureUpdater[T] {
-	return &captureUpdater[T]{ch: make(chan statusprocessor.Update[T], cap)}
+	return &captureUpdater[T]{ch: make(chan statusmanager.Update[T], cap)}
 }
 
-func (u *captureUpdater[T]) Send(upd statusprocessor.Update[T]) {
+func (u *captureUpdater[T]) Send(upd statusmanager.Update[T]) {
 	if upd.Mutator != nil {
 		upd.Mutator.Mutate(upd.Resource)
 	}
 	u.ch <- upd
 }
-func (u *captureUpdater[T]) Len() int                            { return len(u.ch) }
-func (u *captureUpdater[T]) C() <-chan statusprocessor.Update[T] { return u.ch }
+func (u *captureUpdater[T]) Len() int                          { return len(u.ch) }
+func (u *captureUpdater[T]) C() <-chan statusmanager.Update[T] { return u.ch }
 
 // planStatuses returns the captureUpdater for plan statuses from the given state,
 // providing Len() and C() methods for use in tests.

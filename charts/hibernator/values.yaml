@@ -186,6 +186,15 @@ operator:
   # operator.syncPeriod -- Sync period for reconciliation
   syncPeriod: 10h
 
+  # operator.connector -- Connector readiness probe configuration
+  connector:
+    # operator.connector.resyncInterval -- How often each CloudProvider/K8SCluster is re-probed
+    resyncInterval: 15m
+    # operator.connector.maxConcurrentProbes -- Maximum number of probe Jobs running at once
+    maxConcurrentProbes: 5
+    # operator.connector.probeTimeout -- Timeout for a single probe
+    probeTimeout: 30s
+
   # operator.leaderElection -- Leader election configuration
   leaderElection:
     # operator.leaderElection.enabled -- Set to true to enable leader election for the operator.

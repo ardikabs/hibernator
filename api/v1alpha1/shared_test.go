@@ -52,7 +52,7 @@ func TestKindOf_NilHibernatePlan(t *testing.T) {
 	}
 }
 
-// kindOfGeneric mimics the generic pattern used in NewUpdateProcessor:
+// kindOfGeneric mimics the generic pattern used in NewUpdateManager:
 //
 //	var zero T
 //	kind := KindOf(zero)

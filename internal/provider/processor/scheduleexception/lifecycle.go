@@ -21,7 +21,7 @@ import (
 
 	hibernatorv1alpha1 "github.com/ardikabs/hibernator/api/v1alpha1"
 	"github.com/ardikabs/hibernator/internal/message"
-	statusprocessor "github.com/ardikabs/hibernator/internal/provider/processor/status"
+	statusmanager "github.com/ardikabs/hibernator/internal/provider/status"
 	"github.com/ardikabs/hibernator/internal/wellknown"
 )
 
@@ -45,7 +45,7 @@ type LifecycleProcessor struct {
 	Log   logr.Logger
 
 	Resources *message.ControllerResources
-	Statuses  *statusprocessor.ControllerStatuses
+	Statuses  *statusmanager.ControllerStatuses
 }
 
 // NeedLeaderElection returns true since this processor modifies resources.
@@ -150,10 +150,10 @@ func (p *LifecycleProcessor) updateExceptionReferences(log logr.Logger, key type
 		return
 	}
 
-	p.Statuses.PlanStatuses.Send(statusprocessor.Update[*hibernatorv1alpha1.HibernatePlan]{
+	p.Statuses.PlanStatuses.Send(statusmanager.Update[*hibernatorv1alpha1.HibernatePlan]{
 		NamespacedName: key,
 		Resource:       plan,
-		Mutator: statusprocessor.MutatorFunc[*hibernatorv1alpha1.HibernatePlan](func(p *hibernatorv1alpha1.HibernatePlan) {
+		Mutator: statusmanager.MutatorFunc[*hibernatorv1alpha1.HibernatePlan](func(p *hibernatorv1alpha1.HibernatePlan) {
 			p.Status.ExceptionReferences = exceptionRefs
 		}),
 	})
@@ -274,11 +274,11 @@ func (p *LifecycleProcessor) transitionState(_ context.Context, log logr.Logger,
 		oldState = "<unset>"
 	}
 
-	// Queue status update via status processor
-	p.Statuses.ExceptionStatuses.Send(statusprocessor.Update[*hibernatorv1alpha1.ScheduleException]{
+	// Queue status update via status manager
+	p.Statuses.ExceptionStatuses.Send(statusmanager.Update[*hibernatorv1alpha1.ScheduleException]{
 		NamespacedName: key,
 		Resource:       exception,
-		Mutator: statusprocessor.MutatorFunc[*hibernatorv1alpha1.ScheduleException](func(e *hibernatorv1alpha1.ScheduleException) {
+		Mutator: statusmanager.MutatorFunc[*hibernatorv1alpha1.ScheduleException](func(e *hibernatorv1alpha1.ScheduleException) {
 			e.Status.State = desiredState
 
 			switch desiredState {
@@ -333,10 +333,10 @@ func (p *LifecycleProcessor) updateMessage(_ context.Context, log logr.Logger, k
 		"oldMessage", exception.Status.Message,
 		"newMessage", newMessage)
 
-	p.Statuses.ExceptionStatuses.Send(statusprocessor.Update[*hibernatorv1alpha1.ScheduleException]{
+	p.Statuses.ExceptionStatuses.Send(statusmanager.Update[*hibernatorv1alpha1.ScheduleException]{
 		NamespacedName: key,
 		Resource:       exception,
-		Mutator: statusprocessor.MutatorFunc[*hibernatorv1alpha1.ScheduleException](func(e *hibernatorv1alpha1.ScheduleException) {
+		Mutator: statusmanager.MutatorFunc[*hibernatorv1alpha1.ScheduleException](func(e *hibernatorv1alpha1.ScheduleException) {
 			e.Status.Message = newMessage
 		}),
 	})
@@ -485,10 +485,10 @@ func (p *LifecycleProcessor) removeFromPlanStatus(_ context.Context, log logr.Lo
 	}
 
 	exceptionName := exception.Name
-	p.Statuses.PlanStatuses.Send(statusprocessor.Update[*hibernatorv1alpha1.HibernatePlan]{
+	p.Statuses.PlanStatuses.Send(statusmanager.Update[*hibernatorv1alpha1.HibernatePlan]{
 		NamespacedName: planKey,
 		Resource:       new(hibernatorv1alpha1.HibernatePlan),
-		Mutator: statusprocessor.MutatorFunc[*hibernatorv1alpha1.HibernatePlan](func(p *hibernatorv1alpha1.HibernatePlan) {
+		Mutator: statusmanager.MutatorFunc[*hibernatorv1alpha1.HibernatePlan](func(p *hibernatorv1alpha1.HibernatePlan) {
 			var updated []hibernatorv1alpha1.ExceptionReference
 			for _, ref := range p.Status.ExceptionReferences {
 				if ref.Name != exceptionName {
@@ -525,10 +525,10 @@ func (p *LifecycleProcessor) transitionToDetached(ctx context.Context, log logr.
 	now := p.Clock.Now()
 
 	// Queue status update
-	p.Statuses.ExceptionStatuses.Send(statusprocessor.Update[*hibernatorv1alpha1.ScheduleException]{
+	p.Statuses.ExceptionStatuses.Send(statusmanager.Update[*hibernatorv1alpha1.ScheduleException]{
 		NamespacedName: key,
 		Resource:       exception,
-		Mutator: statusprocessor.MutatorFunc[*hibernatorv1alpha1.ScheduleException](func(e *hibernatorv1alpha1.ScheduleException) {
+		Mutator: statusmanager.MutatorFunc[*hibernatorv1alpha1.ScheduleException](func(e *hibernatorv1alpha1.ScheduleException) {
 			e.Status.State = hibernatorv1alpha1.ExceptionStateDetached
 			e.Status.DetachedAt = &metav1.Time{Time: now}
 			e.Status.Message = msg

@@ -97,6 +97,22 @@ func NewWithClients(clientFactory ClientFactory) *Executor {
 	}
 }
 
+var _ executor.ConnectorRequirer = (*Executor)(nil)
+
+// Requires declares the Kubernetes permissions needed by each operation.
+func (e *Executor) Requires() executor.AccessRequirement {
+	return executor.AccessRequirement{
+		ConnectorKind: executor.ConnectorKindK8SCluster,
+		Shutdown: executor.OperationAccess{K8SRules: []executor.K8SRule{
+			{Group: "karpenter.sh", Resource: "nodepools", Verbs: []string{"get", "list", "delete"}},
+			{Resource: "nodes", Verbs: []string{"list"}},
+		}},
+		WakeUp: executor.OperationAccess{K8SRules: []executor.K8SRule{
+			{Group: "karpenter.sh", Resource: "nodepools", Verbs: []string{"get", "create"}},
+		}},
+	}
+}
+
 // Type returns the executor type.
 func (e *Executor) Type() string {
 	return ExecutorType

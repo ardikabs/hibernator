@@ -13,7 +13,7 @@ import (
 
 	"github.com/ardikabs/hibernator/internal/message"
 	"github.com/ardikabs/hibernator/internal/notification"
-	statusprocessor "github.com/ardikabs/hibernator/internal/provider/processor/status"
+	statusmanager "github.com/ardikabs/hibernator/internal/provider/status"
 	"github.com/ardikabs/hibernator/internal/restore"
 	"github.com/ardikabs/hibernator/internal/scheduler"
 )
@@ -63,5 +63,5 @@ type Config struct {
 	RestoreManager *restore.Manager
 	Notifier       notification.Notifier
 	Resources      *message.ControllerResources
-	Statuses       *statusprocessor.ControllerStatuses
+	Statuses       *statusmanager.ControllerStatuses
 }

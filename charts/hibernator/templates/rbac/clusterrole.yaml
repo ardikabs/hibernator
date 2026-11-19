@@ -26,11 +26,17 @@ rules:
   - apiGroups: ["hibernator.ardikabs.com"]
     resources: ["cloudproviders"]
     verbs: ["get", "list", "watch"]
+  - apiGroups: ["hibernator.ardikabs.com"]
+    resources: ["cloudproviders/status"]
+    verbs: ["get", "patch", "update"]
 
   # K8SCluster
   - apiGroups: ["hibernator.ardikabs.com"]
     resources: ["k8sclusters"]
     verbs: ["get", "list", "watch"]
+  - apiGroups: ["hibernator.ardikabs.com"]
+    resources: ["k8sclusters/status"]
+    verbs: ["get", "patch", "update"]
 
   # ScheduleException
   - apiGroups: ["hibernator.ardikabs.com"]
@@ -72,7 +78,7 @@ rules:
   # Secret management for connectors
   - apiGroups: [""]
     resources: ["secrets"]
-    verbs: ["get", "list"]
+    verbs: ["get", "list", "watch"]
 
   # Events
   - apiGroups: [""]

@@ -55,9 +55,9 @@ func basePlan(name, namespace string, phase hibernatorv1alpha1.PlanPhase) *hiber
 	}
 }
 
-func newPlanProcessor(objs ...client.Object) *UpdateProcessor[*hibernatorv1alpha1.HibernatePlan] {
+func newPlanManager(objs ...client.Object) *UpdateManager[*hibernatorv1alpha1.HibernatePlan] {
 	c := newTestFakeClient(objs...)
-	return NewUpdateProcessor[*hibernatorv1alpha1.HibernatePlan](logr.Discard(), c, c)
+	return NewUpdateManager[*hibernatorv1alpha1.HibernatePlan](logr.Discard(), c, c)
 }
 
 // ---------------------------------------------------------------------------
@@ -264,13 +264,13 @@ func TestIsStatusEqual_UnknownType_ReturnsFalse(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
-// UpdateProcessor.apply
+// UpdateManager.apply
 // ---------------------------------------------------------------------------
 
 func TestApply_NilMutator_Skips(t *testing.T) {
 	ctx := context.Background()
 	plan := basePlan("p1", "default", hibernatorv1alpha1.PhaseActive)
-	proc := newPlanProcessor(plan)
+	proc := newPlanManager(plan)
 
 	update := Update[*hibernatorv1alpha1.HibernatePlan]{
 		NamespacedName: types.NamespacedName{Name: "p1", Namespace: "default"},
@@ -289,7 +289,7 @@ func TestApply_NilMutator_Skips(t *testing.T) {
 
 func TestApply_ObjectNotFound_Skips(t *testing.T) {
 	ctx := context.Background()
-	proc := newPlanProcessor() // no objects seeded
+	proc := newPlanManager() // no objects seeded
 
 	update := Update[*hibernatorv1alpha1.HibernatePlan]{
 		NamespacedName: types.NamespacedName{Name: "missing", Namespace: "default"},
@@ -306,7 +306,7 @@ func TestApply_ObjectNotFound_Skips(t *testing.T) {
 func TestApply_MutationApplied_WritesStatus(t *testing.T) {
 	ctx := context.Background()
 	plan := basePlan("p1", "default", hibernatorv1alpha1.PhaseActive)
-	proc := newPlanProcessor(plan)
+	proc := newPlanManager(plan)
 
 	update := Update[*hibernatorv1alpha1.HibernatePlan]{
 		NamespacedName: types.NamespacedName{Name: "p1", Namespace: "default"},
@@ -327,7 +327,7 @@ func TestApply_MutationApplied_WritesStatus(t *testing.T) {
 func TestApply_StatusUnchanged_SkipsWrite(t *testing.T) {
 	ctx := context.Background()
 	plan := basePlan("p1", "default", hibernatorv1alpha1.PhaseActive)
-	proc := newPlanProcessor(plan)
+	proc := newPlanManager(plan)
 
 	// Mutator sets the same phase already stored — no-op write.
 	update := Update[*hibernatorv1alpha1.HibernatePlan]{
@@ -344,7 +344,7 @@ func TestApply_StatusUnchanged_SkipsWrite(t *testing.T) {
 
 func TestApply_PreHook_ObjectNotFound_Skips(t *testing.T) {
 	ctx := context.Background()
-	proc := newPlanProcessor() // no objects seeded
+	proc := newPlanManager() // no objects seeded
 
 	var preHookCalled bool
 	update := Update[*hibernatorv1alpha1.HibernatePlan]{
@@ -367,7 +367,7 @@ func TestApply_PreHook_ObjectNotFound_Skips(t *testing.T) {
 func TestApply_PreHook_Error_AbortsUpdate(t *testing.T) {
 	ctx := context.Background()
 	plan := basePlan("p1", "default", hibernatorv1alpha1.PhaseActive)
-	proc := newPlanProcessor(plan)
+	proc := newPlanManager(plan)
 
 	hookErr := errors.New("pre-hook failure")
 	update := Update[*hibernatorv1alpha1.HibernatePlan]{
@@ -393,7 +393,7 @@ func TestApply_PreHook_Error_AbortsUpdate(t *testing.T) {
 func TestApply_PostHook_CalledAfterWrite(t *testing.T) {
 	ctx := context.Background()
 	plan := basePlan("p1", "default", hibernatorv1alpha1.PhaseActive)
-	proc := newPlanProcessor(plan)
+	proc := newPlanManager(plan)
 
 	var postHookCalled bool
 	update := Update[*hibernatorv1alpha1.HibernatePlan]{
@@ -416,7 +416,7 @@ func TestApply_PostHook_CalledAfterWrite(t *testing.T) {
 func TestApply_PostHook_NotCalledWhenNoWrite(t *testing.T) {
 	ctx := context.Background()
 	plan := basePlan("p1", "default", hibernatorv1alpha1.PhaseActive)
-	proc := newPlanProcessor(plan)
+	proc := newPlanManager(plan)
 
 	var postHookCalled bool
 	update := Update[*hibernatorv1alpha1.HibernatePlan]{
@@ -440,7 +440,7 @@ func TestApply_PostHook_NotCalledWhenNoWrite(t *testing.T) {
 func TestApply_PostHook_ErrorIsNonFatal(t *testing.T) {
 	ctx := context.Background()
 	plan := basePlan("p1", "default", hibernatorv1alpha1.PhaseActive)
-	proc := newPlanProcessor(plan)
+	proc := newPlanManager(plan)
 
 	update := Update[*hibernatorv1alpha1.HibernatePlan]{
 		NamespacedName: types.NamespacedName{Name: "p1", Namespace: "default"},
@@ -465,7 +465,7 @@ func TestApply_PostHook_ErrorIsNonFatal(t *testing.T) {
 func TestDefaultUpdater_Send_AppliesMutatorToResourceImmediately(t *testing.T) {
 	plan := basePlan("p1", "default", hibernatorv1alpha1.PhaseActive)
 	c := newTestFakeClient(plan)
-	proc := NewUpdateProcessor[*hibernatorv1alpha1.HibernatePlan](logr.Discard(), c, c)
+	proc := NewUpdateManager[*hibernatorv1alpha1.HibernatePlan](logr.Discard(), c, c)
 	updater := proc.Writer()
 
 	update := Update[*hibernatorv1alpha1.HibernatePlan]{
@@ -485,7 +485,7 @@ func TestDefaultUpdater_Send_AppliesMutatorToResourceImmediately(t *testing.T) {
 func TestDefaultUpdater_Send_NilMutator_DeliveredToPool(t *testing.T) {
 	plan := basePlan("p1", "default", hibernatorv1alpha1.PhaseActive)
 	c := newTestFakeClient(plan)
-	proc := NewUpdateProcessor[*hibernatorv1alpha1.HibernatePlan](logr.Discard(), c, c)
+	proc := NewUpdateManager[*hibernatorv1alpha1.HibernatePlan](logr.Discard(), c, c)
 	updater := proc.Writer()
 
 	update := Update[*hibernatorv1alpha1.HibernatePlan]{

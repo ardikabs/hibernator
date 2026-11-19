@@ -15,7 +15,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
 
 	hibernatorv1alpha1 "github.com/ardikabs/hibernator/api/v1alpha1"
-	statusprocessor "github.com/ardikabs/hibernator/internal/provider/processor/status"
+	statusmanager "github.com/ardikabs/hibernator/internal/provider/status"
 	"github.com/ardikabs/hibernator/internal/wellknown"
 	"github.com/go-logr/logr"
 )
@@ -95,10 +95,10 @@ func (state *lifecycleState) handle(ctx context.Context, log logr.Logger, plan *
 	if plan.Status.Phase == "" {
 		log.Info("initializing plan status")
 
-		state.Statuses.PlanStatuses.Send(statusprocessor.Update[*hibernatorv1alpha1.HibernatePlan]{
+		state.Statuses.PlanStatuses.Send(statusmanager.Update[*hibernatorv1alpha1.HibernatePlan]{
 			NamespacedName: state.Key,
 			Resource:       plan,
-			Mutator: statusprocessor.MutatorFunc[*hibernatorv1alpha1.HibernatePlan](func(p *hibernatorv1alpha1.HibernatePlan) {
+			Mutator: statusmanager.MutatorFunc[*hibernatorv1alpha1.HibernatePlan](func(p *hibernatorv1alpha1.HibernatePlan) {
 				p.Status.Phase = hibernatorv1alpha1.PhaseActive
 				p.Status.ObservedGeneration = plan.Generation
 			}),

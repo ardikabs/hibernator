@@ -24,7 +24,7 @@ import (
 
 	hibernatorv1alpha1 "github.com/ardikabs/hibernator/api/v1alpha1"
 	"github.com/ardikabs/hibernator/internal/message"
-	statusprocessor "github.com/ardikabs/hibernator/internal/provider/processor/status"
+	statusmanager "github.com/ardikabs/hibernator/internal/provider/status"
 	"github.com/ardikabs/hibernator/internal/wellknown"
 )
 
@@ -38,7 +38,7 @@ func newLifecycleScheme() *runtime.Scheme {
 	return s
 }
 
-func newTestProcessor(t *testing.T, objs ...client.Object) (*LifecycleProcessor, *statusprocessor.ControllerStatuses) {
+func newTestProcessor(t *testing.T, objs ...client.Object) (*LifecycleProcessor, *statusmanager.ControllerStatuses) {
 	t.Helper()
 	scheme := newLifecycleScheme()
 	c := fake.NewClientBuilder().
@@ -59,7 +59,7 @@ func newTestProcessor(t *testing.T, objs ...client.Object) (*LifecycleProcessor,
 
 	planUpdater := newCaptureUpdater[*hibernatorv1alpha1.HibernatePlan](64)
 	exceptionUpdater := newCaptureUpdater[*hibernatorv1alpha1.ScheduleException](64)
-	statuses := &statusprocessor.ControllerStatuses{
+	statuses := &statusmanager.ControllerStatuses{
 		PlanStatuses:      planUpdater,
 		ExceptionStatuses: exceptionUpdater,
 	}
@@ -73,24 +73,24 @@ func newTestProcessor(t *testing.T, objs ...client.Object) (*LifecycleProcessor,
 	return p, statuses
 }
 
-// captureUpdater is a test helper that buffers statusprocessor.Update[T] values
+// captureUpdater is a test helper that buffers statusmanager.Update[T] values
 // sent via Send so that tests can inspect Len() or drain the channel.
 type captureUpdater[T client.Object] struct {
-	ch chan statusprocessor.Update[T]
+	ch chan statusmanager.Update[T]
 }
 
 func newCaptureUpdater[T client.Object](cap int) *captureUpdater[T] {
-	return &captureUpdater[T]{ch: make(chan statusprocessor.Update[T], cap)}
+	return &captureUpdater[T]{ch: make(chan statusmanager.Update[T], cap)}
 }
 
-func (u *captureUpdater[T]) Send(upd statusprocessor.Update[T]) {
+func (u *captureUpdater[T]) Send(upd statusmanager.Update[T]) {
 	if upd.Mutator != nil {
 		upd.Mutator.Mutate(upd.Resource)
 	}
 	u.ch <- upd
 }
-func (u *captureUpdater[T]) Len() int                            { return len(u.ch) }
-func (u *captureUpdater[T]) C() <-chan statusprocessor.Update[T] { return u.ch }
+func (u *captureUpdater[T]) Len() int                          { return len(u.ch) }
+func (u *captureUpdater[T]) C() <-chan statusmanager.Update[T] { return u.ch }
 
 // zeroLP returns a LifecycleProcessor with no fields set, usable only for pure methods.
 func zeroLP() *LifecycleProcessor { return &LifecycleProcessor{} }

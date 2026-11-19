@@ -24,7 +24,7 @@ import (
 
 	hibernatorv1alpha1 "github.com/ardikabs/hibernator/api/v1alpha1"
 	"github.com/ardikabs/hibernator/internal/metrics"
-	statusprocessor "github.com/ardikabs/hibernator/internal/provider/processor/status"
+	statusmanager "github.com/ardikabs/hibernator/internal/provider/status"
 	"github.com/ardikabs/hibernator/internal/restore"
 	"github.com/ardikabs/hibernator/internal/scheduler"
 	"github.com/ardikabs/hibernator/internal/wellknown"
@@ -314,10 +314,10 @@ func (s *state) pruneTarget(plan *hibernatorv1alpha1.HibernatePlan, targetName, 
 		}
 	}
 
-	s.Statuses.PlanStatuses.Send(statusprocessor.Update[*hibernatorv1alpha1.HibernatePlan]{
+	s.Statuses.PlanStatuses.Send(statusmanager.Update[*hibernatorv1alpha1.HibernatePlan]{
 		NamespacedName: s.Key,
 		Resource:       plan,
-		Mutator: statusprocessor.MutatorFunc[*hibernatorv1alpha1.HibernatePlan](func(p *hibernatorv1alpha1.HibernatePlan) {
+		Mutator: statusmanager.MutatorFunc[*hibernatorv1alpha1.HibernatePlan](func(p *hibernatorv1alpha1.HibernatePlan) {
 			for i := range p.Status.Executions {
 				if p.Status.Executions[i].Target == targetName {
 					p.Status.Executions[i].State = hibernatorv1alpha1.StateAborted
@@ -498,10 +498,10 @@ func (s *state) updateExecutionStatuses(ctx context.Context,
 		executions := make([]hibernatorv1alpha1.ExecutionStatus, len(plan.Status.Executions))
 		copy(executions, plan.Status.Executions)
 
-		s.Statuses.PlanStatuses.Send(statusprocessor.Update[*hibernatorv1alpha1.HibernatePlan]{
+		s.Statuses.PlanStatuses.Send(statusmanager.Update[*hibernatorv1alpha1.HibernatePlan]{
 			NamespacedName: s.Key,
 			Resource:       s.plan(),
-			Mutator: statusprocessor.MutatorFunc[*hibernatorv1alpha1.HibernatePlan](func(p *hibernatorv1alpha1.HibernatePlan) {
+			Mutator: statusmanager.MutatorFunc[*hibernatorv1alpha1.HibernatePlan](func(p *hibernatorv1alpha1.HibernatePlan) {
 				p.Status.Executions = executions
 			}),
 			PostHook: s.executionProgressPostHook(prevSnapshot),

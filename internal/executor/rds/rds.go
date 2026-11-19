@@ -153,6 +153,32 @@ func NewWithClients(rdsFactory RDSClientFactory, stsFactory STSClientFactory, aw
 	}
 }
 
+var _ executor.ConnectorRequirer = (*Executor)(nil)
+
+// Requires declares the AWS permissions needed by each operation.
+func (e *Executor) Requires() executor.AccessRequirement {
+	return executor.AccessRequirement{
+		ConnectorKind: executor.ConnectorKindCloudProvider,
+		Shutdown: executor.OperationAccess{AWSActions: []string{
+			"rds:DescribeDBInstances",
+			"rds:DescribeDBClusters",
+			"rds:ListTagsForResource",
+			"rds:StopDBInstance",
+			"rds:StopDBCluster",
+			"rds:CreateDBSnapshot",
+			"rds:DescribeDBSnapshots",
+			"rds:CreateDBClusterSnapshot",
+			"rds:DescribeDBClusterSnapshots",
+		}},
+		WakeUp: executor.OperationAccess{AWSActions: []string{
+			"rds:DescribeDBInstances",
+			"rds:DescribeDBClusters",
+			"rds:StartDBInstance",
+			"rds:StartDBCluster",
+		}},
+	}
+}
+
 // Type returns the executor type.
 func (e *Executor) Type() string {
 	return ExecutorType

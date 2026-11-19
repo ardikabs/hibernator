@@ -10,7 +10,7 @@ import (
 
 	hibernatorv1alpha1 "github.com/ardikabs/hibernator/api/v1alpha1"
 	"github.com/ardikabs/hibernator/internal/notification"
-	statusprocessor "github.com/ardikabs/hibernator/internal/provider/processor/status"
+	statusmanager "github.com/ardikabs/hibernator/internal/provider/status"
 	"github.com/ardikabs/hibernator/internal/wellknown"
 	"github.com/go-logr/logr"
 	"github.com/google/uuid"
@@ -50,10 +50,10 @@ func (state *idleState) Handle(ctx context.Context) (StateResult, error) {
 			// through the normal wakeup finalize path (e.g., manual status patch).
 			if plan.Status.OperationTrigger == hibernatorv1alpha1.TriggerRevert {
 				log.V(1).Info("clearing OperationTrigger while consuming revert annotation")
-				state.Statuses.PlanStatuses.Send(statusprocessor.Update[*hibernatorv1alpha1.HibernatePlan]{
+				state.Statuses.PlanStatuses.Send(statusmanager.Update[*hibernatorv1alpha1.HibernatePlan]{
 					NamespacedName: state.Key,
 					Resource:       plan,
-					Mutator: statusprocessor.MutatorFunc[*hibernatorv1alpha1.HibernatePlan](func(p *hibernatorv1alpha1.HibernatePlan) {
+					Mutator: statusmanager.MutatorFunc[*hibernatorv1alpha1.HibernatePlan](func(p *hibernatorv1alpha1.HibernatePlan) {
 						p.Status.OperationTrigger = ""
 					}),
 				})
@@ -151,10 +151,10 @@ func (state *idleState) transitionToHibernating(ctx context.Context, log logr.Lo
 	executions := buildExecutionsWithSeededSkips(effectivePlan.Spec.Targets, hibernateOverrides, appliedExceptionName, "Target pending hibernation")
 
 	previousPhase := plan.Status.Phase
-	state.Statuses.PlanStatuses.Send(statusprocessor.Update[*hibernatorv1alpha1.HibernatePlan]{
+	state.Statuses.PlanStatuses.Send(statusmanager.Update[*hibernatorv1alpha1.HibernatePlan]{
 		NamespacedName: state.Key,
 		Resource:       plan,
-		Mutator: statusprocessor.MutatorFunc[*hibernatorv1alpha1.HibernatePlan](func(p *hibernatorv1alpha1.HibernatePlan) {
+		Mutator: statusmanager.MutatorFunc[*hibernatorv1alpha1.HibernatePlan](func(p *hibernatorv1alpha1.HibernatePlan) {
 			p.Status.Phase = hibernatorv1alpha1.PhaseHibernating
 			p.Status.CurrentCycleID = cycleID
 			p.Status.CurrentStageIndex = 0
@@ -223,10 +223,10 @@ func (state *idleState) transitionToWakingUp(log logr.Logger, trigger hibernator
 	executions := buildExecutionsWithSeededSkips(targetList, wakeOverrides, wakeExcName, "Target pending wakeup")
 
 	previousPhase := plan.Status.Phase
-	state.Statuses.PlanStatuses.Send(statusprocessor.Update[*hibernatorv1alpha1.HibernatePlan]{
+	state.Statuses.PlanStatuses.Send(statusmanager.Update[*hibernatorv1alpha1.HibernatePlan]{
 		NamespacedName: state.Key,
 		Resource:       plan,
-		Mutator: statusprocessor.MutatorFunc[*hibernatorv1alpha1.HibernatePlan](func(p *hibernatorv1alpha1.HibernatePlan) {
+		Mutator: statusmanager.MutatorFunc[*hibernatorv1alpha1.HibernatePlan](func(p *hibernatorv1alpha1.HibernatePlan) {
 			p.Status.Phase = hibernatorv1alpha1.PhaseWakingUp
 			p.Status.CurrentStageIndex = 0
 			p.Status.CurrentOperation = hibernatorv1alpha1.OperationWakeUp

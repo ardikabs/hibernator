@@ -21,7 +21,7 @@ import (
 // Use RunnerFactory when the caller has no proper way to own the goroutine
 // lifecycle itself — that is, when the caller is a pure stateless callback and
 // relies on the Pool to spawn, reap, and restart goroutines around an idle timer.
-// The status processor is a canonical example: each reconciler invocation
+// The status manager is a canonical example: each reconciler invocation
 // independently calls Send with no shared coordination context, so RunnerFactory
 // provides the lifecycle management that the caller cannot supply on its own.
 //

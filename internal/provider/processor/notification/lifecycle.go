@@ -23,7 +23,7 @@ import (
 	hibernatorv1alpha1 "github.com/ardikabs/hibernator/api/v1alpha1"
 	"github.com/ardikabs/hibernator/internal/message"
 	"github.com/ardikabs/hibernator/internal/notification"
-	statusprocessor "github.com/ardikabs/hibernator/internal/provider/processor/status"
+	statusmanager "github.com/ardikabs/hibernator/internal/provider/status"
 	"github.com/ardikabs/hibernator/internal/wellknown"
 )
 
@@ -63,7 +63,7 @@ type LifecycleProcessor struct {
 	Log   logr.Logger
 
 	Resources *message.ControllerResources
-	Statuses  *statusprocessor.ControllerStatuses
+	Statuses  *statusmanager.ControllerStatuses
 }
 
 // NeedLeaderElection returns true since this processor modifies resource status.
@@ -192,10 +192,10 @@ func (p *LifecycleProcessor) handleNotificationDeletion(ctx context.Context, log
 
 	// Clear all watchedPlans and transition to Detached via status update.
 	if len(notif.Status.WatchedPlans) > 0 || notif.Status.State != hibernatorv1alpha1.NotificationStateDetached {
-		p.Statuses.NotificationStatuses.Send(statusprocessor.Update[*hibernatorv1alpha1.HibernateNotification]{
+		p.Statuses.NotificationStatuses.Send(statusmanager.Update[*hibernatorv1alpha1.HibernateNotification]{
 			NamespacedName: notifKey,
 			Resource:       notif.DeepCopy(),
-			Mutator: statusprocessor.MutatorFunc[*hibernatorv1alpha1.HibernateNotification](func(n *hibernatorv1alpha1.HibernateNotification) {
+			Mutator: statusmanager.MutatorFunc[*hibernatorv1alpha1.HibernateNotification](func(n *hibernatorv1alpha1.HibernateNotification) {
 				n.Status.WatchedPlans = nil
 				n.Status.State = hibernatorv1alpha1.NotificationStateDetached
 			}),
@@ -223,10 +223,10 @@ func (p *LifecycleProcessor) upsertPlanRef(log logr.Logger, bindingKey message.N
 		return
 	}
 
-	p.Statuses.NotificationStatuses.Send(statusprocessor.Update[*hibernatorv1alpha1.HibernateNotification]{
+	p.Statuses.NotificationStatuses.Send(statusmanager.Update[*hibernatorv1alpha1.HibernateNotification]{
 		NamespacedName: bindingKey.GetNotificationKey(),
 		Resource:       notif,
-		Mutator: statusprocessor.MutatorFunc[*hibernatorv1alpha1.HibernateNotification](func(n *hibernatorv1alpha1.HibernateNotification) {
+		Mutator: statusmanager.MutatorFunc[*hibernatorv1alpha1.HibernateNotification](func(n *hibernatorv1alpha1.HibernateNotification) {
 			_, exists := lo.Find(n.Status.WatchedPlans, func(ref hibernatorv1alpha1.PlanReference) bool {
 				return ref.Name == planName
 			})
@@ -266,10 +266,10 @@ func (p *LifecycleProcessor) removePlanRef(ctx context.Context, log logr.Logger,
 	})
 	becomesDetached := len(remaining) == 0
 
-	p.Statuses.NotificationStatuses.Send(statusprocessor.Update[*hibernatorv1alpha1.HibernateNotification]{
+	p.Statuses.NotificationStatuses.Send(statusmanager.Update[*hibernatorv1alpha1.HibernateNotification]{
 		NamespacedName: bindingKey.GetNotificationKey(),
 		Resource:       notif,
-		Mutator: statusprocessor.MutatorFunc[*hibernatorv1alpha1.HibernateNotification](func(n *hibernatorv1alpha1.HibernateNotification) {
+		Mutator: statusmanager.MutatorFunc[*hibernatorv1alpha1.HibernateNotification](func(n *hibernatorv1alpha1.HibernateNotification) {
 			n.Status.WatchedPlans = lo.Filter(n.Status.WatchedPlans, func(ref hibernatorv1alpha1.PlanReference, _ int) bool {
 				return ref.Name != planName
 			})
@@ -304,10 +304,10 @@ func (p *LifecycleProcessor) HandleDeliveryResult(result notification.DeliveryRe
 		return
 	}
 
-	p.Statuses.NotificationStatuses.Send(statusprocessor.Update[*hibernatorv1alpha1.HibernateNotification]{
+	p.Statuses.NotificationStatuses.Send(statusmanager.Update[*hibernatorv1alpha1.HibernateNotification]{
 		NamespacedName: result.NotificationRef,
 		Resource:       &hibernatorv1alpha1.HibernateNotification{},
-		Mutator: statusprocessor.MutatorFunc[*hibernatorv1alpha1.HibernateNotification](func(n *hibernatorv1alpha1.HibernateNotification) {
+		Mutator: statusmanager.MutatorFunc[*hibernatorv1alpha1.HibernateNotification](func(n *hibernatorv1alpha1.HibernateNotification) {
 			ts := metav1.NewTime(result.Timestamp)
 
 			if n.Status.SinkStatuses == nil {

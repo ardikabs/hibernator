@@ -3,7 +3,7 @@
 > Declarative Kubernetes operator for suspending and restoring cloud infrastructure during off-hours
 
 [![License](https://img.shields.io/badge/License-Apache%202.0-blue.svg)](LICENSE)
-[![Go Version](https://img.shields.io/badge/Go-1.24+-00ADD8?logo=go)](go.mod)
+[![Go Version](https://img.shields.io/badge/Go-1.26+-00ADD8?logo=go)](go.mod)
 [![Kubernetes](https://img.shields.io/badge/Kubernetes-1.34+-326CE5?logo=kubernetes)](https://kubernetes.io)
 
 <div align="center">
@@ -43,7 +43,7 @@ graph TD
     subgraph CP [Control Plane]
         direction TB
         Reconciler["<b>Unified Reconciler (HibernatePlan Controller)</b><br/>• Schedule evaluation<br/>• Dependency resolution<br/>• Job lifecycle management"]
-        
+
         subgraph Processors [Resource Processors]
             direction LR
             P1[EKS]
@@ -51,11 +51,11 @@ graph TD
             P3[EC2]
             P4[...]
         end
-        
+
         Connectors[("<b>Connectors (Metadata)</b><br/>• CloudProvider<br/>• K8SCluster")]
-        
+
         Streaming["<b>Streaming Server</b><br/>• Log aggregation<br/>• Progress tracking"]
-        
+
         Reconciler --> Processors
         Processors -.-> Connectors
         Reconciler --- Streaming

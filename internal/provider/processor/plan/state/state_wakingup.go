@@ -12,7 +12,7 @@ import (
 
 	hibernatorv1alpha1 "github.com/ardikabs/hibernator/api/v1alpha1"
 	"github.com/ardikabs/hibernator/internal/notification"
-	statusprocessor "github.com/ardikabs/hibernator/internal/provider/processor/status"
+	statusmanager "github.com/ardikabs/hibernator/internal/provider/status"
 	"github.com/ardikabs/hibernator/internal/scheduler"
 	"github.com/ardikabs/hibernator/internal/wellknown"
 	"github.com/go-logr/logr"
@@ -75,10 +75,10 @@ func (state *wakingUpState) OnError(ctx context.Context, err error) StateResult 
 			summary := BuildOperationSummary(state.Clock, plan, hibernatorv1alpha1.OperationWakeUp)
 			currentCycleID := plan.Status.CurrentCycleID
 
-			state.Statuses.PlanStatuses.Send(statusprocessor.Update[*hibernatorv1alpha1.HibernatePlan]{
+			state.Statuses.PlanStatuses.Send(statusmanager.Update[*hibernatorv1alpha1.HibernatePlan]{
 				NamespacedName: state.Key,
 				Resource:       plan,
-				Mutator: statusprocessor.MutatorFunc[*hibernatorv1alpha1.HibernatePlan](func(p *hibernatorv1alpha1.HibernatePlan) {
+				Mutator: statusmanager.MutatorFunc[*hibernatorv1alpha1.HibernatePlan](func(p *hibernatorv1alpha1.HibernatePlan) {
 					cycleIdx := findOrAppendCycle(&p.Status, currentCycleID)
 					p.Status.ExecutionHistory[cycleIdx].WakeupExecution = summary
 					pruneCycleHistory(&p.Status)
@@ -103,10 +103,10 @@ func (state *wakingUpState) finalize(ctx context.Context, log logr.Logger, _ sch
 	currentCycleID := plan.Status.CurrentCycleID
 
 	previousPhase := plan.Status.Phase
-	state.Statuses.PlanStatuses.Send(statusprocessor.Update[*hibernatorv1alpha1.HibernatePlan]{
+	state.Statuses.PlanStatuses.Send(statusmanager.Update[*hibernatorv1alpha1.HibernatePlan]{
 		NamespacedName: state.Key,
 		Resource:       plan,
-		Mutator: statusprocessor.MutatorFunc[*hibernatorv1alpha1.HibernatePlan](func(p *hibernatorv1alpha1.HibernatePlan) {
+		Mutator: statusmanager.MutatorFunc[*hibernatorv1alpha1.HibernatePlan](func(p *hibernatorv1alpha1.HibernatePlan) {
 			p.Status.Phase = hibernatorv1alpha1.PhaseActive
 			p.Status.LastTransitionTime = ptr.To(metav1.NewTime(state.Clock.Now()))
 

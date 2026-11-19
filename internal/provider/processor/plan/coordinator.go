@@ -22,7 +22,7 @@ import (
 	"github.com/ardikabs/hibernator/internal/metrics"
 	"github.com/ardikabs/hibernator/internal/notification"
 	"github.com/ardikabs/hibernator/internal/provider/processor/plan/state"
-	statusprocessor "github.com/ardikabs/hibernator/internal/provider/processor/status"
+	statusmanager "github.com/ardikabs/hibernator/internal/provider/status"
 	"github.com/ardikabs/hibernator/internal/restore"
 	"github.com/ardikabs/hibernator/internal/scheduler"
 	"github.com/ardikabs/hibernator/pkg/keyedworker"
@@ -44,7 +44,7 @@ type Coordinator struct {
 	Planner        *scheduler.Planner
 	RestoreManager *restore.Manager
 	Resources      *message.ControllerResources
-	Statuses       *statusprocessor.ControllerStatuses
+	Statuses       *statusmanager.ControllerStatuses
 	Notifier       notification.Notifier
 }
 

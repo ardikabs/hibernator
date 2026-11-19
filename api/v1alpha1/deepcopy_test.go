@@ -1087,3 +1087,39 @@ func TestTargetExecutionResult_DeepCopy_Nil(t *testing.T) {
 		t.Error("nil.DeepCopy() should return nil")
 	}
 }
+
+func TestCloudProviderStatus_DeepCopy_ConnectorFields(t *testing.T) {
+	orig := &CloudProviderStatus{
+		AllowedExecutors: []string{"eks"},
+		ExecutorAccess:   []ExecutorAccess{{Type: "eks", Allowed: true}},
+		Conditions:       []metav1.Condition{{Type: ConditionReady}},
+		LastProbeTime:    &metav1.Time{Time: time.Unix(1, 0)},
+	}
+	cp := orig.DeepCopy()
+	cp.AllowedExecutors[0] = "changed"
+	cp.ExecutorAccess[0].Type = "changed"
+	cp.Conditions[0].Type = "changed"
+	cp.LastProbeTime.Time = time.Unix(2, 0)
+	if orig.AllowedExecutors[0] != "eks" || orig.ExecutorAccess[0].Type != "eks" ||
+		orig.Conditions[0].Type != ConditionReady || !orig.LastProbeTime.Time.Equal(time.Unix(1, 0)) {
+		t.Errorf("original mutated: %+v", orig)
+	}
+}
+
+func TestK8SClusterStatus_DeepCopy_ConnectorFields(t *testing.T) {
+	orig := &K8SClusterStatus{
+		AllowedExecutors: []string{"workloadscaler"},
+		ExecutorAccess:   []ExecutorAccess{{Type: "workloadscaler", Allowed: true}},
+		Conditions:       []metav1.Condition{{Type: ConditionReady}},
+		LastProbeTime:    &metav1.Time{Time: time.Unix(1, 0)},
+	}
+	cp := orig.DeepCopy()
+	cp.AllowedExecutors[0] = "changed"
+	cp.ExecutorAccess[0].Type = "changed"
+	cp.Conditions[0].Type = "changed"
+	cp.LastProbeTime.Time = time.Unix(2, 0)
+	if orig.AllowedExecutors[0] != "workloadscaler" || orig.ExecutorAccess[0].Type != "workloadscaler" ||
+		orig.Conditions[0].Type != ConditionReady || !orig.LastProbeTime.Time.Equal(time.Unix(1, 0)) {
+		t.Errorf("original mutated: %+v", orig)
+	}
+}
