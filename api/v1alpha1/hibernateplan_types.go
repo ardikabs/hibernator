@@ -625,7 +625,3 @@ func ExceptionReferencesEqual(a, b []ExceptionReference) bool {
 	}
 	return true
 }
-
-func init() {
-	SchemeBuilder.Register(&HibernatePlan{}, &HibernatePlanList{})
-}

@@ -237,7 +237,3 @@ type HibernateNotificationList struct {
 	// Items is the list of HibernateNotification resources.
 	Items []HibernateNotification `json:"items"`
 }
-
-func init() {
-	SchemeBuilder.Register(&HibernateNotification{}, &HibernateNotificationList{})
-}

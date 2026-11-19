@@ -158,7 +158,3 @@ type CloudProviderList struct {
 	// Items is the list of CloudProvider resources.
 	Items []CloudProvider `json:"items"`
 }
-
-func init() {
-	SchemeBuilder.Register(&CloudProvider{}, &CloudProviderList{})
-}

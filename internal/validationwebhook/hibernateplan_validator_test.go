@@ -11,7 +11,6 @@ import (
 	"testing"
 
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
-	"k8s.io/apimachinery/pkg/runtime"
 
 	hibernatorv1alpha1 "github.com/ardikabs/hibernator/api/v1alpha1"
 	"github.com/ardikabs/hibernator/internal/wellknown"
@@ -325,7 +324,7 @@ func TestHibernatePlanValidator_ValidateCreate(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			_, err := validator.ValidateCreate(context.Background(), runtime.Object(tt.plan))
+			_, err := validator.ValidateCreate(context.Background(), tt.plan)
 			if (err != nil) != tt.wantErr {
 				t.Errorf("ValidateCreate() error = %v, wantErr %v", err, tt.wantErr)
 			}
@@ -514,7 +513,7 @@ func TestHibernatePlanValidator_ValidateUpdate(t *testing.T) {
 				},
 			}
 
-			_, err := validator.ValidateUpdate(context.Background(), runtime.Object(oldPlan), runtime.Object(tt.newPlan))
+			_, err := validator.ValidateUpdate(context.Background(), oldPlan, tt.newPlan)
 			if (err != nil) != tt.wantErr {
 				t.Errorf("ValidateUpdate() error = %v, wantErr %v", err, tt.wantErr)
 			}
@@ -537,31 +536,12 @@ func TestHibernatePlanValidator_ValidateDelete(t *testing.T) {
 		},
 	}
 
-	warnings, err := validator.ValidateDelete(context.Background(), runtime.Object(plan))
+	warnings, err := validator.ValidateDelete(context.Background(), plan)
 	if err != nil {
 		t.Errorf("ValidateDelete() unexpected error: %v", err)
 	}
 	if warnings != nil {
 		t.Errorf("ValidateDelete() unexpected warnings: %v", warnings)
-	}
-}
-
-func TestHibernatePlanValidator_ValidateCreate_WrongType(t *testing.T) {
-	validator := NewHibernatePlanValidator(logr.Discard())
-	wrongType := &hibernatorv1alpha1.CloudProvider{}
-	_, err := validator.ValidateCreate(context.Background(), runtime.Object(wrongType))
-	if err == nil {
-		t.Error("ValidateCreate() expected error for wrong type, got nil")
-	}
-}
-
-func TestHibernatePlanValidator_ValidateUpdate_WrongType(t *testing.T) {
-	validator := NewHibernatePlanValidator(logr.Discard())
-	plan := &hibernatorv1alpha1.HibernatePlan{}
-	wrongType := &hibernatorv1alpha1.CloudProvider{}
-	_, err := validator.ValidateUpdate(context.Background(), runtime.Object(plan), runtime.Object(wrongType))
-	if err == nil {
-		t.Error("ValidateUpdate() expected error for wrong type, got nil")
 	}
 }
 
@@ -585,7 +565,7 @@ func TestHibernatePlanValidator_ValidateCreate_RevertAnnotation_Rejected(t *test
 		},
 	}
 
-	_, err := validator.ValidateCreate(context.Background(), runtime.Object(plan))
+	_, err := validator.ValidateCreate(context.Background(), plan)
 	if err == nil {
 		t.Error("ValidateCreate() expected error for revert annotation on new plan, got nil")
 	}
@@ -674,7 +654,7 @@ func TestHibernatePlanValidator_ValidateUpdate_RevertAnnotation_TransitionValida
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			_, err := validator.ValidateUpdate(context.Background(), runtime.Object(tt.oldPlan), runtime.Object(tt.newPlan))
+			_, err := validator.ValidateUpdate(context.Background(), tt.oldPlan, tt.newPlan)
 			if (err != nil) != tt.wantErr {
 				t.Errorf("ValidateUpdate() error = %v, wantErr %v", err, tt.wantErr)
 			}
@@ -925,7 +905,7 @@ func TestHibernatePlanValidator_ValidateCreate_ControlAnnotations_Conflicts(t *t
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			_, err := validator.ValidateCreate(context.Background(), runtime.Object(tt.plan))
+			_, err := validator.ValidateCreate(context.Background(), tt.plan)
 			if tt.wantErr && err == nil {
 				t.Errorf("ValidateCreate() expected error, got nil")
 			}
@@ -1004,7 +984,7 @@ func TestHibernatePlanValidator_ValidateUpdate_ControlAnnotations_Conflicts(t *t
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			_, err := validator.ValidateUpdate(context.Background(), runtime.Object(tt.oldPlan), runtime.Object(tt.newPlan))
+			_, err := validator.ValidateUpdate(context.Background(), tt.oldPlan, tt.newPlan)
 			if tt.wantErr && err == nil {
 				t.Errorf("ValidateUpdate() expected error, got nil")
 			}

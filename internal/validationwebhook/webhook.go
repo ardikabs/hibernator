@@ -32,16 +32,16 @@ func SetupWithManager(mgr ctrl.Manager, log logr.Logger) error {
 	}
 
 	mux.handlers[hibernatorv1alpha1.GroupVersion.WithKind("HibernatePlan")] =
-		admission.WithCustomValidator(s, &hibernatorv1alpha1.HibernatePlan{}, NewHibernatePlanValidator(log))
+		admission.WithValidator(s, NewHibernatePlanValidator(log))
 
 	mux.handlers[hibernatorv1alpha1.GroupVersion.WithKind("ScheduleException")] =
-		admission.WithCustomValidator(s, &hibernatorv1alpha1.ScheduleException{}, NewScheduleExceptionValidator(log, mgr.GetClient()))
+		admission.WithValidator(s, NewScheduleExceptionValidator(log, mgr.GetClient()))
 
 	mux.handlers[hibernatorv1alpha1.GroupVersion.WithKind("CloudProvider")] =
-		admission.WithCustomValidator(s, &hibernatorv1alpha1.CloudProvider{}, NewCloudProviderValidator(log))
+		admission.WithValidator(s, NewCloudProviderValidator(log))
 
 	mux.handlers[hibernatorv1alpha1.GroupVersion.WithKind("HibernateNotification")] =
-		admission.WithCustomValidator(s, &hibernatorv1alpha1.HibernateNotification{}, NewHibernateNotificationValidator(log))
+		admission.WithValidator(s, NewHibernateNotificationValidator(log))
 
 	mgr.GetWebhookServer().Register(WebhookPath, &webhook.Admission{Handler: mux})
 	return nil

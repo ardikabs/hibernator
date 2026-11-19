@@ -196,7 +196,3 @@ type ScheduleExceptionList struct {
 	// Items is the list of ScheduleException resources.
 	Items []ScheduleException `json:"items"`
 }
-
-func init() {
-	SchemeBuilder.Register(&ScheduleException{}, &ScheduleExceptionList{})
-}

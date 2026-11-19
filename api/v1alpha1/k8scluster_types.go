@@ -168,7 +168,3 @@ type K8SClusterList struct {
 	// Items is the list of K8SCluster resources.
 	Items []K8SCluster `json:"items"`
 }
-
-func init() {
-	SchemeBuilder.Register(&K8SCluster{}, &K8SClusterList{})
-}
