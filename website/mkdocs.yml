@@ -83,6 +83,7 @@ nav:
         - Override Actions: user-guides/override-actions.md
         - Error Recovery: user-guides/error-recovery.md
         - Notifications: user-guides/notifications.md
+        - Connector Status: user-guides/connectors.md
         - Schedule Boundaries: user-guides/schedule-boundaries.md
         - Composing Multiple Exceptions: user-guides/composing-multiple-exceptions.md
       - Executor Guides:

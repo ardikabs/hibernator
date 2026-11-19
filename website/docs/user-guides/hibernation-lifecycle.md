@@ -12,12 +12,12 @@ Before creating a plan, ensure your connectors are ready:
 # Verify CloudProvider is ready
 kubectl get cloudprovider -n hibernator-system
 # NAME             TYPE   READY   AGE
-# aws-production   aws    true    5d
+# aws-production   aws    True    5d
 
 # Verify K8SCluster is ready (if using Karpenter/WorkloadScaler)
 kubectl get k8scluster -n hibernator-system
 # NAME             TYPE   READY   AGE
-# eks-production   eks    true    5d
+# eks-production   eks    True    5d
 ```
 
 ### 2. Apply the Plan
