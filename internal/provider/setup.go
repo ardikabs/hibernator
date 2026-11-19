@@ -6,28 +6,16 @@ Licensed under the Apache License, Version 2.0.
 package provider
 
 import (
-	"context"
-	"fmt"
+	"time"
 
 	"github.com/go-logr/logr"
 	"k8s.io/utils/clock"
 	ctrl "sigs.k8s.io/controller-runtime"
-	"sigs.k8s.io/controller-runtime/pkg/client"
-	"sigs.k8s.io/controller-runtime/pkg/event"
-	"sigs.k8s.io/controller-runtime/pkg/manager"
 
-	hibernatorv1alpha1 "github.com/ardikabs/hibernator/api/v1alpha1"
-	"github.com/ardikabs/hibernator/internal/message"
 	"github.com/ardikabs/hibernator/internal/notification"
-	notificationprocessor "github.com/ardikabs/hibernator/internal/provider/processor/notification"
-	planprocessor "github.com/ardikabs/hibernator/internal/provider/processor/plan"
-	"github.com/ardikabs/hibernator/internal/provider/processor/plan/state"
-	requeueprocessor "github.com/ardikabs/hibernator/internal/provider/processor/requeue"
-	scheduleexceptionprocessor "github.com/ardikabs/hibernator/internal/provider/processor/scheduleexception"
-	statusprocessor "github.com/ardikabs/hibernator/internal/provider/processor/status"
-	"github.com/ardikabs/hibernator/internal/restore"
-	"github.com/ardikabs/hibernator/internal/scheduler"
-	"github.com/ardikabs/hibernator/internal/wellknown"
+	"github.com/ardikabs/hibernator/internal/provider/connector"
+	"github.com/ardikabs/hibernator/internal/provider/processor"
+	"github.com/ardikabs/hibernator/internal/provider/status"
 )
 
 // ProviderOptions contains the configuration needed to wire the full async reconciler pipeline.
@@ -55,6 +43,22 @@ type ProviderOptions struct {
 	// NotificationOptions configures the notification subsystem.
 	// E2E tests use this to inject custom sinks via notification.WithSink().
 	NotificationOptions []notification.Option
+
+	// ControlPlaneNamespace is where connector probe Jobs run, alongside the runner
+	// ServiceAccount. Empty disables the connector reconcilers.
+	ControlPlaneNamespace string
+	// Probe configures connector probing.
+	Probe ProbeOptions
+}
+
+// ProbeOptions configures connector probe scheduling.
+type ProbeOptions struct {
+	// Resync is the interval between probes of an unchanged connector.
+	Resync time.Duration
+	// MaxConcurrent caps in-flight probe Jobs across all connectors.
+	MaxConcurrent int
+	// Timeout bounds a single probe.
+	Timeout time.Duration
 }
 
 // Setup wires the full async phase-driven reconciler pipeline and registers all providers
@@ -68,176 +72,39 @@ type ProviderOptions struct {
 func Setup(mgr ctrl.Manager, clk clock.Clock, opts ProviderOptions) error {
 	log := opts.Logger.WithName("setup")
 
-	// Register field indexer for ScheduleException.spec.planRef.name.
-	// This enables efficient lookups of exceptions by plan name without relying on labels.
-	if err := registerFieldIndexes(mgr); err != nil {
-		return fmt.Errorf("unable to register field indexes: %w", err)
+	statuses, err := status.SetupWithManager(mgr, opts.Logger)
+	if err != nil {
+		return err
 	}
 
-	restoreMgr := restore.NewManager(mgr.GetClient(), opts.Logger)
-	planner := scheduler.NewPlanner()
-	schedEvaluator := scheduler.NewScheduleEvaluator(clk, scheduler.WithScheduleBuffer(opts.ScheduleBufferDuration))
-
-	// Shared message bus between providers and processors.
-	resources := new(message.ControllerResources)
-
-	// PlanEnqueuer channel — processors write GenericEvents here to trigger
-	// a fresh PlanReconciler.Reconcile() without relying on RequeueAfter.
-	enqueueCh := make(chan event.GenericEvent, 128)
-	enqueuer := &channelEnqueuer{
-		logger: opts.Logger.WithName("plan-enqueuer"),
-		ch:     enqueueCh,
+	if err := processor.SetupWithManager(mgr, clk, processor.Options{
+		Logger:                 opts.Logger,
+		Workers:                opts.Workers,
+		ScheduleBufferDuration: opts.ScheduleBufferDuration,
+		ControlPlaneEndpoint:   opts.ControlPlaneEndpoint,
+		RunnerImage:            opts.RunnerImage,
+		RunnerServiceAccount:   opts.RunnerServiceAccount,
+		NotificationOptions:    opts.NotificationOptions,
+		Statuses:               statuses,
+	}); err != nil {
+		return err
 	}
 
-	planStatusProcessor := statusprocessor.NewUpdateProcessor[*hibernatorv1alpha1.HibernatePlan](
-		opts.Logger.WithName("processor").WithName("plan-status"),
-		mgr.GetClient(),
-		mgr.GetAPIReader())
-
-	exceptionStatusProcessor := statusprocessor.NewUpdateProcessor[*hibernatorv1alpha1.ScheduleException](
-		opts.Logger.WithName("processor").WithName("exception-status"),
-		mgr.GetClient(),
-		mgr.GetAPIReader())
-
-	notifStatusProcessor := statusprocessor.NewUpdateProcessor[*hibernatorv1alpha1.HibernateNotification](
-		opts.Logger.WithName("processor").WithName("notification-status"),
-		mgr.GetClient(),
-		mgr.GetAPIReader())
-
-	statuses := &statusprocessor.ControllerStatuses{
-		PlanStatuses:         planStatusProcessor.Writer(),
-		ExceptionStatuses:    exceptionStatusProcessor.Writer(),
-		NotificationStatuses: notifStatusProcessor.Writer(),
+	if err := connector.SetupWithManager(mgr, connector.Options{
+		Clock:                clk,
+		Log:                  opts.Logger,
+		Statuses:             statuses,
+		Workers:              opts.Workers,
+		Namespace:            opts.ControlPlaneNamespace,
+		RunnerImage:          opts.RunnerImage,
+		RunnerServiceAccount: opts.RunnerServiceAccount,
+		Resync:               opts.Probe.Resync,
+		MaxConcurrentProbes:  opts.Probe.MaxConcurrent,
+		ProbeTimeout:         opts.Probe.Timeout,
+	}); err != nil {
+		return err
 	}
-
-	// --- Providers (K8s reconciler → watchable map) ---
-	provider := &PlanReconciler{
-		Client:            mgr.GetClient(),
-		APIReader:         mgr.GetAPIReader(),
-		Clock:             clk,
-		Log:               opts.Logger.WithName("hibernateplan"),
-		Scheme:            mgr.GetScheme(),
-		Planner:           planner,
-		ScheduleEvaluator: schedEvaluator,
-		RestoreManager:    restoreMgr,
-		Resources:         resources,
-		EnqueueCh:         enqueueCh,
-	}
-
-	if err := provider.SetupWithManager(mgr, opts.Workers); err != nil {
-		return fmt.Errorf("unable to create hibernateplan provider: %w", err)
-	}
-
-	log.Info("registered provider", "provider", "hibernateplan")
-
-	// --- Processors (watchable map → status updates) ---
-	// Registered as Runnables via mgr.Add() — started when the manager starts.
-
-	// --- Notification Lifecycle Processor---
-	notifLifecycleProcessor := &notificationprocessor.LifecycleProcessor{
-		Client:    mgr.GetClient(),
-		Clock:     clk,
-		Log:       opts.Logger.WithName("processor").WithName("notification"),
-		Resources: resources,
-		Statuses:  statuses,
-	}
-
-	// --- Notification Dispatcher ---
-	notifInstance := notification.New(
-		opts.Logger.WithName("processor").WithName("notification"),
-		mgr.GetAPIReader(),
-		append(opts.NotificationOptions, notification.WithDeliveryCallback(notifLifecycleProcessor.HandleDeliveryResult))...,
-	)
-
-	processors := []struct {
-		name     string
-		runnable manager.Runnable
-	}{
-		{
-			name: "hibernateplan.coordinator",
-			runnable: &planprocessor.Coordinator{
-				Infrastructure: state.Infrastructure{
-					Client:    mgr.GetClient(),
-					APIReader: mgr.GetAPIReader(),
-					Scheme:    mgr.GetScheme(),
-					Clock:     clk,
-				},
-				ExecutorInfra: state.ExecutorInfra{
-					ControlPlaneEndpoint: opts.ControlPlaneEndpoint,
-					RunnerImage:          opts.RunnerImage,
-					RunnerServiceAccount: opts.RunnerServiceAccount,
-				},
-				Log:            opts.Logger.WithName("processor").WithName("plan"),
-				Planner:        planner,
-				Resources:      resources,
-				Statuses:       statuses,
-				RestoreManager: restoreMgr,
-				Notifier:       notifInstance.Notifier,
-			},
-		},
-		{
-			name: "plan.requeue",
-			runnable: &requeueprocessor.PlanRequeueProcessor{
-				Clock:     clk,
-				Log:       opts.Logger.WithName("processor").WithName("requeue"),
-				Resources: resources,
-				Enqueuer:  enqueuer,
-			},
-		},
-		{
-			name: "scheduleexception.processor",
-			runnable: &scheduleexceptionprocessor.LifecycleProcessor{
-				Client:    mgr.GetClient(),
-				Clock:     clk,
-				Log:       opts.Logger.WithName("processor").WithName("exception"),
-				Resources: resources,
-				Statuses:  statuses,
-			},
-		},
-		{
-			name:     "plan.status",
-			runnable: planStatusProcessor,
-		},
-		{
-			name:     "exception.status",
-			runnable: exceptionStatusProcessor,
-		},
-		{
-			name:     "notification.lifecycle",
-			runnable: notifLifecycleProcessor,
-		},
-		{
-			name:     "notification.status",
-			runnable: notifStatusProcessor,
-		},
-		{
-			name:     "notification.dispatcher",
-			runnable: notifInstance.Runnable,
-		},
-	}
-
-	for _, p := range processors {
-		if err := mgr.Add(p.runnable); err != nil {
-			return fmt.Errorf("unable to add processor %s: %w", p.name, err)
-		}
-		log.Info("registered processor", "processor", p.name)
-	}
+	log.Info("registered provider", "provider", "connector")
 
 	return nil
-}
-
-// registerFieldIndexes sets up field indexes required by the reconciler pipeline.
-func registerFieldIndexes(mgr ctrl.Manager) error {
-	return mgr.GetFieldIndexer().IndexField(
-		context.Background(),
-		&hibernatorv1alpha1.ScheduleException{},
-		wellknown.FieldIndexExceptionPlanRef,
-		func(obj client.Object) []string {
-			exc, ok := obj.(*hibernatorv1alpha1.ScheduleException)
-			if !ok {
-				return nil
-			}
-			return []string{exc.Spec.PlanRef.Name}
-		},
-	)
 }

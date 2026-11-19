@@ -25,7 +25,7 @@ import (
 
 	hibernatorv1alpha1 "github.com/ardikabs/hibernator/api/v1alpha1"
 	"github.com/ardikabs/hibernator/internal/message"
-	statusprocessor "github.com/ardikabs/hibernator/internal/provider/processor/status"
+	statusmanager "github.com/ardikabs/hibernator/internal/provider/status"
 	"github.com/ardikabs/hibernator/internal/restore"
 	"github.com/ardikabs/hibernator/internal/scheduler"
 	"github.com/ardikabs/hibernator/internal/wellknown"
@@ -61,7 +61,7 @@ func buildTestConfig(c client.Client) *Config {
 		},
 		Planner:   scheduler.NewPlanner(),
 		Resources: new(message.ControllerResources),
-		Statuses: &statusprocessor.ControllerStatuses{
+		Statuses: &statusmanager.ControllerStatuses{
 			PlanStatuses:      newCaptureUpdater[*hibernatorv1alpha1.HibernatePlan](64),
 			ExceptionStatuses: newCaptureUpdater[*hibernatorv1alpha1.ScheduleException](16),
 		},

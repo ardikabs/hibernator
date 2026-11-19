@@ -69,6 +69,27 @@ func NewWithClients(clientFactory ClientFactory) *Executor {
 	}
 }
 
+var _ executor.ConnectorRequirer = (*Executor)(nil)
+
+// Requires declares the Kubernetes permissions needed by each operation.
+// Custom CRD workload kinds (group/version/resource) are user-supplied and
+// cannot be declared statically, so only the built-in kinds are listed.
+func (e *Executor) Requires() executor.AccessRequirement {
+	shutdown := []executor.K8SRule{{Resource: "namespaces", Verbs: []string{"list"}}}
+	var wakeUp []executor.K8SRule
+	for _, resource := range []string{"deployments", "statefulsets", "replicasets"} {
+		scale := executor.K8SRule{Group: "apps", Resource: resource, Subresource: "scale", Verbs: []string{"get", "update"}}
+		shutdown = append(shutdown, executor.K8SRule{Group: "apps", Resource: resource, Verbs: []string{"list"}}, scale)
+		wakeUp = append(wakeUp, scale)
+	}
+
+	return executor.AccessRequirement{
+		ConnectorKind: executor.ConnectorKindK8SCluster,
+		Shutdown:      executor.OperationAccess{K8SRules: shutdown},
+		WakeUp:        executor.OperationAccess{K8SRules: wakeUp},
+	}
+}
+
 // Type returns the executor type.
 func (e *Executor) Type() string {
 	return ExecutorType

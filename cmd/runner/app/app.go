@@ -18,13 +18,12 @@ import (
 
 	"github.com/ardikabs/hibernator/internal/executor"
 	"github.com/ardikabs/hibernator/internal/version"
-	"github.com/ardikabs/hibernator/internal/wellknown"
 )
 
 // Config holds runner configuration.
 type Config struct {
 	Timeout              time.Duration // Overall execution timeout
-	Operation            string        // "shutdown" or "wakeup"
+	Operation            string        // "shutdown", "wakeup" or "probe"
 	Target               string        // Target name
 	TargetType           string        // Executor type (e.g., "eks", "rds", "ec2")
 	Plan                 string        // HibernatePlan name
@@ -50,7 +49,7 @@ func ParseFlags() *Config {
 
 	flag.BoolVar(&showVersion, "version", false, "Print version and exit.")
 	flag.DurationVar(&cfg.Timeout, "timeout", time.Hour, "Overall execution timeout, default 1h")
-	flag.StringVar(&cfg.Operation, "operation", "", "Operation: shutdown or wakeup")
+	flag.StringVar(&cfg.Operation, "operation", "", "Operation: shutdown, wakeup or probe")
 	flag.StringVar(&cfg.Target, "target", "", "Target name")
 	flag.StringVar(&cfg.TargetType, "target-type", "", "Target type (executor type)")
 	flag.StringVar(&cfg.Plan, "plan", "", "HibernatePlan name")
@@ -103,6 +102,10 @@ func Run(cfg *Config) error {
 	defer cancel()
 
 	// Create and run the runner
+	if cfg.Operation == OperationProbe {
+		return runProbeMode(ctx, log, cfg)
+	}
+
 	r, err := newRunner(ctx, log, cfg)
 	if err != nil {
 		log.Error(err, "failed to initialize runner")
@@ -140,7 +143,7 @@ func writeTerminationLog(log logr.Logger, result *executor.Result, err error) {
 		msg = "execution completed successfully"
 	}
 
-	if writeErr := os.WriteFile(wellknown.TerminationLogPath, []byte(msg), 0644); writeErr != nil {
+	if writeErr := os.WriteFile(terminationLogPath, []byte(msg), 0644); writeErr != nil {
 		log.Error(writeErr, "failed to write termination log")
 	}
 }

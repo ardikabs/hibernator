@@ -1,0 +1,33 @@
+/*
+Copyright 2026 Ardika Saputro.
+Licensed under the Apache License, Version 2.0.
+*/
+
+package rds
+
+import (
+	"testing"
+
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
+
+	"github.com/ardikabs/hibernator/internal/executor"
+)
+
+func TestExecutor_Requires(t *testing.T) {
+	req := New().Requires()
+
+	require.NoError(t, req.Validate())
+	assert.Equal(t, executor.ConnectorKindCloudProvider, req.ConnectorKind)
+	assert.Subset(t, req.Shutdown.AWSActions, []string{
+		"rds:DescribeDBInstances", "rds:DescribeDBClusters", "rds:ListTagsForResource",
+		"rds:StopDBInstance", "rds:StopDBCluster",
+		"rds:CreateDBSnapshot", "rds:CreateDBClusterSnapshot",
+		"rds:DescribeDBSnapshots", "rds:DescribeDBClusterSnapshots",
+	})
+	assert.Subset(t, req.WakeUp.AWSActions, []string{
+		"rds:DescribeDBInstances", "rds:DescribeDBClusters",
+		"rds:StartDBInstance", "rds:StartDBCluster",
+	})
+	assert.NotContains(t, req.WakeUp.AWSActions, "rds:StopDBInstance")
+}

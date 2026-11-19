@@ -20,7 +20,7 @@ import (
 	hibernatorv1alpha1 "github.com/ardikabs/hibernator/api/v1alpha1"
 	"github.com/ardikabs/hibernator/internal/message"
 	"github.com/ardikabs/hibernator/internal/notification"
-	statusprocessor "github.com/ardikabs/hibernator/internal/provider/processor/status"
+	statusmanager "github.com/ardikabs/hibernator/internal/provider/status"
 	"github.com/ardikabs/hibernator/internal/restore"
 	"github.com/ardikabs/hibernator/internal/scheduler"
 	"github.com/ardikabs/hibernator/internal/wellknown"
@@ -179,7 +179,7 @@ type state struct {
 	Planner        *scheduler.Planner
 	RestoreManager *restore.Manager
 	Resources      *message.ControllerResources
-	Statuses       *statusprocessor.ControllerStatuses
+	Statuses       *statusmanager.ControllerStatuses
 	Notifier       notification.Notifier
 }
 
@@ -447,10 +447,10 @@ func (s *state) buildEffectivePlan(plan *hibernatorv1alpha1.HibernatePlan) *hibe
 // nextStage moves the plan to the next execution stage.
 func (b *state) nextStage(nextStageIndex int) {
 	plan := b.plan()
-	b.Statuses.PlanStatuses.Send(statusprocessor.Update[*hibernatorv1alpha1.HibernatePlan]{
+	b.Statuses.PlanStatuses.Send(statusmanager.Update[*hibernatorv1alpha1.HibernatePlan]{
 		NamespacedName: b.Key,
 		Resource:       plan,
-		Mutator: statusprocessor.MutatorFunc[*hibernatorv1alpha1.HibernatePlan](func(p *hibernatorv1alpha1.HibernatePlan) {
+		Mutator: statusmanager.MutatorFunc[*hibernatorv1alpha1.HibernatePlan](func(p *hibernatorv1alpha1.HibernatePlan) {
 			p.Status.CurrentStageIndex = nextStageIndex
 		}),
 	})
@@ -466,10 +466,10 @@ func (b *state) setError(_ context.Context, phaseErr error) {
 
 	plan := b.plan()
 	previousPhase := plan.Status.Phase
-	b.Statuses.PlanStatuses.Send(statusprocessor.Update[*hibernatorv1alpha1.HibernatePlan]{
+	b.Statuses.PlanStatuses.Send(statusmanager.Update[*hibernatorv1alpha1.HibernatePlan]{
 		NamespacedName: b.Key,
 		Resource:       plan,
-		Mutator: statusprocessor.MutatorFunc[*hibernatorv1alpha1.HibernatePlan](func(p *hibernatorv1alpha1.HibernatePlan) {
+		Mutator: statusmanager.MutatorFunc[*hibernatorv1alpha1.HibernatePlan](func(p *hibernatorv1alpha1.HibernatePlan) {
 			p.Status.Phase = hibernatorv1alpha1.PhaseError
 			p.Status.LastTransitionTime = ptr.To(metav1.NewTime(b.Clock.Now()))
 			p.Status.ErrorMessage = errMsg

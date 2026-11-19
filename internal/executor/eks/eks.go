@@ -136,6 +136,27 @@ func NewWithClients(eksFactory EKSClientFactory, stsFactory STSClientFactory, aw
 	}
 }
 
+var _ executor.ConnectorRequirer = (*Executor)(nil)
+
+// Requires declares the AWS permissions needed by each operation.
+// The optional node-deletion wait reaches the cluster with an EKS token derived
+// from the same AWS identity, so no separate K8SCluster connector is involved.
+func (e *Executor) Requires() executor.AccessRequirement {
+	return executor.AccessRequirement{
+		ConnectorKind: executor.ConnectorKindCloudProvider,
+		Shutdown: executor.OperationAccess{AWSActions: []string{
+			"eks:DescribeCluster",
+			"eks:ListNodegroups",
+			"eks:DescribeNodegroup",
+			"eks:UpdateNodegroupConfig",
+		}},
+		WakeUp: executor.OperationAccess{AWSActions: []string{
+			"eks:DescribeNodegroup",
+			"eks:UpdateNodegroupConfig",
+		}},
+	}
+}
+
 // Type returns the executor type.
 func (e *Executor) Type() string {
 	return ExecutorType

@@ -143,6 +143,12 @@ _Appears in:_
 | `ready` _boolean_ | Ready indicates if the provider is ready to use. |  |  |
 | `message` _string_ | Message provides status details. |  | Optional: \{\} <br /> |
 | `lastValidated` _[Time](https://kubernetes.io/docs/reference/generated/kubernetes-api/v1.33/#time-v1-meta)_ | LastValidated is when credentials were last validated. |  | Optional: \{\} <br /> |
+| `observedGeneration` _integer_ | ObservedGeneration is the generation last reconciled. |  | Optional: \{\} <br /> |
+| `lastProbeTime` _[Time](https://kubernetes.io/docs/reference/generated/kubernetes-api/v1.33/#time-v1-meta)_ | LastProbeTime is when the connector was last probed. |  | Optional: \{\} <br /> |
+| `observedSecretVersion` _string_ | ObservedSecretVersion is the resourceVersion of the credentials Secret last probed. |  | Optional: \{\} <br /> |
+| `conditions` _[Condition](https://kubernetes.io/docs/reference/generated/kubernetes-api/v1.33/#condition-v1-meta) array_ | Conditions represent the latest observations of the connector state. |  | Optional: \{\} <br /> |
+| `allowedExecutors` _string array_ | AllowedExecutors lists executor types the connector may run. |  | Optional: \{\} <br /> |
+| `executorAccess` _[ExecutorAccess](#executoraccess) array_ | ExecutorAccess reports per-executor access verification results. |  | Optional: \{\} <br /> |
 
 
 #### CloudProviderType
@@ -441,6 +447,44 @@ _Appears in:_
 | `Staged` | StrategyStaged executes targets in explicitly defined groups (stages) in order.<br />Within each stage targets may run sequentially or in parallel depending on stage.parallel.<br /> |
 
 
+#### ExecutorAccess
+
+
+
+ExecutorAccess reports whether the connector can run an executor type.
+
+
+
+_Appears in:_
+- [CloudProviderStatus](#cloudproviderstatus)
+- [K8SClusterStatus](#k8sclusterstatus)
+
+| Field | Description | Default | Validation |
+| --- | --- | --- | --- |
+| `type` _string_ | Type is the executor type. |  |  |
+| `allowed` _boolean_ | Allowed indicates whether the connector has the permissions the executor needs. |  |  |
+| `reason` _string_ | Reason is a machine-readable reason when access is not allowed. |  | Optional: \{\} <br /> |
+| `message` _string_ | Message provides human-readable details. |  | Optional: \{\} <br /> |
+| `verification` _[ExecutorVerification](#executorverification)_ | Verification is the method used to verify access. |  | Optional: \{\} <br /> |
+
+
+#### ExecutorVerification
+
+_Underlying type:_ _string_
+
+ExecutorVerification is the method used to verify executor access.
+
+
+
+_Appears in:_
+- [ExecutorAccess](#executoraccess)
+
+| Field | Description |
+| --- | --- |
+| `PolicySimulation` | VerificationPolicySimulation verifies access through IAM policy simulation.<br /> |
+| `AccessReview` | VerificationAccessReview verifies access through Kubernetes SelfSubjectAccessReview.<br /> |
+
+
 #### GKEConfig
 
 
@@ -658,6 +702,12 @@ _Appears in:_
 | `message` _string_ | Message provides status details. |  | Optional: \{\} <br /> |
 | `lastValidated` _[Time](https://kubernetes.io/docs/reference/generated/kubernetes-api/v1.33/#time-v1-meta)_ | LastValidated is when connectivity was last validated. |  | Optional: \{\} <br /> |
 | `clusterType` _[K8SClusterType](#k8sclustertype)_ | ClusterType is the detected cluster type. |  | Enum: [eks gke k8s] <br />Optional: \{\} <br /> |
+| `observedGeneration` _integer_ | ObservedGeneration is the generation last reconciled. |  | Optional: \{\} <br /> |
+| `lastProbeTime` _[Time](https://kubernetes.io/docs/reference/generated/kubernetes-api/v1.33/#time-v1-meta)_ | LastProbeTime is when the connector was last probed. |  | Optional: \{\} <br /> |
+| `observedSecretVersion` _string_ | ObservedSecretVersion is the resourceVersion of the credentials Secret last probed. |  | Optional: \{\} <br /> |
+| `conditions` _[Condition](https://kubernetes.io/docs/reference/generated/kubernetes-api/v1.33/#condition-v1-meta) array_ | Conditions represent the latest observations of the connector state. |  | Optional: \{\} <br /> |
+| `allowedExecutors` _string array_ | AllowedExecutors lists executor types the connector may run. |  | Optional: \{\} <br /> |
+| `executorAccess` _[ExecutorAccess](#executoraccess) array_ | ExecutorAccess reports per-executor access verification results. |  | Optional: \{\} <br /> |
 
 
 #### K8SClusterType

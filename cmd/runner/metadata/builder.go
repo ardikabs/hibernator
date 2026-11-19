@@ -8,12 +8,14 @@ package metadata
 import (
 	"context"
 	"encoding/base64"
+	"errors"
 	"fmt"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/service/eks"
 	"github.com/go-logr/logr"
 	corev1 "k8s.io/api/core/v1"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
 	hibernatorv1alpha1 "github.com/ardikabs/hibernator/api/v1alpha1"
@@ -26,6 +28,13 @@ const (
 	awsSecretAccessKeyKey = "AWS_SECRET_ACCESS_KEY"
 	awsSessionToken       = "AWS_SESSION_TOKEN"
 	kubeconfigKey         = "kubeconfig"
+)
+
+var (
+	// ErrSecretNotFound marks a referenced Secret that does not exist.
+	ErrSecretNotFound = errors.New("referenced secret not found")
+	// ErrCredentialsIncomplete marks a Secret that lacks required credential keys.
+	ErrCredentialsIncomplete = errors.New("credentials incomplete")
 )
 
 // ConfigBuilder constructs the executor.ConnectorConfig from Kubernetes resources.
@@ -119,7 +128,7 @@ func (b *ConfigBuilder) buildAWSConnectorConfig(ctx context.Context, provider *h
 		accessKeyID := string(secret.Data[awsAccessKeyIDKey])
 		secretAccessKey := string(secret.Data[awsSecretAccessKeyKey])
 		if accessKeyID == "" || secretAccessKey == "" {
-			return nil, fmt.Errorf("AWS static credentials must include %s and %s", awsAccessKeyIDKey, awsSecretAccessKeyKey)
+			return nil, fmt.Errorf("%w: AWS static credentials must include %s and %s", ErrCredentialsIncomplete, awsAccessKeyIDKey, awsSecretAccessKeyKey)
 		}
 
 		awsCfg.AccessKeyID = accessKeyID
@@ -141,6 +150,9 @@ func (b *ConfigBuilder) getSecret(ctx context.Context, namespace, name string) (
 		Name:      name,
 	}
 	if err := b.k8sClient.Get(ctx, key, &secret); err != nil {
+		if apierrors.IsNotFound(err) {
+			return nil, fmt.Errorf("get Secret %s/%s: %w: %w", namespace, name, ErrSecretNotFound, err)
+		}
 		return nil, fmt.Errorf("get Secret %s/%s: %w", namespace, name, err)
 	}
 	return &secret, nil
@@ -236,7 +248,7 @@ func (b *ConfigBuilder) loadK8SClusterConfig(ctx context.Context, namespace, nam
 			}
 			kubeconfigBytes := secret.Data[kubeconfigKey]
 			if len(kubeconfigBytes) == 0 {
-				return nil, fmt.Errorf("kubeconfig secret %s/%s missing %s key", secretNamespace, ref.Name, kubeconfigKey)
+				return nil, fmt.Errorf("%w: kubeconfig secret %s/%s missing %s key", ErrCredentialsIncomplete, secretNamespace, ref.Name, kubeconfigKey)
 			}
 
 			return &executor.K8SConnectorConfig{

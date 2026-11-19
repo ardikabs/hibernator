@@ -13,6 +13,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	corev1 "k8s.io/api/core/v1"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
@@ -213,6 +214,7 @@ func TestBuildConnectorConfig_CloudProvider_MissingSecret(t *testing.T) {
 	_, err := b.BuildConnectorConfig(context.Background(), "CloudProvider", "default", "my-provider")
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "get Secret")
+	assert.ErrorIs(t, err, ErrSecretNotFound)
 }
 
 func TestBuildConnectorConfig_CloudProvider_MissingCredentials(t *testing.T) {
@@ -236,6 +238,8 @@ func TestBuildConnectorConfig_CloudProvider_MissingCredentials(t *testing.T) {
 	_, err := b.BuildConnectorConfig(context.Background(), "CloudProvider", "default", "my-provider")
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "AWS static credentials must include")
+	assert.ErrorIs(t, err, ErrCredentialsIncomplete)
+	assert.NotErrorIs(t, err, ErrSecretNotFound)
 }
 
 func TestBuildConnectorConfig_CloudProvider_NotFound(t *testing.T) {
@@ -248,6 +252,8 @@ func TestBuildConnectorConfig_CloudProvider_NotFound(t *testing.T) {
 	_, err := b.BuildConnectorConfig(context.Background(), "CloudProvider", "default", "nonexistent")
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "get CloudProvider")
+	assert.True(t, apierrors.IsNotFound(err))
+	assert.NotErrorIs(t, err, ErrSecretNotFound)
 }
 
 func TestBuildConnectorConfig_K8SCluster_NotFound(t *testing.T) {
@@ -280,6 +286,7 @@ func TestBuildConnectorConfig_K8SCluster_KubeconfigRef_MissingKey(t *testing.T) 
 	_, err := b.BuildConnectorConfig(context.Background(), "K8SCluster", "default", "my-cluster")
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "kubeconfig secret")
+	assert.ErrorIs(t, err, ErrCredentialsIncomplete)
 }
 
 func TestBuildConnectorConfig_K8SCluster_KubeconfigRef_NamespaceOverride(t *testing.T) {

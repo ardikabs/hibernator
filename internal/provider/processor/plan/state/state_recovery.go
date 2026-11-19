@@ -11,7 +11,7 @@ import (
 
 	hibernatorv1alpha1 "github.com/ardikabs/hibernator/api/v1alpha1"
 	"github.com/ardikabs/hibernator/internal/notification"
-	statusprocessor "github.com/ardikabs/hibernator/internal/provider/processor/status"
+	statusmanager "github.com/ardikabs/hibernator/internal/provider/status"
 	"github.com/ardikabs/hibernator/internal/recovery"
 	"github.com/ardikabs/hibernator/internal/wellknown"
 	"github.com/go-logr/logr"
@@ -90,10 +90,10 @@ func (state *recoveryState) handleManualRetry(ctx context.Context, log logr.Logg
 		return true, StateResult{RequeueAfter: wellknown.RequeueIntervalOnRecoveryError}, nil
 	}
 
-	state.Statuses.PlanStatuses.Send(statusprocessor.Update[*hibernatorv1alpha1.HibernatePlan]{
+	state.Statuses.PlanStatuses.Send(statusmanager.Update[*hibernatorv1alpha1.HibernatePlan]{
 		NamespacedName: state.Key,
 		Resource:       plan,
-		Mutator: statusprocessor.MutatorFunc[*hibernatorv1alpha1.HibernatePlan](func(p *hibernatorv1alpha1.HibernatePlan) {
+		Mutator: statusmanager.MutatorFunc[*hibernatorv1alpha1.HibernatePlan](func(p *hibernatorv1alpha1.HibernatePlan) {
 			p.Status.RetryCount = 0
 			p.Status.LastRetryTime = nil
 		}),
@@ -125,7 +125,7 @@ func (state *recoveryState) handleRetry(ctx context.Context, log logr.Logger, la
 		targetPhase = hibernatorv1alpha1.PhaseWakingUp
 	}
 
-	state.Statuses.PlanStatuses.Send(statusprocessor.Update[*hibernatorv1alpha1.HibernatePlan]{
+	state.Statuses.PlanStatuses.Send(statusmanager.Update[*hibernatorv1alpha1.HibernatePlan]{
 		NamespacedName: state.Key,
 		Resource:       plan,
 		PreHook: state.notifyHook(hibernatorv1alpha1.EventRecovery, func(p *hibernatorv1alpha1.HibernatePlan) notification.Payload {
@@ -135,7 +135,7 @@ func (state *recoveryState) handleRetry(ctx context.Context, log logr.Logger, la
 			payload.Operation = string(operation)
 			return payload
 		}),
-		Mutator: statusprocessor.MutatorFunc[*hibernatorv1alpha1.HibernatePlan](func(p *hibernatorv1alpha1.HibernatePlan) {
+		Mutator: statusmanager.MutatorFunc[*hibernatorv1alpha1.HibernatePlan](func(p *hibernatorv1alpha1.HibernatePlan) {
 			if lastErr == nil {
 				lastErr = fmt.Errorf("unknown error (no error message in status)")
 			}

@@ -10,7 +10,7 @@ import (
 
 	hibernatorv1alpha1 "github.com/ardikabs/hibernator/api/v1alpha1"
 	"github.com/ardikabs/hibernator/internal/notification"
-	statusprocessor "github.com/ardikabs/hibernator/internal/provider/processor/status"
+	statusmanager "github.com/ardikabs/hibernator/internal/provider/status"
 	"github.com/ardikabs/hibernator/internal/wellknown"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/utils/ptr"
@@ -73,10 +73,10 @@ func (s *revertState) Handle(ctx context.Context) (StateResult, error) {
 		if err := s.patchAndPreserveStatus(ctx, plan, client.MergeFrom(orig)); err != nil {
 			return StateResult{}, err
 		}
-		s.Statuses.PlanStatuses.Send(statusprocessor.Update[*hibernatorv1alpha1.HibernatePlan]{
+		s.Statuses.PlanStatuses.Send(statusmanager.Update[*hibernatorv1alpha1.HibernatePlan]{
 			NamespacedName: s.Key,
 			Resource:       plan,
-			Mutator: statusprocessor.MutatorFunc[*hibernatorv1alpha1.HibernatePlan](func(p *hibernatorv1alpha1.HibernatePlan) {
+			Mutator: statusmanager.MutatorFunc[*hibernatorv1alpha1.HibernatePlan](func(p *hibernatorv1alpha1.HibernatePlan) {
 				p.Status.ErrorMessage = "revert skipped: no targets have live restore data"
 				p.Status.LastTransitionTime = ptr.To(metav1.NewTime(s.Clock.Now()))
 			}),
@@ -89,10 +89,10 @@ func (s *revertState) Handle(ctx context.Context) (StateResult, error) {
 	previousPhase := plan.Status.Phase
 	now := s.Clock.Now()
 
-	s.Statuses.PlanStatuses.Send(statusprocessor.Update[*hibernatorv1alpha1.HibernatePlan]{
+	s.Statuses.PlanStatuses.Send(statusmanager.Update[*hibernatorv1alpha1.HibernatePlan]{
 		NamespacedName: s.Key,
 		Resource:       plan,
-		Mutator: statusprocessor.MutatorFunc[*hibernatorv1alpha1.HibernatePlan](func(p *hibernatorv1alpha1.HibernatePlan) {
+		Mutator: statusmanager.MutatorFunc[*hibernatorv1alpha1.HibernatePlan](func(p *hibernatorv1alpha1.HibernatePlan) {
 			p.Status.Phase = hibernatorv1alpha1.PhaseWakingUp
 			p.Status.CurrentStageIndex = 0
 			p.Status.CurrentOperation = hibernatorv1alpha1.OperationWakeUp

@@ -17,22 +17,22 @@ import (
 	"github.com/ardikabs/hibernator/pkg/keyedworker"
 )
 
-// processorIdleTTL is how long a per-key worker goroutine idles with no work
+// managerIdleTTL is how long a per-key worker goroutine idles with no work
 // before it exits. The next Send for that key restarts it on demand.
-const processorIdleTTL = 30 * time.Minute
+const managerIdleTTL = 30 * time.Minute
 
 // HookFunc is called with the K8s object before (PreHook) or after (PostHook)
 // the status mutation is written. A non-nil error from PreHook aborts the write.
 type HookFunc[T client.Object] func(ctx context.Context, obj T) error
 
 // Update contains all information needed to apply a single status mutation to a
-// K8s object. Instances are sent via Updater.Send and processed by UpdateProcessor.
+// K8s object. Instances are sent via Updater.Send and applied by UpdateManager.
 type Update[T client.Object] struct {
 	// NamespacedName identifies the target object.
 	NamespacedName types.NamespacedName
 
 	// Resource is the object template used for Get calls inside RetryOnConflict.
-	// The processor always fetches a fresh copy from the API server before mutating.
+	// The manager always fetches a fresh copy from the API server before mutating.
 	Resource T
 
 	// PreHook is called once with the current (pre-mutation) object before Mutate
@@ -67,7 +67,7 @@ func (m MutatorFunc[T]) Mutate(obj T) {
 	}
 }
 
-// UpdateProcessor is a per-key status writer backed by a keyedworker.Pool.
+// UpdateManager is a per-key status writer backed by a keyedworker.Pool.
 //
 // Properties:
 //   - Per-key serial ordering: updates for the same key are processed strictly
@@ -83,8 +83,8 @@ func (m MutatorFunc[T]) Mutate(obj T) {
 //     TTL grace period expires with an empty slot, reclaiming memory for inactive
 //     resources without requiring an explicit Remove call.
 //
-// Register with the controller-runtime manager via mgr.Add(processor).
-type UpdateProcessor[T client.Object] struct {
+// Register with the controller-runtime manager via mgr.Add(manager).
+type UpdateManager[T client.Object] struct {
 	log       logr.Logger
 	kind      string // Kubernetes object kind, used as a metric label
 	client    client.Client
@@ -92,7 +92,7 @@ type UpdateProcessor[T client.Object] struct {
 	pool      *keyedworker.Pool[types.NamespacedName, Update[T]]
 }
 
-// NewUpdateProcessor creates a new UpdateProcessor. It must be registered as a
+// NewUpdateManager creates a new UpdateManager. It must be registered as a
 // manager.Runnable before it processes any updates.
 //
 // The kind label is derived automatically from T via KindOf, so callers do not
@@ -101,10 +101,10 @@ type UpdateProcessor[T client.Object] struct {
 // apiReader must be the uncached reader (mgr.GetAPIReader()) so that Get calls
 // inside RetryOnConflict always see the true server state rather than a potentially
 // stale informer-cache snapshot.
-func NewUpdateProcessor[T client.Object](log logr.Logger, c client.Client, apiReader client.Reader) *UpdateProcessor[T] {
+func NewUpdateManager[T client.Object](log logr.Logger, c client.Client, apiReader client.Reader) *UpdateManager[T] {
 	var zero T
 	kind := hibernatorv1alpha1.KindOf(zero)
-	u := &UpdateProcessor[T]{
+	u := &UpdateManager[T]{
 		log:       log,
 		kind:      kind,
 		client:    c,
@@ -125,15 +125,18 @@ func NewUpdateProcessor[T client.Object](log logr.Logger, c client.Client, apiRe
 	return u
 }
 
+// Kind returns the Kubernetes kind of the resource this manager writes status for.
+func (u *UpdateManager[T]) Kind() string { return u.kind }
+
 // NeedLeaderElection returns true — status writes require leader election.
-func (u *UpdateProcessor[T]) NeedLeaderElection() bool { return true }
+func (u *UpdateManager[T]) NeedLeaderElection() bool { return true }
 
 // Send applies the mutation to update.Resource immediately (so the caller's
 // in-memory object reflects the new status without a separate step), then
 // enqueues the update for async persistence. Non-blocking.
 // Safe to call before Start; the Pool buffers the value and drains it once
 // the run factory is registered.
-func (u *UpdateProcessor[T]) Writer() Updater[T] {
+func (u *UpdateManager[T]) Writer() Updater[T] {
 	return &defaultUpdater[T]{
 		pool: u.pool,
 	}
@@ -141,12 +144,12 @@ func (u *UpdateProcessor[T]) Writer() Updater[T] {
 
 // Start wires the pool's run factory and blocks until ctx is cancelled.
 // Implements manager.Runnable.
-func (u *UpdateProcessor[T]) Start(ctx context.Context) error {
-	u.log.Info("started status update processor")
-	defer u.log.Info("stopped status update processor")
+func (u *UpdateManager[T]) Start(ctx context.Context) error {
+	u.log.Info("started status update manager")
+	defer u.log.Info("stopped status update manager")
 
 	u.pool.Register(ctx, keyedworker.RunnerFactory[types.NamespacedName](
-		processorIdleTTL,
+		managerIdleTTL,
 		func(ctx context.Context, update Update[T]) error {
 			return u.apply(ctx, update)
 		},
@@ -165,7 +168,7 @@ func (u *UpdateProcessor[T]) Start(ctx context.Context) error {
 // It fetches a fresh copy of the object via the uncached APIReader to guard
 // against stale cache reads, applies the mutation, guards against no-op writes
 // via isStatusEqual, then calls Status().Update with RetryOnConflict.
-func (u *UpdateProcessor[T]) apply(ctx context.Context, update Update[T]) error {
+func (u *UpdateManager[T]) apply(ctx context.Context, update Update[T]) error {
 	startTime := time.Now()
 	key := update.NamespacedName.String()
 	obj := update.Resource
@@ -270,6 +273,14 @@ func isStatusEqual(objA, objB any) bool {
 		}
 	case *hibernatorv1alpha1.HibernateNotification:
 		if b, ok := objB.(*hibernatorv1alpha1.HibernateNotification); ok {
+			return cmp.Equal(a.Status, b.Status, defaultOpts)
+		}
+	case *hibernatorv1alpha1.CloudProvider:
+		if b, ok := objB.(*hibernatorv1alpha1.CloudProvider); ok {
+			return cmp.Equal(a.Status, b.Status, defaultOpts)
+		}
+	case *hibernatorv1alpha1.K8SCluster:
+		if b, ok := objB.(*hibernatorv1alpha1.K8SCluster); ok {
 			return cmp.Equal(a.Status, b.Status, defaultOpts)
 		}
 	}

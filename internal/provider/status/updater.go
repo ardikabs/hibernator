@@ -12,7 +12,7 @@ import (
 )
 
 // Updater is the write-facing interface exposed to producers (Workers, state handlers).
-// It intentionally hides all pool and processor internals.
+// It intentionally hides all pool and manager internals.
 type Updater[T client.Object] interface {
 	Send(u Update[T])
 }

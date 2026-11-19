@@ -135,6 +135,18 @@ Common issues and their solutions.
       --as=system:serviceaccount:hibernator-system:hibernator-controller
     ```
 
+## Connector Not Ready
+
+**Symptoms**: `kubectl get cloudproviders,k8sclusters` shows `READY` as `False`, `Unknown` or empty, or `allowedExecutors` is empty. `-o wide` adds the `REASON` column.
+
+**Check**:
+
+```bash
+kubectl get cloudprovider <name> -n hibernator-system -o jsonpath='{.status.conditions}'
+```
+
+The condition `reason` (`InvalidCredentials`, `AccountMismatch`, `SecretNotFound`, `ClusterUnreachable`, `ProbeFailed`, `ProviderNotReady`, `ProbeUnsupported`, and others) points at the cause. `Unknown` means there is no verdict: after `ProbeFailed` the executor lists are cleared and `lastValidated` keeps the time of the last verdict. `gke` clusters are always `Unknown` with `ProbeUnsupported`. See [Connector Status and Executor Access](connectors.md#troubleshooting) for what each reason means.
+
 ## Plan Stuck in Hibernating/WakingUp
 
 **Symptoms**: Plan doesn't transition to `Hibernated` or `Active` after Jobs complete.

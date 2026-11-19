@@ -75,7 +75,9 @@ rules:
 - apiGroups:
   - hibernator.ardikabs.com
   resources:
+  - cloudproviders/status
   - hibernateplans/status
+  - k8sclusters/status
   - scheduleexceptions/status
   verbs:
   - get

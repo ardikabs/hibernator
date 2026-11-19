@@ -1276,3 +1276,104 @@ connectorRef:
 		})
 	}
 }
+
+func connectorStatusFixture() (*metav1.Time, []metav1.Condition, []string, []ExecutorAccess) {
+	now := metav1.NewTime(time.Date(2026, 1, 2, 3, 4, 5, 0, time.UTC))
+	conds := []metav1.Condition{{
+		Type:               ConditionReady,
+		Status:             metav1.ConditionTrue,
+		Reason:             "Ready",
+		LastTransitionTime: now,
+	}}
+	access := []ExecutorAccess{{
+		Type:         "eks",
+		Allowed:      false,
+		Reason:       ReasonAccessDenied,
+		Message:      "denied",
+		Verification: VerificationPolicySimulation,
+	}}
+	return &now, conds, []string{"eks", "ec2"}, access
+}
+
+func assertConnectorStatusKeys(t *testing.T, data []byte) {
+	t.Helper()
+	var raw map[string]json.RawMessage
+	if err := json.Unmarshal(data, &raw); err != nil {
+		t.Fatalf("unmarshal raw: %v", err)
+	}
+	for _, key := range []string{"allowedExecutors", "executorAccess", "observedGeneration", "lastProbeTime", "observedSecretVersion", "conditions"} {
+		if _, ok := raw[key]; !ok {
+			t.Errorf("missing key %q in %s", key, data)
+		}
+	}
+}
+
+func TestCloudProviderStatus_ConnectorFields_Marshal(t *testing.T) {
+	now, conds, allowed, access := connectorStatusFixture()
+	in := CloudProviderStatus{
+		ObservedGeneration:    3,
+		LastProbeTime:         now,
+		ObservedSecretVersion: "42",
+		Conditions:            conds,
+		AllowedExecutors:      allowed,
+		ExecutorAccess:        access,
+	}
+	data, err := json.Marshal(in)
+	if err != nil {
+		t.Fatalf("marshal: %v", err)
+	}
+	assertConnectorStatusKeys(t, data)
+
+	var out CloudProviderStatus
+	if err := json.Unmarshal(data, &out); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	if out.ObservedGeneration != 3 || out.ObservedSecretVersion != "42" || len(out.Conditions) != 1 ||
+		len(out.AllowedExecutors) != 2 || len(out.ExecutorAccess) != 1 ||
+		out.ExecutorAccess[0].Verification != VerificationPolicySimulation || out.LastProbeTime == nil {
+		t.Errorf("round trip mismatch: %+v", out)
+	}
+}
+
+func TestK8SClusterStatus_ConnectorFields_Marshal(t *testing.T) {
+	now, conds, allowed, access := connectorStatusFixture()
+	access[0].Verification = VerificationAccessReview
+	in := K8SClusterStatus{
+		ObservedGeneration:    5,
+		LastProbeTime:         now,
+		ObservedSecretVersion: "7",
+		Conditions:            conds,
+		AllowedExecutors:      allowed,
+		ExecutorAccess:        access,
+	}
+	data, err := json.Marshal(in)
+	if err != nil {
+		t.Fatalf("marshal: %v", err)
+	}
+	assertConnectorStatusKeys(t, data)
+
+	var out K8SClusterStatus
+	if err := json.Unmarshal(data, &out); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	if out.ObservedGeneration != 5 || out.ObservedSecretVersion != "7" || len(out.Conditions) != 1 ||
+		len(out.AllowedExecutors) != 2 || len(out.ExecutorAccess) != 1 ||
+		out.ExecutorAccess[0].Verification != VerificationAccessReview || out.LastProbeTime == nil {
+		t.Errorf("round trip mismatch: %+v", out)
+	}
+}
+
+func TestConnectorStatus_Constants(t *testing.T) {
+	strs := map[string]string{
+		ConditionReady: "Ready", ConditionAuthValid: "AuthValid", ConditionExecutorAccessVerified: "ExecutorAccessVerified",
+		ReasonProbeFailed: "ProbeFailed", ReasonSecretNotFound: "SecretNotFound", ReasonInvalidCredentials: "InvalidCredentials",
+		ReasonAccountMismatch: "AccountMismatch", ReasonClusterUnreachable: "ClusterUnreachable", ReasonProviderNotReady: "ProviderNotReady",
+		ReasonAccessDenied: "AccessDenied", ReasonSimulationUnavailable: "SimulationUnavailable", ReasonProbeError: "ProbeError",
+		string(VerificationPolicySimulation): "PolicySimulation", string(VerificationAccessReview): "AccessReview",
+	}
+	for got, want := range strs {
+		if got != want {
+			t.Errorf("got %q, want %q", got, want)
+		}
+	}
+}
