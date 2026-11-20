@@ -84,6 +84,8 @@ type Spec struct {
 
 // ConnectorConfig holds resolved connector settings.
 type ConnectorConfig struct {
+	// Type is the CloudProvider type (CloudProvider.spec.type). Empty for K8SCluster.
+	Type string
 	// AWS holds AWS-specific configuration.
 	AWS *AWSConnectorConfig
 	// K8S holds Kubernetes-specific configuration.

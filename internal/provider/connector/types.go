@@ -28,10 +28,17 @@ type probeTarget struct {
 	// forceDue probes regardless of lastProbe, e.g. after the provider recovered.
 	forceDue   bool
 	secretRefs []types.NamespacedName
+	// referenced are the executor types that active plans use on this connector.
+	// The reconciler fills it from Strategy.Usage after Prepare.
+	referenced []string
 	// sendResult and sendFailed take the generation and secret version stamped
-	// on the probe Job, not the current ones.
-	sendResult func(res connectorprobe.Result, now metav1.Time, generation int64, secretVersion string)
+	// on the probe Job, not the current ones. sendResult scopes the access verdict
+	// to the referenced executor types.
+	sendResult func(res connectorprobe.Result, now metav1.Time, generation int64, secretVersion string, referenced []string)
 	sendFailed func(now metav1.Time, generation int64, secretVersion, msg string)
+	// sendReferenced rescopes an already recorded access verdict when the
+	// referenced executor types change, without a new probe. Optional.
+	sendReferenced func(generation int64, referenced []string)
 }
 
 // JobConfig configures the connector probe Job.

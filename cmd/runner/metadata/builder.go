@@ -61,6 +61,8 @@ func (b *ConfigBuilder) BuildConnectorConfig(ctx context.Context, kind, namespac
 			return cfg, err
 		}
 		cfg.AWS = awsCfg
+		// buildAWSConnectorConfig only accepts aws providers today.
+		cfg.Type = executor.ConnectorTypeAWS
 	case "K8SCluster":
 		k8sCfg, err := b.loadK8SClusterConfig(ctx, namespace, name)
 		if err != nil {
