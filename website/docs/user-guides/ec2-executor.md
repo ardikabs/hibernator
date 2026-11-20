@@ -5,7 +5,35 @@ This guide covers how to hibernate standalone AWS EC2 instances using the `ec2` 
 ## Prerequisites
 
 - A `CloudProvider` resource configured for your AWS account
-- IAM permissions: `ec2:DescribeInstances`, `ec2:StopInstances`, `ec2:StartInstances`
+- IAM permissions, see [Required Permissions](#required-permissions)
+
+## Required Permissions
+
+The identity the `CloudProvider` authenticates as needs these IAM actions. The [connector status](connectors.md#executor-access-on-aws) checks them and reports `allowed: false` for `ec2` when one is missing.
+
+| Operation | IAM actions |
+|-----------|-------------|
+| Shutdown | `ec2:DescribeInstances`, `ec2:StopInstances` |
+| Wakeup | `ec2:DescribeInstances`, `ec2:StartInstances` |
+
+```json
+{
+  "Version": "2012-10-17",
+  "Statement": [
+    {
+      "Effect": "Allow",
+      "Action": [
+        "ec2:DescribeInstances",
+        "ec2:StopInstances",
+        "ec2:StartInstances"
+      ],
+      "Resource": "*"
+    }
+  ]
+}
+```
+
+`ec2:DescribeInstances` does not support resource-level permissions, so it needs `"Resource": "*"`. You can scope the stop and start actions to specific instances or tags. The connector check simulates with `*`, so a scoped policy can still show `allowed: true` and fail on a target outside the scope.
 
 ## Basic Setup
 

@@ -6,7 +6,33 @@ This guide covers how to hibernate Karpenter-managed NodePools using the `karpen
 
 - A `K8SCluster` resource configured for the target cluster
 - Karpenter v1 (`karpenter.sh/v1`) installed on the target cluster
-- RBAC: `karpenter.sh nodepools` (get, list, delete, create), `v1 nodes` (list, get)
+- RBAC on the target cluster, see [Required Permissions](#required-permissions)
+
+## Required Permissions
+
+The identity the `K8SCluster` authenticates as needs these Kubernetes permissions. [Connector status](connectors.md#executor-access-on-kubernetes) checks them with `SelfSubjectAccessReview` and reports `allowed: false` for `karpenter` when one is missing.
+
+| Operation | API group | Resource | Verbs |
+|-----------|-----------|----------|-------|
+| Shutdown | `karpenter.sh` | `nodepools` | `get`, `list`, `delete` |
+| Shutdown | core | `nodes` | `list` |
+| Wakeup | `karpenter.sh` | `nodepools` | `get`, `create` |
+
+```yaml
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: hibernator-karpenter
+rules:
+  - apiGroups: ["karpenter.sh"]
+    resources: ["nodepools"]
+    verbs: ["get", "list", "delete", "create"]
+  - apiGroups: [""]
+    resources: ["nodes"]
+    verbs: ["list"]
+```
+
+Bind it with a `ClusterRoleBinding`. The access review is cluster-wide, so an identity that only has namespaced bindings shows `AccessDenied`. NodePools are cluster-scoped, so this is the usual setup.
 
 ## Basic Setup
 

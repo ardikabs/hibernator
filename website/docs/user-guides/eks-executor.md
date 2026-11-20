@@ -5,8 +5,38 @@ This guide covers how to hibernate AWS EKS managed node groups using the `eks` e
 ## Prerequisites
 
 - A `CloudProvider` resource configured for your AWS account
-- IAM permissions: `eks:ListNodegroups`, `eks:DescribeNodegroup`, `eks:UpdateNodegroupConfig`
+- IAM permissions, see [Required Permissions](#required-permissions)
 - The EKS cluster must have at least one managed node group
+
+## Required Permissions
+
+The identity the `CloudProvider` authenticates as needs these IAM actions. The [connector status](connectors.md#executor-access-on-aws) checks them and reports `allowed: false` for `eks` when one is missing.
+
+| Operation | IAM actions |
+|-----------|-------------|
+| Shutdown | `eks:DescribeCluster`, `eks:ListNodegroups`, `eks:DescribeNodegroup`, `eks:UpdateNodegroupConfig` |
+| Wakeup | `eks:DescribeNodegroup`, `eks:UpdateNodegroupConfig` |
+
+```json
+{
+  "Version": "2012-10-17",
+  "Statement": [
+    {
+      "Effect": "Allow",
+      "Action": [
+        "eks:DescribeCluster",
+        "eks:ListNodegroups",
+        "eks:DescribeNodegroup",
+        "eks:UpdateNodegroupConfig"
+      ],
+      "Resource": "*"
+    }
+  ]
+}
+```
+
+!!! note "Waiting for node deletion needs cluster RBAC"
+    When the executor waits for nodes to be deleted, it reaches the cluster with an EKS token for the same AWS identity. That identity also needs Kubernetes permission to list `nodes`, for example through an EKS access entry. The connector check only covers the IAM actions above and cannot see this. See [Known Limits](connectors.md#known-limits).
 
 ## Basic Setup
 
