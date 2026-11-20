@@ -14,7 +14,7 @@ A Helm chart for Hibernator Operator - Kubernetes-native time-based infrastructu
 
 ## Prerequisites
 
-- Kubernetes 1.33+
+- Kubernetes 1.34+
 - Helm 3.0+
 - (Optional) cert-manager 1.7+ for automatic webhook certificate management
 
