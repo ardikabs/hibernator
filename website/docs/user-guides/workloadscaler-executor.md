@@ -5,8 +5,41 @@ This guide covers how to scale down Kubernetes workloads (Deployments, StatefulS
 ## Prerequisites
 
 - A `K8SCluster` resource configured for the target cluster
-- RBAC: `apps deployments/scale`, `apps statefulsets/scale` (get, update); `v1 namespaces` (list, get) for namespace discovery
+- RBAC on the target cluster, see [Required Permissions](#required-permissions)
 - For custom CRDs: the scale subresource must be enabled on the CRD
+
+## Required Permissions
+
+The identity the `K8SCluster` authenticates as needs these Kubernetes permissions. [Connector status](connectors.md#executor-access-on-kubernetes) checks them with `SelfSubjectAccessReview` and reports `allowed: false` for `workloadscaler` when one is missing.
+
+| Operation | API group | Resource | Verbs |
+|-----------|-----------|----------|-------|
+| Shutdown | core | `namespaces` | `list` |
+| Shutdown | `apps` | `deployments`, `statefulsets`, `replicasets` | `list` |
+| Shutdown | `apps` | `deployments/scale`, `statefulsets/scale`, `replicasets/scale` | `get`, `update` |
+| Wakeup | `apps` | `deployments/scale`, `statefulsets/scale`, `replicasets/scale` | `get`, `update` |
+
+```yaml
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: hibernator-workloadscaler
+rules:
+  - apiGroups: [""]
+    resources: ["namespaces"]
+    verbs: ["list"]
+  - apiGroups: ["apps"]
+    resources: ["deployments", "statefulsets", "replicasets"]
+    verbs: ["list"]
+  - apiGroups: ["apps"]
+    resources: ["deployments/scale", "statefulsets/scale", "replicasets/scale"]
+    verbs: ["get", "update"]
+```
+
+The access review is cluster-wide. An identity that only has namespaced RoleBindings shows `AccessDenied` even though it works in the namespaces it is bound in. If that is how you grant access, treat `AccessDenied` as expected.
+
+!!! note "Custom resource kinds"
+    Custom CRD workload kinds are not covered by the connector check. For each one you scale, also grant `list` on the resource and `get` and `update` on its `scale` subresource in its API group.
 
 ## Basic Setup
 

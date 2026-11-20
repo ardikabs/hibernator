@@ -143,7 +143,8 @@ var _ executor.ConnectorRequirer = (*Executor)(nil)
 // from the same AWS identity, so no separate K8SCluster connector is involved.
 func (e *Executor) Requires() executor.AccessRequirement {
 	return executor.AccessRequirement{
-		ConnectorKind: executor.ConnectorKindCloudProvider,
+		ConnectorKind:  executor.ConnectorKindCloudProvider,
+		ConnectorTypes: []string{executor.ConnectorTypeAWS},
 		Shutdown: executor.OperationAccess{AWSActions: []string{
 			"eks:DescribeCluster",
 			"eks:ListNodegroups",

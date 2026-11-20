@@ -82,13 +82,37 @@ func (s K8SClusterStrategy) Prepare(ctx context.Context, r *Reconciler, obj clie
 		observedSecret: kc.Status.ObservedSecretVersion,
 		forceDue:       ready != nil && ready.Reason == hibernatorv1alpha1.ReasonProviderNotReady,
 		secretRefs:     k8sClusterSecretRefs(kc),
-		sendResult: func(res connectorprobe.Result, now metav1.Time, gen int64, sv string) {
-			send(ApplyK8SResult(res, now, gen, sv))
+		sendResult: func(res connectorprobe.Result, now metav1.Time, gen int64, sv string, referenced []string) {
+			send(func(o *hibernatorv1alpha1.K8SCluster) {
+				ApplyK8SResult(res, now, gen, sv)(o)
+				ApplyK8SReferencedAccess(referenced, gen)(o)
+			})
 		},
 		sendFailed: func(now metav1.Time, gen int64, sv, msg string) {
 			send(ApplyK8SProbeFailed(now, gen, sv, msg))
 		},
+		sendReferenced: func(gen int64, referenced []string) {
+			if m := ApplyK8SReferencedAccess(referenced, gen); changes(kc, m) {
+				send(m)
+			}
+		},
 	}, false, nil
+}
+
+func (K8SClusterStrategy) Usage(ctx context.Context, r *Reconciler, obj client.Object) (Usage, error) {
+	return planUsage(ctx, r.Client, executor.ConnectorKindK8SCluster, client.ObjectKeyFromObject(obj))
+}
+
+func (K8SClusterStrategy) SendNotInUse(r *Reconciler, obj client.Object) {
+	kc := obj.(*hibernatorv1alpha1.K8SCluster)
+	r.Statuses.K8SClusterStatuses.Send(statusmanager.Update[*hibernatorv1alpha1.K8SCluster]{
+		NamespacedName: client.ObjectKeyFromObject(kc),
+		Resource:       kc,
+		Mutator: statusmanager.MutatorFunc[*hibernatorv1alpha1.K8SCluster](func(o *hibernatorv1alpha1.K8SCluster) {
+			ApplyK8SNotInUse(kc.Generation)(o)
+			o.Status.ClusterType = ClusterTypeOf(kc.Spec)
+		}),
+	})
 }
 
 func (s K8SClusterStrategy) SecretRequests(ctx context.Context, r *Reconciler, secret client.Object) []reconcile.Request {

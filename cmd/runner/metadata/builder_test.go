@@ -123,6 +123,7 @@ func TestBuildConnectorConfig_CloudProvider(t *testing.T) {
 	cfg, err := b.BuildConnectorConfig(context.Background(), "CloudProvider", "default", "my-provider")
 	require.NoError(t, err)
 
+	assert.Equal(t, "aws", cfg.Type)
 	assert.NotNil(t, cfg.AWS)
 	assert.Equal(t, "us-west-2", cfg.AWS.Region)
 	assert.Equal(t, "123456789", cfg.AWS.AccountID)

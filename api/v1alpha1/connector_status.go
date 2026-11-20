@@ -38,6 +38,7 @@ const (
 	ReasonNoExecutorsToVerify   = "NoExecutorsToVerify"
 	ReasonUnverified            = "Unverified"
 	ReasonProbeUnsupported      = "ProbeUnsupported"
+	ReasonNotInUse              = "NotInUse"
 )
 
 // ExecutorAccess reports whether the connector can run an executor type.

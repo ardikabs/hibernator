@@ -31,6 +31,10 @@ func (fakeStrategy) Watches(b *builder.Builder, _ *Reconciler) *builder.Builder 
 func (fakeStrategy) SecretRequests(context.Context, *Reconciler, client.Object) []reconcile.Request {
 	return nil
 }
+func (fakeStrategy) Usage(context.Context, *Reconciler, client.Object) (Usage, error) {
+	return Usage{InUse: true}, nil
+}
+func (fakeStrategy) SendNotInUse(*Reconciler, client.Object) {}
 func (s fakeStrategy) Prepare(_ context.Context, _ *Reconciler, obj client.Object) (probeTarget, bool, error) {
 	return probeTarget{kind: s.kind, key: client.ObjectKeyFromObject(obj), generation: obj.GetGeneration()}, false, nil
 }

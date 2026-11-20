@@ -65,6 +65,7 @@ type Options struct {
 	ConnectorResync         time.Duration
 	ConnectorMaxProbes      int
 	ConnectorProbeTimeout   time.Duration
+	ConnectorProbeUnused    bool
 }
 
 // ParseFlags parses command-line flags and environment variables.
@@ -112,6 +113,8 @@ func ParseFlags() Options {
 		"The maximum number of connector probe Jobs running at once.")
 	flag.DurationVar(&opts.ConnectorProbeTimeout, "connector-probe-timeout", envutil.GetDuration("CONNECTOR_PROBE_TIMEOUT", 30*time.Second),
 		"The timeout of a single connector probe.")
+	flag.BoolVar(&opts.ConnectorProbeUnused, "connector-probe-unreferenced", envutil.GetBool("CONNECTOR_PROBE_UNREFERENCED", false),
+		"Probe CloudProvider and K8SCluster connectors that no active HibernatePlan uses. By default they are skipped and report NotInUse.")
 
 	zapOpts := zap.Options{
 		Development: true,
@@ -174,6 +177,7 @@ func Run(opts Options) error {
 			Resync:        opts.ConnectorResync,
 			MaxConcurrent: opts.ConnectorMaxProbes,
 			Timeout:       opts.ConnectorProbeTimeout,
+			Unreferenced:  opts.ConnectorProbeUnused,
 		},
 	}); err != nil {
 		return err

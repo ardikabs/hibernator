@@ -45,11 +45,58 @@ func TestAccessRequirementValidate(t *testing.T) {
 			},
 			wantErr: true,
 		},
+		{
+			name: "AWS connector type on CloudProvider",
+			req: AccessRequirement{
+				ConnectorKind:  ConnectorKindCloudProvider,
+				ConnectorTypes: []string{ConnectorTypeAWS},
+				Shutdown:       OperationAccess{AWSActions: []string{"ec2:StopInstances"}},
+			},
+		},
+		{
+			name: "empty connector type value",
+			req: AccessRequirement{
+				ConnectorKind:  ConnectorKindCloudProvider,
+				ConnectorTypes: []string{""},
+			},
+			wantErr: true,
+		},
+		{
+			name: "connector types on K8SCluster",
+			req: AccessRequirement{
+				ConnectorKind:  ConnectorKindK8SCluster,
+				ConnectorTypes: []string{ConnectorTypeAWS},
+			},
+			wantErr: true,
+		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			if err := tt.req.Validate(); (err != nil) != tt.wantErr {
 				t.Fatalf("Validate() error = %v, wantErr %v", err, tt.wantErr)
+			}
+		})
+	}
+}
+
+func TestAccessRequirementAppliesTo(t *testing.T) {
+	tests := []struct {
+		name  string
+		types []string
+		given string
+		want  bool
+	}{
+		{"no restriction matches any type", nil, "aws", true},
+		{"no restriction matches empty type", nil, "", true},
+		{"listed type matches", []string{"aws"}, "aws", true},
+		{"unlisted type does not match", []string{"aws"}, "gcp", false},
+		{"restricted requirement never matches an empty type", []string{"aws"}, "", false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			r := AccessRequirement{ConnectorTypes: tt.types}
+			if got := r.AppliesTo(tt.given); got != tt.want {
+				t.Fatalf("AppliesTo(%q) = %v, want %v", tt.given, got, tt.want)
 			}
 		})
 	}

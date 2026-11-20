@@ -298,3 +298,19 @@ func TestNewProber_Wired(t *testing.T) {
 	assert.NotNil(t, p.K8S)
 	assert.NotNil(t, p.Getenv)
 }
+
+func TestProbe_SkipsExecutorsRestrictedToOtherConnectorTypes(t *testing.T) {
+	gcpOnly := cpReq()
+	gcpOnly.ConnectorTypes = []string{"gcp"}
+	awsOnly := cpReq()
+	awsOnly.ConnectorTypes = []string{executor.ConnectorTypeAWS}
+
+	a := &stubAWS{id: &AWSIdentity{}, entries: []hibernatorv1alpha1.ExecutorAccess{{Type: "ec2", Allowed: true}}}
+	cfg := awsCfg()
+	cfg.Type = executor.ConnectorTypeAWS
+	res, err := newProber(a, nil).Probe(context.Background(), executor.ConnectorKindCloudProvider, cfg,
+		[]executor.Executor{mkExec("ec2", awsOnly), mkExec("cloudsql", gcpOnly)})
+	require.NoError(t, err)
+	assert.Equal(t, 1, res.EligibleExecutors)
+	assert.Equal(t, map[string]executor.AccessRequirement{"ec2": awsOnly}, a.gotExecs)
+}

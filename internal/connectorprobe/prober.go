@@ -44,7 +44,7 @@ func NewProber() *Prober {
 // Result is then zero and must not be read as a verdict. The caller should
 // exit non-zero so the controller records a probe failure instead of Ready=false.
 func (p *Prober) Probe(ctx context.Context, kind string, cfg executor.ConnectorConfig, execs []executor.Executor) (Result, error) {
-	reqs := eligible(kind, execs)
+	reqs := eligible(kind, cfg.Type, execs)
 	switch kind {
 	case executor.ConnectorKindCloudProvider:
 		return p.probeAWS(ctx, cfg.AWS, reqs)
@@ -119,8 +119,9 @@ func (p *Prober) probeK8S(ctx context.Context, cfg *k8sutil.K8SConnectorConfig, 
 		EligibleExecutors: len(reqs), CheckedExecutors: len(entries)}, nil
 }
 
-// eligible keeps executors that declare a valid requirement for kind, keyed by type.
-func eligible(kind string, execs []executor.Executor) map[string]executor.AccessRequirement {
+// eligible keeps executors that declare a valid requirement for the connector's
+// kind and type, keyed by executor type.
+func eligible(kind, connectorType string, execs []executor.Executor) map[string]executor.AccessRequirement {
 	out := make(map[string]executor.AccessRequirement)
 	for _, e := range execs {
 		r, ok := e.(executor.ConnectorRequirer)
@@ -128,7 +129,7 @@ func eligible(kind string, execs []executor.Executor) map[string]executor.Access
 			continue
 		}
 		req := r.Requires()
-		if req.ConnectorKind != kind || req.Validate() != nil {
+		if req.ConnectorKind != kind || !req.AppliesTo(connectorType) || req.Validate() != nil {
 			continue
 		}
 		out[e.Type()] = req

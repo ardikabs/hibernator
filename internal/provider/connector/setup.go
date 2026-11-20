@@ -37,6 +37,9 @@ type Options struct {
 	MaxConcurrentProbes int
 	// ProbeTimeout bounds a single probe.
 	ProbeTimeout time.Duration
+	// ProbeUnreferenced probes connectors that no active HibernatePlan uses.
+	// By default they are skipped and report NotInUse.
+	ProbeUnreferenced bool
 }
 
 var defaultStrategies = []Strategy{CloudProviderStrategy{}, K8SClusterStrategy{}}
@@ -47,6 +50,10 @@ func SetupWithManager(mgr ctrl.Manager, opts Options) error {
 	timeout := opts.ProbeTimeout
 	if timeout <= 0 {
 		timeout = DefaultProbeTimeout
+	}
+
+	if err := registerPlanIndex(mgr); err != nil {
+		return fmt.Errorf("unable to register plan connector index: %w", err)
 	}
 
 	for _, strategy := range defaultStrategies {
@@ -66,6 +73,7 @@ func SetupWithManager(mgr ctrl.Manager, opts Options) error {
 			},
 			Resync:              opts.Resync,
 			MaxConcurrentProbes: opts.MaxConcurrentProbes,
+			ProbeUnreferenced:   opts.ProbeUnreferenced,
 		}
 		if err := r.SetupWithManager(mgr, opts.Workers); err != nil {
 			return fmt.Errorf("unable to create %s connector reconciler: %w", strategy.Kind(), err)
