@@ -5,8 +5,45 @@ This guide covers how to hibernate AWS RDS database instances and Aurora cluster
 ## Prerequisites
 
 - A `CloudProvider` resource configured for your AWS account
-- IAM permissions: `rds:DescribeDBInstances`, `rds:DescribeDBClusters`, `rds:StopDBInstance`, `rds:StartDBInstance`, `rds:StopDBCluster`, `rds:StartDBCluster`
-- If using snapshots: `rds:CreateDBSnapshot` or `rds:CreateDBClusterSnapshot`
+- IAM permissions, see [Required Permissions](#required-permissions)
+
+## Required Permissions
+
+The identity the `CloudProvider` authenticates as needs these IAM actions. The [connector status](connectors.md#executor-access-on-aws) checks them and reports `allowed: false` for `rds` when one is missing.
+
+| Operation | IAM actions |
+|-----------|-------------|
+| Shutdown | `rds:DescribeDBInstances`, `rds:DescribeDBClusters`, `rds:ListTagsForResource`, `rds:StopDBInstance`, `rds:StopDBCluster` |
+| Shutdown with `snapshotBeforeStop: true` | additionally `rds:CreateDBSnapshot`, `rds:DescribeDBSnapshots` (instances) and `rds:CreateDBClusterSnapshot`, `rds:DescribeDBClusterSnapshots` (clusters) |
+| Wakeup | `rds:DescribeDBInstances`, `rds:DescribeDBClusters`, `rds:StartDBInstance`, `rds:StartDBCluster` |
+
+```json
+{
+  "Version": "2012-10-17",
+  "Statement": [
+    {
+      "Effect": "Allow",
+      "Action": [
+        "rds:DescribeDBInstances",
+        "rds:DescribeDBClusters",
+        "rds:ListTagsForResource",
+        "rds:StopDBInstance",
+        "rds:StopDBCluster",
+        "rds:StartDBInstance",
+        "rds:StartDBCluster",
+        "rds:CreateDBSnapshot",
+        "rds:DescribeDBSnapshots",
+        "rds:CreateDBClusterSnapshot",
+        "rds:DescribeDBClusterSnapshots"
+      ],
+      "Resource": "*"
+    }
+  ]
+}
+```
+
+!!! note "Snapshot actions and connector status"
+    The connector check always includes the snapshot actions, whether or not any plan enables `snapshotBeforeStop`. Without them `rds` shows `allowed: false` in the connector status, although plans that never take snapshots still run. Grant them, or ignore the entry for this executor.
 
 ## Basic Setup
 

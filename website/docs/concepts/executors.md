@@ -216,7 +216,7 @@ Each node group is stored under its name:
 | Requirement | Details |
 |-------------|---------|
 | **Connector** | `CloudProvider` with `type: aws` |
-| **IAM Permissions** | `eks:ListNodegroups`, `eks:DescribeNodegroup`, `eks:UpdateNodegroupConfig` |
+| **IAM Permissions** | `eks:DescribeCluster`, `eks:ListNodegroups`, `eks:DescribeNodegroup`, `eks:UpdateNodegroupConfig` ([details](../user-guides/eks-executor.md#required-permissions)) |
 | **Await Timeout** | Default: 10 minutes |
 
 ### Limitations
@@ -313,7 +313,7 @@ Each instance is stored under its ID:
 | Requirement | Details |
 |-------------|---------|
 | **Connector** | `CloudProvider` with `type: aws` |
-| **IAM Permissions** | `ec2:DescribeInstances`, `ec2:StopInstances`, `ec2:StartInstances` |
+| **IAM Permissions** | `ec2:DescribeInstances`, `ec2:StopInstances`, `ec2:StartInstances` ([details](../user-guides/ec2-executor.md#required-permissions)) |
 | **Await Timeout** | Default: 5 minutes |
 
 ### Limitations
@@ -390,7 +390,7 @@ The RDS executor supports three mutually exclusive selection methods:
 | Requirement | Details |
 |-------------|---------|
 | **Connector** | `CloudProvider` with `type: aws` |
-| **IAM Permissions** | `rds:DescribeDBInstances`, `rds:DescribeDBClusters`, `rds:StopDBInstance`, `rds:StartDBInstance`, `rds:StopDBCluster`, `rds:StartDBCluster`, `rds:CreateDBSnapshot` (if snapshots enabled) |
+| **IAM Permissions** | `rds:DescribeDBInstances`, `rds:DescribeDBClusters`, `rds:ListTagsForResource`, `rds:StopDBInstance`, `rds:StartDBInstance`, `rds:StopDBCluster`, `rds:StartDBCluster`, plus the snapshot actions when `snapshotBeforeStop` is enabled ([details](../user-guides/rds-executor.md#required-permissions)) |
 | **Await Timeout** | Default: 15 minutes |
 
 ### Limitations
