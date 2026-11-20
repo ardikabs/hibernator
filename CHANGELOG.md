@@ -1,3 +1,15 @@
+<a name="v1.8.0-rc.1"></a>
+
+## [v1.8.0-rc.1](https://github.com/ardikabs/hibernator/compare/v1.7.0...v1.8.0-rc.1) (2026-11-20)
+
+### ✨ Features
+
+* reconciler for connector (CloudProvider and K8SCluster) ([#212](https://github.com/ardikabs/hibernator/issues/212))
+
+### 🧹 Miscellaneous
+
+* bump all modules ([#213](https://github.com/ardikabs/hibernator/issues/213))
+
 <a name="v1.7.0"></a>
 
 ## [v1.7.0](https://github.com/ardikabs/hibernator/compare/v1.7.0-rc.5...v1.7.0) (2026-11-10)
