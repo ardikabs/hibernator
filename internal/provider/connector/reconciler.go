@@ -30,6 +30,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/predicate"
 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
 
+	hibernatorv1alpha1 "github.com/ardikabs/hibernator/api/v1alpha1"
 	statusmanager "github.com/ardikabs/hibernator/internal/provider/status"
 	"github.com/ardikabs/hibernator/internal/wellknown"
 )
@@ -73,6 +74,9 @@ type Reconciler struct {
 	Job                 JobConfig
 	Resync              time.Duration
 	MaxConcurrentProbes int
+	// ProbeUnreferenced probes connectors that no active HibernatePlan uses.
+	// By default they are skipped and report NotInUse.
+	ProbeUnreferenced bool
 	// Jitter returns the extra delay added to resync. Nil means random, up to 10%.
 	Jitter func(resync time.Duration) time.Duration
 }
@@ -90,7 +94,18 @@ func (r *Reconciler) SetupWithManager(mgr ctrl.Manager, workers int) error {
 			return s.SecretRequests(ctx, r, obj)
 		}), builder.OnlyMetadata, builder.WithPredicates(predicate.ResourceVersionChangedPredicate{})).
 		Watches(&batchv1.Job{}, handler.EnqueueRequestsFromMapFunc(connectorForJob),
-			builder.WithPredicates(probeJobFinishedPredicate(s.Kind())))
+			builder.WithPredicates(probeJobFinishedPredicate(s.Kind()))).
+		// A plan starts or stops using a connector when it is created, deleted,
+		// suspended or retargeted. All of these are spec changes, and the update
+		// handler maps both the old and the new object.
+		Watches(&hibernatorv1alpha1.HibernatePlan{}, handler.EnqueueRequestsFromMapFunc(
+			func(_ context.Context, obj client.Object) []reconcile.Request {
+				plan, ok := obj.(*hibernatorv1alpha1.HibernatePlan)
+				if !ok {
+					return nil
+				}
+				return connectorRequestsForPlan(s.Kind(), plan)
+			}), builder.WithPredicates(predicate.GenerationChangedPredicate{}))
 
 	return s.Watches(b, r).
 		WithOptions(controller.Options{MaxConcurrentReconciles: max(workers, 1)}).
@@ -112,15 +127,35 @@ func (r *Reconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Resu
 		return ctrl.Result{}, err
 	}
 
+	usage, err := r.Strategy.Usage(ctx, r, obj)
+	if err != nil {
+		return ctrl.Result{}, err
+	}
+	if !usage.InUse && !r.ProbeUnreferenced {
+		// Requeued by the HibernatePlan watch when a plan starts using the connector.
+		if err := r.deleteProbeJobs(ctx, r.Strategy.Kind(), req.NamespacedName); err != nil {
+			return ctrl.Result{}, err
+		}
+		r.Strategy.SendNotInUse(r, obj)
+		return ctrl.Result{}, nil
+	}
+
 	target, done, err := r.Strategy.Prepare(ctx, r, obj)
 	if err != nil || done {
 		return ctrl.Result{}, err
 	}
+	target.referenced = usage.ReferencedTypes
 	return r.reconcileProbe(ctx, target)
 }
 
 func (r *Reconciler) reconcileProbe(ctx context.Context, t probeTarget) (ctrl.Result, error) {
 	log := r.Log.WithValues("kind", t.kind, "connector", t.key.String())
+
+	// The plans that use the connector can change without a new probe, so rescope
+	// the recorded access verdict on every reconcile.
+	if t.sendReferenced != nil {
+		t.sendReferenced(t.generation, t.referenced)
+	}
 
 	jobs, err := r.probeJobs(ctx, t.kind, t.key)
 	if err != nil {
@@ -212,7 +247,7 @@ func (r *Reconciler) consume(ctx context.Context, t probeTarget, job *batchv1.Jo
 		t.sendFailed(now, gen, sv, err.Error())
 		return
 	}
-	t.sendResult(res, now, gen, sv)
+	t.sendResult(res, now, gen, sv, t.referenced)
 }
 
 // probeJobs lists the live probe Jobs of one connector. Label values may be

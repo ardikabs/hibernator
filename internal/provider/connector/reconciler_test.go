@@ -83,6 +83,7 @@ func newFixture(t *testing.T, objs ...client.Object) *fixture {
 		WithScheme(scheme).
 		WithObjects(objs...).
 		WithStatusSubresource(&hibernatorv1alpha1.CloudProvider{}, &hibernatorv1alpha1.K8SCluster{}).
+		WithIndex(&hibernatorv1alpha1.HibernatePlan{}, wellknown.FieldIndexPlanConnectorRef, planConnectorIndexValues).
 		Build()
 
 	cps := &recorder[*hibernatorv1alpha1.CloudProvider]{c: c}
@@ -102,7 +103,9 @@ func newFixture(t *testing.T, objs ...client.Object) *fixture {
 		Job:                 JobConfig{Namespace: testNS, RunnerImage: "runner:test", RunnerServiceAccount: "hibernator-runner", Timeout: 30 * time.Second},
 		Resync:              15 * time.Minute,
 		MaxConcurrentProbes: 5,
-		Jitter:              func(time.Duration) time.Duration { return 0 },
+		// Most tests exercise probing, so connectors need no plan. Gating tests turn this off.
+		ProbeUnreferenced: true,
+		Jitter:            func(time.Duration) time.Duration { return 0 },
 	}
 	k := *r
 	k.Strategy = K8SClusterStrategy{}

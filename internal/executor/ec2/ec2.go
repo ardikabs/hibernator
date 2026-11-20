@@ -76,7 +76,8 @@ var _ executor.ConnectorRequirer = (*Executor)(nil)
 // Requires declares the AWS permissions needed by each operation.
 func (e *Executor) Requires() executor.AccessRequirement {
 	return executor.AccessRequirement{
-		ConnectorKind: executor.ConnectorKindCloudProvider,
+		ConnectorKind:  executor.ConnectorKindCloudProvider,
+		ConnectorTypes: []string{executor.ConnectorTypeAWS},
 		Shutdown: executor.OperationAccess{AWSActions: []string{
 			"ec2:DescribeInstances",
 			"ec2:StopInstances",

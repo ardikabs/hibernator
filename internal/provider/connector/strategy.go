@@ -8,6 +8,7 @@ package connector
 import (
 	"context"
 
+	"k8s.io/apimachinery/pkg/api/equality"
 	"sigs.k8s.io/controller-runtime/pkg/builder"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
@@ -23,6 +24,10 @@ type Strategy interface {
 	Name() string
 	// New returns an empty connector object to fetch.
 	New() client.Object
+	// Usage reports how active HibernatePlans use the connector.
+	Usage(ctx context.Context, r *Reconciler, obj client.Object) (Usage, error)
+	// SendNotInUse records that no active plan uses the connector, so it is not probed.
+	SendNotInUse(r *Reconciler, obj client.Object)
 	// Prepare turns a fetched connector into a probeTarget. When done is true,
 	// Prepare has already recorded the outcome and no probe is needed.
 	Prepare(ctx context.Context, r *Reconciler, obj client.Object) (target probeTarget, done bool, err error)
@@ -31,6 +36,13 @@ type Strategy interface {
 	// Watches registers the watches this kind needs beyond the connector itself,
 	// its Secrets and probe Jobs.
 	Watches(b *builder.Builder, r *Reconciler) *builder.Builder
+}
+
+// changes reports whether applying m would modify obj, without touching obj.
+func changes[T client.Object](obj T, m func(T)) bool {
+	applied := obj.DeepCopyObject().(T)
+	m(applied)
+	return !equality.Semantic.DeepEqual(applied, obj)
 }
 
 func defaultNS(ns, fallback string) string {

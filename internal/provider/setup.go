@@ -64,6 +64,9 @@ type ProbeOptions struct {
 	MaxConcurrent int
 	// Timeout bounds a single probe.
 	Timeout time.Duration
+	// Unreferenced probes connectors that no active HibernatePlan uses.
+	// By default they are skipped and report NotInUse.
+	Unreferenced bool
 }
 
 // Setup wires the full async phase-driven reconciler pipeline and registers all providers
@@ -112,6 +115,7 @@ func Setup(mgr ctrl.Manager, clk clock.Clock, opts ProviderOptions) error {
 		Resync:               opts.Probe.Resync,
 		MaxConcurrentProbes:  opts.Probe.MaxConcurrent,
 		ProbeTimeout:         opts.Probe.Timeout,
+		ProbeUnreferenced:    opts.Probe.Unreferenced,
 	}); err != nil {
 		return err
 	}
