@@ -172,7 +172,6 @@ func TestProbe_AWSSimulationUnavailable(t *testing.T) {
 			assert.False(t, res.AccessVerified)
 			assert.Equal(t, hibernatorv1alpha1.ReasonSimulationUnavailable, res.AccessReason)
 			assert.Contains(t, res.AccessMessage, "iam:SimulatePrincipalPolicy")
-			assert.Contains(t, res.AccessMessage, "iam:GetContextKeysForPrincipalPolicy")
 			assert.Empty(t, res.ExecutorAccess)
 			assert.Equal(t, tt.want, tt.a.accessCalls)
 		})

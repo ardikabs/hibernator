@@ -15,7 +15,7 @@ import (
 )
 
 const simulationUnavailableMessage = "Executor access could not be verified by policy simulation. " +
-	"Grant iam:SimulatePrincipalPolicy and iam:GetContextKeysForPrincipalPolicy to the identity the connector authenticates as."
+	"Grant iam:SimulatePrincipalPolicy to the identity the connector authenticates as."
 
 type awsChecker interface {
 	CheckAuth(ctx context.Context, cfg *awsutil.AWSConnectorConfig) (*AWSIdentity, *AuthError)

@@ -13,6 +13,7 @@ import (
 	"github.com/stretchr/testify/require"
 	"k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/utils/ptr"
 
 	hibernatorv1alpha1 "github.com/ardikabs/hibernator/api/v1alpha1"
 	"github.com/ardikabs/hibernator/internal/connectorprobe"
@@ -220,7 +221,7 @@ func TestProbeDue(t *testing.T) {
 		{"secret changed", &recent, 1, 1, "a", "b", true},
 		{"within resync", &recent, 1, 1, "a", "a", false},
 		{"past resync plus jitter", &old, 1, 1, "a", "a", true},
-		{"past resync but within jitter", ptr(metav1.NewTime(n.Add(-62 * time.Minute))), 1, 1, "a", "a", false},
+		{"past resync but within jitter", ptr.To(metav1.NewTime(n.Add(-62 * time.Minute))), 1, 1, "a", "a", false},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -229,8 +230,6 @@ func TestProbeDue(t *testing.T) {
 		})
 	}
 }
-
-func ptr[T any](v T) *T { return &v }
 
 func TestApplyK8SProbeFailed(t *testing.T) {
 	prev := metav1.NewTime(now.Add(-time.Hour))

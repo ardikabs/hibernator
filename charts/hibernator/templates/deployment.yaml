@@ -67,6 +67,14 @@ spec:
               containerPort: 8081
               protocol: TCP
           env:
+            - name: POD_NAME
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.name
+            - name: POD_UID
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.uid
             - name: RUNNER_IMAGE
               value: "{{ .Values.image.runner.repository }}:{{ .Values.image.runner.tag | default .Chart.AppVersion }}"
             - name: CONTROL_PLANE_ENDPOINT

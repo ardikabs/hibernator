@@ -26,14 +26,11 @@ type decision struct {
 }
 
 type fakeIAM struct {
-	decisions   map[string]decision
-	contextKeys []string
-	contextErr  error
-	simErrs     []error
-	pageSize    int
+	decisions map[string]decision
+	simErrs   []error
+	pageSize  int
 
-	simCalls        []*iam.SimulatePrincipalPolicyInput
-	contextKeyCalls []*iam.GetContextKeysForPrincipalPolicyInput
+	simCalls []*iam.SimulatePrincipalPolicyInput
 }
 
 func (f *fakeIAM) SimulatePrincipalPolicy(_ context.Context, in *iam.SimulatePrincipalPolicyInput, _ ...func(*iam.Options)) (*iam.SimulatePrincipalPolicyOutput, error) {
@@ -74,14 +71,6 @@ func (f *fakeIAM) SimulatePrincipalPolicy(_ context.Context, in *iam.SimulatePri
 		out.Marker = aws.String(in.ActionNames[end])
 	}
 	return out, nil
-}
-
-func (f *fakeIAM) GetContextKeysForPrincipalPolicy(_ context.Context, in *iam.GetContextKeysForPrincipalPolicyInput, _ ...func(*iam.Options)) (*iam.GetContextKeysForPrincipalPolicyOutput, error) {
-	f.contextKeyCalls = append(f.contextKeyCalls, in)
-	if f.contextErr != nil {
-		return nil, f.contextErr
-	}
-	return &iam.GetContextKeysForPrincipalPolicyOutput{ContextKeyNames: f.contextKeys}, nil
 }
 
 func newTestChecker(f *fakeIAM) *AWSChecker {
@@ -235,7 +224,7 @@ func TestCheckAccess_Decisions(t *testing.T) {
 			name:      "wakeup explicit deny",
 			decisions: mergeDecisions(allow("ec2:DescribeInstances", "ec2:StopInstances"), "ec2:StartInstances", decision{eval: iamtypes.PolicyEvaluationDecisionTypeExplicitDeny}),
 			wantEntry: true,
-			wantInMsg: []string{"ec2:StartInstances", "wakeup"},
+			wantInMsg: []string{"ec2:StartInstances [explicitDeny]", "wakeup"},
 		},
 		{
 			name:      "both operations denied",
@@ -319,15 +308,6 @@ func TestCheckAccess_SimulateAccessDenied(t *testing.T) {
 	}
 }
 
-func TestCheckAccess_ContextKeysAccessDenied(t *testing.T) {
-	f := &fakeIAM{contextErr: &smithy.GenericAPIError{Code: "AccessDenied"}}
-	got, err := newTestChecker(f).CheckAccess(context.Background(), testIdentity(), testPrincipal,
-		map[string]executor.AccessRequirement{"ec2": ec2Requirement()})
-	require.Error(t, err)
-	assert.True(t, errors.Is(err, ErrSimulationUnavailable))
-	assert.Empty(t, got)
-}
-
 func TestCheckAccess_UnresolvedPrincipal(t *testing.T) {
 	f := &fakeIAM{}
 	got, err := newTestChecker(f).CheckAccess(context.Background(), testIdentity(), "",
@@ -408,35 +388,47 @@ func TestCheckAccess_Pagination(t *testing.T) {
 	}
 }
 
-func TestCheckAccess_UsesContextKeys(t *testing.T) {
-	f := &fakeIAM{
-		decisions:   allow("ec2:DescribeInstances", "ec2:StopInstances", "ec2:StartInstances", "rds:StopDBInstance", "rds:StartDBInstance"),
-		contextKeys: []string{"aws:RequestedRegion", "AWS:PrincipalAccount", "aws:SourceVpc"},
-	}
-	rds := executor.AccessRequirement{
-		ConnectorKind: executor.ConnectorKindCloudProvider,
-		Shutdown:      executor.OperationAccess{AWSActions: []string{"rds:StopDBInstance"}},
-		WakeUp:        executor.OperationAccess{AWSActions: []string{"rds:StartDBInstance"}},
-	}
-	got, err := newTestChecker(f).CheckAccess(context.Background(), testIdentity(), testPrincipal,
-		map[string]executor.AccessRequirement{"ec2": ec2Requirement(), "rds": rds})
+func TestCheckAccess_SuppliesContextEntries(t *testing.T) {
+	f := &fakeIAM{decisions: allow("ec2:DescribeInstances", "ec2:StopInstances", "ec2:StartInstances")}
+	_, err := newTestChecker(f).CheckAccess(context.Background(), testIdentity(), testPrincipal,
+		map[string]executor.AccessRequirement{"ec2": ec2Requirement()})
 	require.NoError(t, err)
-	require.Len(t, got, 2)
-	assert.Equal(t, "ec2", got[0].Type)
-	assert.Equal(t, "rds", got[1].Type)
 
-	require.Len(t, f.contextKeyCalls, 1)
-	assert.Equal(t, testPrincipal, aws.ToString(f.contextKeyCalls[0].PolicySourceArn))
-
-	require.Len(t, f.simCalls, 4)
+	require.NotEmpty(t, f.simCalls)
 	entries := map[string][]string{}
 	for _, e := range f.simCalls[0].ContextEntries {
 		entries[aws.ToString(e.ContextKeyName)] = e.ContextKeyValues
 	}
 	assert.Equal(t, map[string][]string{
 		"aws:RequestedRegion":  {"ap-southeast-1"},
-		"AWS:PrincipalAccount": {"111111111111"},
+		"aws:PrincipalAccount": {"111111111111"},
+		"aws:PrincipalArn":     {testPrincipal},
+		"aws:SecureTransport":  {"true"},
 	}, entries)
+}
+
+func TestContextEntries_SkipsEmptyValues(t *testing.T) {
+	var names []string
+	for _, e := range contextEntries("", testIdentity(), testPrincipal) {
+		names = append(names, aws.ToString(e.ContextKeyName))
+	}
+	assert.NotContains(t, names, "aws:RequestedRegion")
+	assert.Contains(t, names, "aws:PrincipalAccount")
+}
+
+func TestAWSChecker_RegionFallback(t *testing.T) {
+	env := func(k string) string {
+		if k == "AWS_DEFAULT_REGION" {
+			return "eu-west-1"
+		}
+		return ""
+	}
+	noRegion := &AWSIdentity{}
+	withRegion := testIdentity()
+
+	assert.Equal(t, "eu-west-1", (&AWSChecker{Getenv: env}).region(noRegion))
+	assert.Equal(t, "ap-southeast-1", (&AWSChecker{Getenv: env}).region(withRegion))
+	assert.Equal(t, "", (&AWSChecker{}).region(noRegion))
 }
 
 func TestCheckAccess_SkipsNonCloudProvider(t *testing.T) {
@@ -449,4 +441,15 @@ func TestCheckAccess_SkipsNonCloudProvider(t *testing.T) {
 	require.NoError(t, err)
 	require.Len(t, got, 1)
 	assert.Equal(t, "ec2", got[0].Type)
+}
+
+func TestDenialLabel(t *testing.T) {
+	r := iamtypes.EvaluationResult{
+		EvalDecision:                      iamtypes.PolicyEvaluationDecisionTypeImplicitDeny,
+		PermissionsBoundaryDecisionDetail: &iamtypes.PermissionsBoundaryDecisionDetail{AllowedByPermissionsBoundary: false},
+	}
+	assert.Equal(t, "ec2:StopInstances [implicitDeny, permissions boundary]", denialLabel("ec2:StopInstances", r))
+
+	r = iamtypes.EvaluationResult{EvalDecision: iamtypes.PolicyEvaluationDecisionTypeExplicitDeny}
+	assert.Equal(t, "ec2:StopInstances [explicitDeny]", denialLabel("ec2:StopInstances", r))
 }

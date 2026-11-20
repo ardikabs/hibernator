@@ -38,6 +38,15 @@ type JobConfig struct {
 	RunnerImage          string
 	RunnerServiceAccount string
 	Timeout              time.Duration
+	// Owner is the controller Pod that creates probe Jobs. When set, Jobs carry an
+	// ownerReference to it so tools like ArgoCD render them under the controller.
+	Owner *OwnerPod
+}
+
+// OwnerPod identifies a Pod in JobConfig.Namespace.
+type OwnerPod struct {
+	Name string
+	UID  types.UID
 }
 
 // statusView points at the status fields shared by CloudProvider and K8SCluster.

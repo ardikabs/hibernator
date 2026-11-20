@@ -79,13 +79,7 @@ func (c *AWSChecker) CheckAccess(ctx context.Context, id *AWSIdentity, principal
 	}
 
 	client := c.NewIAM(id.Config)
-	keys, err := client.GetContextKeysForPrincipalPolicy(ctx, &iam.GetContextKeysForPrincipalPolicyInput{
-		PolicySourceArn: aws.String(principalARN),
-	})
-	if err != nil {
-		return nil, classifyIAMError(ctx, "iam:GetContextKeysForPrincipalPolicy", err, true)
-	}
-	entries := contextEntries(keys.ContextKeyNames, id, principalARN)
+	entries := contextEntries(c.region(id), id, principalARN)
 
 	types := make([]string, 0, len(execs))
 	for t, req := range execs {
@@ -95,7 +89,11 @@ func (c *AWSChecker) CheckAccess(ctx context.Context, id *AWSIdentity, principal
 	}
 	sort.Strings(types)
 
-	s := &simulator{client: client, principal: principalARN, entries: entries}
+	s := &simulator{
+		client:    client,
+		principal: principalARN,
+		entries:   entries,
+	}
 	var out []hibernatorv1alpha1.ExecutorAccess
 	for _, t := range types {
 		req := execs[t]
@@ -187,36 +185,48 @@ func (s *simulator) simulate(ctx context.Context, actions []string) (opResult, e
 			// match a missing key, so even explicitDeny can be false.
 			res.unverified = true
 		case r.EvalDecision != iamtypes.PolicyEvaluationDecisionTypeAllowed:
-			res.denied = appendUnique(res.denied, a)
+			res.denied = appendUnique(res.denied, denialLabel(a, r))
 		}
 	}
 	return res, nil
 }
 
-// contextEntries supplies values for the referenced condition keys the probe
-// knows truthfully; other keys stay missing and make results unverified.
-func contextEntries(keys []string, id *AWSIdentity, principalARN string) []iamtypes.ContextEntry {
+// region is the region the connector calls AWS in, falling back best-effort to
+// AWS_DEFAULT_REGION when the connector config sets none.
+func (c *AWSChecker) region(id *AWSIdentity) string {
+	if id.Config.Region != "" || c.Getenv == nil {
+		return id.Config.Region
+	}
+	return c.Getenv("AWS_DEFAULT_REGION")
+}
+
+// contextEntries returns the condition values the probe knows truthfully. They
+// are sent on every simulation, whether or not a policy references them: the
+// simulator also evaluates Organizations SCPs, whose condition keys cannot be
+// discovered from the principal's own policies (e.g. a region-restriction SCP
+// denies every action when aws:RequestedRegion is absent). Unreferenced entries
+// are ignored; other keys stay missing and make results unverified.
+func contextEntries(region string, id *AWSIdentity, principalARN string) []iamtypes.ContextEntry {
+	candidates := []struct {
+		key   string
+		value string
+		typ   iamtypes.ContextKeyTypeEnum
+	}{
+		{"aws:RequestedRegion", region, iamtypes.ContextKeyTypeEnumString},
+		{"aws:PrincipalAccount", id.AccountID, iamtypes.ContextKeyTypeEnumString},
+		{"aws:PrincipalArn", principalARN, iamtypes.ContextKeyTypeEnumString},
+		{"aws:SecureTransport", "true", iamtypes.ContextKeyTypeEnumBoolean},
+	}
+
 	var entries []iamtypes.ContextEntry
-	for _, k := range keys {
-		var v string
-		t := iamtypes.ContextKeyTypeEnumString
-		switch strings.ToLower(k) {
-		case "aws:requestedregion":
-			v = id.Config.Region
-		case "aws:principalaccount":
-			v = id.AccountID
-		case "aws:principalarn":
-			v = principalARN
-		case "aws:securetransport":
-			v, t = "true", iamtypes.ContextKeyTypeEnumBoolean
-		}
-		if v == "" {
+	for _, c := range candidates {
+		if c.value == "" {
 			continue
 		}
 		entries = append(entries, iamtypes.ContextEntry{
-			ContextKeyName:   aws.String(k),
-			ContextKeyType:   t,
-			ContextKeyValues: []string{v},
+			ContextKeyName:   aws.String(c.key),
+			ContextKeyType:   c.typ,
+			ContextKeyValues: []string{c.value},
 		})
 	}
 	return entries
@@ -233,6 +243,19 @@ func classifyIAMError(ctx context.Context, op string, err error, first bool) err
 		return fmt.Errorf("%w: %s: %v", ErrSimulationUnavailable, op, err)
 	}
 	return fmt.Errorf("%s: %w", op, err)
+}
+
+// denialLabel annotates a denied action with the simulator's decision so a
+// surprising denial (e.g. on an admin role) can be traced to its source.
+func denialLabel(action string, r iamtypes.EvaluationResult) string {
+	reasons := []string{string(r.EvalDecision)}
+	if d := r.PermissionsBoundaryDecisionDetail; d != nil && !d.AllowedByPermissionsBoundary {
+		reasons = append(reasons, "permissions boundary")
+	}
+	if d := r.OrganizationsDecisionDetail; d != nil && !d.AllowedByOrganizations {
+		reasons = append(reasons, "organizations")
+	}
+	return fmt.Sprintf("%s [%s]", action, strings.Join(reasons, ", "))
 }
 
 func denialMessage(op string, actions []string) string {
