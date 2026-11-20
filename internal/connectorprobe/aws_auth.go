@@ -63,7 +63,11 @@ func (c *AWSChecker) CheckAuth(ctx context.Context, cfg *awsutil.AWSConnectorCon
 		return nil, &AuthError{Reason: hibernatorv1alpha1.ReasonInvalidCredentials, Message: fmt.Sprintf("sts:GetCallerIdentity failed: %v", err)}
 	}
 
-	id := &AWSIdentity{AccountID: aws.ToString(out.Account), ARN: aws.ToString(out.Arn), Config: awsCfg}
+	id := &AWSIdentity{
+		AccountID: aws.ToString(out.Account),
+		ARN:       aws.ToString(out.Arn),
+		Config:    awsCfg,
+	}
 	if cfg.AccountID != "" && id.AccountID != cfg.AccountID {
 		return nil, &AuthError{
 			Reason:  hibernatorv1alpha1.ReasonAccountMismatch,
