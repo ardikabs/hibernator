@@ -13,7 +13,7 @@ import (
 	"google.golang.org/grpc/status"
 	batchv1 "k8s.io/api/batch/v1"
 	corev1 "k8s.io/api/core/v1"
-	"k8s.io/client-go/tools/record"
+	"k8s.io/client-go/tools/events"
 	"k8s.io/utils/clock"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/log"
@@ -51,7 +51,7 @@ type ExecutionServiceServer struct {
 
 	log           logr.Logger
 	k8sClient     client.Client
-	eventRecorder record.EventRecorder
+	eventRecorder events.EventRecorder
 
 	executionStatus   map[string]*ExecutionState
 	executionStatusMu sync.RWMutex
@@ -65,7 +65,7 @@ type ExecutionServiceServer struct {
 // NewExecutionServiceServer creates a new ExecutionServiceServer
 func NewExecutionServiceServer(
 	k8sClient client.Client,
-	eventRecorder record.EventRecorder,
+	eventRecorder events.EventRecorder,
 	clk clock.Clock,
 ) *ExecutionServiceServer {
 	logger := log.Log.WithName("execution-service")
@@ -253,7 +253,7 @@ func (s *ExecutionServiceServer) ReportProgress(ctx context.Context, req *stream
 			"namespace", meta.Namespace,
 			"plan", meta.PlanName)
 	} else if plan != nil {
-		s.eventRecorder.Eventf(plan, corev1.EventTypeNormal, "ExecutionProgress",
+		s.eventRecorder.Eventf(plan, nil, corev1.EventTypeNormal, "ExecutionProgress", "ReportProgress",
 			"[%s/%s] target=%s: %d%% - %s",
 			meta.Namespace, meta.PlanName, meta.TargetName, req.ProgressPercent, req.Message)
 	}
@@ -324,7 +324,7 @@ func (s *ExecutionServiceServer) ReportCompletion(ctx context.Context, req *stre
 			if req.ErrorMessage != "" {
 				message = req.ErrorMessage
 			}
-			s.eventRecorder.Eventf(plan, eventType, reason,
+			s.eventRecorder.Eventf(plan, nil, eventType, reason, "ReportCompletion",
 				"[%s/%s] target=%s: %s",
 				meta.Namespace, meta.PlanName, meta.TargetName, message)
 		}

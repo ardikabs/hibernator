@@ -36,7 +36,7 @@ func SetupStreamingServerWithManager(mgr ctrl.Manager, opts Options) error {
 	}
 
 	// Create event recorder for streaming events
-	eventRecorder := mgr.GetEventRecorderFor("hibernator-streaming")
+	eventRecorder := mgr.GetEventRecorder("hibernator-streaming")
 
 	// Create shared execution service
 	// Runners persist restore data directly to ConfigMap - controller only orchestrates

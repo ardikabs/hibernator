@@ -12,7 +12,6 @@ import (
 	"regexp"
 	"strings"
 
-	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/util/validation/field"
 	"sigs.k8s.io/controller-runtime/pkg/webhook/admission"
 
@@ -34,14 +33,10 @@ func NewHibernatePlanValidator(log logr.Logger) *HibernatePlanValidator {
 	}
 }
 
-var _ admission.CustomValidator = &HibernatePlanValidator{}
+var _ admission.Validator[*hibernatorv1alpha1.HibernatePlan] = &HibernatePlanValidator{}
 
-// ValidateCreate implements webhook.CustomValidator.
-func (v *HibernatePlanValidator) ValidateCreate(ctx context.Context, obj runtime.Object) (admission.Warnings, error) {
-	plan, ok := obj.(*hibernatorv1alpha1.HibernatePlan)
-	if !ok {
-		return nil, fmt.Errorf("expected HibernatePlan but got %T", obj)
-	}
+// ValidateCreate implements admission.Validator.
+func (v *HibernatePlanValidator) ValidateCreate(ctx context.Context, plan *hibernatorv1alpha1.HibernatePlan) (admission.Warnings, error) {
 	v.log.V(1).Info("validate create", "name", plan.Name)
 
 	// Revert annotation cannot be set on a new plan (new plans are never in Error phase).
@@ -55,18 +50,8 @@ func (v *HibernatePlanValidator) ValidateCreate(ctx context.Context, obj runtime
 	return v.validate(plan)
 }
 
-// ValidateUpdate implements webhook.CustomValidator.
-func (v *HibernatePlanValidator) ValidateUpdate(ctx context.Context, oldObj, newObj runtime.Object) (admission.Warnings, error) {
-	oldPlan, ok := oldObj.(*hibernatorv1alpha1.HibernatePlan)
-	if !ok {
-		return nil, fmt.Errorf("expected HibernatePlan but got %T", newObj)
-	}
-
-	newPlan, ok := newObj.(*hibernatorv1alpha1.HibernatePlan)
-	if !ok {
-		return nil, fmt.Errorf("expected HibernatePlan but got %T", newObj)
-	}
-
+// ValidateUpdate implements admission.Validator.
+func (v *HibernatePlanValidator) ValidateUpdate(ctx context.Context, oldPlan, newPlan *hibernatorv1alpha1.HibernatePlan) (admission.Warnings, error) {
 	// Transition-based validation: revert annotation can only be added when the plan is in Error phase.
 	// Preserving or removing the annotation is always allowed so internal controller patches are not blocked.
 	oldHasRevert := oldPlan.Annotations != nil && oldPlan.Annotations[wellknown.AnnotationRevert] == "true"
@@ -94,8 +79,8 @@ func (v *HibernatePlanValidator) ValidateUpdate(ctx context.Context, oldObj, new
 	return v.validate(newPlan)
 }
 
-// ValidateDelete implements webhook.CustomValidator.
-func (v *HibernatePlanValidator) ValidateDelete(ctx context.Context, obj runtime.Object) (admission.Warnings, error) {
+// ValidateDelete implements admission.Validator.
+func (v *HibernatePlanValidator) ValidateDelete(ctx context.Context, _ *hibernatorv1alpha1.HibernatePlan) (admission.Warnings, error) {
 	return nil, nil
 }
 

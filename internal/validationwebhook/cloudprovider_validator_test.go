@@ -11,7 +11,6 @@ import (
 	"testing"
 
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
-	"k8s.io/apimachinery/pkg/runtime"
 
 	hibernatorv1alpha1 "github.com/ardikabs/hibernator/api/v1alpha1"
 	"github.com/go-logr/logr"
@@ -161,7 +160,7 @@ func TestCloudProviderValidator_ValidateCreate(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			_, err := validator.ValidateCreate(context.Background(), runtime.Object(tt.provider))
+			_, err := validator.ValidateCreate(context.Background(), tt.provider)
 			if (err != nil) != tt.wantErr {
 				t.Errorf("ValidateCreate() error = %v, wantErr %v", err, tt.wantErr)
 				return
@@ -174,15 +173,6 @@ func TestCloudProviderValidator_ValidateCreate(t *testing.T) {
 				}
 			}
 		})
-	}
-}
-
-func TestCloudProviderValidator_ValidateCreate_WrongType(t *testing.T) {
-	validator := NewCloudProviderValidator(logr.Discard())
-	wrongType := &hibernatorv1alpha1.HibernatePlan{}
-	_, err := validator.ValidateCreate(context.Background(), runtime.Object(wrongType))
-	if err == nil {
-		t.Error("ValidateCreate() expected error for wrong type, got nil")
 	}
 }
 
@@ -217,7 +207,7 @@ func TestCloudProviderValidator_ValidateUpdate(t *testing.T) {
 		},
 	}
 
-	_, err := validator.ValidateUpdate(context.Background(), runtime.Object(oldProvider), runtime.Object(newProvider))
+	_, err := validator.ValidateUpdate(context.Background(), oldProvider, newProvider)
 	if err != nil {
 		t.Errorf("ValidateUpdate() unexpected error = %v", err)
 	}
@@ -228,7 +218,7 @@ func TestCloudProviderValidator_ValidateDelete(t *testing.T) {
 	provider := &hibernatorv1alpha1.CloudProvider{
 		ObjectMeta: metav1.ObjectMeta{Name: "aws-test", Namespace: "default"},
 	}
-	_, err := validator.ValidateDelete(context.Background(), runtime.Object(provider))
+	_, err := validator.ValidateDelete(context.Background(), provider)
 	if err != nil {
 		t.Errorf("ValidateDelete() unexpected error = %v", err)
 	}

@@ -7,9 +7,7 @@ package validationwebhook
 
 import (
 	"context"
-	"fmt"
 
-	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/util/validation/field"
 	"sigs.k8s.io/controller-runtime/pkg/webhook/admission"
 
@@ -29,30 +27,22 @@ func NewCloudProviderValidator(log logr.Logger) *CloudProviderValidator {
 	}
 }
 
-var _ admission.CustomValidator = &CloudProviderValidator{}
+var _ admission.Validator[*hibernatorv1alpha1.CloudProvider] = &CloudProviderValidator{}
 
-// ValidateCreate implements webhook.CustomValidator.
-func (v *CloudProviderValidator) ValidateCreate(ctx context.Context, obj runtime.Object) (admission.Warnings, error) {
-	cloudProvider, ok := obj.(*hibernatorv1alpha1.CloudProvider)
-	if !ok {
-		return nil, fmt.Errorf("expected CloudProvider but got %T", obj)
-	}
+// ValidateCreate implements admission.Validator.
+func (v *CloudProviderValidator) ValidateCreate(ctx context.Context, cloudProvider *hibernatorv1alpha1.CloudProvider) (admission.Warnings, error) {
 	v.log.V(1).Info("validate create", "name", cloudProvider.Name)
 	return v.validate(cloudProvider)
 }
 
-// ValidateUpdate implements webhook.CustomValidator.
-func (v *CloudProviderValidator) ValidateUpdate(ctx context.Context, oldObj, newObj runtime.Object) (admission.Warnings, error) {
-	cloudProvider, ok := newObj.(*hibernatorv1alpha1.CloudProvider)
-	if !ok {
-		return nil, fmt.Errorf("expected CloudProvider but got %T", newObj)
-	}
+// ValidateUpdate implements admission.Validator.
+func (v *CloudProviderValidator) ValidateUpdate(ctx context.Context, _, cloudProvider *hibernatorv1alpha1.CloudProvider) (admission.Warnings, error) {
 	v.log.V(1).Info("validate update", "name", cloudProvider.Name)
 	return v.validate(cloudProvider)
 }
 
-// ValidateDelete implements webhook.CustomValidator.
-func (v *CloudProviderValidator) ValidateDelete(ctx context.Context, obj runtime.Object) (admission.Warnings, error) {
+// ValidateDelete implements admission.Validator.
+func (v *CloudProviderValidator) ValidateDelete(ctx context.Context, _ *hibernatorv1alpha1.CloudProvider) (admission.Warnings, error) {
 	return nil, nil
 }
 

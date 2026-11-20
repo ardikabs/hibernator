@@ -13,7 +13,6 @@ import (
 	"time"
 
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
-	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/util/validation/field"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/webhook/admission"
@@ -38,29 +37,20 @@ func NewScheduleExceptionValidator(log logr.Logger, c client.Reader) *ScheduleEx
 	}
 }
 
-var _ admission.CustomValidator = &ScheduleExceptionValidator{}
+var _ admission.Validator[*hibernatorv1alpha1.ScheduleException] = &ScheduleExceptionValidator{}
 
-// ValidateCreate implements webhook.CustomValidator.
-func (v *ScheduleExceptionValidator) ValidateCreate(ctx context.Context, obj runtime.Object) (admission.Warnings, error) {
-	exception, ok := obj.(*hibernatorv1alpha1.ScheduleException)
-	if !ok {
-		return nil, fmt.Errorf("expected ScheduleException but got %T", obj)
-	}
+// ValidateCreate implements admission.Validator.
+func (v *ScheduleExceptionValidator) ValidateCreate(ctx context.Context, exception *hibernatorv1alpha1.ScheduleException) (admission.Warnings, error) {
 	v.log.V(1).Info("validate create", "name", exception.Name)
 	return v.validate(ctx, exception)
 }
 
-// ValidateUpdate implements webhook.CustomValidator.
-func (v *ScheduleExceptionValidator) ValidateUpdate(ctx context.Context, oldObj, newObj runtime.Object) (admission.Warnings, error) {
-	exception, ok := newObj.(*hibernatorv1alpha1.ScheduleException)
-	if !ok {
-		return nil, fmt.Errorf("expected ScheduleException but got %T", newObj)
-	}
+// ValidateUpdate implements admission.Validator.
+func (v *ScheduleExceptionValidator) ValidateUpdate(ctx context.Context, oldExc, exception *hibernatorv1alpha1.ScheduleException) (admission.Warnings, error) {
 	v.log.V(1).Info("validate update", "name", exception.Name)
 
 	// Check if the update modifies override fields while the plan is mid-cycle.
-	oldExc, ok := oldObj.(*hibernatorv1alpha1.ScheduleException)
-	if ok && v.overrideFieldsChanged(oldExc, exception) {
+	if v.overrideFieldsChanged(oldExc, exception) {
 		if err := v.checkMidCycleBlock(ctx, exception); err != nil {
 			return nil, err
 		}
@@ -69,12 +59,8 @@ func (v *ScheduleExceptionValidator) ValidateUpdate(ctx context.Context, oldObj,
 	return v.validate(ctx, exception)
 }
 
-// ValidateDelete implements webhook.CustomValidator.
-func (v *ScheduleExceptionValidator) ValidateDelete(ctx context.Context, obj runtime.Object) (admission.Warnings, error) {
-	exception, ok := obj.(*hibernatorv1alpha1.ScheduleException)
-	if !ok {
-		return nil, fmt.Errorf("expected ScheduleException but got %T", obj)
-	}
+// ValidateDelete implements admission.Validator.
+func (v *ScheduleExceptionValidator) ValidateDelete(ctx context.Context, exception *hibernatorv1alpha1.ScheduleException) (admission.Warnings, error) {
 	if err := v.checkMidCycleBlock(ctx, exception); err != nil {
 		return nil, err
 	}

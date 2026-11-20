@@ -653,7 +653,7 @@ func TestStartCleanupRoutine(t *testing.T) {
 	server.executionStatus[staleExecID] = &ExecutionState{
 		ExecutionID:     staleExecID,
 		ProgressPercent: 30,
-		LastUpdate:      time.Now().Add(-200 * time.Millisecond), // Already stale
+		LastUpdate:      clk.Now().Add(-200 * time.Millisecond), // Already stale
 	}
 	server.executionStatusMu.Unlock()
 

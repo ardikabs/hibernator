@@ -10,7 +10,6 @@ import (
 	"fmt"
 
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
-	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/util/validation/field"
 	"sigs.k8s.io/controller-runtime/pkg/webhook/admission"
 
@@ -30,30 +29,22 @@ func NewHibernateNotificationValidator(log logr.Logger) *HibernateNotificationVa
 	}
 }
 
-var _ admission.CustomValidator = &HibernateNotificationValidator{}
+var _ admission.Validator[*hibernatorv1alpha1.HibernateNotification] = &HibernateNotificationValidator{}
 
-// ValidateCreate implements webhook.CustomValidator.
-func (v *HibernateNotificationValidator) ValidateCreate(_ context.Context, obj runtime.Object) (admission.Warnings, error) {
-	notif, ok := obj.(*hibernatorv1alpha1.HibernateNotification)
-	if !ok {
-		return nil, fmt.Errorf("expected HibernateNotification but got %T", obj)
-	}
+// ValidateCreate implements admission.Validator.
+func (v *HibernateNotificationValidator) ValidateCreate(_ context.Context, notif *hibernatorv1alpha1.HibernateNotification) (admission.Warnings, error) {
 	v.log.V(1).Info("validate create", "name", notif.Name)
 	return v.validate(notif)
 }
 
-// ValidateUpdate implements webhook.CustomValidator.
-func (v *HibernateNotificationValidator) ValidateUpdate(_ context.Context, _, newObj runtime.Object) (admission.Warnings, error) {
-	notif, ok := newObj.(*hibernatorv1alpha1.HibernateNotification)
-	if !ok {
-		return nil, fmt.Errorf("expected HibernateNotification but got %T", newObj)
-	}
+// ValidateUpdate implements admission.Validator.
+func (v *HibernateNotificationValidator) ValidateUpdate(_ context.Context, _, notif *hibernatorv1alpha1.HibernateNotification) (admission.Warnings, error) {
 	v.log.V(1).Info("validate update", "name", notif.Name)
 	return v.validate(notif)
 }
 
-// ValidateDelete implements webhook.CustomValidator.
-func (v *HibernateNotificationValidator) ValidateDelete(_ context.Context, _ runtime.Object) (admission.Warnings, error) {
+// ValidateDelete implements admission.Validator.
+func (v *HibernateNotificationValidator) ValidateDelete(_ context.Context, _ *hibernatorv1alpha1.HibernateNotification) (admission.Warnings, error) {
 	return nil, nil
 }
 
