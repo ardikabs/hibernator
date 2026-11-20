@@ -15,6 +15,7 @@ import (
 	batchv1 "k8s.io/api/batch/v1"
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/utils/ptr"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
 	"github.com/ardikabs/hibernator/internal/wellknown"
@@ -59,8 +60,6 @@ func ProbeJobSelector(kind, namespace, name string) client.MatchingLabels {
 // secretVersion are stamped on the Job so its verdict is recorded for the
 // connector state it actually probed.
 func BuildProbeJob(cfg JobConfig, kind, namespace, name string, generation int64, secretVersion string) *batchv1.Job {
-	backoffLimit := int32(0)
-	ttl := probeJobTTLSeconds
 	deadline := int64((cfg.Timeout + probeDeadlineGrace).Seconds())
 
 	annotations := map[string]string{
@@ -70,16 +69,27 @@ func BuildProbeJob(cfg JobConfig, kind, namespace, name string, generation int64
 		wellknown.AnnotationConnectorSecretVersion: secretVersion,
 	}
 
+	var owners []metav1.OwnerReference
+	if cfg.Owner != nil && cfg.Owner.Name != "" && cfg.Owner.UID != "" {
+		owners = []metav1.OwnerReference{{
+			APIVersion: "v1",
+			Kind:       "Pod",
+			Name:       cfg.Owner.Name,
+			UID:        cfg.Owner.UID,
+		}}
+	}
+
 	return &batchv1.Job{
 		ObjectMeta: metav1.ObjectMeta{
-			GenerateName: probeJobGenerateName,
-			Namespace:    cfg.Namespace,
-			Labels:       probeLabels(kind, namespace, name),
-			Annotations:  annotations,
+			GenerateName:    probeJobGenerateName,
+			Namespace:       cfg.Namespace,
+			Labels:          probeLabels(kind, namespace, name),
+			Annotations:     annotations,
+			OwnerReferences: owners,
 		},
 		Spec: batchv1.JobSpec{
-			BackoffLimit:            &backoffLimit,
-			TTLSecondsAfterFinished: &ttl,
+			BackoffLimit:            ptr.To[int32](0),
+			TTLSecondsAfterFinished: ptr.To[int32](probeJobTTLSeconds),
 			ActiveDeadlineSeconds:   &deadline,
 			Template: corev1.PodTemplateSpec{
 				ObjectMeta: metav1.ObjectMeta{

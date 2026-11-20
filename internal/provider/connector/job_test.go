@@ -127,3 +127,24 @@ func TestProbeJobSelector_MatchesJobLabels(t *testing.T) {
 		assert.Equal(t, "true", sel[wellknown.LabelConnectorProbe])
 	}
 }
+
+func TestBuildProbeJob_OwnerReference(t *testing.T) {
+	t.Run("set from controller pod", func(t *testing.T) {
+		cfg := testCfg
+		cfg.Owner = &OwnerPod{Name: "hibernator-abc", UID: "uid-1"}
+		job := BuildProbeJob(cfg, "CloudProvider", "team-a", "aws-prod", 1, "")
+
+		require.Len(t, job.OwnerReferences, 1)
+		ref := job.OwnerReferences[0]
+		assert.Equal(t, "v1", ref.APIVersion)
+		assert.Equal(t, "Pod", ref.Kind)
+		assert.Equal(t, "hibernator-abc", ref.Name)
+		assert.Equal(t, "uid-1", string(ref.UID))
+		assert.Nil(t, ref.Controller)
+	})
+
+	t.Run("omitted without owner", func(t *testing.T) {
+		job := BuildProbeJob(testCfg, "CloudProvider", "team-a", "aws-prod", 1, "")
+		assert.Empty(t, job.OwnerReferences)
+	})
+}

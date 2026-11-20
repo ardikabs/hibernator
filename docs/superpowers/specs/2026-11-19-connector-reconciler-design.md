@@ -161,8 +161,7 @@ type ConnectorRequirer interface {
   - If the ARN cannot be resolved (e.g. EKS Pod Identity, which does not set
     `AWS_ROLE_ARN`), step 2 is not possible; see below.
 - Permissions needed on that identity, in the target account or wherever the
-  connector's authentication points: `iam:SimulatePrincipalPolicy` and
-  `iam:GetContextKeysForPrincipalPolicy`. Nothing new is required on the runner role
+  connector's authentication points: `iam:SimulatePrincipalPolicy`. Nothing new is required on the runner role
   when `assumeRoleArn` is used.
 - If simulation is not possible (the identity lacks these permissions, or the
   principal cannot be resolved): step 2 is skipped. The connector stays `ready`,
@@ -172,14 +171,15 @@ type ConnectorRequirer interface {
   `allowed: false`, `reason: AccessDenied`.
 - To keep this discoverable, the reconciler sets an `ExecutorAccessVerified`
   condition to `False` with reason `SimulationUnavailable` and a message telling the
-  operator to grant the two permissions above to the connector's identity. This is a
+  operator to grant the permission above to the connector's identity. This is a
   condition only, not an entry in either executor field.
 - Simulation may not reflect every guardrail (e.g. org SCPs); to be confirmed
   against AWS docs. `verification` records how each answer was reached.
-- `iam:GetContextKeysForPrincipalPolicy` is used to discover condition keys the
-  identity's policies reference, so the simulation does not report a false denial
-  for conditions it was not given values for. The exact handling is left to the
-  builder.
+- The probe always supplies the condition values it knows (`aws:RequestedRegion`,
+  `aws:PrincipalAccount`, `aws:PrincipalArn`, `aws:SecureTransport`) instead of
+  discovering keys via `iam:GetContextKeysForPrincipalPolicy`: that call only sees the
+  identity's own policies, while the simulator also evaluates Organizations SCPs (e.g.
+  a region restriction) whose keys it cannot discover.
 
 ### Status shape
 
@@ -272,8 +272,7 @@ failure, and is kept when the probe could not run.
   credentials (target account when assumed).
 - If step 2 is not possible, the connector is still marked ready with no entries in
   `allowedExecutors` or `executorAccess`; docs encourage granting
-  `iam:SimulatePrincipalPolicy` and `iam:GetContextKeysForPrincipalPolicy` to the
-  connector's identity in the target account.
+  `iam:SimulatePrincipalPolicy` to the connector's identity in the target account.
 
 ## Calls made by me (please check)
 

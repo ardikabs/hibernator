@@ -115,7 +115,7 @@ For `CloudProvider`, access is checked with IAM policy simulation (`iam:Simulate
 | No `assumeRoleArn`, IRSA | The runner IRSA role (from `AWS_ROLE_ARN`) |
 | No `assumeRoleArn`, static keys | The IAM user |
 
-Nothing new is required on the runner role when `assumeRoleArn` is used. On the identity above, grant two optional permissions:
+Nothing new is required on the runner role when `assumeRoleArn` is used. On the identity above, grant one optional permission:
 
 ```json
 {
@@ -123,19 +123,16 @@ Nothing new is required on the runner role when `assumeRoleArn` is used. On the 
   "Statement": [
     {
       "Effect": "Allow",
-      "Action": [
-        "iam:SimulatePrincipalPolicy",
-        "iam:GetContextKeysForPrincipalPolicy"
-      ],
+      "Action": "iam:SimulatePrincipalPolicy",
       "Resource": "*"
     }
   ]
 }
 ```
 
-`GetContextKeysForPrincipalPolicy` lets the probe find condition keys the identity's policies reference and supply values for the ones it knows (`aws:RequestedRegion`, `aws:PrincipalAccount`, `aws:PrincipalArn`, `aws:SecureTransport`).
+The probe always supplies the condition values it knows (`aws:RequestedRegion`, `aws:PrincipalAccount`, `aws:PrincipalArn`, `aws:SecureTransport`), so conditions in the identity's policies and in Organizations SCPs, such as a region restriction, are evaluated against the connector's region.
 
-Without these permissions the connector is still `ready`. `allowedExecutors` and `executorAccess` stay empty, and the `ExecutorAccessVerified` condition is `False` with reason `SimulationUnavailable` and a message naming the two permissions. `SimulationUnavailable` is reported only when the first IAM call is denied; an error on a later call is `ProbeError`. A missing permission is never reported as a denial.
+Without these permissions the connector is still `ready`. `allowedExecutors` and `executorAccess` stay empty, and the `ExecutorAccessVerified` condition is `False` with reason `SimulationUnavailable` and a message naming the permission. `SimulationUnavailable` is reported only when the first IAM call is denied; an error on a later call is `ProbeError`. A missing permission is never reported as a denial.
 
 Two rules for reading results:
 
@@ -188,7 +185,7 @@ Reasons appear in `status.conditions[*].reason` and in `executorAccess[*].reason
 | `ProbeFailed` | `Ready`, `AuthValid`, `ExecutorAccessVerified` (status `Unknown`) | The probe Job could not run or returned no result (image pull, unschedulable pod, timeout, missing termination message). The executor lists are cleared. | Inspect the probe Job and pod in the controller namespace. The probe is retried at the resync interval. |
 | `ProbeUnsupported` | `Ready`, `AuthValid`, `ExecutorAccessVerified` (status `Unknown`) on `K8SCluster` | The cluster uses `spec.gke`, which is not probed yet. | Nothing to do; the status does not reflect whether the connector works. |
 | `AccessDenied` | `executorAccess` | Simulation or access review found a denied action. The message lists the actions and the operation (shutdown or wakeup). | Grant the listed actions to the identity, or ignore it if the executor is not used with this connector. |
-| `SimulationUnavailable` | `ExecutorAccessVerified` | The identity lacks the simulate permissions, or its ARN cannot be resolved (Pod Identity, session-token credentials). | Grant `iam:SimulatePrincipalPolicy` and `iam:GetContextKeysForPrincipalPolicy`, see above. The connector is otherwise unaffected. |
+| `SimulationUnavailable` | `ExecutorAccessVerified` | The identity lacks the simulate permissions, or its ARN cannot be resolved (Pod Identity, session-token credentials). | Grant `iam:SimulatePrincipalPolicy`, see above. The connector is otherwise unaffected. |
 | `ProbeError` | `ExecutorAccessVerified` | Authentication passed but the access check failed for another reason (for example IAM throttling). | Read the message; it clears on the next successful probe. |
 | `Unverified` | `ExecutorAccessVerified` (status `False`) | Executors require access, but none could be verified: missing condition-key values on AWS, or failed reviews on Kubernetes. | Read the message. On AWS, check which condition keys the identity's policies use. On Kubernetes, check that the target cluster serves `SelfSubjectAccessReview`. |
 | `NoExecutorsToVerify` | `ExecutorAccessVerified` (status `True`) | No executor declares access requirements for this connector kind. | Nothing to do. |

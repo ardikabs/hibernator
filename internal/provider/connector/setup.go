@@ -28,6 +28,8 @@ type Options struct {
 	Namespace            string
 	RunnerImage          string
 	RunnerServiceAccount string
+	// Owner is the controller Pod set as owner of probe Jobs. Optional.
+	Owner *OwnerPod
 
 	// Resync is the interval between probes of an unchanged connector.
 	Resync time.Duration
@@ -60,6 +62,7 @@ func SetupWithManager(mgr ctrl.Manager, opts Options) error {
 				RunnerImage:          opts.RunnerImage,
 				RunnerServiceAccount: opts.RunnerServiceAccount,
 				Timeout:              timeout,
+				Owner:                opts.Owner,
 			},
 			Resync:              opts.Resync,
 			MaxConcurrentProbes: opts.MaxConcurrentProbes,
