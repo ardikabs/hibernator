@@ -21,9 +21,11 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/utils/clock"
+	"k8s.io/utils/ptr"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/builder"
 	"sigs.k8s.io/controller-runtime/pkg/client"
+	"sigs.k8s.io/controller-runtime/pkg/client/apiutil"
 	"sigs.k8s.io/controller-runtime/pkg/controller"
 	"sigs.k8s.io/controller-runtime/pkg/event"
 	"sigs.k8s.io/controller-runtime/pkg/handler"
@@ -116,6 +118,18 @@ func (r *Reconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Resu
 	if err != nil || done {
 		return ctrl.Result{}, err
 	}
+	gvk, err := apiutil.GVKForObject(obj, r.Client.Scheme())
+	if err != nil {
+		return ctrl.Result{}, err
+	}
+	// No BlockOwnerDeletion: it would need update on the connector's finalizers.
+	target.owner = metav1.OwnerReference{
+		APIVersion: gvk.GroupVersion().String(),
+		Kind:       gvk.Kind,
+		Name:       obj.GetName(),
+		UID:        obj.GetUID(),
+		Controller: ptr.To(true),
+	}
 	return r.reconcileProbe(ctx, target)
 }
 
@@ -185,7 +199,7 @@ func (r *Reconciler) reconcileProbe(ctx context.Context, t probeTarget) (ctrl.Re
 		return ctrl.Result{RequeueAfter: requeueAtCap}, nil
 	}
 
-	job := BuildProbeJob(r.Job, t.kind, t.key.Namespace, t.key.Name, t.generation, sv)
+	job := BuildProbeJob(r.Job, t.owner, t.kind, t.key.Namespace, t.key.Name, t.generation, sv)
 	if err := r.Client.Create(ctx, job); err != nil {
 		return ctrl.Result{}, fmt.Errorf("create probe job: %w", err)
 	}
@@ -219,7 +233,7 @@ func (r *Reconciler) consume(ctx context.Context, t probeTarget, job *batchv1.Jo
 // hashed, so the annotations are checked for the exact name and namespace.
 func (r *Reconciler) probeJobs(ctx context.Context, kind string, key types.NamespacedName) ([]batchv1.Job, error) {
 	var list batchv1.JobList
-	if err := r.reader().List(ctx, &list, client.InNamespace(r.Job.Namespace),
+	if err := r.reader().List(ctx, &list, client.InNamespace(key.Namespace),
 		ProbeJobSelector(kind, key.Namespace, key.Name)); err != nil {
 		return nil, fmt.Errorf("list probe jobs: %w", err)
 	}
@@ -258,7 +272,7 @@ func (r *Reconciler) deleteJob(ctx context.Context, job *batchv1.Job) error {
 
 func (r *Reconciler) inFlightProbes(ctx context.Context) (int, error) {
 	var list batchv1.JobList
-	if err := r.reader().List(ctx, &list, client.InNamespace(r.Job.Namespace),
+	if err := r.reader().List(ctx, &list,
 		client.MatchingLabels{wellknown.LabelConnectorProbe: "true"}); err != nil {
 		return 0, fmt.Errorf("list probe jobs: %w", err)
 	}

@@ -24,12 +24,10 @@ type Options struct {
 	// Workers is the number of concurrent reconciles per connector kind.
 	Workers int
 
-	// Namespace is where probe Jobs run, alongside the runner ServiceAccount.
-	Namespace            string
+	// RunnerImage and RunnerServiceAccount run the probe Jobs, in the namespace
+	// of the connector they probe.
 	RunnerImage          string
 	RunnerServiceAccount string
-	// Owner is the controller Pod set as owner of probe Jobs. Optional.
-	Owner *OwnerPod
 
 	// Resync is the interval between probes of an unchanged connector.
 	Resync time.Duration
@@ -58,11 +56,9 @@ func SetupWithManager(mgr ctrl.Manager, opts Options) error {
 			Log:       opts.Log.WithName("connector").WithName(strategy.Kind()),
 			Statuses:  opts.Statuses,
 			Job: JobConfig{
-				Namespace:            opts.Namespace,
 				RunnerImage:          opts.RunnerImage,
 				RunnerServiceAccount: opts.RunnerServiceAccount,
 				Timeout:              timeout,
-				Owner:                opts.Owner,
 			},
 			Resync:              opts.Resync,
 			MaxConcurrentProbes: opts.MaxConcurrentProbes,

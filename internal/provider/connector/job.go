@@ -56,10 +56,11 @@ func ProbeJobSelector(kind, namespace, name string) client.MatchingLabels {
 	return client.MatchingLabels(probeLabels(kind, namespace, name))
 }
 
-// BuildProbeJob builds the one-shot Job that probes a connector. generation and
-// secretVersion are stamped on the Job so its verdict is recorded for the
-// connector state it actually probed.
-func BuildProbeJob(cfg JobConfig, kind, namespace, name string, generation int64, secretVersion string) *batchv1.Job {
+// BuildProbeJob builds the one-shot Job that probes a connector. The Job runs in
+// the connector's namespace and is owned by the connector, so it is garbage
+// collected with it. generation and secretVersion are stamped on the Job so its
+// verdict is recorded for the connector state it actually probed.
+func BuildProbeJob(cfg JobConfig, owner metav1.OwnerReference, kind, namespace, name string, generation int64, secretVersion string) *batchv1.Job {
 	deadline := int64((cfg.Timeout + probeDeadlineGrace).Seconds())
 
 	annotations := map[string]string{
@@ -69,23 +70,13 @@ func BuildProbeJob(cfg JobConfig, kind, namespace, name string, generation int64
 		wellknown.AnnotationConnectorSecretVersion: secretVersion,
 	}
 
-	var owners []metav1.OwnerReference
-	if cfg.Owner != nil && cfg.Owner.Name != "" && cfg.Owner.UID != "" {
-		owners = []metav1.OwnerReference{{
-			APIVersion: "v1",
-			Kind:       "Pod",
-			Name:       cfg.Owner.Name,
-			UID:        cfg.Owner.UID,
-		}}
-	}
-
 	return &batchv1.Job{
 		ObjectMeta: metav1.ObjectMeta{
 			GenerateName:    probeJobGenerateName,
-			Namespace:       cfg.Namespace,
+			Namespace:       namespace,
 			Labels:          probeLabels(kind, namespace, name),
 			Annotations:     annotations,
-			OwnerReferences: owners,
+			OwnerReferences: []metav1.OwnerReference{owner},
 		},
 		Spec: batchv1.JobSpec{
 			BackoffLimit:            ptr.To[int32](0),
@@ -104,7 +95,7 @@ func BuildProbeJob(cfg JobConfig, kind, namespace, name string, generation int64
 						Image: cfg.RunnerImage,
 						Args:  []string{"--operation", "probe", "--timeout", cfg.Timeout.String()},
 						Env: []corev1.EnvVar{
-							{Name: "POD_NAMESPACE", Value: cfg.Namespace},
+							{Name: "POD_NAMESPACE", Value: namespace},
 							{Name: "HIBERNATOR_CONNECTOR_KIND", Value: kind},
 							{Name: "HIBERNATOR_CONNECTOR_NAME", Value: name},
 							{Name: "HIBERNATOR_CONNECTOR_NAMESPACE", Value: namespace},

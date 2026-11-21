@@ -72,11 +72,11 @@ status:
 
 An executor listed in `executorAccess` was actually checked. An executor with no entry is unknown, never denied.
 
-`Ready=Unknown` with reason `ProbeFailed` means the probe Job could not run or produced no result. `ready` is then false, `allowedExecutors` and `executorAccess` are cleared, `ExecutorAccessVerified` is `Unknown`, and `lastValidated` keeps the time of the last verdict. Check the Job and pod in the controller namespace (labels `hibernator.ardikabs.com/connector-*`).
+`Ready=Unknown` with reason `ProbeFailed` means the probe Job could not run or produced no result. `ready` is then false, `allowedExecutors` and `executorAccess` are cleared, `ExecutorAccessVerified` is `Unknown`, and `lastValidated` keeps the time of the last verdict. Check the Job and pod in the connector's namespace (labels `hibernator.ardikabs.com/connector-*`).
 
 ## How the Probe Works
 
-The controller does not test credentials itself. IRSA is bound to the runner ServiceAccount, so a check from the controller identity would not match what an execution sees. Instead the controller creates a short-lived Job in its own namespace, using the runner image and the runner ServiceAccount, and reads the result from the pod termination message.
+The controller does not test credentials itself. IRSA is bound to the runner ServiceAccount, so a check from the controller identity would not match what an execution sees. Instead the controller creates a short-lived Job in the connector's namespace, using the runner image and the runner ServiceAccount, and reads the result from the pod termination message.
 
 Each probe has two steps:
 
@@ -99,7 +99,7 @@ Controller flags (also exposed in the Helm chart under `operator.connector`):
 
 The Job runs with the runner ServiceAccount, which already can read `CloudProvider`, `K8SCluster` and Secrets. No extra runner RBAC is needed. The Kubernetes access check sends `SelfSubjectAccessReview` to the target cluster as the connector's identity; the default `system:basic-user` ClusterRole grants it to every authenticated identity.
 
-The Helm chart runs probe Jobs in the release namespace, next to the runner ServiceAccount (`CONTROL_PLANE_NAMESPACE`, flag `--control-plane-namespace`).
+A probe Job runs in the namespace of the connector it probes, the same namespace a HibernatePlan referencing that connector runs its runner Jobs in. The runner ServiceAccount must exist there, as it must for plan execution. The Job is owned by the connector, so deleting the connector garbage collects its probe Jobs.
 
 ## Upgrading
 
@@ -182,7 +182,7 @@ Reasons appear in `status.conditions[*].reason` and in `executorAccess[*].reason
 | `SecretNotFound` | `Ready`, `AuthValid` | The referenced Secret does not exist. | Create the Secret or fix the reference. A Secret change triggers a new probe. |
 | `ClusterUnreachable` | `Ready`, `AuthValid` | Clients could not be built or the server version call failed. | Check the kubeconfig or EKS cluster name/region, network reachability from the controller namespace, and token validity. |
 | `ProviderNotReady` | `Ready`, `AuthValid`, `ExecutorAccessVerified` on `K8SCluster` | An `eks` cluster references a `CloudProvider` that is missing or not ready. No probe ran. `Ready` is `False` when the provider is missing or failed, `Unknown` when its own state is unknown; the other two are `Unknown` and the executor lists are cleared. | Fix the `CloudProvider` first; the cluster is re-probed once it is ready. |
-| `ProbeFailed` | `Ready`, `AuthValid`, `ExecutorAccessVerified` (status `Unknown`) | The probe Job could not run or returned no result (image pull, unschedulable pod, timeout, missing termination message). The executor lists are cleared. | Inspect the probe Job and pod in the controller namespace. The probe is retried at the resync interval. |
+| `ProbeFailed` | `Ready`, `AuthValid`, `ExecutorAccessVerified` (status `Unknown`) | The probe Job could not run or returned no result (image pull, unschedulable pod, timeout, missing termination message). The executor lists are cleared. | Inspect the probe Job and pod in the connector's namespace. The probe is retried at the resync interval. |
 | `ProbeUnsupported` | `Ready`, `AuthValid`, `ExecutorAccessVerified` (status `Unknown`) on `K8SCluster` | The cluster uses `spec.gke`, which is not probed yet. | Nothing to do; the status does not reflect whether the connector works. |
 | `AccessDenied` | `executorAccess` | Simulation or access review found a denied action. The message lists the actions and the operation (shutdown or wakeup). | Grant the listed actions to the identity, or ignore it if the executor is not used with this connector. |
 | `SimulationUnavailable` | `ExecutorAccessVerified` | The identity lacks the simulate permissions, or its ARN cannot be resolved (Pod Identity, session-token credentials). | Grant `iam:SimulatePrincipalPolicy`, see above. The connector is otherwise unaffected. |

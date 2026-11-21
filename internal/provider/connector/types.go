@@ -17,8 +17,10 @@ import (
 
 // probeTarget is the kind-independent view of one connector for a reconcile.
 type probeTarget struct {
-	kind           string
-	key            types.NamespacedName
+	kind string
+	key  types.NamespacedName
+	// owner is the connector itself, set on the probe Job.
+	owner          metav1.OwnerReference
 	generation     int64
 	lastProbe      *metav1.Time
 	observedGen    int64
@@ -34,19 +36,9 @@ type probeTarget struct {
 
 // JobConfig configures the connector probe Job.
 type JobConfig struct {
-	Namespace            string
 	RunnerImage          string
 	RunnerServiceAccount string
 	Timeout              time.Duration
-	// Owner is the controller Pod that creates probe Jobs. When set, Jobs carry an
-	// ownerReference to it so tools like ArgoCD render them under the controller.
-	Owner *OwnerPod
-}
-
-// OwnerPod identifies a Pod in JobConfig.Namespace.
-type OwnerPod struct {
-	Name string
-	UID  types.UID
 }
 
 // statusView points at the status fields shared by CloudProvider and K8SCluster.

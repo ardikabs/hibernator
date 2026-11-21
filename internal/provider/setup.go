@@ -9,7 +9,6 @@ import (
 	"time"
 
 	"github.com/go-logr/logr"
-	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/utils/clock"
 	ctrl "sigs.k8s.io/controller-runtime"
 
@@ -45,13 +44,6 @@ type ProviderOptions struct {
 	// E2E tests use this to inject custom sinks via notification.WithSink().
 	NotificationOptions []notification.Option
 
-	// ControlPlaneNamespace is where connector probe Jobs run, alongside the runner
-	// ServiceAccount. Empty disables the connector reconcilers.
-	ControlPlaneNamespace string
-	// OwnerPodName and OwnerPodUID identify the controller Pod, set as owner of
-	// connector probe Jobs. Both must be set for the ownerReference to be added.
-	OwnerPodName string
-	OwnerPodUID  string
 	// Probe configures connector probing.
 	Probe ProbeOptions
 }
@@ -95,20 +87,13 @@ func Setup(mgr ctrl.Manager, clk clock.Clock, opts ProviderOptions) error {
 		return err
 	}
 
-	var owner *connector.OwnerPod
-	if opts.OwnerPodName != "" && opts.OwnerPodUID != "" {
-		owner = &connector.OwnerPod{Name: opts.OwnerPodName, UID: types.UID(opts.OwnerPodUID)}
-	}
-
 	if err := connector.SetupWithManager(mgr, connector.Options{
 		Clock:                clk,
 		Log:                  opts.Logger,
 		Statuses:             statuses,
 		Workers:              opts.Workers,
-		Namespace:            opts.ControlPlaneNamespace,
 		RunnerImage:          opts.RunnerImage,
 		RunnerServiceAccount: opts.RunnerServiceAccount,
-		Owner:                owner,
 		Resync:               opts.Probe.Resync,
 		MaxConcurrentProbes:  opts.Probe.MaxConcurrent,
 		ProbeTimeout:         opts.Probe.Timeout,
