@@ -51,8 +51,6 @@ type Options struct {
 	LeaderElectionNamespace string
 	ControlPlaneEndpoint    string
 	ControlPlaneNamespace   string
-	PodName                 string
-	PodUID                  string
 	RunnerImage             string
 	RunnerServiceAccount    string
 	GRPCServerAddr          string
@@ -87,11 +85,7 @@ func ParseFlags() Options {
 	flag.StringVar(&opts.ControlPlaneEndpoint, "control-plane-endpoint", envutil.GetString("CONTROL_PLANE_ENDPOINT", ""),
 		"The endpoint for runner streaming callbacks.")
 	flag.StringVar(&opts.ControlPlaneNamespace, "control-plane-namespace", envutil.GetString("CONTROL_PLANE_NAMESPACE", "hibernator-system"),
-		"The namespace of the runner ServiceAccount, where connector probe Jobs run.")
-	flag.StringVar(&opts.PodName, "pod-name", envutil.GetString("POD_NAME", ""),
-		"The name of this controller Pod, set as owner of connector probe Jobs.")
-	flag.StringVar(&opts.PodUID, "pod-uid", envutil.GetString("POD_UID", ""),
-		"The UID of this controller Pod, set as owner of connector probe Jobs.")
+		"The namespace of the runner ServiceAccount.")
 	flag.StringVar(&opts.GRPCServerAddr, "grpc-server-address", ":9444",
 		"The address for the gRPC streaming server.")
 	flag.StringVar(&opts.WebSocketServerAddr, "websocket-server-address", ":8082",
@@ -167,9 +161,6 @@ func Run(opts Options) error {
 		ControlPlaneEndpoint:   opts.ControlPlaneEndpoint,
 		RunnerImage:            opts.RunnerImage,
 		RunnerServiceAccount:   opts.RunnerServiceAccount,
-		ControlPlaneNamespace:  opts.ControlPlaneNamespace,
-		OwnerPodName:           opts.PodName,
-		OwnerPodUID:            opts.PodUID,
 		Probe: provider.ProbeOptions{
 			Resync:        opts.ConnectorResync,
 			MaxConcurrent: opts.ConnectorMaxProbes,

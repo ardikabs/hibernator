@@ -15,21 +15,30 @@ import (
 	batchv1 "k8s.io/api/batch/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/util/validation"
+	"k8s.io/utils/ptr"
 
 	"github.com/ardikabs/hibernator/internal/wellknown"
 )
 
 var testCfg = JobConfig{
-	Namespace:            "hibernator-system",
 	RunnerImage:          "runner:v1",
 	RunnerServiceAccount: "hibernator-runner",
 	Timeout:              90 * time.Second,
 }
 
-func TestBuildProbeJob(t *testing.T) {
-	job := BuildProbeJob(testCfg, "CloudProvider", "team-a", "aws-prod", 7, "rv1,missing")
+var testOwner = metav1.OwnerReference{
+	APIVersion: "hibernator.ardikabs.com/v1alpha1",
+	Kind:       "CloudProvider",
+	Name:       "aws-prod",
+	UID:        "uid-1",
+	Controller: ptr.To(true),
+}
 
-	assert.Equal(t, "hibernator-system", job.Namespace)
+func TestBuildProbeJob(t *testing.T) {
+	job := BuildProbeJob(testCfg, testOwner, "CloudProvider", "team-a", "aws-prod", 7, "rv1,missing")
+
+	assert.Equal(t, "team-a", job.Namespace)
+	assert.Equal(t, []metav1.OwnerReference{testOwner}, job.OwnerReferences)
 	assert.Equal(t, "connector-probe-", job.GenerateName)
 	require.NotNil(t, job.Spec.BackoffLimit)
 	assert.Equal(t, int32(0), *job.Spec.BackoffLimit)
@@ -54,7 +63,7 @@ func TestBuildProbeJob(t *testing.T) {
 		env[e.Name] = e.Value
 	}
 	assert.Equal(t, map[string]string{
-		"POD_NAMESPACE":                  "hibernator-system",
+		"POD_NAMESPACE":                  "team-a",
 		"HIBERNATOR_CONNECTOR_KIND":      "CloudProvider",
 		"HIBERNATOR_CONNECTOR_NAME":      "aws-prod",
 		"HIBERNATOR_CONNECTOR_NAMESPACE": "team-a",
@@ -100,7 +109,7 @@ func TestBuildProbeJob_LongNames(t *testing.T) {
 	longName2 := strings.Repeat("a", 252) + "b"
 	ns := strings.Repeat("n", 63)
 
-	job := BuildProbeJob(testCfg, "K8SCluster", ns, longName, 1, "")
+	job := BuildProbeJob(testCfg, testOwner, "K8SCluster", ns, longName, 1, "")
 	for k, v := range job.Labels {
 		assert.Empty(t, validation.IsValidLabelValue(v), "label %s=%q", k, v)
 	}
@@ -108,7 +117,7 @@ func TestBuildProbeJob_LongNames(t *testing.T) {
 	assert.Equal(t, longName, job.Spec.Template.Spec.Containers[0].Env[2].Value)
 	assert.Empty(t, validation.IsDNS1123Label(strings.TrimSuffix(job.GenerateName, "-")))
 
-	other := BuildProbeJob(testCfg, "K8SCluster", ns, longName2, 1, "")
+	other := BuildProbeJob(testCfg, testOwner, "K8SCluster", ns, longName2, 1, "")
 	assert.NotEqual(t, job.Labels[wellknown.LabelConnectorName], other.Labels[wellknown.LabelConnectorName])
 }
 
@@ -118,7 +127,7 @@ func TestProbeJobSelector_MatchesJobLabels(t *testing.T) {
 		{"K8SCluster", strings.Repeat("n", 63), strings.Repeat("x", 253)},
 	}
 	for _, tc := range cases {
-		job := BuildProbeJob(testCfg, tc.kind, tc.ns, tc.name, 1, "")
+		job := BuildProbeJob(testCfg, testOwner, tc.kind, tc.ns, tc.name, 1, "")
 		sel := ProbeJobSelector(tc.kind, tc.ns, tc.name)
 		for k, v := range sel {
 			assert.Equal(t, v, job.Labels[k], k)
@@ -126,25 +135,4 @@ func TestProbeJobSelector_MatchesJobLabels(t *testing.T) {
 		assert.Len(t, sel, 4)
 		assert.Equal(t, "true", sel[wellknown.LabelConnectorProbe])
 	}
-}
-
-func TestBuildProbeJob_OwnerReference(t *testing.T) {
-	t.Run("set from controller pod", func(t *testing.T) {
-		cfg := testCfg
-		cfg.Owner = &OwnerPod{Name: "hibernator-abc", UID: "uid-1"}
-		job := BuildProbeJob(cfg, "CloudProvider", "team-a", "aws-prod", 1, "")
-
-		require.Len(t, job.OwnerReferences, 1)
-		ref := job.OwnerReferences[0]
-		assert.Equal(t, "v1", ref.APIVersion)
-		assert.Equal(t, "Pod", ref.Kind)
-		assert.Equal(t, "hibernator-abc", ref.Name)
-		assert.Equal(t, "uid-1", string(ref.UID))
-		assert.Nil(t, ref.Controller)
-	})
-
-	t.Run("omitted without owner", func(t *testing.T) {
-		job := BuildProbeJob(testCfg, "CloudProvider", "team-a", "aws-prod", 1, "")
-		assert.Empty(t, job.OwnerReferences)
-	})
 }

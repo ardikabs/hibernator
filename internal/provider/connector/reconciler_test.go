@@ -22,6 +22,7 @@ import (
 	"k8s.io/apimachinery/pkg/types"
 	clientgoscheme "k8s.io/client-go/kubernetes/scheme"
 	clocktesting "k8s.io/utils/clock/testing"
+	"k8s.io/utils/ptr"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
@@ -34,7 +35,6 @@ import (
 )
 
 const (
-	testNS      = "hibernator-system"
 	testConnNS  = "team-a"
 	testConnRV  = "42"
 	kindCP      = "CloudProvider"
@@ -99,7 +99,7 @@ func newFixture(t *testing.T, objs ...client.Object) *fixture {
 			CloudProviderStatuses: cps,
 			K8SClusterStatuses:    kcs,
 		},
-		Job:                 JobConfig{Namespace: testNS, RunnerImage: "runner:test", RunnerServiceAccount: "hibernator-runner", Timeout: 30 * time.Second},
+		Job:                 JobConfig{RunnerImage: "runner:test", RunnerServiceAccount: "hibernator-runner", Timeout: 30 * time.Second},
 		Resync:              15 * time.Minute,
 		MaxConcurrentProbes: 5,
 		Jitter:              func(time.Duration) time.Duration { return 0 },
@@ -111,7 +111,7 @@ func newFixture(t *testing.T, objs ...client.Object) *fixture {
 
 func cloudProvider(name string) *hibernatorv1alpha1.CloudProvider {
 	return &hibernatorv1alpha1.CloudProvider{
-		ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: testConnNS, Generation: 1},
+		ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: testConnNS, Generation: 1, UID: types.UID("uid-" + name)},
 		Spec: hibernatorv1alpha1.CloudProviderSpec{
 			Type: hibernatorv1alpha1.CloudProviderAWS,
 			AWS:  &hibernatorv1alpha1.AWSConfig{AccountId: "123456789012", Region: "us-east-1"},
@@ -129,7 +129,7 @@ func staticCloudProvider(name, secret, secretNS string) *hibernatorv1alpha1.Clou
 
 func k8sCluster(name string, spec hibernatorv1alpha1.K8SClusterSpec) *hibernatorv1alpha1.K8SCluster {
 	return &hibernatorv1alpha1.K8SCluster{
-		ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: testConnNS, Generation: 1},
+		ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: testConnNS, Generation: 1, UID: types.UID("uid-" + name)},
 		Spec:       spec,
 	}
 }
@@ -138,13 +138,23 @@ func secret(name, ns string) *corev1.Secret {
 	return &corev1.Secret{ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: ns}}
 }
 
+func ownerOf(kind, name string) metav1.OwnerReference {
+	return metav1.OwnerReference{
+		APIVersion: hibernatorv1alpha1.GroupVersion.String(),
+		Kind:       kind,
+		Name:       name,
+		UID:        types.UID("uid-" + name),
+		Controller: ptr.To(true),
+	}
+}
+
 func req(name string) ctrl.Request {
 	return ctrl.Request{NamespacedName: types.NamespacedName{Namespace: testConnNS, Name: name}}
 }
 
 // probeJob returns a probe Job for the connector at generation 1, optionally finished.
 func probeJob(f *fixture, kind, name, jobName string, cond batchv1.JobConditionType) *batchv1.Job {
-	job := BuildProbeJob(f.r.Job, kind, testConnNS, name, 1, "")
+	job := BuildProbeJob(f.r.Job, ownerOf(kind, name), kind, testConnNS, name, 1, "")
 	job.Name = jobName
 	job.GenerateName = ""
 	job.CreationTimestamp = metav1.NewTime(testNow.Add(-time.Minute))
@@ -176,7 +186,7 @@ func probePod(job *batchv1.Job, msg string) *corev1.Pod {
 func listProbeJobs(t *testing.T, c client.Client) []batchv1.Job {
 	t.Helper()
 	var jobs batchv1.JobList
-	require.NoError(t, c.List(context.Background(), &jobs, client.InNamespace(testNS),
+	require.NoError(t, c.List(context.Background(), &jobs, client.InNamespace(testConnNS),
 		client.MatchingLabels{wellknown.LabelConnectorProbe: "true"}))
 	return jobs.Items
 }
@@ -208,7 +218,15 @@ func TestReconcile_DueCreatesOneJob(t *testing.T) {
 	assert.Equal(t, "aws", jobs[0].Annotations[wellknown.AnnotationConnectorName])
 	assert.Equal(t, testConnNS, jobs[0].Annotations[wellknown.AnnotationConnectorNamespace])
 	assert.Equal(t, "1", jobs[0].Annotations[wellknown.AnnotationConnectorGeneration])
-	assert.Empty(t, jobs[0].OwnerReferences)
+	assert.Equal(t, testConnNS, jobs[0].Namespace, "probe Job runs in the connector's namespace")
+	require.Len(t, jobs[0].OwnerReferences, 1)
+	owner := jobs[0].OwnerReferences[0]
+	assert.Equal(t, hibernatorv1alpha1.GroupVersion.String(), owner.APIVersion)
+	assert.Equal(t, kindCP, owner.Kind)
+	assert.Equal(t, "aws", owner.Name)
+	assert.Equal(t, types.UID("uid-aws"), owner.UID)
+	assert.Equal(t, ptr.To(true), owner.Controller)
+	assert.Nil(t, owner.BlockOwnerDeletion)
 
 	res, err = f.r.Reconcile(ctx, req("aws"))
 	require.NoError(t, err)
