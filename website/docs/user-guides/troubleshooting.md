@@ -145,7 +145,7 @@ Common issues and their solutions.
 kubectl get cloudprovider <name> -n hibernator-system -o jsonpath='{.status.conditions}'
 ```
 
-The condition `reason` (`InvalidCredentials`, `AccountMismatch`, `SecretNotFound`, `ClusterUnreachable`, `ProbeFailed`, `ProviderNotReady`, `ProbeUnsupported`, and others) points at the cause. `Unknown` means there is no verdict: after `ProbeFailed` the executor lists are cleared and `lastValidated` keeps the time of the last verdict. `gke` clusters are always `Unknown` with `ProbeUnsupported`. See [Connector Status and Executor Access](connectors.md#troubleshooting) for what each reason means.
+The condition `reason` (`InvalidCredentials`, `AccountMismatch`, `SecretNotFound`, `ClusterUnreachable`, `ProbeFailed`, `ProviderNotReady`, `ProbeUnsupported`, `NotInUse`, and others) points at the cause. `Unknown` means there is no verdict: after `ProbeFailed` the executor lists are cleared and `lastValidated` keeps the time of the last verdict. `gke` clusters are always `Unknown` with `ProbeUnsupported`. See [Connector Status and Executor Access](connectors.md#troubleshooting) for what each reason means.
 
 ## Plan Stuck in Hibernating/WakingUp
 

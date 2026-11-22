@@ -194,6 +194,8 @@ operator:
     maxConcurrentProbes: 5
     # operator.connector.probeTimeout -- Timeout for a single probe
     probeTimeout: 30s
+    # operator.connector.probeUnreferenced -- Probe connectors that no active HibernatePlan uses. By default they are skipped and report NotInUse
+    probeUnreferenced: false
 
   # operator.leaderElection -- Leader election configuration
   leaderElection:

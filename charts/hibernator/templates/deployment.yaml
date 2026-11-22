@@ -89,6 +89,8 @@ spec:
               value: {{ .Values.operator.connector.maxConcurrentProbes | quote }}
             - name: CONNECTOR_PROBE_TIMEOUT
               value: {{ .Values.operator.connector.probeTimeout | quote }}
+            - name: CONNECTOR_PROBE_UNREFERENCED
+              value: {{ .Values.operator.connector.probeUnreferenced | quote }}
 
           livenessProbe:
             httpGet:

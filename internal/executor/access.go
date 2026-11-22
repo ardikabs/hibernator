@@ -13,6 +13,9 @@ const (
 	ConnectorKindK8SCluster    = "K8SCluster"
 )
 
+// ConnectorTypeAWS is the CloudProvider type backed by AWS (CloudProvider.spec.type).
+const ConnectorTypeAWS = "aws"
+
 // K8SRule is a Kubernetes RBAC-style permission an executor needs.
 type K8SRule struct {
 	Group       string
@@ -31,8 +34,12 @@ type OperationAccess struct {
 // permissions each operation needs on it.
 type AccessRequirement struct {
 	ConnectorKind string
-	Shutdown      OperationAccess
-	WakeUp        OperationAccess
+	// ConnectorTypes restricts the requirement to connectors of these types
+	// (CloudProvider.spec.type). Empty applies to every type of the kind.
+	// Only CloudProvider connectors carry a type today.
+	ConnectorTypes []string
+	Shutdown       OperationAccess
+	WakeUp         OperationAccess
 }
 
 // ConnectorRequirer is optionally implemented by executors that declare the
@@ -41,8 +48,27 @@ type ConnectorRequirer interface {
 	Requires() AccessRequirement
 }
 
+// AppliesTo reports whether the requirement covers a connector of the given
+// type. A restricted requirement never applies to an unknown (empty) type.
+func (r AccessRequirement) AppliesTo(connectorType string) bool {
+	if len(r.ConnectorTypes) == 0 {
+		return true
+	}
+	for _, t := range r.ConnectorTypes {
+		if t == connectorType {
+			return true
+		}
+	}
+	return false
+}
+
 // Validate reports a malformed requirement.
 func (r AccessRequirement) Validate() error {
+	for _, t := range r.ConnectorTypes {
+		if t == "" {
+			return fmt.Errorf("connector type must not be empty")
+		}
+	}
 	ops := []OperationAccess{r.Shutdown, r.WakeUp}
 	switch r.ConnectorKind {
 	case ConnectorKindCloudProvider:
@@ -52,6 +78,9 @@ func (r AccessRequirement) Validate() error {
 			}
 		}
 	case ConnectorKindK8SCluster:
+		if len(r.ConnectorTypes) > 0 {
+			return fmt.Errorf("connector types are not supported for connector kind %s", r.ConnectorKind)
+		}
 		for _, op := range ops {
 			if len(op.AWSActions) > 0 {
 				return fmt.Errorf("AWS actions are not valid for connector kind %s", r.ConnectorKind)

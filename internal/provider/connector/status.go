@@ -9,6 +9,7 @@ import (
 	"errors"
 	"fmt"
 	"slices"
+	"strings"
 	"time"
 
 	"k8s.io/apimachinery/pkg/api/meta"
@@ -22,6 +23,7 @@ const (
 	reasonVerified = "Verified"
 	msgNoExecutors = "no executors require access verification"
 	msgGKE         = "GKE clusters are not probed yet"
+	msgNotInUse    = "no active HibernatePlan references this connector; it is probed once one does"
 	// probeFailedPrefix starts the status message of a probe that produced no verdict.
 	probeFailedPrefix = "probe failed: "
 )
@@ -106,6 +108,77 @@ func ApplyK8SProbeUnsupported(generation int64) func(*hibernatorv1alpha1.K8SClus
 			hibernatorv1alpha1.ConditionExecutorAccessVerified} {
 			setCondition(v, typ, metav1.ConditionUnknown, reason, msgGKE, generation)
 		}
+	}
+}
+
+// ApplyNotInUse records that no active plan uses the CloudProvider, so it is not
+// probed. It writes no timestamps, so repeated writes are no-ops.
+func ApplyNotInUse(generation int64) func(*hibernatorv1alpha1.CloudProvider) {
+	return func(cp *hibernatorv1alpha1.CloudProvider) {
+		applyNotInUse(cloudProviderView(&cp.Status), generation)
+	}
+}
+
+// ApplyK8SNotInUse is ApplyNotInUse for a K8SCluster.
+func ApplyK8SNotInUse(generation int64) func(*hibernatorv1alpha1.K8SCluster) {
+	return func(kc *hibernatorv1alpha1.K8SCluster) {
+		applyNotInUse(k8sClusterView(&kc.Status), generation)
+	}
+}
+
+func applyNotInUse(v statusView, gen int64) {
+	clearVerdict(v, gen, msgNotInUse)
+	// Generations start at 1, so 0 makes the connector due as soon as a plan uses it.
+	*v.observedGeneration = 0
+	for _, typ := range []string{hibernatorv1alpha1.ConditionReady, hibernatorv1alpha1.ConditionAuthValid,
+		hibernatorv1alpha1.ConditionExecutorAccessVerified} {
+		setCondition(v, typ, metav1.ConditionUnknown, hibernatorv1alpha1.ReasonNotInUse, msgNotInUse, gen)
+	}
+}
+
+// ApplyReferencedAccess scopes the ExecutorAccessVerified verdict on a
+// CloudProvider to the executor types that active plans use.
+func ApplyReferencedAccess(referenced []string, generation int64) func(*hibernatorv1alpha1.CloudProvider) {
+	return func(cp *hibernatorv1alpha1.CloudProvider) {
+		applyReferencedAccess(cloudProviderView(&cp.Status), referenced, generation)
+	}
+}
+
+// ApplyK8SReferencedAccess is ApplyReferencedAccess for a K8SCluster.
+func ApplyK8SReferencedAccess(referenced []string, generation int64) func(*hibernatorv1alpha1.K8SCluster) {
+	return func(kc *hibernatorv1alpha1.K8SCluster) {
+		applyReferencedAccess(k8sClusterView(&kc.Status), referenced, generation)
+	}
+}
+
+// applyReferencedAccess turns a recorded access matrix into the
+// ExecutorAccessVerified verdict: False when an executor type that an active plan
+// uses is denied, True otherwise. Denials of types no plan uses stay visible in
+// executorAccess but do not count. It leaves the condition alone when there is no
+// matrix, and keeps a True message already written by applyResult.
+func applyReferencedAccess(v statusView, referenced []string, gen int64) {
+	cond := meta.FindStatusCondition(*v.conditions, hibernatorv1alpha1.ConditionExecutorAccessVerified)
+	if cond == nil || len(*v.executorAccess) == 0 ||
+		(cond.Reason != reasonVerified && cond.Reason != hibernatorv1alpha1.ReasonAccessDenied) {
+		return
+	}
+
+	var denied []string
+	for _, e := range *v.executorAccess {
+		if !e.Allowed && slices.Contains(referenced, e.Type) {
+			denied = append(denied, e.Type)
+		}
+	}
+	slices.Sort(denied)
+
+	switch {
+	case len(denied) > 0:
+		setCondition(v, hibernatorv1alpha1.ConditionExecutorAccessVerified, metav1.ConditionFalse,
+			hibernatorv1alpha1.ReasonAccessDenied,
+			fmt.Sprintf("access denied for executors used by active plans: %s", strings.Join(denied, ", ")), gen)
+	case cond.Reason == hibernatorv1alpha1.ReasonAccessDenied:
+		setCondition(v, hibernatorv1alpha1.ConditionExecutorAccessVerified, metav1.ConditionTrue,
+			reasonVerified, "access verified for executors used by active plans", gen)
 	}
 }
 

@@ -14,6 +14,11 @@ const (
 	// Used by the field indexer to enable efficient lookups of exceptions by plan name.
 	FieldIndexExceptionPlanRef = ".spec.planRef.name"
 
+	// FieldIndexPlanConnectorRef is the field index path for active HibernatePlan
+	// targets' connector references, valued "<Kind>/<namespace>/<name>".
+	// Used by the connector reconciler to find the plans that use a connector.
+	FieldIndexPlanConnectorRef = ".spec.targets.connectorRef"
+
 	// RunnerImage is the default runner image.
 	RunnerImage = "ghcr.io/ardikabs/hibernator-runner:latest"
 
