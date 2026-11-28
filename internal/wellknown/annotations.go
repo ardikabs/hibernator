@@ -101,6 +101,18 @@ const (
 	//   # Force wakeup with a fresh snapshot from the current exception
 	//   kubectl annotate hibernateplan <name> hibernator.ardikabs.com/override-action=true hibernator.ardikabs.com/override-phase-target=wakeup hibernator.ardikabs.com/fresh=true
 	AnnotationFresh = "hibernator.ardikabs.com/fresh"
+
+	// AnnotationConnectorName carries the full connector name of a probe Job.
+	AnnotationConnectorName = "hibernator.ardikabs.com/connector-name"
+
+	// AnnotationConnectorNamespace carries the full connector namespace of a probe Job.
+	AnnotationConnectorNamespace = "hibernator.ardikabs.com/connector-namespace"
+
+	// AnnotationConnectorGeneration carries the connector generation a probe Job was created for.
+	AnnotationConnectorGeneration = "hibernator.ardikabs.com/connector-generation"
+
+	// AnnotationConnectorSecretVersion carries the referenced Secret version a probe Job was created for.
+	AnnotationConnectorSecretVersion = "hibernator.ardikabs.com/connector-secret-version"
 )
 
 // Override phase target values for AnnotationOverridePhaseTarget.

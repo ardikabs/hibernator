@@ -581,7 +581,7 @@ func TestDispatcher_SlackJSONTemplate_EndToEnd(t *testing.T) {
 	}))
 	defer server.Close()
 
-	secret := sinkSecret("default", "slack-secret", []byte(fmt.Sprintf(`{"webhook_url":%q,"format":"json"}`, server.URL)))
+	secret := sinkSecret("default", "slack-secret", fmt.Appendf(nil, `{"webhook_url":%q,"format":"json"}`, server.URL))
 	tmplKey := defaultTemplateKey
 	cm := &corev1.ConfigMap{
 		ObjectMeta: metav1.ObjectMeta{Namespace: "default", Name: "slack-json-template"},
@@ -656,7 +656,7 @@ func TestDispatcher_SlackJSONTemplate_InvalidFallsBackToPreset(t *testing.T) {
 	}))
 	defer server.Close()
 
-	secret := sinkSecret("default", "slack-secret", []byte(fmt.Sprintf(`{"webhook_url":%q,"format":"json","block_layout":"compact"}`, server.URL)))
+	secret := sinkSecret("default", "slack-secret", fmt.Appendf(nil, `{"webhook_url":%q,"format":"json","block_layout":"compact"}`, server.URL))
 	tmplKey := defaultTemplateKey
 	cm := &corev1.ConfigMap{
 		ObjectMeta: metav1.ObjectMeta{Namespace: "default", Name: "slack-bad-json-template"},
